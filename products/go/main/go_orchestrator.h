@@ -14,6 +14,7 @@
 #pragma once
 
 #include "config_store.h"
+#include "fg_learning_controller.h"
 #include "go_ble.h"
 #include "buzzer/go_buzzer.h"
 #include "go_cloud.h"
@@ -162,6 +163,13 @@ private:
   /// forces a factory_reset() so test units ship clean.
   bool _manufacturing_mode = false;
 
+  // --- Fuel-gauge learning ---
+  FgLearningController _fg_learning;
+  FactorySettings _factory{};
+  /// Last applied learning stage; drives one-shot transition side-effects
+  /// (persist, screen paint, charge/load, terminal cleanup).
+  FgLearningStage _fg_prev_stage = FgLearningStage::Idle;
+
   // --- Display buffers (mutable for const build_context) ---
   mutable Measures _display_measures{};
   mutable MeasuresAGo _cache_buf[UI_CHART_BUF_SIZE]{};
@@ -227,6 +235,25 @@ private:
   void check_timers();
   void on_bms_timer();
   void on_bms_status_timer();
+
+  // --- Fuel-gauge learning ---
+  /// Normal-operation charge current restored at terminal cleanup (matches
+  /// the BQ25629 boot Config).
+  static constexpr uint16_t NORMAL_CHARGE_CURRENT_MA = 500;
+  /// True when a learning run is in progress (stage not Idle/Complete/Failed).
+  bool is_fg_learning_active() const;
+  /// Tick the controller from the latest snapshot, apply the action.  Returns
+  /// true while a run is active so the BMS status poll can short-circuit.
+  bool tick_fg_learning();
+  void apply_fg_learning_action(const FgLearningAction &action);
+  void persist_fg_learning_state();
+  void run_fg_learning_verify();
+  void resume_fg_learning_on_boot();
+  /// EDV-during-learning: persist CycleDone (committed) before ship.  Returns
+  /// false when the commit fails (caller must NOT ship).
+  bool commit_fg_learning_cycle_done();
+  void fg_learning_terminal_cleanup(FgLearningStage stage);
+  void apply_fg_learning_cue(ManualCue cue);
   void on_inactivity_timeout();
   void reschedule_sensor_timer(const GoSettings &previous_settings);
 

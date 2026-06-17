@@ -98,6 +98,43 @@ struct PowerSnapshot {
   /// Non-None when a safety trip requires the orchestrator to show a
   /// warning and enter ship mode.
   ShipModeRequest ship_mode_request = ShipModeRequest::None;
+
+  // FG learning flags (V1 only).  Populated by poll_bms() from Flags() and
+  // CONTROL_STATUS; consumed by FgLearningController.  Invalid/false otherwise.
+  bool fg_flag_fc = false;   ///< Flags() FC      (full charge)
+  bool fg_flag_chg = false;  ///< Flags() CHG     (fast-charge allowed)
+  bool fg_flag_dsg = false;  ///< Flags() DSG     (discharging)
+  bool fg_qmax_up = false;   ///< CONTROL_STATUS QMAX_UP
+  bool fg_res_up = false;    ///< CONTROL_STATUS RES_UP
+  bool fg_itpor = false;     ///< Flags() ITPOR   (POR wiped learning)
+  bool fg_ocv_taken = false; ///< Flags() OCVTAKEN
+
+  /// Plugged (external input present) vs on battery, at boot/poll.
+  bool external_input_present = false;
+
+  /// Derived mirror of ship_mode_request == OverDischarge, exposed so the
+  /// pure FSM transitions Discharge → CycleDone without the enum dependency.
+  bool edv_cutoff_reached = false;
+};
+
+// ---------------------------------------------------------------------------
+// FG-learning verify read-back
+// ---------------------------------------------------------------------------
+
+/// Ra table size for the verify read-back.  Kept host-safe (not pulled from
+/// bq27427.h).  A static_assert in GoHardwareBoard (target build) checks this
+/// equals BQ27427::RA_TABLE_SIZE so the two cannot drift.
+inline constexpr int FG_RA_TABLE_SIZE = 15;
+
+/// Aggregated learned-value read-back, built by read_fg_learning_verify() and
+/// converted to FgLearningController::VerifyInputs by the orchestrator.
+struct FgLearningVerifyReadout {
+  bool ok = false;
+  bool itpor = false;
+  bool qmax_up = false;
+  uint16_t qmax_mah = 0;
+  uint16_t design_capacity_mah = 0;
+  int16_t ra[FG_RA_TABLE_SIZE] = {};
 };
 
 // ---------------------------------------------------------------------------
@@ -201,6 +238,25 @@ public:
 
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   void shutdown();
+
+  // -------------------------------------------------------------------------
+  // FG-learning control (used by the orchestrator's learning wiring)
+  // -------------------------------------------------------------------------
+
+  /// Aggregate the learned-value read-back for the verify step.  Returns a
+  /// readout with ok=false when no FG is attached or a read fails.
+  FgLearningVerifyReadout read_fg_learning_verify();
+
+  /// Manually hold or release the battery charge path for a learning phase.
+  /// While disabled the learning run owns the charge state; poll_bms()'s
+  /// thermal / full-charge auto-toggles are suppressed.
+  void set_manual_charge_disabled(bool disabled);
+
+  /// Program the fast-charge current limit (mA).  Forwards to the BMS.
+  bool set_charge_current_ma(uint16_t current_ma);
+
+  /// Set/clear the FG Update Status learning bits (no-op without an FG).
+  bool set_update_status_learning(bool enable);
 
   /// Re-configure the BMS watchdog timeout.  See
   /// BmsDevice::set_watchdog_timeout_ms for semantics.  Forwards directly;
@@ -368,6 +424,11 @@ private:
   /// charge while plugged in.  Cleared when SOC drops to
   /// FULL_CHARGE_RESUME_SOC.  Edge-triggered like the thermal guard.
   bool _full_charge_paused = false;
+
+  /// True while a FG-learning phase owns the charge path (set via
+  /// set_manual_charge_disabled).  Suppresses poll_bms()'s thermal /
+  /// full-charge auto re-enable so learning controls charging.
+  bool _manual_charge_disabled = false;
 
   /// Log charger status, ADC telemetry, and FG telemetry for a single
   /// poll_bms() snapshot.  Pure side-effect (serial output); does not

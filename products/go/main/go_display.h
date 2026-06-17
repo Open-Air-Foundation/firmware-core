@@ -27,6 +27,15 @@ enum class Screen : uint8_t {
   ProvisioningConfirm, ///< Yes/No confirmation overlay for Provisioning actions
   Info,                ///< Generic single-text presentation surface (bring-up narration, etc.)
   GettingStarted,      ///< One-time first-boot guide (setup QR + single action row)
+
+  // --- Fuel-gauge learning phase screens (text-only banners) ---
+  FgLearnCharging,   ///< "Battery learning" / "Charging…"
+  FgLearnResting,    ///< "Battery learning" / "Resting…"
+  FgLearnUnplug,     ///< "Battery learning" / "Unplug charger"
+  DischargeComplete, ///< "Battery learning" / "Discharge complete"
+  FgLearnVerifying,  ///< "Battery learning" / "Verifying…"
+  FgLearnComplete,   ///< "Battery learning" / "Complete"
+  FgLearnFailed,     ///< "Battery learning" / "Failed"
 };
 
 enum class Metric : uint8_t {
@@ -301,6 +310,7 @@ private:
   void _draw_pairing_passkey(const DisplayValues &v);
   void _draw_chart(const DisplayValues &v);
   void _draw_info(const DisplayValues &v);
+  void _draw_fg_learning_banner(Screen screen);
   void _draw_provisioning(const DisplayValues &v);
   void _draw_provisioning_confirm(const DisplayValues &v);
   void _draw_getting_started(const DisplayValues &v);

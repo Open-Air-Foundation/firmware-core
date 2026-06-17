@@ -49,6 +49,11 @@
 
 static constexpr const char *TAG = "PowerService";
 
+// CONTROL_STATUS (Control 0x0000) bit positions (TRM SLUUCD5 §5.1.1).
+// TODO(bench): confirm exact QMAX_UP / RES_UP indices against the datasheet.
+static constexpr uint16_t FG_CONTROL_STATUS_QMAX_UP = (1u << 4);
+static constexpr uint16_t FG_CONTROL_STATUS_RES_UP = (1u << 5);
+
 // ---------------------------------------------------------------------------
 // FG flag decode helper
 // ---------------------------------------------------------------------------
@@ -182,6 +187,18 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
     uint16_t fg_fl = 0;
     if (_fg->read_flags(fg_fl)) {
       status.fg_flags = fg_fl;
+      status.fg_flag_fc = (fg_fl & FgFlags::FC) != 0;
+      status.fg_flag_chg = (fg_fl & FgFlags::CHG) != 0;
+      status.fg_flag_dsg = (fg_fl & FgFlags::DSG) != 0;
+      status.fg_itpor = (fg_fl & FgFlags::ITPOR) != 0;
+      status.fg_ocv_taken = (fg_fl & FgFlags::OCVTAKEN) != 0;
+    }
+
+    // CONTROL_STATUS carries the learning-progress bits (QMAX_UP / RES_UP).
+    uint16_t ctrl = 0;
+    if (_fg->read_control_status(ctrl)) {
+      status.fg_qmax_up = (ctrl & FG_CONTROL_STATUS_QMAX_UP) != 0;
+      status.fg_res_up = (ctrl & FG_CONTROL_STATUS_RES_UP) != 0;
     }
   }
 
@@ -242,6 +259,9 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
     }
   }
 
+  // Derived mirror for the FG-learning FSM (Discharge -> CycleDone trigger).
+  status.edv_cutoff_reached = (status.ship_mode_request == ShipModeRequest::OverDischarge);
+
   // -------------------------------------------------------------------------
   // OT (over-temperature) trip — two-tier policy
   // -------------------------------------------------------------------------
@@ -275,7 +295,7 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
       AG_LOGI(TAG, "OT clear: cell cooled %d°C <= %d°C -> re-enable charging", bat_temp,
               OT_CHARGE_HOT_RESUME_C);
       _thermal_charge_disabled = false;
-      if (!_full_charge_paused) {
+      if (!_full_charge_paused && !_manual_charge_disabled) {
         _bms.set_charge_enable(true);
       }
     }
@@ -285,6 +305,7 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
   // Full-charge pause — disable charging when battery is full + plugged
   // -------------------------------------------------------------------------
   const bool plugged = status_ok && bms_power_source_has_external_input(bms_status.power_source);
+  status.external_input_present = plugged;
 
   // FC flag (FG path) or ChargeTerminationDone + 100 % (Prototype fallback).
   const bool fg_full = (_fg != nullptr && _fg->ready() && (status.fg_flags & FgFlags::FC));
@@ -293,7 +314,10 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
        status.battery_percentage >= 100.0f);
   const bool full = fg_full || bms_full;
 
-  if (plugged && full && !_full_charge_paused) {
+  // Skipped entirely while a learning phase owns the charge path.
+  if (_manual_charge_disabled) {
+    // Learning controls charging; leave _full_charge_paused untouched.
+  } else if (plugged && full && !_full_charge_paused) {
     _full_charge_paused = true;
     if (!_thermal_charge_disabled) {
       _bms.set_charge_enable(false);
@@ -403,6 +427,47 @@ void PowerService::shutdown() {
   }
   esp_deep_sleep_start();
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// FG-learning control
+// ---------------------------------------------------------------------------
+
+FgLearningVerifyReadout PowerService::read_fg_learning_verify() {
+  FgLearningVerifyReadout out{};
+  if (_fg == nullptr || !_fg->ready()) {
+    return out; // ok = false
+  }
+
+  uint16_t flags = 0;
+  uint16_t ctrl = 0;
+  bool ok = _fg->read_flags(flags);
+  ok = _fg->read_control_status(ctrl) && ok;
+  ok = _fg->read_qmax_cell0(out.qmax_mah) && ok;
+  ok = _fg->read_design_capacity_mah(out.design_capacity_mah) && ok;
+  ok = _fg->read_ra_table(out.ra, FG_RA_TABLE_SIZE) && ok;
+
+  out.itpor = (flags & FgFlags::ITPOR) != 0;
+  out.qmax_up = (ctrl & FG_CONTROL_STATUS_QMAX_UP) != 0;
+  out.ok = ok;
+  return out;
+}
+
+void PowerService::set_manual_charge_disabled(bool disabled) {
+  _manual_charge_disabled = disabled;
+  _bms.set_charge_enable(!disabled);
+  AG_LOGI(TAG, "manual charge %s (FG learning)", disabled ? "DISABLED" : "ENABLED");
+}
+
+bool PowerService::set_charge_current_ma(uint16_t current_ma) {
+  return _bms.set_charge_current_ma(current_ma);
+}
+
+bool PowerService::set_update_status_learning(bool enable) {
+  if (_fg == nullptr || !_fg->ready()) {
+    return false;
+  }
+  return _fg->set_update_status_learning(enable);
 }
 
 // ---------------------------------------------------------------------------

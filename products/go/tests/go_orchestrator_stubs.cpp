@@ -205,6 +205,12 @@ bool pm_power_set = false;
 bool pm_power_on = false;
 uint32_t pm_power_set_count = 0;
 
+// --- FG learning ---
+FgLearningVerifyReadout fg_verify_to_return{};
+bool fg_manual_charge_disabled = false;
+uint16_t fg_charge_current_ma = 0;
+bool fg_update_status_learning = false;
+
 void reset() {
   sensor_started = false;
   sensor_stopped = false;
@@ -554,6 +560,24 @@ bool PowerService::poll_status(BmsStatus &status) {
 bool PowerService::reset_watchdog() { return true; }
 
 void PowerService::shutdown() { test_spy::shutdown_called = true; }
+
+FgLearningVerifyReadout PowerService::read_fg_learning_verify() {
+  return test_spy::fg_verify_to_return;
+}
+
+void PowerService::set_manual_charge_disabled(bool disabled) {
+  test_spy::fg_manual_charge_disabled = disabled;
+}
+
+bool PowerService::set_charge_current_ma(uint16_t current_ma) {
+  test_spy::fg_charge_current_ma = current_ma;
+  return true;
+}
+
+bool PowerService::set_update_status_learning(bool enable) {
+  test_spy::fg_update_status_learning = enable;
+  return true;
+}
 
 bool PowerService::set_watchdog_timeout_ms(uint32_t /*timeout_ms*/) { return true; }
 

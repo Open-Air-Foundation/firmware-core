@@ -82,6 +82,12 @@ extern bool pm_power_set;
 extern bool pm_power_on;
 extern uint32_t pm_power_set_count;
 
+// --- FG learning ---
+extern FgLearningVerifyReadout fg_verify_to_return;
+extern bool fg_manual_charge_disabled;
+extern uint16_t fg_charge_current_ma;
+extern bool fg_update_status_learning;
+
 // --- BleService ---
 extern bool ble_init_called;
 extern bool ble_deinit_called;
@@ -412,6 +418,18 @@ public:
   static void shutdown(Orchestrator &o) { o.shutdown(); }
   static void shutdown(Orchestrator &o, ShipModeRequest reason) { o.shutdown(reason); }
   static void on_bms_status_timer(Orchestrator &o) { o.on_bms_status_timer(); }
+  static void on_bms_timer(Orchestrator &o) { o.on_bms_timer(); }
+
+  // --- FG learning ---
+  static FgLearningStage fg_learning_stage(const Orchestrator &o) { return o._fg_learning.stage(); }
+  static uint8_t fg_learning_cycle(const Orchestrator &o) { return o._fg_learning.cycle(); }
+  static void load_fg_learning(Orchestrator &o, FgLearningStage stage, uint8_t cycle,
+                               uint8_t itpor) {
+    o._fg_learning.load(stage, cycle, itpor);
+    o._fg_prev_stage = FgLearningStage::Idle;
+  }
+  static bool tick_fg_learning(Orchestrator &o) { return o.tick_fg_learning(); }
+  static uint16_t normal_charge_current_ma() { return Orchestrator::NORMAL_CHARGE_CURRENT_MA; }
   static void apply_settings_change(Orchestrator &o) { o.apply_settings_change(); }
   static void prepare_for_sleep(Orchestrator &o, uint32_t sleep_ms = 60000) {
     o.prepare_for_sleep(sleep_ms);
@@ -3493,6 +3511,7 @@ struct PmSleepFixture {
   std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_int;
   std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_bool;
   std::unique_ptr<trompeloeil::expectation> _exp_cfg_set_string;
+  std::unique_ptr<trompeloeil::expectation> _exp_cfg_get_int;
   std::unique_ptr<trompeloeil::expectation> _exp_cfg_commit;
 
   PmSleepFixture()
@@ -3538,6 +3557,8 @@ struct PmSleepFixture {
                             .RETURN(ConfigStoreResult::OK);
     _exp_cfg_set_string = NAMED_ALLOW_CALL(mock_config, set_string(trompeloeil::_, trompeloeil::_))
                               .RETURN(ConfigStoreResult::OK);
+    _exp_cfg_get_int = NAMED_ALLOW_CALL(mock_config, get_int(trompeloeil::_, trompeloeil::_))
+                           .RETURN(ConfigStoreResult::NOT_FOUND);
     _exp_cfg_commit = NAMED_ALLOW_CALL(mock_config, commit()).RETURN(ConfigStoreResult::OK);
   }
 
@@ -3988,6 +4009,8 @@ namespace {
   ALLOW_CALL((F).mock_config, set_string(trompeloeil::_, trompeloeil::_))                          \
       .RETURN(ConfigStoreResult::OK);                                                              \
   ALLOW_CALL((F).mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);                \
+  ALLOW_CALL((F).mock_config, get_int(trompeloeil::_, trompeloeil::_))                             \
+      .RETURN(ConfigStoreResult::NOT_FOUND);                                                       \
   ALLOW_CALL((F).mock_config, commit()).RETURN(ConfigStoreResult::OK)
 
 Event make_wifi_disconnected(WifiDisconnectReason r) {
@@ -5176,4 +5199,104 @@ TEST_CASE("OTA: lightweight WiFi failure renders a snackbar over the current scr
   // no Home reset for the lightweight path).
   CHECK(DisplayService::spy_update_count == 1);
   CHECK(test_spy::sensor_stopped == false); // never quiesced on a no-op check
+}
+
+// ============================================================================
+// Fuel-gauge learning wiring
+// ============================================================================
+
+TEST_CASE("FG learning: second manufacturing boot-press arms a run", "[Orchestrator][fglearn]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::settings(orch).onboarding_done = false;
+  A::set_manufacturing_mode(orch, true); // first press already entered manufacturing
+
+  InputEventData in{InputSource::ButtonBoot, InputType::ShortPress};
+  A::on_input(orch, in);
+
+  CHECK(A::fg_learning_stage(orch) == FgLearningStage::Charge);
+  CHECK(A::fg_learning_cycle(orch) == 1);
+}
+
+TEST_CASE("FG learning: boot-press after onboarding does not arm", "[Orchestrator][fglearn]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::settings(orch).onboarding_done = true; // post-onboarding unit
+
+  InputEventData in{InputSource::ButtonBoot, InputType::ShortPress};
+  A::on_input(orch, in);
+
+  CHECK(A::fg_learning_stage(orch) == FgLearningStage::Idle);
+}
+
+TEST_CASE("FG learning: EDV CycleDone commit failure does not ship",
+          "[Orchestrator][fglearn][edv]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  // Writes succeed but commit fails → save_fg_learning_state() returns false.
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+
+  A::load_fg_learning(orch, FgLearningStage::Discharge, 1, 0);
+
+  PowerSnapshot snap{};
+  snap.ship_mode_request = ShipModeRequest::OverDischarge;
+  snap.edv_cutoff_reached = true;
+  test_spy::snapshot_to_return = snap; // on_bms_timer's poll_bms returns this
+
+  A::on_bms_timer(orch);
+
+  CHECK_FALSE(test_spy::shutdown_called); // commit failed → keep discharging
+}
+
+TEST_CASE("FG learning: EDV CycleDone commit success ships", "[Orchestrator][fglearn][edv]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+
+  A::load_fg_learning(orch, FgLearningStage::Discharge, 1, 0);
+
+  PowerSnapshot snap{};
+  snap.ship_mode_request = ShipModeRequest::OverDischarge;
+  snap.edv_cutoff_reached = true;
+  test_spy::snapshot_to_return = snap;
+
+  A::on_bms_timer(orch);
+
+  CHECK(test_spy::shutdown_called); // committed → ship
+}
+
+TEST_CASE("FG learning: entering Complete restores charge/load and clears learning bits",
+          "[Orchestrator][fglearn][terminal]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+
+  // Healthy verify read-back → pass.
+  FgLearningVerifyReadout r;
+  r.ok = true;
+  r.itpor = false;
+  r.qmax_up = true;
+  r.design_capacity_mah = 2000;
+  r.qmax_mah = 1950;
+  for (int i = 0; i < FG_RA_TABLE_SIZE; ++i) {
+    r.ra[i] = static_cast<int16_t>(50 + i);
+  }
+  test_spy::fg_verify_to_return = r;
+
+  A::load_fg_learning(orch, FgLearningStage::Verify, FgLearningController::CYCLE_TARGET, 0);
+  test_spy::fg_update_status_learning = true; // pretend lifted during the run
+  test_spy::fg_manual_charge_disabled = true;
+
+  A::tick_fg_learning(orch); // enter Verify, read verify -> Complete
+  A::tick_fg_learning(orch); // observe Complete transition -> terminal cleanup
+
+  CHECK(A::fg_learning_stage(orch) == FgLearningStage::Complete);
+  CHECK_FALSE(test_spy::fg_update_status_learning); // change limits restored
+  CHECK_FALSE(test_spy::fg_manual_charge_disabled); // charge path released
+  CHECK(test_spy::fg_charge_current_ma == A::normal_charge_current_ma());
 }

@@ -668,6 +668,44 @@ bool is_shutdown_screen(Screen screen) {
          screen == Screen::ShutdownTemperature;
 }
 
+// Any fuel-gauge learning phase banner.
+bool is_fg_learning_screen(Screen screen) {
+  switch (screen) {
+  case Screen::FgLearnCharging:
+  case Screen::FgLearnResting:
+  case Screen::FgLearnUnplug:
+  case Screen::DischargeComplete:
+  case Screen::FgLearnVerifying:
+  case Screen::FgLearnComplete:
+  case Screen::FgLearnFailed:
+    return true;
+  default:
+    return false;
+  }
+}
+
+// Second-line phase text for a learning banner.
+const char *fg_learning_phase_text(Screen screen) {
+  switch (screen) {
+  case Screen::FgLearnCharging:
+    return "Charging...";
+  case Screen::FgLearnResting:
+    return "Resting...";
+  case Screen::FgLearnUnplug:
+    return "Unplug charger";
+  case Screen::DischargeComplete:
+    return "Discharge complete";
+  case Screen::FgLearnVerifying:
+    return "Verifying...";
+  case Screen::FgLearnComplete:
+    return "Complete";
+  case Screen::FgLearnFailed:
+    return "Failed";
+  default:
+    return "";
+  }
+}
+
 // A "navigable" screen is one the user reaches through normal menu interaction.
 // Transitions between navigable screens use body-only partial for snappy UX.
 // Screens NOT listed here (PairingPasskey, Shutdown*) trigger Fast on transition.
@@ -1365,6 +1403,12 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     return;
   }
 
+  // Fuel-gauge learning phase banners own the full canvas (text only).
+  if (is_fg_learning_screen(v.screen)) {
+    _draw_fg_learning_banner(v.screen);
+    return;
+  }
+
   // Session screens own the full canvas — no status bar, no snackbar.
   if (v.screen == Screen::Info) {
     _draw_info(v);
@@ -1409,6 +1453,15 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::ProvisioningConfirm:
   case Screen::GettingStarted:
     // Already handled above before the status-bar draw.
+    break;
+  // FG-learning phase banners are drawn by _draw_fg_learning_banner() above.
+  case Screen::FgLearnCharging:
+  case Screen::FgLearnResting:
+  case Screen::FgLearnUnplug:
+  case Screen::DischargeComplete:
+  case Screen::FgLearnVerifying:
+  case Screen::FgLearnComplete:
+  case Screen::FgLearnFailed:
     break;
   }
 
@@ -1813,6 +1866,32 @@ void DisplayService::_draw_info(const DisplayValues &v) {
     const int x = (SCREEN_W - w) / 2;
     const int baseline_y = top_y + ascent + static_cast<int>(i) * line_h;
     draw_text(&_u8g2, x, baseline_y, scratch);
+  }
+}
+
+void DisplayService::_draw_fg_learning_banner(Screen screen) {
+  // Two centered lines: a fixed title and the phase-specific status line.
+  const char *title = "Battery learning";
+  const char *phase = fg_learning_phase_text(screen);
+
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB12_tf);
+  constexpr int LINE_GAP_PX = 8;
+  const int ascent = u8g2_GetAscent(&_u8g2);
+  const int descent = u8g2_GetDescent(&_u8g2); // negative
+  const int line_h = (ascent - descent) + LINE_GAP_PX;
+
+  const int block_h = 2 * line_h;
+  int top_y = BODY_Y + (BODY_H - block_h) / 2;
+  if (top_y < BODY_Y) {
+    top_y = BODY_Y;
+  }
+
+  const char *lines[2] = {title, phase};
+  for (int i = 0; i < 2; ++i) {
+    const int w = static_cast<int>(u8g2_GetStrWidth(&_u8g2, lines[i]));
+    const int x = (SCREEN_W - w) / 2;
+    const int baseline_y = top_y + ascent + i * line_h;
+    draw_text(&_u8g2, x, baseline_y, lines[i]);
   }
 }
 

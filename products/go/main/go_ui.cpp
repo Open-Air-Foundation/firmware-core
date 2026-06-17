@@ -178,6 +178,15 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
   case Screen::ShutdownTemperature:
   case Screen::PairingPasskey:
   case Screen::Info:
+  // FG-learning phase banners are non-interactive (operator acts via charger
+  // plug/unplug); the orchestrator drives the screen directly.
+  case Screen::FgLearnCharging:
+  case Screen::FgLearnResting:
+  case Screen::FgLearnUnplug:
+  case Screen::DischargeComplete:
+  case Screen::FgLearnVerifying:
+  case Screen::FgLearnComplete:
+  case Screen::FgLearnFailed:
     // Info has no interactive elements.  Shutdown* / PairingPasskey have
     // no row-cursor either.  Drop all input.
     return {};
@@ -265,6 +274,15 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     break;
   case Screen::GettingStarted:
     populate_getting_started_rows(v);
+    break;
+  // FG-learning banners carry no list rows (rendered as centered text).
+  case Screen::FgLearnCharging:
+  case Screen::FgLearnResting:
+  case Screen::FgLearnUnplug:
+  case Screen::DischargeComplete:
+  case Screen::FgLearnVerifying:
+  case Screen::FgLearnComplete:
+  case Screen::FgLearnFailed:
     break;
   }
 

@@ -29,6 +29,11 @@ constexpr const char *KEY_STATIC_DNS1 = "sd1";
 constexpr const char *KEY_STATIC_DNS2 = "sd2";
 // First-boot onboarding guide flag.
 constexpr const char *KEY_ONBOARDING_DONE = "obd";
+// Fuel-gauge learning factory state — separate keys, never written by
+// save_go_settings(), so factory_reset() leaves them intact.
+constexpr const char *KEY_FG_LEARNING_STAGE = "fs_s";
+constexpr const char *KEY_FG_LEARNING_CYCLE = "fs_c";
+constexpr const char *KEY_FG_LEARNING_ITPOR = "fs_i";
 
 bool is_measure_interval_valid(int value) { return value >= 1 && value <= 3600; }
 
@@ -49,6 +54,13 @@ bool is_device_name_valid(const std::string &value) { return !value.empty() && v
 bool is_led_brightness_valid(int value) { return value >= 0 && value <= 3; }
 
 bool is_touch_led_intensity_valid(int value) { return value >= 0 && value <= 2; }
+
+bool is_fg_learning_stage_valid(int value) {
+  return value >= static_cast<int>(FgLearningStage::Idle) &&
+         value <= static_cast<int>(FgLearningStage::Failed);
+}
+
+bool is_byte_valid(int value) { return value >= 0 && value <= 255; }
 
 } // namespace
 
@@ -296,4 +308,59 @@ void print_settings(const GoSettings &settings) {
           static_cast<int>(settings.touch_led_intensity), settings.buzzer_enabled ? "on" : "off",
           settings.device_name.c_str(), settings.disable_cloud ? "true" : "false",
           settings.static_ip.ip != 0 ? "set" : "dhcp", settings.onboarding_done ? "true" : "false");
+}
+
+// ---------------------------------------------------------------------------
+// FactorySettings — fuel-gauge learning state (separate keys, survives
+// factory_reset()).
+// ---------------------------------------------------------------------------
+
+bool load_factory_settings(ConfigStore &store, FactorySettings &out) {
+  out = FactorySettings{}; // defaults; absent keys keep them
+
+  int stage = 0;
+  if (store.get_int(KEY_FG_LEARNING_STAGE, stage) == ConfigStoreResult::OK &&
+      is_fg_learning_stage_valid(stage)) {
+    out.fg_learning_stage = static_cast<FgLearningStage>(stage);
+  }
+
+  int cycle = 0;
+  if (store.get_int(KEY_FG_LEARNING_CYCLE, cycle) == ConfigStoreResult::OK &&
+      is_byte_valid(cycle)) {
+    out.fg_learning_cycle = static_cast<uint8_t>(cycle);
+  }
+
+  int itpor = 0;
+  if (store.get_int(KEY_FG_LEARNING_ITPOR, itpor) == ConfigStoreResult::OK &&
+      is_byte_valid(itpor)) {
+    out.fg_learning_itpor_losses = static_cast<uint8_t>(itpor);
+  }
+
+  return true;
+}
+
+bool save_factory_settings(ConfigStore &store, const FactorySettings &in) {
+  return save_fg_learning_state(store, in.fg_learning_stage, in.fg_learning_cycle,
+                                in.fg_learning_itpor_losses);
+}
+
+bool save_fg_learning_state(ConfigStore &store, FgLearningStage stage, uint8_t cycle,
+                            uint8_t itpor_losses) {
+  if (store.set_int(KEY_FG_LEARNING_STAGE, static_cast<int>(stage)) != ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_FG_LEARNING_CYCLE, cycle) != ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_FG_LEARNING_ITPOR, itpor_losses) != ConfigStoreResult::OK) {
+    return false;
+  }
+  return store.commit() == ConfigStoreResult::OK;
+}
+
+bool clear_factory_settings(ConfigStore &store) {
+  store.erase(KEY_FG_LEARNING_STAGE);
+  store.erase(KEY_FG_LEARNING_CYCLE);
+  store.erase(KEY_FG_LEARNING_ITPOR);
+  return store.commit() == ConfigStoreResult::OK;
 }

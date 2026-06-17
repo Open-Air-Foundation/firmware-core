@@ -38,6 +38,9 @@ public:
   /// Expected response from Control(DEVICE_TYPE) used to confirm part.
   static constexpr uint16_t DEVICE_TYPE_BQ27427 = 0x0427;
 
+  /// Ra resistance-grid size (TRM Ra0 RAM subclass).
+  static constexpr int RA_TABLE_SIZE = 15;
+
   struct Config {
     uint8_t address = DEFAULT_ADDRESS;
     uint32_t scl_speed_hz = 400000;
@@ -66,13 +69,29 @@ public:
   bool read_internal_temperature_c(float &out) override;
   bool read_flags(uint16_t &out) override;
 
+  // -- FG-learning surface (overrides FuelGaugeDevice) -----------------------
+  bool read_control_status(uint16_t &out) override;      // Control(0x0000)
+  bool read_qmax_cell0(uint16_t &out) override;          // State subclass word 0
+  bool read_ra_table(int16_t *out, size_t len) override; // Ra0 RAM subclass 0x59
+  bool set_update_status_learning(bool enable) override; // Update Status bit0+bit1
+
   // -- Control() subcommand (non-virtual; concrete class only) ---------------
   bool control_subcommand(uint16_t subcmd, uint16_t &result);
+
+  // -- Boot-only chemistry switch (concrete class; GoHardwareBoard) ----------
+
+  /// Read Control(CHEM_ID = 0x0008).
+  bool read_chem_id(uint16_t &out);
+
+  /// Select CHEM_B (4.2 V profile, Chem ID 0x1202), idempotent.  Changing the
+  /// Chem ID RESETS IT learning, so this must run before any learning run and
+  /// is a no-op once already on 0x1202.
+  bool select_chemistry_4v2();
 
   // -- Data Memory (non-virtual; concrete class only) ------------------------
 
   /// DM read; does not enter CFGUPDATE; does not perturb learned state.
-  bool read_design_capacity_mah(uint16_t &out);
+  bool read_design_capacity_mah(uint16_t &out) override;
 
   /// DM read of the full 4-field FgCellConfig block.  Same property
   /// as read_design_capacity_mah — non-perturbing.

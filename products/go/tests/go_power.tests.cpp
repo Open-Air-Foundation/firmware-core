@@ -69,6 +69,11 @@ public:
   IMPLEMENT_MOCK1(read_full_charge_capacity_mah);
   IMPLEMENT_MOCK1(read_internal_temperature_c);
   IMPLEMENT_MOCK1(read_flags);
+  IMPLEMENT_MOCK1(read_control_status);
+  IMPLEMENT_MOCK1(read_qmax_cell0);
+  IMPLEMENT_MOCK1(read_design_capacity_mah);
+  IMPLEMENT_MOCK2(read_ra_table);
+  IMPLEMENT_MOCK1(set_update_status_learning);
 };
 
 // ============================================================================
@@ -1394,6 +1399,7 @@ TEST_CASE("set_fuel_gauge: null-pointer guard and overwrite", "[PowerService][fg
     ALLOW_CALL(mock_fg2, read_full_charge_capacity_mah(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_fg2, read_internal_temperature_c(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_fg2, read_flags(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg2, read_control_status(trompeloeil::_)).RETURN(false);
 
     REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_)).RETURN(true);
     REQUIRE_CALL(mock_bms, read_status(trompeloeil::_)).RETURN(true);
@@ -1432,6 +1438,7 @@ TEST_CASE("poll_bms: SOC source switching with FG", "[PowerService][fg][poll_bms
         .SIDE_EFFECT(_1 = 28.5f)
         .RETURN(true);
     ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = 0x0100).RETURN(true);
+    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_)).RETURN(false);
 
     REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
         .SIDE_EFFECT(_1.battery_voltage = 3.8f)
@@ -1472,6 +1479,7 @@ TEST_CASE("poll_bms: SOC source switching with FG", "[PowerService][fg][poll_bms
         .SIDE_EFFECT(_1 = 25.0f)
         .RETURN(true);
     ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = 0x0004).RETURN(true);
+    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_)).RETURN(false);
 
     REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
         .SIDE_EFFECT(_1.battery_voltage = 3.7f)
@@ -1508,6 +1516,7 @@ TEST_CASE("poll_bms: SOC source switching with FG", "[PowerService][fg][poll_bms
     ALLOW_CALL(mock_fg, read_full_charge_capacity_mah(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_fg, read_internal_temperature_c(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_)).RETURN(false);
 
     REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
         .SIDE_EFFECT(_1.battery_voltage = 3.7f)
@@ -1573,7 +1582,8 @@ TEST_CASE("poll_bms: SOC source switching with FG", "[PowerService][fg][poll_bms
   ALLOW_CALL(fg_mock, read_internal_temperature_c(trompeloeil::_))                                 \
       .SIDE_EFFECT(_1 = 25.0f)                                                                     \
       .RETURN(true);                                                                               \
-  ALLOW_CALL(fg_mock, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = flags_val).RETURN(true)
+  ALLOW_CALL(fg_mock, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = flags_val).RETURN(true);        \
+  ALLOW_CALL(fg_mock, read_control_status(trompeloeil::_)).RETURN(false)
 
 // Helper: stub BMS reads for a single poll cycle (charger side).
 // percentage, charging_state, and power_source are the primary knobs.
@@ -1883,5 +1893,167 @@ TEST_CASE("poll_bms: full-charge pause — thermal interaction", "[PowerService]
 
     const PowerSnapshot snap = svc.poll_bms();
     CHECK_FALSE(snap.full_charge_paused);
+  }
+}
+
+// ============================================================================
+// FG-learning snapshot flags — poll_bms() decode
+// ============================================================================
+
+TEST_CASE("poll_bms: FG-learning flag decode", "[PowerService][fg][learning]") {
+  MockBmsDevice mock_bms;
+  MockFuelGaugeDevice mock_fg;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  svc.set_fuel_gauge(&mock_fg);
+
+  SECTION("Flags() and CONTROL_STATUS bits map to snapshot fields") {
+    STUB_FG_READS(mock_fg, 80,
+                  FgFlags::FC | FgFlags::CHG | FgFlags::DSG | FgFlags::ITPOR | FgFlags::OCVTAKEN);
+    // Override the macro's control_status stub: QMAX_UP (1<<4) | RES_UP (1<<5).
+    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_))
+        .SIDE_EFFECT(_1 = (1u << 4) | (1u << 5))
+        .RETURN(true);
+    STUB_BMS_READS(mock_bms, 80.0f, BmsChargingState::FastCharge, BmsPowerSource::UsbSdp);
+    ALLOW_CALL(mock_bms, set_charge_enable(trompeloeil::_)).RETURN(true); // FC+plugged pause
+
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.fg_flag_fc);
+    CHECK(snap.fg_flag_chg);
+    CHECK(snap.fg_flag_dsg);
+    CHECK(snap.fg_itpor);
+    CHECK(snap.fg_ocv_taken);
+    CHECK(snap.fg_qmax_up);
+    CHECK(snap.fg_res_up);
+    CHECK(snap.external_input_present); // UsbSdp = plugged
+  }
+
+  SECTION("cleared flags map to false; on battery → not plugged") {
+    STUB_FG_READS(mock_fg, 50, 0x0000);
+    STUB_BMS_READS(mock_bms, 50.0f, BmsChargingState::NotCharging, BmsPowerSource::None);
+
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK_FALSE(snap.fg_flag_fc);
+    CHECK_FALSE(snap.fg_itpor);
+    CHECK_FALSE(snap.fg_ocv_taken);
+    CHECK_FALSE(snap.fg_qmax_up);
+    CHECK_FALSE(snap.external_input_present);
+    CHECK_FALSE(snap.edv_cutoff_reached);
+  }
+}
+
+TEST_CASE("poll_bms: edv_cutoff_reached mirrors OverDischarge trip",
+          "[PowerService][fg][learning][edv]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  // Three consecutive sub-EDV polls on battery trip the debounced ship request.
+  ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+      .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+      .RETURN(true);
+  ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_)).SIDE_EFFECT(*_1 = 3.0f).RETURN(true);
+  ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+      .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
+                   _1.power_source = BmsPowerSource::None)
+      .RETURN(true);
+
+  svc.poll_bms();
+  svc.poll_bms();
+  const PowerSnapshot snap = svc.poll_bms();
+  CHECK(snap.ship_mode_request == ShipModeRequest::OverDischarge);
+  CHECK(snap.edv_cutoff_reached);
+}
+
+// ============================================================================
+// read_fg_learning_verify — aggregation
+// ============================================================================
+
+TEST_CASE("read_fg_learning_verify: aggregates driver reads", "[PowerService][fg][verify]") {
+  MockBmsDevice mock_bms;
+  MockFuelGaugeDevice mock_fg;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  SECTION("no FG attached → ok=false") {
+    const FgLearningVerifyReadout r = svc.read_fg_learning_verify();
+    CHECK_FALSE(r.ok);
+  }
+
+  SECTION("all reads OK → populated, ok=true, ITPOR/QMAX_UP decoded") {
+    svc.set_fuel_gauge(&mock_fg);
+    ALLOW_CALL(mock_fg, ready()).RETURN(true);
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = 0x0000).RETURN(true);
+    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_))
+        .SIDE_EFFECT(_1 = (1u << 4)) // QMAX_UP
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_qmax_cell0(trompeloeil::_)).SIDE_EFFECT(_1 = 1950).RETURN(true);
+    ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 2000)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_ra_table(trompeloeil::_, trompeloeil::_))
+        .SIDE_EFFECT(for (int i = 0; i < FG_RA_TABLE_SIZE; ++i) _1[i] =
+                         static_cast<int16_t>(50 + i))
+        .RETURN(true);
+
+    const FgLearningVerifyReadout r = svc.read_fg_learning_verify();
+    CHECK(r.ok);
+    CHECK_FALSE(r.itpor);
+    CHECK(r.qmax_up);
+    CHECK(r.qmax_mah == 1950);
+    CHECK(r.design_capacity_mah == 2000);
+    CHECK(r.ra[0] == 50);
+    CHECK(r.ra[FG_RA_TABLE_SIZE - 1] == 64);
+  }
+
+  SECTION("a failed read → ok=false but ITPOR still decoded") {
+    svc.set_fuel_gauge(&mock_fg);
+    ALLOW_CALL(mock_fg, ready()).RETURN(true);
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = FgFlags::ITPOR).RETURN(true);
+    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);
+    ALLOW_CALL(mock_fg, read_qmax_cell0(trompeloeil::_)).RETURN(false); // fails
+    ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 2000)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_ra_table(trompeloeil::_, trompeloeil::_)).RETURN(true);
+
+    const FgLearningVerifyReadout r = svc.read_fg_learning_verify();
+    CHECK_FALSE(r.ok);
+    CHECK(r.itpor);
+  }
+}
+
+// ============================================================================
+// FG-learning charge / Update Status setters
+// ============================================================================
+
+TEST_CASE("set_manual_charge_disabled forwards to BMS and gates auto re-enable",
+          "[PowerService][fg][learning]") {
+  MockBmsDevice mock_bms;
+  MockFuelGaugeDevice mock_fg;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  svc.set_fuel_gauge(&mock_fg);
+
+  // Disabling charge forwards set_charge_enable(false).
+  REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+  svc.set_manual_charge_disabled(true);
+
+  // While manually disabled, a full+plugged poll must NOT auto-toggle charge
+  // (no set_charge_enable expectation → trompeloeil fails if called).
+  STUB_FG_READS(mock_fg, 100, FgFlags::FC | FgFlags::CHG);
+  STUB_BMS_READS(mock_bms, 100.0f, BmsChargingState::ChargeTerminationDone, BmsPowerSource::UsbSdp);
+  const PowerSnapshot snap = svc.poll_bms();
+  CHECK_FALSE(snap.full_charge_paused); // learning owns the charge path
+}
+
+TEST_CASE("set_update_status_learning forwards to FG when ready", "[PowerService][fg][learning]") {
+  MockBmsDevice mock_bms;
+  MockFuelGaugeDevice mock_fg;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  SECTION("no FG → false") { CHECK_FALSE(svc.set_update_status_learning(true)); }
+
+  SECTION("FG ready → forwards") {
+    svc.set_fuel_gauge(&mock_fg);
+    ALLOW_CALL(mock_fg, ready()).RETURN(true);
+    REQUIRE_CALL(mock_fg, set_update_status_learning(true)).RETURN(true);
+    CHECK(svc.set_update_status_learning(true));
   }
 }

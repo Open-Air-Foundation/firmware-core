@@ -86,6 +86,7 @@ public:
   }
 
   bool committed() const { return _committed; }
+  void reset_committed() { _committed = false; }
   void set_fail_writes(bool fail) { _fail_writes = fail; }
   bool has_int(const char *key) const { return _ints.count(key) > 0; }
 
@@ -398,4 +399,96 @@ TEST_CASE("save returns false when store write fails", "[settings]") {
   GoSettings s;
   REQUIRE_FALSE(save_go_settings(store, s));
   REQUIRE_FALSE(store.committed());
+}
+
+// ============================================================================
+// FactorySettings — fuel-gauge learning state persistence
+// ============================================================================
+
+TEST_CASE("factory settings load from empty store returns defaults", "[settings][factory]") {
+  FakeConfigStore store;
+  FactorySettings fs;
+  REQUIRE(load_factory_settings(store, fs));
+  REQUIRE(fs.fg_learning_stage == FgLearningStage::Idle);
+  REQUIRE(fs.fg_learning_cycle == 0);
+  REQUIRE(fs.fg_learning_itpor_losses == 0);
+}
+
+TEST_CASE("factory settings round-trip all fields", "[settings][factory]") {
+  FakeConfigStore store;
+
+  FactorySettings in;
+  in.fg_learning_stage = FgLearningStage::Discharge;
+  in.fg_learning_cycle = 2;
+  in.fg_learning_itpor_losses = 1;
+  REQUIRE(save_factory_settings(store, in));
+  REQUIRE(store.committed());
+
+  FactorySettings out;
+  REQUIRE(load_factory_settings(store, out));
+  REQUIRE(out.fg_learning_stage == FgLearningStage::Discharge);
+  REQUIRE(out.fg_learning_cycle == 2);
+  REQUIRE(out.fg_learning_itpor_losses == 1);
+}
+
+TEST_CASE("save_fg_learning_state writes and commits atomically", "[settings][factory]") {
+  FakeConfigStore store;
+  REQUIRE(save_fg_learning_state(store, FgLearningStage::CycleDone, 1, 0));
+  REQUIRE(store.committed());
+
+  FactorySettings out;
+  REQUIRE(load_factory_settings(store, out));
+  REQUIRE(out.fg_learning_stage == FgLearningStage::CycleDone);
+  REQUIRE(out.fg_learning_cycle == 1);
+}
+
+TEST_CASE("save_fg_learning_state fails when store write fails", "[settings][factory]") {
+  FakeConfigStore store;
+  store.set_fail_writes(true);
+  REQUIRE_FALSE(save_fg_learning_state(store, FgLearningStage::Charge, 1, 0));
+  REQUIRE_FALSE(store.committed());
+}
+
+TEST_CASE("factory settings load ignores out-of-range stored stage", "[settings][factory]") {
+  FakeConfigStore store;
+  store.set_int("fs_s", 99); // invalid stage enum
+  store.set_int("fs_c", 1);
+
+  FactorySettings out;
+  REQUIRE(load_factory_settings(store, out));
+  REQUIRE(out.fg_learning_stage == FgLearningStage::Idle); // fell back to default
+  REQUIRE(out.fg_learning_cycle == 1);                     // valid value still loaded
+}
+
+TEST_CASE("save_go_settings never touches factory keys", "[settings][factory]") {
+  FakeConfigStore store;
+
+  // Seed factory state.
+  REQUIRE(save_fg_learning_state(store, FgLearningStage::Verify, 2, 1));
+
+  // A user settings save must not overwrite or clear the factory keys.
+  GoSettings s;
+  REQUIRE(save_go_settings(store, s));
+
+  FactorySettings out;
+  REQUIRE(load_factory_settings(store, out));
+  REQUIRE(out.fg_learning_stage == FgLearningStage::Verify);
+  REQUIRE(out.fg_learning_cycle == 2);
+  REQUIRE(out.fg_learning_itpor_losses == 1);
+}
+
+TEST_CASE("clear_factory_settings erases factory keys", "[settings][factory]") {
+  FakeConfigStore store;
+  REQUIRE(save_fg_learning_state(store, FgLearningStage::Complete, 2, 0));
+  REQUIRE(store.has_int("fs_s"));
+
+  REQUIRE(clear_factory_settings(store));
+  REQUIRE_FALSE(store.has_int("fs_s"));
+  REQUIRE_FALSE(store.has_int("fs_c"));
+  REQUIRE_FALSE(store.has_int("fs_i"));
+
+  // Subsequent load returns defaults.
+  FactorySettings out;
+  REQUIRE(load_factory_settings(store, out));
+  REQUIRE(out.fg_learning_stage == FgLearningStage::Idle);
 }

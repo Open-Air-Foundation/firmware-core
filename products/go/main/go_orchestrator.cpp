@@ -208,8 +208,19 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     _last_input_ms = now;
   }
 
+  // Resume an in-progress learning run from persisted factory state.  Runs
+  // after the first poll_bms() so the snapshot carries fresh FG flags / power
+  // source.  Independent of the runtime _manufacturing_mode flag (which does
+  // not survive a cold boot).
+  resume_fg_learning_on_boot();
+  if (is_fg_learning_active()) {
+    tick_fg_learning(); // apply the resumed phase (charge/load/screen) now
+  }
+
   init_ble_if_portable();
-  if (_settings.operating_mode == OperatingMode::Stationary) {
+  // Suppress Stationary Wi-Fi / cloud while a learning run is active so the
+  // radio does not perturb the discharge/OCV load profile.
+  if (_settings.operating_mode == OperatingMode::Stationary && !is_fg_learning_active()) {
     enter_stationary();
   }
 }
@@ -222,8 +233,10 @@ void Orchestrator::run() {
   AG_LOGI(TAG, "run: entering main event loop");
 
   while (true) {
-    // Sleep check: enter sleep when locked and first measurement is done
-    if (_lock_state == LockState::Locked && _first_measurement_done) {
+    // Sleep check: enter sleep when locked and first measurement is done.
+    // Never sleep while a learning run is active — the device must stay awake
+    // to drive the charge / rest / discharge phases.
+    if (_lock_state == LockState::Locked && _first_measurement_done && !is_fg_learning_active()) {
       try_enter_sleep(); // Returns only when sleep conditions are not met
     }
 
@@ -459,6 +472,20 @@ void Orchestrator::on_bms_timer() {
   _last_bms_status_poll_ms = now; // Full poll subsumes the fast status check.
 
   if (_latest_power.ship_mode_request != ShipModeRequest::None) {
+    // EDV during a learning discharge: persist CycleDone (committed) BEFORE
+    // ship mode.  If the commit fails, do NOT ship — keep discharging and
+    // retry on the next poll.
+    if (_latest_power.ship_mode_request == ShipModeRequest::OverDischarge &&
+        (_fg_learning.stage() == FgLearningStage::Discharge ||
+         _fg_learning.stage() == FgLearningStage::CycleDone)) {
+      if (!commit_fg_learning_cycle_done()) {
+        AG_LOGE(TAG, "EDV: CycleDone commit failed — not shipping, retry next poll");
+        return;
+      }
+      _svc.ui_manager.set_screen(Screen::DischargeComplete);
+      update_display(true);
+      _svc.display_service.flush();
+    }
     shutdown(_latest_power.ship_mode_request);
     return; // system is shutting down — skip further processing
   }
@@ -471,6 +498,12 @@ void Orchestrator::on_bms_timer() {
 }
 
 void Orchestrator::on_bms_status_timer() {
+  // A learning run owns the device — drive the FSM and skip normal status UI.
+  if (tick_fg_learning()) {
+    _last_bms_status_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+    return;
+  }
+
   BmsStatus status{};
   if (_svc.power_service.poll_status(status)) {
     bool was_charging = is_bms_charging(_latest_power.charging_status);
@@ -495,6 +528,152 @@ void Orchestrator::on_bms_status_timer() {
   }
 
   _last_bms_status_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+}
+
+// ---------------------------------------------------------------------------
+// Fuel-gauge learning
+// ---------------------------------------------------------------------------
+
+bool Orchestrator::is_fg_learning_active() const {
+  const FgLearningStage s = _fg_learning.stage();
+  return s != FgLearningStage::Idle && s != FgLearningStage::Complete &&
+         s != FgLearningStage::Failed;
+}
+
+bool Orchestrator::tick_fg_learning() {
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  const FgLearningAction action = _fg_learning.tick(_latest_power, now);
+  apply_fg_learning_action(action);
+  return action.active;
+}
+
+void Orchestrator::apply_fg_learning_action(const FgLearningAction &action) {
+  const FgLearningStage stage = _fg_learning.stage();
+
+  // Idle never disturbs normal operation.
+  if (stage == FgLearningStage::Idle) {
+    _fg_prev_stage = stage;
+    return;
+  }
+
+  // Apply each stage's hardware intent once, on entry.
+  if (stage != _fg_prev_stage) {
+    persist_fg_learning_state();
+
+    if (stage == FgLearningStage::Complete || stage == FgLearningStage::Failed) {
+      fg_learning_terminal_cleanup(stage);
+    } else if (action.active) {
+      // Gauge prereq: lift Update Status change limits on cycle-1 Charge entry.
+      if (stage == FgLearningStage::Charge && _fg_learning.cycle() == 1) {
+        _svc.power_service.set_update_status_learning(true);
+      }
+      _svc.power_service.set_manual_charge_disabled(!action.set_charge_enabled);
+      if (action.set_charge_enabled && action.charge_current_ma > 0) {
+        _svc.power_service.set_charge_current_ma(action.charge_current_ma);
+      }
+      _svc.power_service.set_pm_power(!action.low_power); // quiet load => PM off
+    }
+
+    apply_fg_learning_cue(action.manual_cue);
+    _svc.ui_manager.set_screen(action.screen);
+    update_display();
+    _fg_prev_stage = stage;
+  }
+
+  // Verify reads run every tick while in Verify; may advance the stage, whose
+  // result is painted on the next tick's transition.
+  if (action.run_verify) {
+    run_fg_learning_verify();
+  }
+}
+
+void Orchestrator::persist_fg_learning_state() {
+  _factory.fg_learning_stage = _fg_learning.stage();
+  _factory.fg_learning_cycle = _fg_learning.cycle();
+  _factory.fg_learning_itpor_losses = _fg_learning.itpor_losses();
+  if (!save_fg_learning_state(_config_store, _factory.fg_learning_stage, _factory.fg_learning_cycle,
+                              _factory.fg_learning_itpor_losses)) {
+    AG_LOGE(TAG, "persist_fg_learning_state: save failed");
+  }
+}
+
+void Orchestrator::run_fg_learning_verify() {
+  const FgLearningVerifyReadout r = _svc.power_service.read_fg_learning_verify();
+  VerifyInputs in;
+  in.reads_ok = r.ok;
+  in.itpor = r.itpor;
+  in.qmax_up = r.qmax_up;
+  in.qmax_mah = r.qmax_mah;
+  in.design_capacity_mah = r.design_capacity_mah;
+  for (size_t i = 0; i < FG_LEARNING_RA_TABLE_SIZE; ++i) {
+    in.ra[i] = r.ra[i];
+  }
+  const bool pass = _fg_learning.on_verify_result(in);
+  AG_LOGI(TAG, "fg verify: %s -> stage %d (Qmax=%u DC=%u)", pass ? "PASS" : "FAIL",
+          static_cast<int>(_fg_learning.stage()), r.qmax_mah, r.design_capacity_mah);
+  persist_fg_learning_state();
+}
+
+bool Orchestrator::commit_fg_learning_cycle_done() {
+  // Single-commit CycleDone persist that MUST confirm before ship mode.
+  return save_fg_learning_state(_config_store, FgLearningStage::CycleDone, _fg_learning.cycle(),
+                                _fg_learning.itpor_losses());
+}
+
+void Orchestrator::fg_learning_terminal_cleanup(FgLearningStage stage) {
+  // 1. Restore normal charge / load (exit any learning LOW_POWER state).
+  _svc.power_service.set_manual_charge_disabled(false);
+  _svc.power_service.set_charge_current_ma(NORMAL_CHARGE_CURRENT_MA);
+  _svc.power_service.set_pm_power(true);
+  // 2. Clear learning gauge config (revert to bounded field-refinement limits).
+  _svc.power_service.set_update_status_learning(false);
+  // Dsg Current Threshold restore is bench-pending (spec Open Question).
+  // 3. Persist final state.
+  persist_fg_learning_state();
+  AG_LOGI(TAG, "fg learning terminal cleanup: %s",
+          stage == FgLearningStage::Complete ? "COMPLETE" : "FAILED");
+}
+
+void Orchestrator::apply_fg_learning_cue(ManualCue cue) {
+  switch (cue) {
+  case ManualCue::Unplug:
+    _svc.led_service.back_solid(Rgb{255, 140, 0}); // amber — "unplug charger"
+    _svc.buzzer_service.play(PATTERN_UNPLUG, PATTERN_UNPLUG_COUNT);
+    break;
+  case ManualCue::Failed:
+    _svc.led_service.back_solid(Rgb{255, 0, 0}); // red — rejected
+    break;
+  case ManualCue::Complete:
+    _svc.led_service.back_solid(Rgb{0, 255, 0}); // green — pass
+    break;
+  case ManualCue::None:
+    _svc.led_service.back_off();
+    break;
+  }
+}
+
+void Orchestrator::resume_fg_learning_on_boot() {
+  if (!load_factory_settings(_config_store, _factory)) {
+    AG_LOGW(TAG, "resume_fg_learning: load failed — defaulting Idle");
+    _factory = FactorySettings{};
+  }
+  _fg_learning.load(_factory.fg_learning_stage, _factory.fg_learning_cycle,
+                    _factory.fg_learning_itpor_losses);
+
+  const bool changed = _fg_learning.resume_on_boot(_latest_power);
+  // Force the first tick to (re)apply an active resumed phase; terminal/idle
+  // stages are treated as already-applied so a learned unit boots to normal
+  // operation without re-painting the result.
+  _fg_prev_stage = is_fg_learning_active() ? FgLearningStage::Idle : _fg_learning.stage();
+
+  if (changed) {
+    persist_fg_learning_state();
+  }
+  if (_fg_learning.stage() != FgLearningStage::Idle) {
+    AG_LOGI(TAG, "fg learning resume: stage=%d cycle=%u losses=%u",
+            static_cast<int>(_fg_learning.stage()), _fg_learning.cycle(),
+            _fg_learning.itpor_losses());
+  }
 }
 
 void Orchestrator::on_inactivity_timeout() { lock(); }
@@ -768,6 +947,15 @@ void Orchestrator::on_input(const InputEventData &input) {
 
   // Factory reset: long press on boot button
   if (input.source == InputSource::ButtonBoot && input.type == InputType::LongPress) {
+    // Reset-learning rides the factory-reset gesture, but ONLY clears a
+    // Failed run (a Complete/learned unit's result is preserved).
+    if (_fg_learning.stage() == FgLearningStage::Failed) {
+      AG_LOGI(TAG, "reset learning: clearing Failed run");
+      _fg_learning.reset();
+      clear_factory_settings(_config_store);
+      _fg_prev_stage = FgLearningStage::Idle;
+      apply_fg_learning_cue(ManualCue::None);
+    }
     if (factory_reset()) {
       AG_LOGI(TAG, "Rebooting in 2s");
       RTOS::delay_ms(2000);
@@ -776,11 +964,20 @@ void Orchestrator::on_input(const InputEventData &input) {
     return;
   }
 
-  // Manufacturing: boot short-press before onboarding skips the guide and
-  // enters Stationary ephemerally, so production can re-test a fresh unit.
+  // Manufacturing / learning arm: boot short-press before onboarding.  First
+  // press enters ephemeral Stationary; a second press (already manufacturing)
+  // arms the fuel-gauge learning run.
   if (input.source == InputSource::ButtonBoot && input.type == InputType::ShortPress &&
       !_settings.onboarding_done) {
-    enter_manufacturing_mode();
+    if (_manufacturing_mode) {
+      AG_LOGI(TAG, "arming fuel-gauge learning run");
+      _fg_learning.start();
+      _fg_prev_stage = FgLearningStage::Idle;
+      persist_fg_learning_state();
+      tick_fg_learning(); // apply the Charge phase immediately
+    } else {
+      enter_manufacturing_mode();
+    }
     return;
   }
 
@@ -1172,8 +1369,11 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
   AG_LOGI(TAG, "shutdown (reason=%d)", static_cast<int>(reason));
 
   // Manufacturing units ship clean: wipe any settings / Wi-Fi / bonds the
-  // production team changed while testing.
-  if (_manufacturing_mode) {
+  // production team changed while testing.  Gated on a user-initiated
+  // power-off (reason == None) so an EDV/OT safety trip during a learning
+  // run does not wipe state mid-run.  (FactorySettings survives factory_reset
+  // anyway; this is belt-and-suspenders.)
+  if (_manufacturing_mode && reason == ShipModeRequest::None) {
     AG_LOGI(TAG, "shutdown: manufacturing mode — factory reset before power off");
     factory_reset();
   }

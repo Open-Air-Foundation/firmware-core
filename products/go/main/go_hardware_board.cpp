@@ -53,6 +53,12 @@
 #include "go_led_driver.h"
 #include "go_power.h"
 #include "go_storage.h"
+
+// The FG-learning verify read-back size (host-safe) must match the driver's
+// Ra grid size.  This is the target-build boundary where both headers are
+// visible.
+static_assert(BQ27427::RA_TABLE_SIZE == FG_RA_TABLE_SIZE,
+              "Ra table size mismatch between BQ27427 and FG learning layer");
 #include "go_ulp.h"
 #include "nimble_ble_server.h"
 #include "services/ag_client.h"
@@ -233,6 +239,13 @@ void GoHardwareBoard::init_bms() {
       AG_LOGE(TAG, "BQ27427 init failed — FG offline");
       // Continue: _fuel_gauge stays non-null but ready() == false.
     } else {
+      // Chemistry first: ensure the 4.2 V profile (Chem ID 0x1202) before any
+      // learning run.  Idempotent — switching resets IT learning, so it must
+      // run before the cell-config write and never on an already-correct unit.
+      if (!_fuel_gauge->select_chemistry_4v2()) {
+        AG_LOGW(TAG, "BQ27427 chemistry select (0x1202) failed — FC may not latch");
+      }
+
       // Pass 1: read state with validity flags.
       uint16_t dc = 0;
       uint16_t fcc = 0;
