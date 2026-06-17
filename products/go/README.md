@@ -120,8 +120,8 @@ idf.py -C products/go build
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — boot paths, event model, module
   structure
 - [`docs/`](docs) — per-service implementation notes (BLE, cloud, display,
-  GPS, input, orchestrator, OTA, power, sensor producer, settings, storage,
-  UI, Wi-Fi)
+  fuel-gauge learning, GPS, input, orchestrator, OTA, power, sensor producer,
+  settings, storage, UI, Wi-Fi)
 - [`go_ble_client.md`](go_ble_client.md) — client-side BLE integration spec
   for mobile app developers (discovery, pairing, GATT, payloads, history)
 - [`specs/`](specs) — design specs and refactor plans (temporary; deleted

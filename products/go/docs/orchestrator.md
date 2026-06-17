@@ -731,6 +731,27 @@ No new event type is added — the BLE `START` is detected by polling
 `is_ble_active()`, not by a queued event. See [`ota_service.md`](ota_service.md)
 for the component-facing contract and edge cases.
 
+## Fuel-Gauge Learning
+
+On V1 boards the orchestrator owns the automated BQ27427 learning run and
+drives a pure `FgLearningController` from the BMS poll. The wiring methods
+are:
+
+| Method | Role |
+|---|---|
+| `tick_fg_learning()` | Tick the FSM from the latest snapshot, apply the action; called at the top of `on_bms_status_timer()` and short-circuits the rest while a run is active |
+| `apply_fg_learning_action()` | Map the action to charge / load / cue / screen / persist / verify on each stage entry |
+| `persist_fg_learning_state()` | Mirror controller state into `FactorySettings` and commit |
+| `run_fg_learning_verify()` | Read the gauge, build `VerifyInputs`, call `on_verify_result()` |
+| `resume_fg_learning_on_boot()` | Load `FactorySettings` and re-enter the FSM at `init()` |
+
+The EDV pre-ship hook in `on_bms_timer()` persists `CycleDone` (committed)
+before `shutdown(OverDischarge)`, and skips shipping when the commit fails.
+The manufacturing `factory_reset()` at `shutdown()` is gated on
+`reason == None` so a safety trip mid-run does not wipe state. See the
+[Fuel-Gauge Learning service doc](fuel_gauge_learning.md) for the full
+behavior, stages, and verify criteria.
+
 ## Display Update
 
 ### `update_display()`

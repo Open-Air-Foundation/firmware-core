@@ -592,6 +592,27 @@ transfer fitting inside a single ~6 min window. See
 [`ota_service.md`](ota_service.md) and
 [`orchestrator.md` → OTA](orchestrator.md#firmware-update-ota).
 
+## Fuel-Gauge Learning Surface
+
+On V1 boards `poll_bms()` also decodes the learning flags the
+`FgLearningController` consumes — `fg_flag_fc` / `fg_flag_chg` / `fg_flag_dsg`
+/ `fg_itpor` / `fg_ocv_taken` from `Flags()`, `fg_qmax_up` / `fg_res_up` from
+a `CONTROL_STATUS` read, `external_input_present`, and `edv_cutoff_reached`
+(a derived mirror of `ship_mode_request == OverDischarge`).
+
+These `PowerService` methods support the orchestrator's learning wiring:
+
+| Method | Role |
+|---|---|
+| `read_fg_learning_verify()` | Aggregate Qmax / design capacity / Ra grid / flags for the verify step |
+| `set_manual_charge_disabled(bool)` | Hold or release the charge path; suppresses the thermal / full-charge auto re-enable while a phase owns charging |
+| `set_charge_current_ma(uint16_t)` | Program the fast-charge limit (forwards to the BMS) |
+| `set_update_status_learning(bool)` | Lift or restore the gauge's Update Status change limits |
+
+The 4.2 V chemistry select (`BQ27427::select_chemistry_4v2()`, Chem ID
+`0x1202`) runs once at FG bring-up in `init_bms()`. See the
+[Fuel-Gauge Learning service doc](fuel_gauge_learning.md) for the full run.
+
 ## Platform Abstraction Summary
 
 | Method | Testable on Host? | Notes |

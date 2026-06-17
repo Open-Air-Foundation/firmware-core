@@ -732,6 +732,11 @@ Two tiers of storage:
 - **Fuel gauge (V1 only):** `PowerService::set_fuel_gauge()` attaches an
   already-initialised `FuelGaugeDevice` for runtime SOC reads. `poll_bms()`
   prefers FG-derived SOC and tags the log line with `src=FG|BMS`
+- **Fuel-gauge learning (V1 only):** a per-unit end-of-line run learns the
+  BQ27427 `Qmax` and `Ra` table, armed by a button and driven automatically
+  across charge / rest / discharge cycles, an EDV ship-off, cold-boot
+  resumes, and a final verify. See
+  [`docs/fuel_gauge_learning.md`](docs/fuel_gauge_learning.md)
 - Sleep cycle management (deep sleep entry, wake source config)
 - RTC memory state persistence before sleep
 - Fast-path boot logic for timer wakes
@@ -1002,6 +1007,7 @@ Detailed implementation documentation for each service:
 - [Display Service](docs/display_service.md)
 - [UI Manager](docs/ui_manager.md)
 - [Power Management](docs/power_management.md)
+- [Fuel-Gauge Learning](docs/fuel_gauge_learning.md)
 - [BLE Service](docs/ble_service.md)
 - [Wi-Fi Service](docs/wifi_service.md)
 - [Cloud Service](docs/cloud_service.md)
