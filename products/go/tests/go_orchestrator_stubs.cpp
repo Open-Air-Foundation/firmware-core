@@ -205,6 +205,8 @@ bool pm_power_set = false;
 bool pm_power_on = false;
 uint32_t pm_power_set_count = 0;
 bool pm_sleep_requested = false;
+bool ensure_pmid_healthy_called = false;
+uint32_t ensure_pmid_healthy_count = 0;
 
 void reset() {
   sensor_started = false;
@@ -351,6 +353,8 @@ void reset() {
   pm_power_on = false;
   pm_power_set_count = 0;
   pm_sleep_requested = false;
+  ensure_pmid_healthy_called = false;
+  ensure_pmid_healthy_count = 0;
 
   DisplayService::spy_deep_sleep_called = false;
   DisplayService::spy_update_count = 0;
@@ -553,6 +557,16 @@ bool PowerService::poll_status(BmsStatus &status) {
     status.charging_state = test_spy::snapshot_to_return.charging_status;
   }
   return true;
+}
+
+bool PowerService::rekick_pmid_if_collapsed(const BmsTelemetry & /*t*/, BmsPowerSource /*src*/) {
+  return false;
+}
+
+bool PowerService::ensure_pmid_healthy() {
+  test_spy::ensure_pmid_healthy_called = true;
+  ++test_spy::ensure_pmid_healthy_count;
+  return false;
 }
 
 bool PowerService::reset_watchdog() { return true; }

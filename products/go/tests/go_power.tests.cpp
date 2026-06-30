@@ -31,6 +31,7 @@
 #include "go_board.h"
 #include "go_power.h"
 #include "hal/fuel_gauge_device.h"
+#include "rtos.h"
 
 // ============================================================================
 // MockBmsDevice
@@ -52,6 +53,29 @@ public:
   IMPLEMENT_MOCK1(set_charge_enable);
   IMPLEMENT_MOCK1(set_charge_current_ma);
   IMPLEMENT_MOCK1(set_watchdog_timeout_ms);
+};
+
+// ============================================================================
+// MockRTOS — needed for tests that trigger RTOS::delay_ms (PMID re-kick)
+// ============================================================================
+
+class MockRTOS : public trompeloeil::mock_interface<RTOS> {
+public:
+  IMPLEMENT_MOCK1(delay_ms_impl);
+  IMPLEMENT_MOCK0(get_time_ms_impl);
+  void set_system_time_from_epoch_impl(int64_t) override {}
+};
+
+/// RAII guard: installs a MockRTOS and clears the singleton on destruction.
+struct ScopedMockRTOS {
+  MockRTOS mock;
+  std::unique_ptr<trompeloeil::expectation> exp_delay;
+
+  ScopedMockRTOS() {
+    RTOS::set_instance(&mock);
+    exp_delay = NAMED_ALLOW_CALL(mock, delay_ms_impl(trompeloeil::_));
+  }
+  ~ScopedMockRTOS() { RTOS::set_instance(nullptr); }
 };
 
 // ============================================================================
@@ -792,27 +816,130 @@ TEST_CASE("set_pm_power: EN_PM GPIO only, no BMS coupling", "[PowerService][pm_p
 }
 
 // ============================================================================
-// TEST CASE 9 — poll_bms: PMID resync on PM-invalid hint
+// TEST CASE 9 — rekick_pmid_if_collapsed (direct)
 // ============================================================================
 //
-// When the caller signals that the last PM read returned invalid data,
-// poll_bms re-applies the full PMID configuration via resync_pmid() —
-// but only on battery.  USB-present is skipped (chip masks EN_OTG).
-// Partial status reads also skip recovery (avoid acting on stale state).
+// Pure decision + action on already-read data.  Triggers only when on
+// battery, telemetry is valid, and vpmid < PMID_HEALTHY_MIN_MV.
 
-TEST_CASE("poll_bms: PMID resync triggered by pm_invalid_hint",
-          "[PowerService][poll_bms][resync]") {
+TEST_CASE("rekick_pmid_if_collapsed: direct helper", "[PowerService][pmid][rekick]") {
+  ScopedMockRTOS rtos;
   MockBmsDevice mock_bms;
   PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
-  // Each section sets up its own REQUIRE_CALL expectations.  Expectations
-  // must live in the same scope as the call under test, so we inline them
-  // rather than factor into a helper function (trompeloeil expectation
-  // objects are destroyed when their declaring scope exits).
+  SECTION("on battery, vpmid collapsed: re-kick fires") {
+    BmsTelemetry t{};
+    t.pmid_voltage_mv = 3240; // below PMID_HEALTHY_MIN_MV (4500)
+    trompeloeil::sequence seq;
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+  }
 
-  SECTION("hint=false: no resync regardless of power source") {
+  SECTION("on battery (OtgMode), vpmid collapsed: re-kick fires") {
+    BmsTelemetry t{};
+    t.pmid_voltage_mv = 3240;
+    trompeloeil::sequence seq;
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::OtgMode));
+  }
+
+  SECTION("on battery, vpmid healthy: no re-kick") {
+    BmsTelemetry t{};
+    t.pmid_voltage_mv = 5040; // above threshold
+    CHECK_FALSE(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+  }
+
+  SECTION("on battery, vpmid at threshold: no re-kick") {
+    BmsTelemetry t{};
+    t.pmid_voltage_mv = PowerService::PMID_HEALTHY_MIN_MV; // exactly at threshold
+    CHECK_FALSE(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+  }
+
+  SECTION("plugged (UnknownAdapter), vpmid collapsed: no re-kick") {
+    BmsTelemetry t{};
+    t.pmid_voltage_mv = 3240;
+    CHECK_FALSE(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::UnknownAdapter));
+  }
+
+  SECTION("plugged (UsbSdp), vpmid collapsed: no re-kick") {
+    BmsTelemetry t{};
+    t.pmid_voltage_mv = 3240;
+    CHECK_FALSE(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::UsbSdp));
+  }
+
+  SECTION("on battery, vpmid sentinel (read failure): no re-kick") {
+    BmsTelemetry t{};
+    // pmid_voltage_mv defaults to BmsInvalid::VOLTAGE_MV (65535)
+    CHECK_FALSE(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+  }
+}
+
+// ============================================================================
+// TEST CASE 9b — ensure_pmid_healthy (convenience wrapper)
+// ============================================================================
+
+TEST_CASE("ensure_pmid_healthy: reads fresh status+telemetry then delegates",
+          "[PowerService][pmid][ensure]") {
+  ScopedMockRTOS rtos;
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  SECTION("on battery, low vpmid: re-kicks") {
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
     REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
-        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
+        .SIDE_EFFECT(_1.pmid_voltage_mv = 3240)
+        .RETURN(true);
+    trompeloeil::sequence seq;
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    CHECK(svc.ensure_pmid_healthy());
+  }
+
+  SECTION("on battery, healthy vpmid: no re-kick") {
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.pmid_voltage_mv = 5040)
+        .RETURN(true);
+    CHECK_FALSE(svc.ensure_pmid_healthy());
+  }
+
+  SECTION("read_status fails: returns false, no re-kick") {
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_)).RETURN(false);
+    CHECK_FALSE(svc.ensure_pmid_healthy());
+  }
+
+  SECTION("read_telemetry fails: returns false, no re-kick") {
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_)).RETURN(false);
+    CHECK_FALSE(svc.ensure_pmid_healthy());
+  }
+}
+
+// ============================================================================
+// TEST CASE 9c — poll_bms: PMID boost recovery safety net
+// ============================================================================
+//
+// poll_bms uses the already-read telemetry + status to call
+// rekick_pmid_if_collapsed (zero extra I2C).  Triggered by measured PMID
+// voltage, not by pm_invalid_hint.
+
+TEST_CASE("poll_bms: PMID boost recovery safety net (voltage-driven)",
+          "[PowerService][poll_bms][pmid]") {
+  ScopedMockRTOS rtos;
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  SECTION("on battery, vpmid collapsed: re-kick fires") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.pmid_voltage_mv = 3240)
         .RETURN(true);
     REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
         .SIDE_EFFECT(*_1 = 50.0f)
@@ -820,13 +947,15 @@ TEST_CASE("poll_bms: PMID resync triggered by pm_invalid_hint",
     REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
         .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
         .RETURN(true);
-    // No REQUIRE_CALL for resync_pmid — any call fails the test.
-    svc.poll_bms(/*pm_invalid_hint=*/false);
+    trompeloeil::sequence seq;
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    svc.poll_bms();
   }
 
-  SECTION("hint=true on battery: resync fires exactly once") {
+  SECTION("on battery, vpmid healthy: no re-kick") {
     REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
-        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.pmid_voltage_mv = 5040)
         .RETURN(true);
     REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
         .SIDE_EFFECT(*_1 = 50.0f)
@@ -834,26 +963,13 @@ TEST_CASE("poll_bms: PMID resync triggered by pm_invalid_hint",
     REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
         .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
         .RETURN(true);
-    REQUIRE_CALL(mock_bms, resync_pmid()).RETURN(true);
-    svc.poll_bms(/*pm_invalid_hint=*/true);
+    // No set_pmid_enabled calls expected.
+    svc.poll_bms();
   }
 
-  SECTION("hint=true on USB (SDP): no resync (chip masks EN_OTG)") {
+  SECTION("plugged (UnknownAdapter), vpmid low: no re-kick") {
     REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
-        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
-        .SIDE_EFFECT(*_1 = 50.0f)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
-        .SIDE_EFFECT(_1.power_source = BmsPowerSource::UsbSdp)
-        .RETURN(true);
-    svc.poll_bms(/*pm_invalid_hint=*/true);
-  }
-
-  SECTION("hint=true on USB (UnknownAdapter): no resync") {
-    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
-        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.pmid_voltage_mv = 3240)
         .RETURN(true);
     REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
         .SIDE_EFFECT(*_1 = 50.0f)
@@ -861,40 +977,11 @@ TEST_CASE("poll_bms: PMID resync triggered by pm_invalid_hint",
     REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
         .SIDE_EFFECT(_1.power_source = BmsPowerSource::UnknownAdapter)
         .RETURN(true);
-    svc.poll_bms(/*pm_invalid_hint=*/true);
+    svc.poll_bms();
   }
 
-  SECTION("hint=true but read_status fails: no resync (no power source known)") {
-    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
-        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
-        .SIDE_EFFECT(*_1 = 50.0f)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_)).RETURN(false);
-    svc.poll_bms(/*pm_invalid_hint=*/true);
-  }
-
-  SECTION("hint=true on battery, resync returns false: poll_bms still completes") {
-    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
-        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
-        .SIDE_EFFECT(*_1 = 50.0f)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
-        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, resync_pmid()).RETURN(false);
-    const PowerSnapshot snap = svc.poll_bms(/*pm_invalid_hint=*/true);
-    // Snapshot still populated from the prior reads.
-    CHECK(snap.battery_voltage == Catch::Approx(3.7f));
-  }
-
-  SECTION("default arg (no hint passed): no resync") {
-    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
-        .SIDE_EFFECT(_1.battery_voltage = 3.7f)
-        .RETURN(true);
+  SECTION("read_telemetry fails: no re-kick (no telemetry to check)") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_)).RETURN(false);
     REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
         .SIDE_EFFECT(*_1 = 50.0f)
         .RETURN(true);
@@ -902,6 +989,32 @@ TEST_CASE("poll_bms: PMID resync triggered by pm_invalid_hint",
         .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
         .RETURN(true);
     svc.poll_bms();
+  }
+
+  SECTION("read_status fails: no re-kick (no power source known)") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.pmid_voltage_mv = 3240)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_)).RETURN(false);
+    svc.poll_bms();
+  }
+
+  SECTION("re-kick does not prevent snapshot population") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.pmid_voltage_mv = 3240)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, set_pmid_enabled(trompeloeil::_)).RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.battery_voltage == Catch::Approx(3.7f));
   }
 }
 

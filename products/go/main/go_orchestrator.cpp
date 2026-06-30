@@ -485,6 +485,9 @@ void Orchestrator::on_bms_status_timer() {
           bms_power_source_str(previous_power_source), bms_power_source_str(status.power_source));
       request_background_display_update();
 
+      // Re-kick PMID boost if the unplug transition collapsed the rail.
+      _svc.power_service.ensure_pmid_healthy();
+
       // Push the charging delta so clients reflect the change without polling
       // (also refreshes the full Status snapshot).
       if (_svc.ble_service.is_initialized()) {

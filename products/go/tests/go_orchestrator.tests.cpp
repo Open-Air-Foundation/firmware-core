@@ -83,6 +83,8 @@ extern bool pm_power_set;
 extern bool pm_power_on;
 extern uint32_t pm_power_set_count;
 extern bool pm_sleep_requested;
+extern bool ensure_pmid_healthy_called;
+extern uint32_t ensure_pmid_healthy_count;
 
 // --- BleService ---
 extern bool ble_init_called;
@@ -3437,6 +3439,54 @@ TEST_CASE("on_bms_status_timer: no charging transition does not notify",
   A::on_bms_status_timer(orch);
 
   CHECK_FALSE(test_spy::ble_notify_charging_status_called);
+}
+
+// ============================================================================
+// on_bms_status_timer: PMID boost recovery on power-source transition
+// ============================================================================
+
+TEST_CASE("on_bms_status_timer: power-source transition calls ensure_pmid_healthy",
+          "[Orchestrator][pmid][transition]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Transition: Unknown (default) -> None (unplug).
+  test_spy::snapshot_to_return.charger_status.power_source = BmsPowerSource::None;
+  test_spy::ensure_pmid_healthy_called = false;
+
+  A::on_bms_status_timer(orch);
+
+  CHECK(test_spy::ensure_pmid_healthy_called);
+  CHECK(test_spy::ensure_pmid_healthy_count == 1);
+}
+
+TEST_CASE("on_bms_status_timer: no power-source transition does not call ensure_pmid_healthy",
+          "[Orchestrator][pmid][transition]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // No change from initial default — no transition.
+  test_spy::ensure_pmid_healthy_called = false;
+
+  A::on_bms_status_timer(orch);
+
+  CHECK_FALSE(test_spy::ensure_pmid_healthy_called);
+}
+
+TEST_CASE("on_bms_status_timer: charging transition to plugged calls ensure_pmid_healthy",
+          "[Orchestrator][pmid][transition]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Transition: Unknown -> UnknownAdapter (plug-in).
+  test_spy::snapshot_to_return.charger_status.power_source = BmsPowerSource::UnknownAdapter;
+  test_spy::snapshot_to_return.charger_status.charging_state = BmsChargingState::FastCharge;
+  test_spy::ensure_pmid_healthy_called = false;
+
+  A::on_bms_status_timer(orch);
+
+  // ensure_pmid_healthy is called on any transition (measure-gated inside).
+  CHECK(test_spy::ensure_pmid_healthy_called);
 }
 
 TEST_CASE("background suppression: snackbar refresh on Home updates display",

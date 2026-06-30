@@ -209,16 +209,9 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
 
   _log_poll_snapshot(status);
 
-  // PMID recovery: PM was invalid on battery -> re-apply full PMID config.
-  // The chip can autonomously clear EN_OTG on BAT_OTGZ / OTG hiccup / TS
-  // faults; PM read failure is the externally-observable symptom.  Skip on
-  // USB-present (chip masks EN_OTG, boost not in play) and on partial
-  // status (avoid acting on stale state).
-  if (pm_invalid_hint && status_ok && bms_status.power_source == BmsPowerSource::None) {
-    AG_LOGW(TAG, "poll_bms: PM invalid on battery -> resync PMID");
-    if (!_bms.resync_pmid()) {
-      AG_LOGE(TAG, "poll_bms: resync_pmid() failed");
-    }
+  // PMID boost recovery (safety net): re-kick if vpmid collapsed on battery.
+  if (status_ok && telemetry_ok) {
+    rekick_pmid_if_collapsed(telemetry, bms_status.power_source);
   }
 
   // -------------------------------------------------------------------------
@@ -454,6 +447,32 @@ bool PowerService::poll_status(BmsStatus &status) {
     return false;
   }
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// PMID boost recovery
+// ---------------------------------------------------------------------------
+
+bool PowerService::rekick_pmid_if_collapsed(const BmsTelemetry &t, BmsPowerSource src) {
+  const bool on_battery = (src == BmsPowerSource::None || src == BmsPowerSource::OtgMode);
+  const bool pmid_valid = (t.pmid_voltage_mv != BmsInvalid::VOLTAGE_MV);
+  if (!(on_battery && pmid_valid && t.pmid_voltage_mv < PMID_HEALTHY_MIN_MV)) {
+    return false;
+  }
+  AG_LOGW(TAG, "PMID collapsed (vpmid=%u mV) -> re-kick boost", t.pmid_voltage_mv);
+  _bms.set_pmid_enabled(false);
+  RTOS::delay_ms(PMID_REKICK_OFF_MS);
+  _bms.set_pmid_enabled(true);
+  return true;
+}
+
+bool PowerService::ensure_pmid_healthy() {
+  BmsStatus s{};
+  BmsTelemetry t{};
+  if (!_bms.read_status(s) || !_bms.read_telemetry(t)) {
+    return false;
+  }
+  return rekick_pmid_if_collapsed(t, s.power_source);
 }
 
 bool PowerService::reset_watchdog() {

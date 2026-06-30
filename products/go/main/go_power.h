@@ -240,6 +240,16 @@ public:
   /// @return true if the read succeeded.
   bool poll_status(BmsStatus &status);
 
+  /// Re-kick PMID boost if collapsed.  Acts only when on battery with a
+  /// valid vpmid below PMID_HEALTHY_MIN_MV.
+  /// @return true if a re-kick was performed.
+  bool rekick_pmid_if_collapsed(const BmsTelemetry &t, BmsPowerSource src);
+
+  /// Read fresh status + telemetry, then delegate to
+  /// rekick_pmid_if_collapsed().
+  /// @return true if a re-kick was performed.
+  bool ensure_pmid_healthy();
+
   /// Reset BMS watchdog.  Must be called periodically (< 10 s interval).
   /// @return true if the watchdog reset succeeded.
   bool reset_watchdog();
@@ -405,6 +415,10 @@ public:
   static constexpr int16_t OT_CHARGE_HOT_CUTOFF_C = 50;
   static constexpr int16_t OT_CHARGE_HOT_RESUME_C = 47;
   static constexpr int16_t OT_SHIP_THRESHOLD_C = 60;
+
+  // --- PMID boost recovery ---
+  static constexpr uint16_t PMID_HEALTHY_MIN_MV = 4500; ///< Floor below which PMID is collapsed
+  static constexpr uint32_t PMID_REKICK_OFF_MS = 15;    ///< EN_OTG low dwell before re-assert
 
   // --- Full-charge pause ---
   //

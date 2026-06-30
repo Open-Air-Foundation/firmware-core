@@ -368,6 +368,12 @@ bool PowerService::poll_status(BmsStatus &status) {
   return true;
 }
 
+bool PowerService::rekick_pmid_if_collapsed(const BmsTelemetry & /*t*/, BmsPowerSource /*src*/) {
+  return false;
+}
+
+bool PowerService::ensure_pmid_healthy() { return false; }
+
 bool PowerService::reset_watchdog() { return true; }
 
 void PowerService::shutdown() {}

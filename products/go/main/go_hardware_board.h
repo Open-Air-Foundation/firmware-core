@@ -78,6 +78,9 @@ private:
   bool _power_ready = false;
   bool _wifi_inited = false;
 
+  // Cold-boot PMID gate — bounded wait + re-kick for SPS30 probe
+  void _ensure_pmid_ready();
+
   // Bus handles
   i2c_master_bus_handle_t _i2c_bus = nullptr;
 

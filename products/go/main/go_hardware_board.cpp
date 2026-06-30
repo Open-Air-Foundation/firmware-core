@@ -348,6 +348,51 @@ BmsDevice &GoHardwareBoard::bms() {
   return *_bms_driver;
 }
 
+// ---------------------------------------------------------------------------
+// Cold-boot PMID gate
+// ---------------------------------------------------------------------------
+
+/// Max time (ms) to wait for PMID to reach PMID_HEALTHY_MIN_MV at boot.
+static constexpr uint32_t PMID_WAIT_TIMEOUT_MS = 500;
+
+/// Poll interval (ms) while waiting for PMID at boot.
+static constexpr uint32_t PMID_WAIT_POLL_MS = 50;
+
+void GoHardwareBoard::_ensure_pmid_ready() {
+  assert(_bms_driver && "init_bms() must precede _ensure_pmid_ready()");
+
+  bool rekicked = false;
+  uint32_t elapsed_ms = 0;
+  while (elapsed_ms < PMID_WAIT_TIMEOUT_MS) {
+    BmsTelemetry t{};
+    if (_bms_driver->read_telemetry(t) && t.pmid_voltage_mv != BmsInvalid::VOLTAGE_MV &&
+        t.pmid_voltage_mv >= PowerService::PMID_HEALTHY_MIN_MV) {
+      AG_LOGI(TAG, "PMID ready: vpmid=%u mV (waited %lu ms)", t.pmid_voltage_mv,
+              static_cast<unsigned long>(elapsed_ms));
+      return;
+    }
+
+    // One re-kick attempt after the first poll sees a low rail.
+    if (!rekicked) {
+      AG_LOGW(TAG, "PMID low at boot (vpmid=%u mV) -> re-kick boost", t.pmid_voltage_mv);
+      _bms_driver->set_pmid_enabled(false);
+      RTOS::delay_ms(PowerService::PMID_REKICK_OFF_MS);
+      _bms_driver->set_pmid_enabled(true);
+      rekicked = true;
+    }
+
+    RTOS::delay_ms(PMID_WAIT_POLL_MS);
+    elapsed_ms += PMID_WAIT_POLL_MS;
+  }
+
+  AG_LOGW(TAG, "PMID wait timed out after %lu ms — proceeding to SPS30 init",
+          static_cast<unsigned long>(elapsed_ms));
+}
+
+// ---------------------------------------------------------------------------
+// Sensors
+// ---------------------------------------------------------------------------
+
 SensorManager &GoHardwareBoard::sensors(bool warm) {
   assert(_buses_ready && "sensors() requires init_buses()");
   assert(_bms_ready && "sensors() requires init_bms()");
@@ -383,6 +428,10 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
     } else {
       AG_LOGE(TAG, "SGP41 init failed");
     }
+
+    // Wait for PMID to reach healthy voltage before probing SPS30.
+    _ensure_pmid_ready();
+
     if (sps30->init(warm)) {
       s->pms_a = sps30;
     } else {
