@@ -207,6 +207,8 @@ uint32_t pm_power_set_count = 0;
 bool pm_sleep_requested = false;
 bool ensure_pmid_healthy_called = false;
 uint32_t ensure_pmid_healthy_count = 0;
+bool recover_pm_sensor_called = false;
+uint32_t recover_pm_sensor_count = 0;
 
 void reset() {
   sensor_started = false;
@@ -355,6 +357,8 @@ void reset() {
   pm_sleep_requested = false;
   ensure_pmid_healthy_called = false;
   ensure_pmid_healthy_count = 0;
+  recover_pm_sensor_called = false;
+  recover_pm_sensor_count = 0;
 
   DisplayService::spy_deep_sleep_called = false;
   DisplayService::spy_update_count = 0;
@@ -567,6 +571,11 @@ bool PowerService::ensure_pmid_healthy() {
   test_spy::ensure_pmid_healthy_called = true;
   ++test_spy::ensure_pmid_healthy_count;
   return false;
+}
+
+void PowerService::recover_pm_sensor() {
+  test_spy::recover_pm_sensor_called = true;
+  ++test_spy::recover_pm_sensor_count;
 }
 
 bool PowerService::reset_watchdog() { return true; }

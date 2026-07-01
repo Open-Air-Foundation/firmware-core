@@ -1019,6 +1019,40 @@ TEST_CASE("poll_bms: PMID boost recovery safety net (voltage-driven)",
 }
 
 // ============================================================================
+// TEST CASE 9d — recover_pm_sensor: boost-kill power cycle
+// ============================================================================
+
+TEST_CASE("recover_pm_sensor: EN_PM off -> boost off -> boost on -> EN_PM on",
+          "[PowerService][pmid][recover]") {
+  ScopedMockRTOS rtos;
+  MockBmsDevice mock_bms;
+
+  SECTION("pin_pm_power configured: full sequence fires in order") {
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 26;
+    config.pm_power_on_level = 0; // V1: active-low
+    PowerService svc(mock_bms, test_gpio_hal, config);
+
+    trompeloeil::sequence seq;
+    // set_pm_power(false) -> GPIO level = 1 (inverted for V1 active-low)
+    // set_pmid_enabled(false)
+    // delay PM_RECOVER_OFF_MS
+    // set_pmid_enabled(true)
+    // delay PM_RECOVER_SETTLE_MS
+    // set_pm_power(true) -> GPIO level = 0
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    svc.recover_pm_sensor();
+  }
+
+  SECTION("pin_pm_power not configured: no-op") {
+    PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+    // DEFAULT_CONFIG has pin_pm_power = -1. No BMS calls expected.
+    svc.recover_pm_sensor();
+  }
+}
+
+// ============================================================================
 // TEST CASE 10 — poll_bms: EDV (over-discharge) trip
 // ============================================================================
 

@@ -250,6 +250,13 @@ public:
   /// @return true if a re-kick was performed.
   bool ensure_pmid_healthy();
 
+  /// Power-cycle the PM sensor via boost kill (V1 only).
+  ///
+  /// Isolates EN_PM, kills the PMID boost so the SPS30 fully de-powers,
+  /// then restores both.  Only useful on V1 where PMID is the SPS30's
+  /// sole power source.
+  void recover_pm_sensor();
+
   /// Reset BMS watchdog.  Must be called periodically (< 10 s interval).
   /// @return true if the watchdog reset succeeded.
   bool reset_watchdog();
@@ -419,6 +426,10 @@ public:
   // --- PMID boost recovery ---
   static constexpr uint16_t PMID_HEALTHY_MIN_MV = 4500; ///< Floor below which PMID is collapsed
   static constexpr uint32_t PMID_REKICK_OFF_MS = 15;    ///< EN_OTG low dwell before re-assert
+
+  // --- PM sensor recovery (V1 boost-kill power cycle) ---
+  static constexpr uint32_t PM_RECOVER_OFF_MS = 50;     ///< SPS30 discharge after boost kill
+  static constexpr uint32_t PM_RECOVER_SETTLE_MS = 100; ///< PMID ramp + SPS30 boot after restore
 
   // --- Full-charge pause ---
   //

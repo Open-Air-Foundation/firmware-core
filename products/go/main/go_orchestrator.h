@@ -130,6 +130,9 @@ private:
   // --- PM sensor sleep (Portable mode power-cycling) ---
   bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle
 
+  // --- PM sensor recovery (V1: boost-kill power cycle on persistent failure) ---
+  uint32_t _pm_first_fail_ms = 0; ///< 0 = no failure in progress
+
   // --- Stationary networking ---
   bool _provisioning_sensitive_services_paused = false;
 
@@ -171,6 +174,7 @@ private:
   static constexpr uint32_t BMS_STATUS_POLL_INTERVAL_MS = 5000;
   static constexpr uint32_t EXT_WDT_INTERVAL_MS = 60000;
   static constexpr uint32_t MAX_REASONABLE_TIMEOUT_MS = 3600000;
+  static constexpr uint32_t PM_RECOVERY_TIMEOUT_MS = 30000;
   static constexpr uint32_t BLE_COMMAND_RESULT_DELAY_MS = 200;
   /// Settle window between pushing the op_mode Config delta and tearing down
   /// the Portable BLE link, so the notification drains before disconnect.

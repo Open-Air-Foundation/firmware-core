@@ -475,6 +475,19 @@ bool PowerService::ensure_pmid_healthy() {
   return rekick_pmid_if_collapsed(t, s.power_source);
 }
 
+void PowerService::recover_pm_sensor() {
+  if (_config.pin_pm_power < 0) {
+    return;
+  }
+  AG_LOGW(TAG, "PM sensor recovery: power-cycling via boost kill");
+  set_pm_power(false);
+  _bms.set_pmid_enabled(false);
+  RTOS::delay_ms(PM_RECOVER_OFF_MS);
+  _bms.set_pmid_enabled(true);
+  RTOS::delay_ms(PM_RECOVER_SETTLE_MS);
+  set_pm_power(true);
+}
+
 bool PowerService::reset_watchdog() {
   const bool ok = _bms.update_watchdog();
   if (!ok) {

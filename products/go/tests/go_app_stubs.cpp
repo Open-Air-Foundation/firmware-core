@@ -374,6 +374,8 @@ bool PowerService::rekick_pmid_if_collapsed(const BmsTelemetry & /*t*/, BmsPower
 
 bool PowerService::ensure_pmid_healthy() { return false; }
 
+void PowerService::recover_pm_sensor() {}
+
 bool PowerService::reset_watchdog() { return true; }
 
 void PowerService::shutdown() {}
