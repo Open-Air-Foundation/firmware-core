@@ -71,6 +71,12 @@ DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData
 /// Build DisplayValues for button-wake early paint (snapshot-based).
 DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapshot_valid);
 
+/// Build DisplayValues for the silent PMID power-cycle resume paint.
+/// Same seeding as build_wake_values but keeps the pre-reboot lock state
+/// and shows no "Unlocked" snackbar — the frame must be pixel-identical to
+/// what the e-paper glass retained through the reboot.
+DisplayValues build_pmid_resume_values(const RtcDisplaySnapshot &snapshot, LockState lock_state);
+
 /// Build DisplayValues for the cold-boot splash (Screen::Info, "Booting...").
 /// Used when Interactive boot has no snapshot and no fast-path measurement.
 DisplayValues build_boot_splash_values();

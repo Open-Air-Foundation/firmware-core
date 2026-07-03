@@ -48,9 +48,12 @@ public:
   bool enter_ship_mode() override;
   bool set_pmid_enabled(bool enabled) override;
   bool resync_pmid() override;
+  bool hard_resync_pmid() override;
+  bool power_cycle() override;
   bool set_charge_enable(bool enabled) override;
   bool set_charge_current_ma(uint16_t current_ma) override;
   bool set_watchdog_timeout_ms(uint32_t timeout_ms) override;
+  bool dump_power_registers(const char *context) override;
 
 private:
   /// Apply the full PMID configuration sequence:

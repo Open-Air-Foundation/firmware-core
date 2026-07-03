@@ -13,6 +13,7 @@
 #include <esp_attr.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <nvs.h>
 
 extern "C" {
 #include "u8x8.h"
@@ -36,22 +37,7 @@ RTC_DATA_ATTR static RtcDisplaySnapshot s_rtc_display_snapshot;
 RTC_DATA_ATTR static bool s_rtc_display_snapshot_valid = false;
 
 void save_rtc_display_snapshot(const DisplayValues &values) {
-  s_rtc_display_snapshot.co2_ppm = values.co2_ppm;
-  s_rtc_display_snapshot.pm25_ugm3 = values.pm25_ugm3;
-  s_rtc_display_snapshot.temperature_c = values.temperature_c;
-  s_rtc_display_snapshot.humidity_pct = values.humidity_pct;
-  s_rtc_display_snapshot.tvoc_index = values.tvoc_index;
-  s_rtc_display_snapshot.nox_index = values.nox_index;
-  s_rtc_display_snapshot.pressure_hpa = values.pressure_hpa;
-  s_rtc_display_snapshot.altitude_m = values.altitude_m;
-  s_rtc_display_snapshot.battery_pct = values.battery_pct;
-  s_rtc_display_snapshot.is_battery_charging = values.is_battery_charging;
-  s_rtc_display_snapshot.gps_enabled = values.gps_enabled;
-  s_rtc_display_snapshot.gps_fix = values.gps_fix;
-  s_rtc_display_snapshot.tracking_active = values.tracking_active;
-  s_rtc_display_snapshot.ble_enabled = values.ble_enabled;
-  s_rtc_display_snapshot.use_fahrenheit = values.use_fahrenheit;
-  s_rtc_display_snapshot.pm_use_usaqi = values.pm_use_usaqi;
+  fill_display_snapshot(values, s_rtc_display_snapshot);
   s_rtc_display_snapshot_valid = true;
 }
 
@@ -61,6 +47,60 @@ bool load_rtc_display_snapshot(RtcDisplaySnapshot *snapshot_out) {
   }
   *snapshot_out = s_rtc_display_snapshot;
   return true;
+}
+
+// ===========================================================================
+// PMID power-cycle resume state — NVS persistence
+// ===========================================================================
+//
+// Written by the orchestrator immediately before the BATFET recovery reboot
+// (RTC memory does not survive the power excursion); consumed exactly once
+// by GoApp::run() on the next boot.  Shares the "agopwr" namespace with the
+// power-cycle backoff counter in go_power.cpp.
+
+static constexpr const char *PMID_RESUME_NVS_NAMESPACE = "agopwr";
+static constexpr const char *PMID_RESUME_NVS_KEY = "pcyc_rsm";
+
+void save_pmid_resume_state(const PmidResumeState &state) {
+  nvs_handle_t handle;
+  if (nvs_open(PMID_RESUME_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
+    ESP_LOGE(TAG, "pmid resume: nvs_open failed");
+    return;
+  }
+  if (nvs_set_blob(handle, PMID_RESUME_NVS_KEY, &state, sizeof(state)) == ESP_OK) {
+    nvs_commit(handle);
+  } else {
+    ESP_LOGE(TAG, "pmid resume: nvs_set_blob failed");
+  }
+  nvs_close(handle);
+}
+
+bool take_pmid_resume_state(PmidResumeState *out) {
+  nvs_handle_t handle;
+  if (nvs_open(PMID_RESUME_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
+    return false;
+  }
+  size_t len = sizeof(*out);
+  const esp_err_t err = nvs_get_blob(handle, PMID_RESUME_NVS_KEY, out, &len);
+  const bool valid =
+      (err == ESP_OK && len == sizeof(*out) && out->version == PMID_RESUME_STATE_VERSION);
+  // One-shot: erase unconditionally — even a wrong-size/foreign-version blob
+  // (which get_blob rejects without err==ESP_OK) must not linger into a
+  // later boot.  Erasing a missing key is a harmless no-op.
+  nvs_erase_key(handle, PMID_RESUME_NVS_KEY);
+  nvs_commit(handle);
+  nvs_close(handle);
+  return valid;
+}
+
+void clear_pmid_resume_state() {
+  nvs_handle_t handle;
+  if (nvs_open(PMID_RESUME_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
+    return;
+  }
+  nvs_erase_key(handle, PMID_RESUME_NVS_KEY);
+  nvs_commit(handle);
+  nvs_close(handle);
 }
 
 // ===========================================================================
@@ -1117,11 +1157,11 @@ DisplayService::DisplayService(const Config &config)
       _diff_count(0), _pending_mode(RefreshMode::Full), _task_handle(nullptr), _running(false),
       _worker_busy(false) {}
 
-bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
+esp_err_t DisplayService::_setup_renderer(const DisplayValues &initial) {
   esp_err_t err = driver_init(_config);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "driver init failed: %s", esp_err_to_name(err));
-    return false;
+    return err;
   }
 
   // u8g2: software renderer into RAM only — no hardware callbacks
@@ -1132,6 +1172,27 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
 
   _prev_values = initial;
   _render_frame(initial);
+  return ESP_OK;
+}
+
+bool DisplayService::_start_worker() {
+  _running = true;
+  const bool created = RTOS::task_create(
+      _worker_entry, "disp_worker", static_cast<uint32_t>(_config.task_stack_size), this,
+      static_cast<uint32_t>(_config.task_priority), &_task_handle);
+  if (!created) {
+    ESP_LOGE(TAG, "failed to create worker task");
+    _running = false;
+    _task_handle = nullptr;
+  }
+  return created;
+}
+
+bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
+  if (_setup_renderer(initial) != ESP_OK) {
+    return false;
+  }
+  esp_err_t err;
 
   if (!defer_refresh) {
     // Synchronous initial full refresh (worker not yet started).
@@ -1168,14 +1229,7 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
   }
 
   // Start async worker task.
-  _running = true;
-  const bool created = RTOS::task_create(
-      _worker_entry, "disp_worker", static_cast<uint32_t>(_config.task_stack_size), this,
-      static_cast<uint32_t>(_config.task_priority), &_task_handle);
-  if (!created) {
-    ESP_LOGE(TAG, "failed to create worker task");
-    _running = false;
-    _task_handle = nullptr;
+  if (!_start_worker()) {
     return false;
   }
 
@@ -1185,6 +1239,42 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
   }
 
   return true;
+}
+
+bool DisplayService::init_resume(const DisplayValues &initial) {
+  if (_setup_renderer(initial) != ESP_OK) {
+    return false;
+  }
+
+  // Synchronous silent RAM re-sync: the glass still shows this exact frame,
+  // so pushing it with the fast non-flashing waveform rebuilds both RAM
+  // planes (driver_fast_write) without any visible change.  A Full GC here
+  // would flash for ~2 s and reveal the recovery reboot.
+  esp_err_t err = driver_bus_acquire();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "bus acquire failed for resume init: %s", esp_err_to_name(err));
+    return false;
+  }
+  err = driver_hw_init_fast();
+  if (err == ESP_OK) {
+    err = driver_fast_write(_render_buf);
+  }
+  if (err == ESP_OK) {
+    err = driver_fast_commit();
+  }
+  driver_bus_release();
+
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "resume refresh failed: %s", esp_err_to_name(err));
+    return false;
+  }
+  _diff_count = 1; // mirror the worker's Fast-refresh ghosting accounting
+
+  // The snapshot header may differ from the first live runtime frame
+  // (BLE/Wi-Fi icons come up async) — same policy as the deferred wake init.
+  _defer_header_check = true;
+
+  return _start_worker();
 }
 
 bool DisplayService::update(const DisplayValues &values, bool wait) {

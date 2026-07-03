@@ -107,6 +107,9 @@ constexpr uint8_t WATCHDOG_50S = 0x01;
 constexpr uint8_t WATCHDOG_100S = 0x02;
 constexpr uint8_t WATCHDOG_200S = 0x03;
 
+// CHARGER_CONTROL_1 (0x17)
+constexpr uint8_t REG_RST = (1 << 7);
+
 // CHARGER_CONTROL_2 (0x18)
 constexpr uint8_t EN_BYPASS_OTG = (1 << 7);
 constexpr uint8_t EN_OTG = (1 << 6);
@@ -183,6 +186,19 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
   }
 
   ESP_LOGI(TAG, "%s found, Part Info: 0x%02X", part_name, part_info);
+
+  ret = apply_config(config);
+  if (ret != ESP_OK) {
+    return ret;
+  }
+
+  initialized_ = true;
+  ESP_LOGI(TAG, "BQ25629 initialized successfully");
+  return ESP_OK;
+}
+
+esp_err_t BQ25629::apply_config(const BQ25629_Config &config) {
+  esp_err_t ret;
 
   // Best-effort: enable EN_AUTO_IBATDIS (CHARGER_CONTROL_0 bit7).
   // Keep init running even if this fails.
@@ -275,8 +291,38 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
     return ret;
   }
 
-  initialized_ = true;
-  ESP_LOGI(TAG, "BQ25629 initialized successfully");
+  return ESP_OK;
+}
+
+esp_err_t BQ25629::soft_reset() {
+  // REG_RST self-clears when the reset completes.  Register-domain only:
+  // BATFET stays on, so SYS (and the MCU running this code) keep power.
+  esp_err_t ret = modify_register(BQ25629_REG::CHARGER_CONTROL_1, BIT_MASK::REG_RST,
+                                  BIT_MASK::REG_RST);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to write REG_RST: %s", esp_err_to_name(ret));
+    return ret;
+  }
+
+  // Poll for self-clear: a single coarse tick (10 ms at 100 Hz FreeRTOS can
+  // round down to ~0 ms) must not turn an in-progress reset into a hard
+  // failure — the failure path here strands the chip at POR defaults.
+  uint8_t cc1 = 0;
+  bool cleared = false;
+  for (int attempt = 0; attempt < 3 && !cleared; ++attempt) {
+    vTaskDelay(pdMS_TO_TICKS(10));
+    ret = read_register(BQ25629_REG::CHARGER_CONTROL_1, cc1);
+    if (ret != ESP_OK) {
+      return ret;
+    }
+    cleared = (cc1 & BIT_MASK::REG_RST) == 0;
+  }
+  if (!cleared) {
+    ESP_LOGE(TAG, "REG_RST did not self-clear (0x17=0x%02X)", cc1);
+    return ESP_FAIL;
+  }
+
+  ESP_LOGI(TAG, "register reset complete (all registers at POR defaults)");
   return ESP_OK;
 }
 
@@ -686,6 +732,116 @@ esp_err_t BQ25629::log_charger_limits() {
   ESP_LOGI(TAG, "=======================================");
 
   return ESP_OK;
+}
+
+esp_err_t BQ25629::log_otg_registers(const char *context) {
+  // Best-effort reads; read_register() already logs on I2C failure and the
+  // field stays 0 in the table so the dump never aborts mid-way.  Failures
+  // are counted so a bus-dead all-zero dump cannot masquerade as a healthy
+  // "EN_OTG=0, no faults" chip state.
+  int failed_reads = 0;
+  auto rd8 = [&](uint8_t reg, uint8_t &v) {
+    if (read_register(reg, v) != ESP_OK) {
+      ++failed_reads;
+    }
+  };
+  uint8_t cc0 = 0, cc2 = 0, cc3 = 0, ntc0 = 0, cs0 = 0, cs1 = 0, fs0 = 0;
+  uint16_t votg = 0;
+  rd8(BQ25629_REG::CHARGER_CONTROL_0, cc0);
+  rd8(BQ25629_REG::CHARGER_CONTROL_2, cc2);
+  rd8(BQ25629_REG::CHARGER_CONTROL_3, cc3);
+  rd8(BQ25629_REG::NTC_CONTROL_0, ntc0);
+  rd8(BQ25629_REG::CHARGER_STATUS_0, cs0);
+  rd8(BQ25629_REG::CHARGER_STATUS_1, cs1);
+  rd8(BQ25629_REG::FAULT_STATUS_0, fs0);
+  if (read_register_16(BQ25629_REG::VOTG_REGULATION, votg) != ESP_OK) {
+    ++failed_reads;
+  }
+
+  // Latched flag registers: unlike the instantaneous *_STATUS regs above,
+  // these record any event since the last read (and clear on read), so a
+  // transient boost hiccup / PMID-UVP that STATUS misses is captured here.
+  // This function is the sole reader/owner of the FLAG registers — adding
+  // another consumer (e.g. an INT-pin fault handler) would silently race
+  // with these clear-on-read accesses.
+  uint8_t cflag0 = 0, cflag1 = 0, fflag0 = 0;
+  rd8(BQ25629_REG::CHARGER_FLAG_0, cflag0);
+  rd8(BQ25629_REG::CHARGER_FLAG_1, cflag1);
+  rd8(BQ25629_REG::FAULT_FLAG_0, fflag0);
+
+  BQ25629_ADC_Data adc{};
+  read_adc(adc);
+
+  const uint8_t en_otg = (cc2 >> 6) & 0x01;
+  const uint8_t en_bypass = (cc2 >> 7) & 0x01;
+  const uint8_t votg_code = (votg >> 6) & 0x7F; // REG0x0C bits [12:6]
+  const uint16_t votg_mv = (votg_code >= 0x30) ? ((votg_code - 0x30) * 80 + 3840) : 0;
+  const uint8_t vbat_otg_min = (cc3 >> 4) & 0x01;
+  const uint8_t vbat_uvlo = (cc3 >> 5) & 0x01;
+  const uint8_t ibat_pk = (cc3 >> 6) & 0x03;
+  const uint8_t en_hiz = (cc0 >> 4) & 0x01;
+  const uint8_t force_pmid_dis = (cc0 >> 3) & 0x01;
+  const uint8_t wd = cc0 & 0x03;
+  const uint8_t ts_ignore = (ntc0 >> 7) & 0x01;
+  const uint8_t vbus_stat = cs1 & 0x07;
+
+  static const char *const WD_STR[] = {"disabled", "50s", "100s", "200s"};
+  static const char *const IBATPK_STR[] = {"reserved", "reserved", "6A", "12A"};
+  const char *vbus_str;
+  switch (vbus_stat) {
+  case 0: vbus_str = "No input"; break;
+  case 1: vbus_str = "USB SDP"; break;
+  case 2: vbus_str = "USB CDP"; break;
+  case 3: vbus_str = "USB DCP"; break;
+  case 4: vbus_str = "Unknown adapter"; break;
+  case 5: vbus_str = "Non-standard"; break;
+  case 7: vbus_str = "OTG (boost active)"; break;
+  default: vbus_str = "?"; break;
+  }
+
+  ESP_LOGI(TAG, "+=========== OTG registers [%s] ===========", context ? context : "");
+  if (failed_reads > 0) {
+    ESP_LOGW(TAG, "| !! %d register reads FAILED — zeroed fields below are unreliable",
+             failed_reads);
+  }
+  ESP_LOGI(TAG, "| REG  FIELD          BITS   VAL   DECODED");
+  ESP_LOGI(TAG, "| 0x18 EN_OTG         [6]    %u     %s", en_otg,
+           en_otg ? "boost ENABLED" : "boost disabled");
+  ESP_LOGI(TAG, "| 0x18 EN_BYPASS_OTG  [7]    %u     %s", en_bypass,
+           en_bypass ? "bypass ON" : "bypass off");
+  ESP_LOGI(TAG, "| 0x0C VOTG           [12:6] 0x%02X  %u mV (raw 0x%04X)", votg_code, votg_mv, votg);
+  ESP_LOGI(TAG, "| 0x19 VBAT_OTG_MIN   [4]    %u     %s", vbat_otg_min,
+           vbat_otg_min ? "start>2.6V / stop<2.4V" : "start>3.0V / stop<2.8V (default)");
+  ESP_LOGI(TAG, "| 0x19 VBAT_UVLO      [5]    %u     %s", vbat_uvlo,
+           vbat_uvlo ? "UVLO 1.8V / SHORT 1.85V" : "UVLO 2.2V / SHORT 2.05V (default)");
+  ESP_LOGI(TAG, "| 0x19 IBAT_PK        [7:6]  %u     %s", ibat_pk, IBATPK_STR[ibat_pk]);
+  ESP_LOGI(TAG, "| 0x16 EN_HIZ         [4]    %u     %s", en_hiz,
+           en_hiz ? "HIZ ON (blocks boost!)" : "HIZ off");
+  ESP_LOGI(TAG, "| 0x16 WATCHDOG       [1:0]  %u     %s", wd, WD_STR[wd]);
+  ESP_LOGI(TAG, "| 0x16 FORCE_PMID_DIS [3]    %u     %s", force_pmid_dis,
+           force_pmid_dis ? "PMID 30mA sink ON (fights boost!)" : "off");
+  ESP_LOGI(TAG, "| 0x1A TS_IGNORE      [7]    %u     %s", ts_ignore,
+           ts_ignore ? "TS ignored" : "TS gates OTG");
+  ESP_LOGI(TAG, "| 0x1E VBUS_STAT      [2:0]  %u     %s", vbus_stat, vbus_str);
+  ESP_LOGI(TAG,
+           "| 0x1D STATUS 0x%02X:  VOTG_reg=%u IOTG_reg=%u VSYS=%u TREG=%u SAFE_TMR=%u WD_EXP=%u",
+           cs0, (cs0 >> 2) & 1, (cs0 >> 3) & 1, (cs0 >> 4) & 1, (cs0 >> 5) & 1, (cs0 >> 1) & 1,
+           cs0 & 1);
+  ESP_LOGI(TAG, "| 0x1F FAULT  0x%02X:  VBUS=%u BAT=%u SYS=%u OTG=%u TSHUT=%u TS_zone=%u", fs0,
+           (fs0 >> 7) & 1, (fs0 >> 6) & 1, (fs0 >> 5) & 1, (fs0 >> 4) & 1, (fs0 >> 3) & 1,
+           fs0 & 0x07);
+  ESP_LOGI(TAG,
+           "| 0x22 FAULT_FLAG (latched) 0x%02X: VBUS=%u BAT=%u SYS=%u OTG=%u TSHUT=%u", fflag0,
+           (fflag0 >> 7) & 1, (fflag0 >> 6) & 1, (fflag0 >> 5) & 1, (fflag0 >> 4) & 1,
+           (fflag0 >> 3) & 1);
+  ESP_LOGI(TAG,
+           "| 0x20/0x21 FLAG (latched) 0x%02X / 0x%02X  (nonzero => event fired since last read)",
+           cflag0, cflag1);
+  ESP_LOGI(TAG, "| ADC: VPMID=%u VBAT=%u VSYS=%u VBUS=%u mV  IBUS=%d IBAT=%d mA", adc.vpmid_mv,
+           adc.vbat_mv, adc.vsys_mv, adc.vbus_mv, adc.ibus_ma, adc.ibat_ma);
+  ESP_LOGI(TAG, "| OK boost => EN_OTG=1, HIZ=0, VBUS_STAT=OTG, VPMID~5000, no BAT/SYS/OTG fault");
+  ESP_LOGI(TAG, "+================================================");
+  return failed_reads == 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t BQ25629::read_register(uint8_t reg_addr, uint8_t &value) {

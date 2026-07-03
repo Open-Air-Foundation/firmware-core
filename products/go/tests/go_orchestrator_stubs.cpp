@@ -209,6 +209,10 @@ bool ensure_pmid_healthy_called = false;
 uint32_t ensure_pmid_healthy_count = 0;
 bool recover_pm_sensor_called = false;
 uint32_t recover_pm_sensor_count = 0;
+bool probe_stuck_result = false; // tests set true to simulate a confirmed stuck rail
+uint32_t probe_stuck_count = 0;
+bool execute_pmid_power_cycle_result = false; // real impl: false = refused, true unreachable
+uint32_t execute_pmid_power_cycle_count = 0;
 
 void reset() {
   sensor_started = false;
@@ -359,10 +363,16 @@ void reset() {
   ensure_pmid_healthy_count = 0;
   recover_pm_sensor_called = false;
   recover_pm_sensor_count = 0;
+  probe_stuck_result = false;
+  probe_stuck_count = 0;
+  execute_pmid_power_cycle_result = false;
+  execute_pmid_power_cycle_count = 0;
 
   DisplayService::spy_deep_sleep_called = false;
   DisplayService::spy_update_count = 0;
   DisplayService::spy_flush_count = 0;
+  DisplayService::spy_init_resume_count = 0;
+  pmid_resume_host::reset();
 }
 
 } // namespace test_spy
@@ -576,6 +586,20 @@ bool PowerService::ensure_pmid_healthy() {
 void PowerService::recover_pm_sensor() {
   test_spy::recover_pm_sensor_called = true;
   ++test_spy::recover_pm_sensor_count;
+}
+
+bool PowerService::probe_stuck_powerpath(const BmsStatus & /*status*/) {
+  ++test_spy::probe_stuck_count;
+  if (test_spy::probe_stuck_result) {
+    _power_cycle_pending = true;
+  }
+  return test_spy::probe_stuck_result;
+}
+
+bool PowerService::execute_pmid_power_cycle() {
+  ++test_spy::execute_pmid_power_cycle_count;
+  _power_cycle_pending = false;
+  return test_spy::execute_pmid_power_cycle_result;
 }
 
 bool PowerService::reset_watchdog() { return true; }

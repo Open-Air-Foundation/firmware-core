@@ -218,6 +218,30 @@ public:
    */
   esp_err_t deinit();
 
+  /**
+   * @brief Re-apply the full charger register configuration
+   *
+   * Runs the same register-programming sequence as init() without touching
+   * the I2C device handle, so it is safe to call on an already-initialized
+   * device.  Use after soft_reset() to restore configuration.
+   *
+   * @param config Configuration structure
+   * @return ESP_OK on success
+   */
+  esp_err_t apply_config(const BQ25629_Config &config);
+
+  /**
+   * @brief Software register reset (REG_RST, CHARGER_CONTROL_1 bit7)
+   *
+   * Resets every register to its POR default and clears latched power-path
+   * state that survives EN_OTG toggles.  Register-domain only: BATFET stays
+   * on and SYS power is uninterrupted (unlike ship/shutdown/power reset).
+   * All configuration is lost — follow with apply_config().
+   *
+   * @return ESP_OK on success
+   */
+  esp_err_t soft_reset();
+
   // CHARGER_CONTROL_0 (0x16) bit7 EN_AUTO_IBATDIS.
   // When enabled, the device can automatically enable IBAT discharge.
   esp_err_t enable_auto_ibat_discharge(bool enable);
@@ -473,6 +497,21 @@ public:
    * @return ESP_OK on success
    */
   esp_err_t log_charger_limits();
+
+  /**
+   * @brief Dump all OTG/boost-related registers, decoded, as a readable table.
+   *
+   * Reads REG0x0C (VOTG), 0x16 (CC0: HIZ/WDT), 0x18 (CC2: EN_OTG/BYPASS),
+   * 0x19 (CC3: VBAT_OTG_MIN/UVLO/IBAT_PK), 0x1A (TS_IGNORE), 0x1D/0x1E status,
+   * 0x1F fault, and the ADC rails, then logs each field with its decoded
+   * meaning.  Lets a failed boost be attributed to EN_OTG/HIZ/VBAT_OTG_MIN/TS
+   * or a BAT/SYS/OTG fault — and, when dumped before/after a config write,
+   * shows whether the written value actually changed.
+   *
+   * @param context Short label printed in the table header (e.g. "BEFORE").
+   * @return ESP_OK on success
+   */
+  esp_err_t log_otg_registers(const char *context);
 
   /**
    * @brief Read register (8-bit)

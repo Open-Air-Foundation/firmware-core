@@ -160,6 +160,8 @@ void reset() {
 
   DisplayService::spy_deep_sleep_called = false;
   DisplayService::spy_update_count = 0;
+  DisplayService::spy_init_resume_count = 0;
+  pmid_resume_host::reset();
 }
 
 } // namespace test_spy
@@ -428,6 +430,8 @@ void PowerService::configure_wake_sources(uint32_t /*timer_ms*/) {}
 // ============================================================================
 
 RtcAppState load_rtc_app_state() { return test_spy::rtc_state; }
+
+void store_rtc_app_state(const RtcAppState &state) { test_spy::rtc_state = state; }
 
 // ============================================================================
 // BleService stubs

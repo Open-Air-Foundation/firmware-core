@@ -133,6 +133,20 @@ private:
   // --- PM sensor recovery (V1: boost-kill power cycle on persistent failure) ---
   uint32_t _pm_first_fail_ms = 0; ///< 0 = no failure in progress
 
+  // --- PMID stuck-power-path recovery (unplug-triggered BATFET cycle) ---
+
+  /// Stops the 5 s stuck-probe after execute_pmid_power_cycle() was refused
+  /// (NVS backoff cap or adapter present) so a permanently stuck rail does
+  /// not retry every status tick.  Cleared when external power returns.
+  bool _pmid_cycle_refused = false;
+
+  /// Display-only hold of the last shown PM2.5 value through the recovery
+  /// window (stuck detected -> reboot -> first valid post-boot reading).
+  /// Never touches _cached_measures: storage, cloud, BLE and the PM
+  /// recovery timer must keep seeing the real invalid sentinel.
+  bool _pm_display_hold = false;
+  float _held_pm25 = MeasuresInvalid::PM;
+
   // --- Stationary networking ---
   bool _provisioning_sensitive_services_paused = false;
 
@@ -231,6 +245,16 @@ private:
   void check_timers();
   void on_bms_timer();
   void on_bms_status_timer();
+  /// Last-rung PMID recovery with an invisible reboot: persists the current
+  /// app state + on-glass frame to NVS, settles storage, then fires the
+  /// BATFET power cycle.  On success the device reboots inside this call and
+  /// the next boot resumes silently from the persisted state.  Deferred (no
+  /// side effects) while a menu/session/focus screen owns the display, since
+  /// the resume path repaints Home.
+  void execute_pmid_recovery_cycle();
+  /// True while a menu/session/focus screen owns the glass — the PMID
+  /// recovery cycle (and its 400 ms stuck-probe) defers until Home is back.
+  bool transient_screen_active() const;
   void on_inactivity_timeout();
   void reschedule_sensor_timer(const GoSettings &previous_settings);
 

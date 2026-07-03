@@ -117,7 +117,9 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   _mode = _settings.operating_mode;
 
   // --- Restore RTC state for wake-from-sleep cases ---
-  if (cause != WakeCause::PowerOn) {
+  // A PMID power-cycle resume boots as PowerOn but GoApp::run() has already
+  // rebuilt RTC state from the NVS resume blob — restore from it too.
+  if (cause != WakeCause::PowerOn || handoff.pmid_resume) {
     RtcAppState state = _svc.power_service.load_state();
     _behavior = state.behavior;
     _gps_enabled = state.gps_enabled;
@@ -126,7 +128,12 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   }
 
   // --- Apply initial lock state ---
-  if (handoff.initial_lock_state == LockState::Unlocked) {
+  if (handoff.pmid_resume) {
+    // Silent restore: the reboot must stay invisible, so no unlock()
+    // repaint and no "Unlocked" snackbar.
+    _lock_state = handoff.initial_lock_state;
+    _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  } else if (handoff.initial_lock_state == LockState::Unlocked) {
     if (handoff.display_painted) {
       // Display already shows unlocked UI — set state directly.
       // Do NOT call unlock() which would trigger update_display().
@@ -156,6 +163,13 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     _cached_measures.tvoc_nox.nox_index = handoff.display_snapshot->nox_index;
     _cached_measures.pressure.pressure = handoff.display_snapshot->pressure_hpa;
     _cached_measures.pressure.altitude = handoff.display_snapshot->altitude_m;
+
+    if (handoff.pmid_resume) {
+      // Bridge the SPS30 warmup after the recovery reboot with the
+      // pre-reboot PM2.5 instead of flipping the hero to a dash.
+      _pm_display_hold = true;
+      _held_pm25 = handoff.display_snapshot->pm25_ugm3;
+    }
   }
 
   // --- Mark first measurement done if boot already measured ---
@@ -188,6 +202,12 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   _svc.led_service.front_set_brightness(_settings.front_led_brightness);
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
+
+  // Restore the back AQI color through the resume window — a dark LED
+  // strip until the first post-reboot measurement would expose the reboot.
+  if (handoff.pmid_resume && _cached_measures.pm_a.is_pm_25_valid()) {
+    _svc.led_service.back_update_aqi(_cached_measures.pm_a.pm_25);
+  }
 
   // --- Common tail ---
   _svc.ui_manager.sync_settings(_settings);
@@ -463,6 +483,13 @@ void Orchestrator::on_bms_timer() {
     return; // system is shutting down — skip further processing
   }
 
+  if (_latest_power.pmid_power_cycle_request) {
+    // Last-rung PMID recovery: on success the device loses power and
+    // cold-boots (~430 ms BATFET off + silent resume); on refusal (backoff
+    // limit or adapter present) execution simply continues.
+    execute_pmid_recovery_cycle();
+  }
+
   // Steady-state Status refresh (value only; urgent transitions push via notify_tracking_status()).
   if (_svc.ble_service.is_initialized()) {
     _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(),
@@ -495,9 +522,70 @@ void Orchestrator::on_bms_status_timer() {
                                                 _tracking_session_id);
       }
     }
+
+    if (bms_power_source_has_external_input(status.power_source)) {
+      // External power restores the boost path unconditionally; re-arm the
+      // probe so a future unplug gets the fast recovery again.
+      _pmid_cycle_refused = false;
+    } else if (!_pmid_cycle_refused && !transient_screen_active() &&
+               _svc.power_service.probe_stuck_powerpath(status)) {
+      // Stuck-RBFET signature confirmed right after a USB-C unplug: soft
+      // toggles and REG_RST cannot cure it (bench-verified) — go straight
+      // to the BATFET cycle instead of waiting for the 30 s poll ladder.
+      execute_pmid_recovery_cycle();
+    }
   }
 
   _last_bms_status_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+}
+
+bool Orchestrator::transient_screen_active() const {
+  return _setup_session_active || _svc.ui_manager.is_focus_screen() ||
+         _svc.ui_manager.is_on_menu_screen();
+}
+
+void Orchestrator::execute_pmid_recovery_cycle() {
+  // The resume path repaints Home with the persisted values.  While a
+  // menu/session/focus screen owns the glass, defer instead of swapping the
+  // user's screen out under them — the request stays latched in
+  // PowerService and the timers retry after they leave the screen.
+  if (transient_screen_active()) {
+    AG_LOGW(TAG, "PMID recovery cycle deferred: non-Home screen active");
+    return;
+  }
+
+  // Keep the last shown PM2.5 on the glass through the recovery window —
+  // the unplug kills the SPS30 rail, and a "-" flashing up right before an
+  // (invisible) reboot would expose it.
+  _pm_display_hold = true;
+  if (_cached_measures.pm_a.is_pm_25_valid()) {
+    _held_pm25 = _cached_measures.pm_a.pm_25;
+  }
+
+  // Settle the glass, then persist exactly what is on it: the resume boot
+  // re-renders this frame with the non-flashing waveform, so frame and
+  // glass must match.  Single-task: nothing can repaint in between.
+  _svc.display_service.flush();
+  _svc.ui_manager.clear_expired_snackbar(static_cast<uint32_t>(RTOS::get_time_ms()));
+  PmidResumeState resume{};
+  resume.app = snapshot_state();
+  fill_display_snapshot(_svc.ui_manager.build_values(build_context()), resume.display);
+  save_pmid_resume_state(resume);
+
+  // Same storage settling as prepare_for_sleep: resume_route() reopens the
+  // session after the reboot, and the chart cache survives via its NAND
+  // backup (the RTC-backed cache does not survive the BATFET excursion).
+  _svc.storage_service.end_route();
+  _svc.storage_service.backup_cache();
+
+  if (!_svc.power_service.execute_pmid_power_cycle()) {
+    // Refused: backoff cap reached or adapter present.  Forget the resume
+    // blob (a later unrelated boot must not replay it), stop probing until
+    // external power returns, and show honest sentinels again.
+    clear_pmid_resume_state();
+    _pmid_cycle_refused = true;
+    _pm_display_hold = false;
+  }
 }
 
 void Orchestrator::on_inactivity_timeout() { lock(); }
@@ -651,6 +739,10 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   // SPS30 via boost kill then re-trigger measurement.
   if (_cached_measures.pm_a.is_pm_25_valid()) {
     _pm_first_fail_ms = 0;
+    // Fresh PM ends the PMID-recovery display hold and refreshes the value
+    // a future hold would bridge with.
+    _pm_display_hold = false;
+    _held_pm25 = _cached_measures.pm_a.pm_25;
   } else if (_first_measurement_done && _svc.board.variant() == BoardVariant::V1) {
     const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
     if (_pm_first_fail_ms == 0) {
@@ -658,6 +750,9 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     } else if ((now - _pm_first_fail_ms) >= PM_RECOVERY_TIMEOUT_MS) {
       _pm_first_fail_ms = 0;
       AG_LOGW(TAG, "PM invalid for %" PRIu32 " ms -> power-cycle recovery", PM_RECOVERY_TIMEOUT_MS);
+      // The hold has overstayed its bridge window — show the honest dash
+      // while the boost-kill recovery runs.
+      _pm_display_hold = false;
       _svc.power_service.recover_pm_sensor();
       _svc.sensor_producer.request_prepare();
     }
@@ -2082,6 +2177,11 @@ BuildContext Orchestrator::build_context() const {
   _display_measures = Measures{};
   _display_measures.temp_hum_a = _cached_measures.temp_hum_a;
   _display_measures.pm_a = _cached_measures.pm_a;
+  if (_pm_display_hold && !_cached_measures.pm_a.is_pm_25_valid()) {
+    // Display-only: bridge the PMID recovery window with the last shown
+    // PM2.5 instead of a dash.  _cached_measures stays untouched.
+    _display_measures.pm_a.pm_25 = _held_pm25;
+  }
   _display_measures.co2 = _cached_measures.co2;
   _display_measures.tvoc_nox = _cached_measures.tvoc_nox;
   _display_measures.power = _cached_measures.power;

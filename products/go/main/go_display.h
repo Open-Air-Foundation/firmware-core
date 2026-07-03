@@ -3,6 +3,7 @@
 
 #include <cstdint>
 
+#include "go_types.h"
 #include "measures_types.h"
 #include "rtos.h"
 #include "services/provisioning_qr.h"
@@ -222,6 +223,44 @@ struct RtcDisplaySnapshot {
   bool pm_use_usaqi;
 };
 
+/// Copy the display-relevant scalars of a DisplayValues frame into a
+/// snapshot.  Shared by the RTC deep-sleep snapshot and the NVS-backed
+/// PMID power-cycle resume snapshot.
+inline void fill_display_snapshot(const DisplayValues &values, RtcDisplaySnapshot &out) {
+  out.co2_ppm = values.co2_ppm;
+  out.pm25_ugm3 = values.pm25_ugm3;
+  out.temperature_c = values.temperature_c;
+  out.humidity_pct = values.humidity_pct;
+  out.tvoc_index = values.tvoc_index;
+  out.nox_index = values.nox_index;
+  out.pressure_hpa = values.pressure_hpa;
+  out.altitude_m = values.altitude_m;
+  out.battery_pct = values.battery_pct;
+  out.is_battery_charging = values.is_battery_charging;
+  out.gps_enabled = values.gps_enabled;
+  out.gps_fix = values.gps_fix;
+  out.tracking_active = values.tracking_active;
+  out.ble_enabled = values.ble_enabled;
+  out.use_fahrenheit = values.use_fahrenheit;
+  out.pm_use_usaqi = values.pm_use_usaqi;
+}
+
+// ---------------------------------------------------------------------------
+// PMID power-cycle resume state — saved to NVS just before the BATFET
+// recovery reboot (RTC memory does not survive the power excursion) and
+// consumed exactly once by the next boot to resume invisibly.
+// ---------------------------------------------------------------------------
+
+/// Bump when PmidResumeState's layout changes so a stale blob written by a
+/// previous firmware cannot seed a resume after an OTA-across-cycle.
+inline constexpr uint32_t PMID_RESUME_STATE_VERSION = 1;
+
+struct PmidResumeState {
+  uint32_t version = PMID_RESUME_STATE_VERSION;
+  RtcAppState app{};
+  RtcDisplaySnapshot display{};
+};
+
 // ---------------------------------------------------------------------------
 // DisplayService (hardware-dependent, excluded from host builds)
 // ---------------------------------------------------------------------------
@@ -274,6 +313,16 @@ public:
   /// The worker holds the SPI bus for the duration (~3 s), naturally
   /// serializing any other SPI device (NAND) without explicit coordination.
   bool init(const DisplayValues &initial, bool defer_refresh = false);
+
+  /// Initialize display hardware for the PMID power-cycle resume boot.
+  ///
+  /// The e-paper glass still shows the pre-reboot frame (the image persists
+  /// unpowered) but the controller lost its RAM in the BATFET excursion.
+  /// Renders `initial` — the frame saved just before the reboot — and pushes
+  /// it with the fast non-flashing waveform so both RAM planes match the
+  /// glass again.  Identical content means no visible change: the recovery
+  /// reboot stays invisible.  Starts the worker task like init().
+  bool init_resume(const DisplayValues &initial);
 
   /// Submit a new frame for display.
   /// Renders into framebuffer (fast), then signals worker task.
@@ -339,6 +388,10 @@ private:
   volatile bool _running = false;
   volatile bool _worker_busy = false;
 
+  // Init helpers shared by init() and init_resume()
+  esp_err_t _setup_renderer(const DisplayValues &initial);
+  bool _start_worker();
+
   // Render methods
   void _render_frame(const DisplayValues &v);
   bool _is_header_changed(const DisplayValues &a, const DisplayValues &b) const;
@@ -375,6 +428,20 @@ void save_rtc_display_snapshot(const DisplayValues &values);
 /// Returns false when no valid snapshot is present (first power-on).
 bool load_rtc_display_snapshot(RtcDisplaySnapshot *snapshot_out);
 
+// --- PMID power-cycle resume persistence (NVS, shares "agopwr" namespace) ---
+
+/// Save the resume state.  Called by the orchestrator immediately before
+/// executing the BATFET power cycle.
+void save_pmid_resume_state(const PmidResumeState &state);
+
+/// One-shot consume: returns true and fills *out when a valid resume blob
+/// exists, erasing the blob either way so a crash after this point can
+/// never replay a stale resume on a later boot.
+bool take_pmid_resume_state(PmidResumeState *out);
+
+/// Discard a saved resume state (power cycle refused after saving).
+void clear_pmid_resume_state();
+
 #else // TEST_HOST
 
 // ---------------------------------------------------------------------------
@@ -389,6 +456,11 @@ public:
   explicit DisplayService(const Config &) {}
 
   bool init(const DisplayValues &, bool = false) { return true; }
+
+  bool init_resume(const DisplayValues &) {
+    ++spy_init_resume_count;
+    return true;
+  }
 
   bool update(const DisplayValues &, bool = false) {
     ++spy_update_count;
@@ -405,11 +477,49 @@ public:
   inline static bool spy_deep_sleep_called = false;
   inline static uint32_t spy_update_count = 0;
   inline static uint32_t spy_flush_count = 0;
+  inline static uint32_t spy_init_resume_count = 0;
 };
 
 // Stub implementations for host builds.
 inline void save_rtc_display_snapshot(const DisplayValues &) {}
 inline bool load_rtc_display_snapshot(RtcDisplaySnapshot *) { return false; }
+
+// Host-test PMID resume persistence — in-memory one-slot store with the
+// same one-shot take semantics as the NVS implementation.  Inspect/reset
+// via pmid_resume_host in tests (test_spy::reset() clears it in stubs).
+namespace pmid_resume_host {
+inline PmidResumeState stored{};
+inline bool stored_valid = false;
+inline uint32_t save_count = 0;
+inline uint32_t clear_count = 0;
+
+inline void reset() {
+  stored = PmidResumeState{};
+  stored_valid = false;
+  save_count = 0;
+  clear_count = 0;
+}
+} // namespace pmid_resume_host
+
+inline void save_pmid_resume_state(const PmidResumeState &state) {
+  pmid_resume_host::stored = state;
+  pmid_resume_host::stored_valid = true;
+  ++pmid_resume_host::save_count;
+}
+
+inline bool take_pmid_resume_state(PmidResumeState *out) {
+  if (!pmid_resume_host::stored_valid) {
+    return false;
+  }
+  *out = pmid_resume_host::stored;
+  pmid_resume_host::stored_valid = false;
+  return true;
+}
+
+inline void clear_pmid_resume_state() {
+  pmid_resume_host::stored_valid = false;
+  ++pmid_resume_host::clear_count;
+}
 
 #endif // !TEST_HOST
 

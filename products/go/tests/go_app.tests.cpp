@@ -598,6 +598,59 @@ TEST_CASE("build_wake_values: snapshot invalid -> defaults, unlocked") {
 }
 
 // ============================================================================
+// Tests: build_pmid_resume_values
+// ============================================================================
+
+TEST_CASE("build_pmid_resume_values: seeds values, keeps lock state, no snackbar") {
+  RtcDisplaySnapshot snap{};
+  snap.co2_ppm = 500;
+  snap.pm25_ugm3 = 10.0f;
+  snap.battery_pct = 80;
+
+  SECTION("locked stays locked") {
+    DisplayValues v = build_pmid_resume_values(snap, LockState::Locked);
+    CHECK(v.co2_ppm == 500);
+    CHECK(v.pm25_ugm3 == 10.0f);
+    CHECK(v.battery_pct == 80);
+    CHECK(v.screen == Screen::Home);
+    CHECK(v.locked == true);
+    CHECK(v.snackbar_text == nullptr);
+  }
+
+  SECTION("unlocked stays unlocked, still silent") {
+    DisplayValues v = build_pmid_resume_values(snap, LockState::Unlocked);
+    CHECK(v.locked == false);
+    CHECK(v.snackbar_text == nullptr);
+  }
+}
+
+// ============================================================================
+// Tests: PMID resume persistence (host store — mirrors the NVS semantics)
+// ============================================================================
+
+TEST_CASE("take_pmid_resume_state: one-shot consume") {
+  pmid_resume_host::reset();
+
+  PmidResumeState saved{};
+  saved.app.lock_state = LockState::Unlocked;
+  saved.app.tracking_active = true;
+  saved.app.tracking_session_id = 777;
+  saved.display.pm25_ugm3 = 9.0f;
+  save_pmid_resume_state(saved);
+
+  PmidResumeState out{};
+  REQUIRE(take_pmid_resume_state(&out));
+  CHECK(out.version == PMID_RESUME_STATE_VERSION);
+  CHECK(out.app.lock_state == LockState::Unlocked);
+  CHECK(out.app.tracking_active);
+  CHECK(out.app.tracking_session_id == 777);
+  CHECK(out.display.pm25_ugm3 == 9.0f);
+
+  // Consumed: a second boot must not replay it.
+  CHECK_FALSE(take_pmid_resume_state(&out));
+}
+
+// ============================================================================
 // Tests: build_boot_splash_values
 // ============================================================================
 

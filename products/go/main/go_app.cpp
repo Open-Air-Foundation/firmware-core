@@ -122,6 +122,16 @@ void GoApp::run() {
   // wake, or charger re-plug during an active run always routes here, which is
   // what makes resume-across-ship-off automatic.
   _board.init_nvs();
+
+  // PMID power-cycle resume: the BATFET recovery reboot looks like a plain
+  // power-on (RTC memory gone, wake cause PowerOn), so the orchestrator left
+  // a one-shot NVS blob behind.  Consume it before any path selection —
+  // including the factory pre-emption — so it can never replay on a later
+  // boot.  The blob lives on this never-returning stack so the Interactive
+  // handoff can point into it.
+  PmidResumeState pmid_resume{};
+  const bool pmid_resume_taken = take_pmid_resume_state(&pmid_resume);
+
   FactorySettings fs{};
   load_factory_settings(_board.config_store(), fs);
   if (is_factory_learning_stage_active(fs.fg_learning_stage)) {
@@ -129,6 +139,13 @@ void GoApp::run() {
   }
 
   WakeCause cause = PowerService::get_wake_cause();
+
+  const bool pmid_resumed = pmid_resume_taken && cause == WakeCause::PowerOn;
+  if (pmid_resumed) {
+    AG_LOGI(TAG, "PMID power-cycle resume: restoring pre-reboot state");
+    store_rtc_app_state(pmid_resume.app);
+  }
+
   RtcAppState state = load_rtc_app_state();
 
   AG_LOGI(TAG,
@@ -148,10 +165,17 @@ void GoApp::run() {
   case BootPath::ButtonWake:
     run_button_wake_path(state);
     break; // never reached
-  case BootPath::Interactive:
+  case BootPath::Interactive: {
     AG_LOGI(TAG, "Serial number: %s", _board.serial_number().c_str());
-    run_interactive(cause, {});
+    BootHandoff handoff{};
+    if (pmid_resumed) {
+      handoff.pmid_resume = true;
+      handoff.display_snapshot = &pmid_resume.display;
+      handoff.initial_lock_state = pmid_resume.app.lock_state;
+    }
+    run_interactive(cause, handoff);
     break; // never reached
+  }
   }
 }
 
@@ -700,7 +724,13 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
 
   // --- Display init (if boot hasn't painted) ---
   if (!handoff.display_painted) {
-    if (handoff.display_snapshot != nullptr) {
+    if (handoff.pmid_resume && handoff.display_snapshot != nullptr) {
+      // Silent resume: the glass still shows the pre-reboot frame.
+      // Re-render it and re-sync controller RAM without the Full-GC flash.
+      DisplayValues resume =
+          build_pmid_resume_values(*handoff.display_snapshot, handoff.initial_lock_state);
+      disp.init_resume(resume);
+    } else if (handoff.display_snapshot != nullptr) {
       DisplayValues wake = build_wake_values(*handoff.display_snapshot, true);
       disp.init(wake);
     } else {
@@ -715,8 +745,9 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   }
 
   // Boot animation — runs after the splash is painted so the screen is up
-  // before the chime/LED play.
-  if (cause == WakeCause::PowerOn) {
+  // before the chime/LED play.  Suppressed on PMID resume: the recovery
+  // reboot must stay inaudible and invisible.
+  if (cause == WakeCause::PowerOn && !handoff.pmid_resume) {
     if (!settings.onboarding_done) {
       // Fresh unit defaults buzzer + back LED off; force a one-time synced
       // chime + LED welcome, then restore the persisted settings.
@@ -733,9 +764,10 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
 
   // --- Determine whether GPS should be active ---
   // On fresh power-on, tracking is always inactive (no RTC state).
-  // On wake from sleep, load the persisted tracking state.
+  // On wake from sleep — or a PMID resume, where run() rebuilt RTC state
+  // from the NVS blob — load the persisted tracking state.
   RtcAppState boot_state{};
-  if (cause != WakeCause::PowerOn) {
+  if (cause != WakeCause::PowerOn || handoff.pmid_resume) {
     boot_state = load_rtc_app_state();
   }
   const bool gps_active = is_gps_active_at_boot(settings, boot_state);
@@ -892,5 +924,12 @@ DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapsho
   v.display_off = false;
   v.snackbar_text = "Unlocked";
 
+  return v;
+}
+
+DisplayValues build_pmid_resume_values(const RtcDisplaySnapshot &snapshot, LockState lock_state) {
+  DisplayValues v = build_wake_values(snapshot, true);
+  v.locked = (lock_state == LockState::Locked);
+  v.snackbar_text = nullptr; // silent resume — no "Unlocked" toast
   return v;
 }

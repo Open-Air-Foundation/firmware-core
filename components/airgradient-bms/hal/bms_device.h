@@ -73,6 +73,18 @@ public:
   /// @return true if the request succeeded.
   virtual bool configure_pmid_mode(BmsPmidMode) { return false; }
 
+  /// Dump the charger's power-path / OTG registers to the log for diagnostics.
+  ///
+  /// Charger-backed implementations decode EN_OTG, HIZ, VOTG, VBAT_OTG_MIN,
+  /// TS, VBUS_STAT and the fault flags so a failed boost can be attributed.
+  /// Default no-op for backends without register introspection.
+  /// @param context Short label printed with the dump (e.g. "BEFORE re-kick").
+  /// @return true if a dump was produced.
+  virtual bool dump_power_registers(const char *context) {
+    (void)context;
+    return false;
+  }
+
   // -- Power-path control ---------------------------------------------------
 
   /// Enable or disable the PMID boost converter.
@@ -92,6 +104,27 @@ public:
   /// implementations may include a short settle delay.
   /// @return true if PMID is armed and verified after the sequence.
   virtual bool resync_pmid() = 0;
+
+  /// Hard PMID recovery: full charger register reset + reconfigure + re-arm.
+  ///
+  /// Escalation for when set_pmid_enabled()/resync_pmid() toggles cannot
+  /// restore the boost — e.g. latched power-path state left over from an
+  /// adapter session that keeps VBUS held up and silently blocks every
+  /// boost re-entry.  Register-domain only: battery/system power stays up
+  /// throughout.  Blocking call.  Default no-op for backends without
+  /// register-level reset support.
+  /// @return true if the reset + reconfigure + arm sequence succeeded.
+  virtual bool hard_resync_pmid() { return false; }
+
+  /// Last-resort recovery: full battery-FET power cycle (system power
+  /// reset).  The charger disconnects the battery from SYS for a fixed
+  /// window and re-engages it on its own — the software equivalent of ship
+  /// mode plus the power button.  THE SYSTEM LOSES POWER AND COLD-BOOTS;
+  /// this call does not return on success (the MCU dies within ~25 ms).
+  /// Use only when hard_resync_pmid() cannot clear latched power-path
+  /// state.  Default no-op for backends without this capability.
+  /// @return false if the request could not be issued (or was refused).
+  virtual bool power_cycle() { return false; }
 
   /// Enable or disable the battery charging current path.  When disabled the
   /// charger IC holds the cell at its current SOC but continues to power the

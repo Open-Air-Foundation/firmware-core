@@ -85,6 +85,14 @@ bool BQ25629Bms::_apply_pmid_config() {
   }
   RTOS::delay_ms(STEP_DELAY_MS);
 
+  // Registers survive a BATFET power cycle (BAT never drops below UVLO), so
+  // clear any stale PMID discharge sink a previous power_cycle() left armed.
+  err = _charger.enable_pmid_discharge(false);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "enable_pmid_discharge(false) failed: %s (continuing)", esp_err_to_name(err));
+  }
+  RTOS::delay_ms(STEP_DELAY_MS);
+
   err = _charger.set_ts_ignore(false);
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "set_ts_ignore failed: %s (continuing)", esp_err_to_name(err));
@@ -328,6 +336,59 @@ bool BQ25629Bms::set_pmid_enabled(bool enabled) {
 }
 
 bool BQ25629Bms::resync_pmid() { return _apply_pmid_config(); }
+
+bool BQ25629Bms::hard_resync_pmid() {
+  // Escalation for a boost the chip refuses to restart via EN_OTG toggles:
+  // REG_RST clears latched power-path/input-FSM state (register-domain
+  // only; BATFET stays on), then the full configuration and PMID arm
+  // sequence is re-applied from scratch.
+  esp_err_t err = _charger.soft_reset();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "hard_resync_pmid: soft_reset failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  // Disable the chip watchdog FIRST: REG_RST re-arms it at its 50 s POR
+  // default, and a mid-sequence I2C failure below must not leave a live
+  // watchdog that keeps wiping the registers back to defaults every 50 s.
+  err = _charger.set_watchdog_timeout(drivers::WatchdogTimeout::Disable);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "hard_resync_pmid: set_watchdog_timeout failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  err = _charger.apply_config(_config);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "hard_resync_pmid: apply_config failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  return _apply_pmid_config();
+}
+
+bool BQ25629Bms::power_cycle() {
+  // Full BATFET excursion: off for tBATFET_RST (~430 ms), then the chip
+  // re-engages it on its own — the software equivalent of ship mode + power
+  // button, which is the only intervention observed to clear stuck
+  // power-path state that survives REG_RST.  SYS (and this MCU) lose power
+  // ~25 ms after the write; on success this function never returns.
+  (void)_charger.enable_otg(false);
+  // Actively drain PMID so every rail reaches cold-boot levels well inside
+  // the 430 ms window (IPMID_LOAD ~30 mA sink; VBUS follows via its bleed).
+  (void)_charger.enable_pmid_discharge(true);
+
+  esp_err_t err = _charger.system_power_reset();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "power_cycle: system_power_reset failed: %s", esp_err_to_name(err));
+    (void)_charger.enable_pmid_discharge(false);
+    return false;
+  }
+  return true;
+}
+
+bool BQ25629Bms::dump_power_registers(const char *context) {
+  return _charger.log_otg_registers(context) == ESP_OK;
+}
 
 bool BQ25629Bms::set_charge_enable(bool enabled) {
   esp_err_t err = _charger.enable_charging(enabled);

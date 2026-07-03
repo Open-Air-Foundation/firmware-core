@@ -32,6 +32,7 @@
 #ifndef TEST_HOST
 #include "driver/gpio.h"
 #include "esp_sleep.h"
+#include "nvs.h"
 #endif
 
 #include "go_power.h"
@@ -106,6 +107,40 @@ static char *fmt_fg_flags(uint16_t flags, char *buf, size_t len) {
 
 RTC_DATA_ATTR static RtcAppState s_rtc_state;
 RTC_DATA_ATTR static bool s_rtc_state_valid = false;
+
+// ---------------------------------------------------------------------------
+// Power-cycle backoff counter (NVS)
+//
+// RTC memory does not survive a BATFET power cycle, so the consecutive
+// recovery-reboot count lives in NVS.  Read defaults to 0 when the
+// namespace/key does not exist yet.
+// ---------------------------------------------------------------------------
+
+#ifndef TEST_HOST
+static constexpr const char *PCYC_NVS_NAMESPACE = "agopwr";
+static constexpr const char *PCYC_NVS_KEY = "pcyc_cnt";
+
+static uint8_t pcyc_count_read() {
+  nvs_handle_t handle;
+  if (nvs_open(PCYC_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
+    return 0;
+  }
+  uint8_t value = 0;
+  nvs_get_u8(handle, PCYC_NVS_KEY, &value);
+  nvs_close(handle);
+  return value;
+}
+
+static void pcyc_count_write(uint8_t value) {
+  nvs_handle_t handle;
+  if (nvs_open(PCYC_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
+    return;
+  }
+  nvs_set_u8(handle, PCYC_NVS_KEY, value);
+  nvs_commit(handle);
+  nvs_close(handle);
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -212,6 +247,34 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
   // PMID boost recovery (safety net): re-kick if vpmid collapsed on battery.
   if (status_ok && telemetry_ok) {
     rekick_pmid_if_collapsed(telemetry, bms_status.power_source);
+  }
+
+  // A failed hard resync can strand the charger at POR defaults (config
+  // lost).  Repair on the next poll regardless of PMID health — a lucky
+  // soft toggle can revive the rail while the chip still runs defaults.
+  if (_charger_config_dirty) {
+    AG_LOGW(TAG, "poll_bms: charger config dirty -> retrying hard resync");
+    if (_bms.hard_resync_pmid()) {
+      _charger_config_dirty = false;
+      _restore_charge_latches();
+    }
+  }
+
+  // Surface the last-rung recovery request; the orchestrator executes it
+  // (mirrors the ship_mode_request pattern).
+  status.pmid_power_cycle_request = _power_cycle_pending;
+
+  // PMID verified healthy on battery: any power-cycle recovery worked, so
+  // clear the NVS backoff counter (once per boot).
+  if (!_pcyc_backoff_cleared && status_ok && telemetry_ok &&
+      (bms_status.power_source == BmsPowerSource::None ||
+       bms_status.power_source == BmsPowerSource::OtgMode) &&
+      telemetry.pmid_voltage_mv != BmsInvalid::VOLTAGE_MV &&
+      telemetry.pmid_voltage_mv >= PMID_HEALTHY_MIN_MV) {
+    _pcyc_backoff_cleared = true;
+#ifndef TEST_HOST
+    pcyc_count_write(0);
+#endif
   }
 
   // -------------------------------------------------------------------------
@@ -455,15 +518,184 @@ bool PowerService::poll_status(BmsStatus &status) {
 
 bool PowerService::rekick_pmid_if_collapsed(const BmsTelemetry &t, BmsPowerSource src) {
   const bool on_battery = (src == BmsPowerSource::None || src == BmsPowerSource::OtgMode);
-  const bool pmid_valid = (t.pmid_voltage_mv != BmsInvalid::VOLTAGE_MV);
-  if (!(on_battery && pmid_valid && t.pmid_voltage_mv < PMID_HEALTHY_MIN_MV)) {
+  if (!on_battery) {
+    _pmid_rekick_streak = 0; // buck-fed rail: confirmed fine
+    _pmid_hard_rounds = 0;
+    _pmid_stuck_streak = 0;
+    _power_cycle_pending = false;
     return false;
   }
+
+  // 0 mV means the VPMID ADC read failed (read_adc swallows per-register
+  // errors and leaves the field zeroed).  No data is neither a collapse
+  // nor recovery evidence — hold the streak so a glitching I2C bus can
+  // neither trigger a register wipe nor defuse a pending escalation.
+  const bool pmid_valid =
+      (t.pmid_voltage_mv != BmsInvalid::VOLTAGE_MV && t.pmid_voltage_mv != 0);
+  if (!pmid_valid) {
+    return false;
+  }
+
+  if (t.pmid_voltage_mv >= PMID_HEALTHY_MIN_MV) {
+    _pmid_rekick_streak = 0; // confirmed healthy
+    _pmid_hard_rounds = 0;
+    _pmid_stuck_streak = 0;
+    _power_cycle_pending = false;
+    return false;
+  }
+
+  // Fast path — stuck-RBFET signature.  With no adapter, VBUS sits at its
+  // bleed baseline (~1.2 V); finding it held above the threshold while the
+  // rail is collapsed means latched power-path state is back-feeding VBUS.
+  // Bench-verified: soft toggles and REG_RST do NOT cure this — only a
+  // BATFET power cycle does — so skip the pointless rungs.
+  if (t.is_charging_voltage_valid() && t.charging_voltage > PMID_STUCK_VBUS_MIN_V) {
+    ++_pmid_stuck_streak;
+    if (_pmid_stuck_streak >= PMID_STUCK_CONFIRM_SAMPLES) {
+      AG_LOGE(TAG,
+              "PMID collapsed (vpmid=%u mV) with VBUS held at %.2f V on battery "
+              "-> stuck power-path signature, requesting BATFET power cycle",
+              t.pmid_voltage_mv, t.charging_voltage);
+      _power_cycle_pending = true;
+      _pmid_stuck_streak = 0;
+      _pmid_rekick_streak = 0;
+      return true;
+    }
+  } else {
+    _pmid_stuck_streak = 0;
+  }
+
+  ++_pmid_rekick_streak;
+  if (_pmid_rekick_streak > PMID_REKICK_SOFT_ATTEMPTS) {
+    if (_pmid_hard_rounds >= PMID_HARD_ROUNDS_BEFORE_POWER_CYCLE) {
+      // A register reset already ran and the collapse came back: the stuck
+      // state lives below the register domain (bench-verified: only a
+      // BATFET excursion — ship mode + power button — clears it).  Stop
+      // resetting registers and request the last-rung power cycle.
+      AG_LOGE(TAG,
+              "PMID collapsed (vpmid=%u mV) after %d register reset(s) "
+              "-> requesting BATFET power cycle",
+              t.pmid_voltage_mv, _pmid_hard_rounds);
+      _power_cycle_pending = true;
+      _pmid_rekick_streak = 0;
+      return true;
+    }
+
+    // EN_OTG toggles didn't stick.  After an adapter session the chip can
+    // hold latched power-path state that keeps VBUS up and silently blocks
+    // every boost re-entry (exit to adapter qualification is not a fault,
+    // datasheet §8.3.10.3.1).  A register reset + reconfigure is the only
+    // software-level unstick; battery/system power stays up throughout.
+    AG_LOGW(TAG, "PMID collapsed (vpmid=%u mV, streak=%d) -> charger register reset",
+            t.pmid_voltage_mv, _pmid_rekick_streak);
+    _bms.dump_power_registers("PMID hard reset: BEFORE");
+    if (_bms.hard_resync_pmid()) {
+      _restore_charge_latches();
+    } else {
+      // Chip may be stranded at POR defaults (config lost mid-sequence).
+      // Flag it so the next poll retries the full reconfigure even if a
+      // later soft toggle happens to revive the rail.
+      AG_LOGE(TAG, "hard_resync_pmid() failed -> charger config dirty");
+      _charger_config_dirty = true;
+    }
+    _bms.dump_power_registers("PMID hard reset: AFTER");
+    ++_pmid_hard_rounds;
+    _pmid_rekick_streak = 0; // restart the soft->hard ladder either way
+    return true;
+  }
+
   AG_LOGW(TAG, "PMID collapsed (vpmid=%u mV) -> re-kick boost", t.pmid_voltage_mv);
+  _bms.dump_power_registers("PMID collapsed: BEFORE re-kick");
   _bms.set_pmid_enabled(false);
   RTOS::delay_ms(PMID_REKICK_OFF_MS);
   _bms.set_pmid_enabled(true);
+  _bms.dump_power_registers("PMID collapsed: AFTER re-kick");
   return true;
+}
+
+bool PowerService::probe_stuck_powerpath(const BmsStatus &status) {
+  const auto on_battery = [](BmsPowerSource src) {
+    return src == BmsPowerSource::None || src == BmsPowerSource::OtgMode;
+  };
+  const auto stuck_signature = [](const BmsTelemetry &t) {
+    const bool pmid_valid = (t.pmid_voltage_mv != BmsInvalid::VOLTAGE_MV && t.pmid_voltage_mv != 0);
+    return pmid_valid && t.pmid_voltage_mv < PMID_HEALTHY_MIN_MV && t.is_charging_voltage_valid() &&
+           t.charging_voltage > PMID_STUCK_VBUS_MIN_V;
+  };
+
+  if (!on_battery(status.power_source)) {
+    return false;
+  }
+
+  BmsTelemetry t{};
+  if (!_bms.read_telemetry(t) || !stuck_signature(t)) {
+    return false;
+  }
+
+  // First sample matches, but right after the unplug edge the ADC registers
+  // can still hold adapter-era conversions.  Confirm after a full ADC loop.
+  RTOS::delay_ms(PMID_STUCK_PROBE_DELAY_MS);
+
+  BmsStatus s2{};
+  if (!_bms.read_status(s2) || !on_battery(s2.power_source)) {
+    return false; // re-plugged mid-probe (or bus glitch): not stuck
+  }
+  BmsTelemetry t2{};
+  if (!_bms.read_telemetry(t2) || !stuck_signature(t2)) {
+    return false;
+  }
+
+  AG_LOGE(TAG,
+          "unplug probe: PMID collapsed (vpmid=%u mV) with VBUS held at %.2f V "
+          "on battery -> stuck power-path signature, requesting BATFET power cycle",
+          t2.pmid_voltage_mv, t2.charging_voltage);
+  _power_cycle_pending = true;
+  return true;
+}
+
+bool PowerService::execute_pmid_power_cycle() {
+#ifndef TEST_HOST
+  const uint8_t count = pcyc_count_read();
+  if (count >= PMID_POWER_CYCLE_MAX_CONSECUTIVE) {
+    AG_LOGE(TAG,
+            "PMID power cycle: %u consecutive attempts did not cure -> "
+            "giving up (device stays degraded, PM unavailable)",
+            count);
+    _power_cycle_pending = false;
+    return false;
+  }
+  pcyc_count_write(count + 1);
+
+  AG_LOGW(TAG, "PMID power cycle: BATFET off/on (attempt %u/%u) -- system reboots now",
+          count + 1, PMID_POWER_CYCLE_MAX_CONSECUTIVE);
+  set_pm_power(false); // isolate the SPS30 before the rail goes down
+  if (!_bms.power_cycle()) {
+    _power_cycle_pending = false;
+    return false;
+  }
+
+  // BATFET opens ~25 ms after the write; power is lost mid-delay.  Reaching
+  // the end means the chip refused the request (adapter present).
+  RTOS::delay_ms(1000);
+  AG_LOGW(TAG, "PMID power cycle: still alive -- chip refused (adapter present?)");
+  _power_cycle_pending = false;
+  return false;
+#else
+  _power_cycle_pending = false;
+  return false;
+#endif
+}
+
+void PowerService::_restore_charge_latches() {
+  // hard_resync_pmid() re-applies the boot config, which re-enables
+  // charging (enable_charging=true).  The OT and full-charge guards are
+  // edge-triggered and never re-issue their disable, so re-assert it here
+  // or a register reset silently defeats the thermal charge-off latch.
+  if (_thermal_charge_disabled || _full_charge_paused) {
+    AG_LOGW(TAG, "hard resync: re-asserting charge-off latch (thermal=%d full=%d)",
+            _thermal_charge_disabled, _full_charge_paused);
+    _bms.set_charge_enable(false);
+  }
 }
 
 bool PowerService::ensure_pmid_healthy() {
@@ -715,4 +947,9 @@ RtcAppState load_rtc_app_state() {
   RtcAppState out{};
   memcpy(&out, &s_rtc_state, sizeof(RtcAppState));
   return out;
+}
+
+void store_rtc_app_state(const RtcAppState &state) {
+  memcpy(&s_rtc_state, &state, sizeof(RtcAppState));
+  s_rtc_state_valid = true;
 }

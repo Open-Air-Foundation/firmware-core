@@ -87,6 +87,10 @@ extern bool ensure_pmid_healthy_called;
 extern uint32_t ensure_pmid_healthy_count;
 extern bool recover_pm_sensor_called;
 extern uint32_t recover_pm_sensor_count;
+extern bool probe_stuck_result;
+extern uint32_t probe_stuck_count;
+extern bool execute_pmid_power_cycle_result;
+extern uint32_t execute_pmid_power_cycle_count;
 
 // --- BleService ---
 extern bool ble_init_called;
@@ -417,6 +421,7 @@ public:
   }
   static void shutdown(Orchestrator &o) { o.shutdown(); }
   static void shutdown(Orchestrator &o, ShipModeRequest reason) { o.shutdown(reason); }
+  static void on_bms_timer(Orchestrator &o) { o.on_bms_timer(); }
   static void on_bms_status_timer(Orchestrator &o) { o.on_bms_status_timer(); }
   static void apply_settings_change(Orchestrator &o) { o.apply_settings_change(); }
   static void prepare_for_sleep(Orchestrator &o, uint32_t sleep_ms = 60000) {
@@ -3489,6 +3494,197 @@ TEST_CASE("on_bms_status_timer: charging transition to plugged calls ensure_pmid
 
   // ensure_pmid_healthy is called on any transition (measure-gated inside).
   CHECK(test_spy::ensure_pmid_healthy_called);
+}
+
+// ============================================================================
+// PMID stuck-power-path recovery: unplug probe + seamless BATFET cycle
+// ============================================================================
+
+TEST_CASE("on_bms_status_timer: confirmed stuck probe fires the seamless recovery cycle",
+          "[Orchestrator][pmid][stuck_probe]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // Seed a shown PM value so the persisted display snapshot carries it.
+  MeasuresAGo m{};
+  m.pm_a.pm_25 = 12.5f;
+  A::on_sensor_data(orch, m);
+
+  test_spy::snapshot_to_return.charger_status.power_source = BmsPowerSource::None;
+  test_spy::probe_stuck_result = true;
+  // Default execute result false = refused (backoff cap / adapter present).
+
+  A::on_bms_status_timer(orch);
+
+  CHECK(test_spy::probe_stuck_count == 1);
+  CHECK(test_spy::execute_pmid_power_cycle_count == 1);
+  // Persisted before the execute attempt, discarded after the refusal.
+  CHECK(pmid_resume_host::save_count == 1);
+  CHECK(pmid_resume_host::clear_count == 1);
+  CHECK_FALSE(pmid_resume_host::stored_valid);
+  CHECK(pmid_resume_host::stored.display.pm25_ugm3 == 12.5f);
+  CHECK(pmid_resume_host::stored.version == PMID_RESUME_STATE_VERSION);
+  // Storage settled like prepare_for_sleep.
+  CHECK(test_spy::cache_backed_up);
+  CHECK(DisplayService::spy_flush_count > 0);
+
+  // Refused: the probe is disabled on subsequent ticks.
+  A::on_bms_status_timer(orch);
+  CHECK(test_spy::probe_stuck_count == 1);
+}
+
+TEST_CASE("on_bms_status_timer: external power re-arms the refused probe",
+          "[Orchestrator][pmid][stuck_probe]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::snapshot_to_return.charger_status.power_source = BmsPowerSource::None;
+  test_spy::probe_stuck_result = true;
+  A::on_bms_status_timer(orch); // fires, refused -> probe disabled
+  CHECK(test_spy::probe_stuck_count == 1);
+
+  // Re-plug: latch clears, no probe while plugged.
+  test_spy::snapshot_to_return.charger_status.power_source = BmsPowerSource::UsbSdp;
+  A::on_bms_status_timer(orch);
+  CHECK(test_spy::probe_stuck_count == 1);
+
+  // Unplug again: probing resumes.
+  test_spy::snapshot_to_return.charger_status.power_source = BmsPowerSource::None;
+  A::on_bms_status_timer(orch);
+  CHECK(test_spy::probe_stuck_count == 2);
+}
+
+TEST_CASE("on_bms_status_timer: stuck probe defers on transient screens",
+          "[Orchestrator][pmid][stuck_probe]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.set_screen(Screen::MainMenu);
+
+  test_spy::snapshot_to_return.charger_status.power_source = BmsPowerSource::None;
+  test_spy::probe_stuck_result = true;
+
+  A::on_bms_status_timer(orch);
+
+  // The 400 ms probe itself is skipped while a menu owns the glass.
+  CHECK(test_spy::probe_stuck_count == 0);
+  CHECK(test_spy::execute_pmid_power_cycle_count == 0);
+  CHECK(pmid_resume_host::save_count == 0);
+}
+
+TEST_CASE("on_bms_timer: pmid_power_cycle_request routes through the seamless helper",
+          "[Orchestrator][pmid][stuck_probe]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::snapshot_to_return.pmid_power_cycle_request = true;
+  test_spy::snapshot_to_return.charger_status.power_source = BmsPowerSource::None;
+
+  A::on_bms_timer(orch);
+
+  CHECK(test_spy::execute_pmid_power_cycle_count == 1);
+  CHECK(pmid_resume_host::save_count == 1);
+
+  SECTION("deferred while a menu screen is active") {
+    test_spy::execute_pmid_power_cycle_count = 0;
+    pmid_resume_host::reset();
+    f.ui_manager.set_screen(Screen::MainMenu);
+    A::on_bms_timer(orch);
+    CHECK(test_spy::execute_pmid_power_cycle_count == 0);
+    CHECK(pmid_resume_host::save_count == 0);
+  }
+}
+
+TEST_CASE("PM display hold: bridges invalid PM through the recovery window",
+          "[Orchestrator][pmid][pm_hold]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  MeasuresAGo valid{};
+  valid.pm_a.pm_25 = 12.5f;
+  A::on_sensor_data(orch, valid);
+
+  // Fire the recovery with a "successful" execute (device would reboot) so
+  // the hold stays armed.
+  test_spy::snapshot_to_return.charger_status.power_source = BmsPowerSource::None;
+  test_spy::probe_stuck_result = true;
+  test_spy::execute_pmid_power_cycle_result = true;
+  A::on_bms_status_timer(orch);
+
+  // Successful save is kept (no clear).
+  CHECK(pmid_resume_host::stored_valid);
+  CHECK(pmid_resume_host::clear_count == 0);
+
+  // A PM dropout now renders the held value, while the cache keeps the
+  // honest sentinel for storage/cloud/recovery logic.
+  MeasuresAGo invalid{};
+  invalid.pm_a.pm_25 = MeasuresInvalid::PM;
+  A::on_sensor_data(orch, invalid);
+  CHECK_FALSE(A::cached_measures(orch).pm_a.is_pm_25_valid());
+  CHECK(A::build_context(orch).sensor_data.pm_a.pm_25 == 12.5f);
+
+  // Fresh valid PM ends the hold and updates the held value.
+  MeasuresAGo fresh{};
+  fresh.pm_a.pm_25 = 7.0f;
+  A::on_sensor_data(orch, fresh);
+  CHECK(A::build_context(orch).sensor_data.pm_a.pm_25 == 7.0f);
+}
+
+TEST_CASE("PM display hold: inactive hold does not mask invalid PM",
+          "[Orchestrator][pmid][pm_hold]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  MeasuresAGo valid{};
+  valid.pm_a.pm_25 = 12.5f;
+  A::on_sensor_data(orch, valid);
+
+  MeasuresAGo invalid{};
+  invalid.pm_a.pm_25 = MeasuresInvalid::PM;
+  A::on_sensor_data(orch, invalid);
+
+  CHECK(A::build_context(orch).sensor_data.pm_a.pm_25 == MeasuresInvalid::PM);
+}
+
+TEST_CASE("init: PMID resume handoff restores state silently",
+          "[Orchestrator][pmid][resume_boot]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  // RTC state was rebuilt from the NVS blob by GoApp::run() before init.
+  test_spy::state_to_load.behavior = Behavior::Tracking;
+  test_spy::state_to_load.tracking_active = true;
+  test_spy::state_to_load.tracking_session_id = 777;
+  test_spy::state_to_load.gps_enabled = true;
+
+  RtcDisplaySnapshot snap{};
+  snap.pm25_ugm3 = 9.0f;
+  snap.co2_ppm = 600;
+
+  BootHandoff handoff{};
+  handoff.pmid_resume = true;
+  handoff.display_painted = true;
+  handoff.display_snapshot = &snap;
+  handoff.initial_lock_state = LockState::Unlocked;
+
+  orch.init(WakeCause::PowerOn, handoff);
+
+  // Silent unlock: state applied, no "Unlocked" snackbar frame.
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(v.snackbar_text == nullptr);
+
+  // RTC restore ran despite WakeCause::PowerOn.
+  CHECK(A::behavior(orch) == Behavior::Tracking);
+  CHECK(A::tracking_active(orch));
+  CHECK(A::tracking_session_id(orch) == 777);
+  CHECK(test_spy::route_resumed);
+
+  // Seeded values + armed PM hold bridge the SPS30 warmup.
+  CHECK(A::cached_measures(orch).pm_a.pm_25 == 9.0f);
+  MeasuresAGo invalid{};
+  invalid.pm_a.pm_25 = MeasuresInvalid::PM;
+  A::on_sensor_data(orch, invalid);
+  CHECK(A::build_context(orch).sensor_data.pm_a.pm_25 == 9.0f);
 }
 
 // ============================================================================

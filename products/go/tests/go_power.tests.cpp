@@ -50,6 +50,7 @@ public:
   IMPLEMENT_MOCK1(configure_pmid_mode);
   IMPLEMENT_MOCK1(set_pmid_enabled);
   IMPLEMENT_MOCK0(resync_pmid);
+  IMPLEMENT_MOCK0(hard_resync_pmid);
   IMPLEMENT_MOCK1(set_charge_enable);
   IMPLEMENT_MOCK1(set_charge_current_ma);
   IMPLEMENT_MOCK1(set_watchdog_timeout_ms);
@@ -874,6 +875,430 @@ TEST_CASE("rekick_pmid_if_collapsed: direct helper", "[PowerService][pmid][rekic
     // pmid_voltage_mv defaults to BmsInvalid::VOLTAGE_MV (65535)
     CHECK_FALSE(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
   }
+}
+
+// ============================================================================
+// TEST CASE 9a — rekick escalation ladder
+// ============================================================================
+//
+// EN_OTG toggles cannot clear latched charger power-path state (e.g. after
+// an adapter session keeps VBUS held up and every boost re-entry silently
+// aborts).  After PMID_REKICK_SOFT_ATTEMPTS consecutive collapsed
+// observations, the ladder escalates to hard_resync_pmid() (register reset
+// + reconfigure + re-arm), then restarts from soft toggles.
+
+TEST_CASE("rekick_pmid_if_collapsed: escalates to hard resync after repeated soft re-kicks",
+          "[PowerService][pmid][rekick]") {
+  ScopedMockRTOS rtos;
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  BmsTelemetry t{};
+  t.pmid_voltage_mv = 3240; // below PMID_HEALTHY_MIN_MV (4500)
+
+  SECTION("third consecutive collapse triggers hard resync instead of a toggle") {
+    trompeloeil::sequence seq;
+    // Attempts 1-2: soft EN_OTG toggles.
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    // Attempt 3: escalation — register reset path, no toggle.
+    REQUIRE_CALL(mock_bms, hard_resync_pmid()).IN_SEQUENCE(seq).RETURN(true);
+    // Attempt 4: streak restarted — back to a soft toggle.
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+  }
+
+  SECTION("hard resync failure still restarts the ladder") {
+    trompeloeil::sequence seq;
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, hard_resync_pmid()).IN_SEQUENCE(seq).RETURN(false);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None)); // hard path
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None)); // soft again
+  }
+
+  SECTION("healthy observation resets the escalation streak") {
+    {
+      trompeloeil::sequence seq;
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+      CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+      CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    }
+
+    // Healthy PMID clears the streak (no BMS calls).
+    BmsTelemetry healthy{};
+    healthy.pmid_voltage_mv = 5040;
+    CHECK_FALSE(svc.rekick_pmid_if_collapsed(healthy, BmsPowerSource::None));
+
+    // Next collapse starts over with a soft toggle, not an escalation.
+    {
+      trompeloeil::sequence seq;
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+      CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    }
+  }
+
+  SECTION("plugged observation also resets the streak") {
+    {
+      trompeloeil::sequence seq;
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+      CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+      CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    }
+
+    // On USB the rail is buck-fed; the collapse gate is off and the streak clears.
+    CHECK_FALSE(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::UsbSdp));
+
+    {
+      trompeloeil::sequence seq;
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+      CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    }
+  }
+
+  SECTION("stuck-VBUS signature fast-paths to a power-cycle request") {
+    BmsTelemetry stuck{};
+    stuck.pmid_voltage_mv = 3240;
+    stuck.charging_voltage = 3.3f; // VBUS held up with no adapter = stuck RBFET
+
+    // Sample 1: signature counted; the normal ladder still soft-toggles.
+    {
+      trompeloeil::sequence seq;
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+      CHECK(svc.rekick_pmid_if_collapsed(stuck, BmsPowerSource::None));
+    }
+    // Sample 2: confirmed — request fires with no further toggles/resets.
+    CHECK(svc.rekick_pmid_if_collapsed(stuck, BmsPowerSource::None));
+
+    // Surfaced through the next poll snapshot (its own rekick soft-toggles
+    // again since both streaks restarted).
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.charging_voltage = 3.3f;
+                     _1.pmid_voltage_mv = 3240)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, set_pmid_enabled(trompeloeil::_)).RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.pmid_power_cycle_request);
+  }
+
+  SECTION("baseline VBUS keeps the normal ladder (no fast path)") {
+    BmsTelemetry baseline{};
+    baseline.pmid_voltage_mv = 3240;
+    baseline.charging_voltage = 1.2f; // bleed baseline: not the stuck signature
+
+    trompeloeil::sequence seq;
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, hard_resync_pmid()).IN_SEQUENCE(seq).RETURN(true);
+
+    CHECK(svc.rekick_pmid_if_collapsed(baseline, BmsPowerSource::None));
+    CHECK(svc.rekick_pmid_if_collapsed(baseline, BmsPowerSource::None));
+    CHECK(svc.rekick_pmid_if_collapsed(baseline, BmsPowerSource::None)); // register reset
+  }
+
+  SECTION("second escalation requests a power cycle instead of another register reset") {
+    trompeloeil::sequence seq;
+    // Round 1: soft, soft, register reset.
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, hard_resync_pmid()).IN_SEQUENCE(seq).RETURN(true);
+    // Round 2 (reset did not cure): soft, soft, then NO further reset —
+    // the ladder requests a BATFET power cycle instead.
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+
+    for (int i = 0; i < 5; ++i) {
+      CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    }
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None)); // power-cycle request
+
+    // The request is surfaced through the next poll_bms snapshot.
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.pmid_voltage_mv = 3240)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    // The poll's own rekick performs a soft toggle (streak restarted at 1).
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.pmid_power_cycle_request);
+  }
+
+  SECTION("healthy observation cancels a pending power-cycle request") {
+    trompeloeil::sequence seq;
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).TIMES(4).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).TIMES(4).RETURN(true);
+    REQUIRE_CALL(mock_bms, hard_resync_pmid()).RETURN(true);
+    for (int i = 0; i < 5; ++i) {
+      CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    }
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None)); // request pending
+
+    // Rail recovers on its own before the orchestrator acted: cancel.
+    BmsTelemetry healthy{};
+    healthy.pmid_voltage_mv = 5040;
+    CHECK_FALSE(svc.rekick_pmid_if_collapsed(healthy, BmsPowerSource::None));
+
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.pmid_voltage_mv = 5040)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK_FALSE(snap.pmid_power_cycle_request);
+  }
+
+  SECTION("vpmid=0 (failed ADC read) neither counts nor resets the streak") {
+    {
+      trompeloeil::sequence seq;
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+      REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+      CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+      CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    }
+
+    // Zeroed VPMID = swallowed I2C read failure: no action, streak held.
+    BmsTelemetry zero{};
+    zero.pmid_voltage_mv = 0;
+    CHECK_FALSE(svc.rekick_pmid_if_collapsed(zero, BmsPowerSource::None));
+
+    // Streak was held at 2, so the next confirmed collapse escalates.
+    REQUIRE_CALL(mock_bms, hard_resync_pmid()).RETURN(true);
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+  }
+}
+
+// ============================================================================
+// TEST CASE 9a2 — dirty-config repair after a failed hard resync
+// ============================================================================
+//
+// A hard resync that fails mid-sequence can strand the charger at POR
+// defaults.  poll_bms() must retry the full reconfigure on its next cycle
+// even when PMID reads healthy (a lucky soft toggle can revive the rail
+// while the chip still runs default config).
+
+// ============================================================================
+// TEST CASE 9b — unplug fast probe (stuck power-path)
+// ============================================================================
+//
+// Called from the orchestrator's 5 s status tick.  Confirms the stuck-RBFET
+// signature with two reads PMID_STUCK_PROBE_DELAY_MS apart (the chip ADC can
+// still hold adapter-era conversions right after the unplug edge) and bails
+// when the second read shows the device re-plugged or the rail recovered.
+
+TEST_CASE("probe_stuck_powerpath: unplug fast probe", "[PowerService][pmid][probe]") {
+  ScopedMockRTOS rtos;
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  BmsStatus on_battery{};
+  on_battery.power_source = BmsPowerSource::None;
+
+  SECTION("plugged: no telemetry read, no probe") {
+    BmsStatus plugged{};
+    plugged.power_source = BmsPowerSource::UsbSdp;
+    FORBID_CALL(mock_bms, read_telemetry(trompeloeil::_));
+    CHECK_FALSE(svc.probe_stuck_powerpath(plugged));
+  }
+
+  SECTION("healthy vpmid: single read, no probe") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.pmid_voltage_mv = 5040; _1.charging_voltage = 1.2f)
+        .RETURN(true);
+    CHECK_FALSE(svc.probe_stuck_powerpath(on_battery));
+  }
+
+  SECTION("collapsed with bleed-baseline VBUS: not the stuck signature") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.pmid_voltage_mv = 3240; _1.charging_voltage = 1.2f)
+        .RETURN(true);
+    CHECK_FALSE(svc.probe_stuck_powerpath(on_battery));
+  }
+
+  SECTION("vpmid ADC dropout (0 mV): no data, no probe") {
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.pmid_voltage_mv = 0; _1.charging_voltage = 3.3f)
+        .RETURN(true);
+    CHECK_FALSE(svc.probe_stuck_powerpath(on_battery));
+  }
+
+  SECTION("stale first sample: recovered second read cancels") {
+    trompeloeil::sequence seq;
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.pmid_voltage_mv = 3240; _1.charging_voltage = 3.3f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::OtgMode)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.pmid_voltage_mv = 5100; _1.charging_voltage = 1.2f)
+        .RETURN(true);
+    CHECK_FALSE(svc.probe_stuck_powerpath(on_battery));
+  }
+
+  SECTION("re-plug during the confirm dwell cancels") {
+    trompeloeil::sequence seq;
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.pmid_voltage_mv = 3240; _1.charging_voltage = 3.3f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::UsbSdp)
+        .RETURN(true);
+    CHECK_FALSE(svc.probe_stuck_powerpath(on_battery));
+  }
+
+  SECTION("confirmed stuck: latches the power-cycle request") {
+    {
+      trompeloeil::sequence seq;
+      REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+          .IN_SEQUENCE(seq)
+          .SIDE_EFFECT(_1.pmid_voltage_mv = 3240; _1.charging_voltage = 3.3f)
+          .RETURN(true);
+      REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+          .IN_SEQUENCE(seq)
+          .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+          .RETURN(true);
+      REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+          .IN_SEQUENCE(seq)
+          .SIDE_EFFECT(_1.pmid_voltage_mv = 3240; _1.charging_voltage = 3.3f)
+          .RETURN(true);
+      CHECK(svc.probe_stuck_powerpath(on_battery));
+    }
+
+    // The latch surfaces through the next poll snapshot (its own rekick
+    // soft-toggles since the probe does not touch the ladder streaks).
+    REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.charging_voltage = 3.3f;
+                     _1.pmid_voltage_mv = 3240)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 50.0f)
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, set_pmid_enabled(trompeloeil::_)).RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.pmid_power_cycle_request);
+  }
+}
+
+TEST_CASE("store_rtc_app_state / load_rtc_app_state: NVS-resume round-trip",
+          "[PowerService][rtc]") {
+  RtcAppState state{};
+  state.mode = OperatingMode::Portable;
+  state.behavior = Behavior::Tracking;
+  state.lock_state = LockState::Unlocked;
+  state.gps_enabled = true;
+  state.tracking_active = true;
+  state.tracking_session_id = 42017;
+
+  store_rtc_app_state(state);
+  const RtcAppState loaded = load_rtc_app_state();
+  CHECK(loaded.mode == OperatingMode::Portable);
+  CHECK(loaded.behavior == Behavior::Tracking);
+  CHECK(loaded.lock_state == LockState::Unlocked);
+  CHECK(loaded.gps_enabled);
+  CHECK(loaded.tracking_active);
+  CHECK(loaded.tracking_session_id == 42017);
+}
+
+TEST_CASE("poll_bms: retries hard resync while charger config is dirty",
+          "[PowerService][poll_bms][pmid]") {
+  ScopedMockRTOS rtos;
+  MockBmsDevice mock_bms;
+  PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  // Drive the ladder to a FAILED hard resync via direct calls.
+  BmsTelemetry t{};
+  t.pmid_voltage_mv = 3240;
+  {
+    trompeloeil::sequence seq;
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, hard_resync_pmid()).IN_SEQUENCE(seq).RETURN(false);
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None)); // hard, fails
+  }
+
+  // Next poll: PMID healthy, but the dirty flag forces a reconfigure retry.
+  REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+      .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.pmid_voltage_mv = 5040)
+      .RETURN(true);
+  REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+      .SIDE_EFFECT(*_1 = 50.0f)
+      .RETURN(true);
+  REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+      .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+      .RETURN(true);
+  REQUIRE_CALL(mock_bms, hard_resync_pmid()).RETURN(true);
+  svc.poll_bms();
+
+  // Repaired: the following poll performs no further recovery calls.
+  REQUIRE_CALL(mock_bms, read_telemetry(trompeloeil::_))
+      .SIDE_EFFECT(_1.battery_voltage = 3.7f; _1.pmid_voltage_mv = 5040)
+      .RETURN(true);
+  REQUIRE_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+      .SIDE_EFFECT(*_1 = 50.0f)
+      .RETURN(true);
+  REQUIRE_CALL(mock_bms, read_status(trompeloeil::_))
+      .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+      .RETURN(true);
+  svc.poll_bms();
 }
 
 // ============================================================================

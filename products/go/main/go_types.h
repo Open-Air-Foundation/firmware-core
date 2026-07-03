@@ -97,6 +97,13 @@ struct BootHandoff {
   /// Used by button-wake path to avoid dashes before fresh data arrives.
   const RtcDisplaySnapshot *display_snapshot = nullptr;
 
+  /// This boot resumes from a PMID BATFET recovery cycle: RTC state was
+  /// rebuilt from the NVS resume blob, display_snapshot carries the
+  /// pre-reboot frame, and the whole boot must stay invisible (no chime,
+  /// no boot LED animation, no splash, no "Unlocked" snackbar, no e-paper
+  /// flash — DisplayService::init_resume instead of init).
+  bool pmid_resume = false;
+
   /// Optional measurement from fast-path boot (promotion case).
   /// When non-null, the Orchestrator seeds _cached_measures.
   const MeasuresAGo *fast_path_measures = nullptr;

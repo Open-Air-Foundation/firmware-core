@@ -121,6 +121,12 @@ struct PowerSnapshot {
   /// Non-None when a safety trip requires the orchestrator to show a
   /// warning and enter ship mode.
   ShipModeRequest ship_mode_request = ShipModeRequest::None;
+
+  /// True when the PMID recovery ladder is out of software options
+  /// (register reset did not cure the collapse) and requests a full BATFET
+  /// power cycle.  The orchestrator calls execute_pmid_power_cycle(), which
+  /// reboots the whole system on success.
+  bool pmid_power_cycle_request = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -212,11 +218,10 @@ public:
   /// Returns a PowerSnapshot with all fields populated (invalid sentinels on error).
   ///
   /// @param pm_invalid_hint  Caller-supplied flag indicating the latest PM
-  ///   read returned an invalid sentinel.  When true and the chip reports
-  ///   on battery, poll_bms triggers a PMID resync (full re-prep + verify)
-  ///   to recover from a suspected autonomous EN_OTG clear.  No-op
-  ///   otherwise.  Default false preserves the cheap-poll behavior for
-  ///   call sites that don't track PM validity.
+  ///   read returned an invalid sentinel.  Currently unused: the PMID
+  ///   recovery ladder is voltage-driven (rekick_pmid_if_collapsed runs on
+  ///   every poll).  Kept so call sites that track PM validity keep
+  ///   compiling while the hint remains available for future policies.
   PowerSnapshot poll_bms(bool pm_invalid_hint = false);
 
   /// Factory-learning poll: a normal poll_bms() plus the learning-only fields
@@ -245,6 +250,25 @@ public:
   /// @return true if a re-kick was performed.
   bool rekick_pmid_if_collapsed(const BmsTelemetry &t, BmsPowerSource src);
 
+  /// Fast stuck-power-path probe for the orchestrator's status tick.
+  ///
+  /// Detects the bench-verified stuck-RBFET signature right after a USB-C
+  /// unplug instead of waiting for the slow poll ladder: on battery with
+  /// vpmid collapsed AND VBUS held above PMID_STUCK_VBUS_MIN_V (healthy
+  /// baseline is ~1.2 V; the stuck state back-feeds VBUS at PMID minus
+  /// ~80 mV for 30+ s).  A single sample can be stale — the chip ADC runs
+  /// a continuous conversion loop, so right after the unplug edge both
+  /// VBUS and VPMID may still read adapter-era values.  The probe therefore
+  /// confirms with a second status + telemetry read PMID_STUCK_PROBE_DELAY_MS
+  /// later and bails if the device was re-plugged in between.
+  ///
+  /// On confirmation latches the BATFET power-cycle request (same latch as
+  /// the ladder's last rung; mirrored into PowerSnapshot by poll_bms()).
+  ///
+  /// @param status  Fresh charger status from the caller's poll_status().
+  /// @return true when the stuck signature was confirmed twice.
+  bool probe_stuck_powerpath(const BmsStatus &status);
+
   /// Read fresh status + telemetry, then delegate to
   /// rekick_pmid_if_collapsed().
   /// @return true if a re-kick was performed.
@@ -256,6 +280,17 @@ public:
   /// then restores both.  Only useful on V1 where PMID is the SPS30's
   /// sole power source.
   void recover_pm_sensor();
+
+  /// Execute the last-rung PMID recovery: a full BATFET power cycle.
+  ///
+  /// Called by the orchestrator when PowerSnapshot::pmid_power_cycle_request
+  /// is set.  Guarded by an NVS-backed consecutive-attempt counter
+  /// (PMID_POWER_CYCLE_MAX_CONSECUTIVE) so a cure that does not stick can
+  /// never turn into a reboot loop; the counter clears once PMID is
+  /// verified healthy on battery after a boot.  On success THE DEVICE
+  /// REBOOTS and this call does not return.
+  /// @return false if the attempt was refused (backoff) or failed to fire.
+  bool execute_pmid_power_cycle();
 
   /// Reset BMS watchdog.  Must be called periodically (< 10 s interval).
   /// @return true if the watchdog reset succeeded.
@@ -426,6 +461,22 @@ public:
   // --- PMID boost recovery ---
   static constexpr uint16_t PMID_HEALTHY_MIN_MV = 4500; ///< Floor below which PMID is collapsed
   static constexpr uint32_t PMID_REKICK_OFF_MS = 15;    ///< EN_OTG low dwell before re-assert
+  static constexpr int PMID_REKICK_SOFT_ATTEMPTS = 2;   ///< EN_OTG toggles before escalating
+                                                        ///< to a charger register reset
+  static constexpr int PMID_HARD_ROUNDS_BEFORE_POWER_CYCLE = 1; ///< Register resets tried
+                                                                ///< before a BATFET power cycle
+  static constexpr uint8_t PMID_POWER_CYCLE_MAX_CONSECUTIVE = 2; ///< NVS-backed cap on
+                                                                 ///< reboot-recovery attempts
+  static constexpr float PMID_STUCK_VBUS_MIN_V = 2.0f; ///< VBUS above this on battery while
+                                                       ///< collapsed = stuck power-path
+                                                       ///< signature (baseline is ~1.2 V)
+  static constexpr int PMID_STUCK_CONFIRM_SAMPLES = 2; ///< Consecutive signature polls before
+                                                       ///< fast-pathing to the power cycle
+  static constexpr uint32_t PMID_STUCK_PROBE_DELAY_MS = 400; ///< Dwell between the two
+                                                             ///< probe_stuck_powerpath() reads —
+                                                             ///< longer than one full ADC
+                                                             ///< conversion loop so the second
+                                                             ///< sample cannot be adapter-stale
 
   // --- PM sensor recovery (V1 boost-kill power cycle) ---
   static constexpr uint32_t PM_RECOVER_OFF_MS = 50;     ///< SPS30 discharge after boost kill
@@ -446,6 +497,44 @@ private:
 
   // --- EDV trip-state members ---
   int _edv_low_count = 0;
+
+  // --- PMID recovery ladder state ---
+
+  /// Consecutive collapsed-PMID observations; drives the soft-toggle ->
+  /// register-reset escalation in rekick_pmid_if_collapsed().  Reset only
+  /// on a CONFIRMED healthy or plugged observation; held (unchanged) when
+  /// telemetry is missing/invalid so a flaky bus cannot steer the ladder.
+  int _pmid_rekick_streak = 0;
+
+  /// Set when hard_resync_pmid() fails mid-sequence (chip possibly stranded
+  /// at POR defaults with config lost).  poll_bms() retries the full
+  /// reconfigure until it succeeds, independent of PMID health.
+  bool _charger_config_dirty = false;
+
+  /// Register resets fired for the current outage.  When a reset round did
+  /// not cure the collapse (the streak fills again), the ladder stops
+  /// resetting and requests a BATFET power cycle instead.
+  int _pmid_hard_rounds = 0;
+
+  /// Consecutive collapsed polls that also showed the stuck-RBFET VBUS
+  /// signature (VBUS held above PMID_STUCK_VBUS_MIN_V with no adapter).
+  /// Bench-verified curable only by a BATFET power cycle, so at
+  /// PMID_STUCK_CONFIRM_SAMPLES the ladder skips straight to it.
+  int _pmid_stuck_streak = 0;
+
+  /// Latched request for the last-rung BATFET power cycle; mirrored into
+  /// PowerSnapshot::pmid_power_cycle_request by poll_bms().  Cleared when
+  /// the rail is confirmed healthy/plugged or after an executed attempt.
+  bool _power_cycle_pending = false;
+
+  /// One-shot guard so the NVS power-cycle backoff counter is cleared at
+  /// most once per boot (on the first healthy-on-battery observation).
+  bool _pcyc_backoff_cleared = false;
+
+  /// Re-assert the runtime charge-off latches (thermal / full-charge pause)
+  /// after a charger register reset re-enabled charging from the boot
+  /// config.  The guards are edge-triggered and never repeat their disable.
+  void _restore_charge_latches();
 
   // --- OT trip-state members ---
 
@@ -480,3 +569,9 @@ private:
 /// state has been saved.  No dependencies — safe to call early in app_main
 /// before PowerService is constructed.
 RtcAppState load_rtc_app_state();
+
+/// Write RtcAppState to RTC memory and mark it valid.  Counterpart of
+/// load_rtc_app_state() for boot paths that restore state from NVS after a
+/// full power loss (PMID BATFET recovery cycle) — safe to call early in
+/// app_main before PowerService is constructed.
+void store_rtc_app_state(const RtcAppState &state);
