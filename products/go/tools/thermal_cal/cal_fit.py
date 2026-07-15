@@ -267,6 +267,82 @@ def maybe_plots(m: pd.DataFrame, fits: dict, out_dir: Path) -> list[str]:
     return written
 
 
+def write_html(out_dir: Path, report: dict, bins: pd.DataFrame,
+               plot_files: list[str]) -> Path:
+    """Self-contained HTML report: all fit tables + plots inlined as base64."""
+    import base64
+
+    def img_tag(name: str) -> str:
+        data = base64.b64encode((out_dir / name).read_bytes()).decode()
+        return f'<img src="data:image/png;base64,{data}" alt="{name}">'
+
+    fit_rows = []
+    for reg, segs in report["self_heating"].items():
+        for seg, entry in segs.items():
+            best = max(entry["models"], key=lambda k: entry["models"][k]["r2"])
+            for name, f in entry["models"].items():
+                coefs = ", ".join(
+                    f"{c}={f[c]}" for c in ("k", "k1", "k2", "kp", "b") if c in f)
+                cls = ' class="best"' if name == best else ""
+                fit_rows.append(
+                    f"<tr{cls}><td>{reg}</td><td>{seg}</td><td>{name}</td>"
+                    f"<td>{coefs}</td><td>{f['r2']}</td><td>{f['resid_std_c']}</td>"
+                    f"<td>{f['resid_p95_c']}</td><td>{entry['n']}</td></tr>")
+
+    tau_rows = [
+        f"<tr><td>{label}</td><td>{f['tau_s']}</td><td>{f['r2']}</td>"
+        f"<td>{f['t_start_c']} → {f['t_inf_c']}</td><td>{f['span_s']}</td></tr>"
+        for label, f in report["warmup_tau"].items()]
+
+    drift = report.get("offset_vs_temp")
+    drift_html = ""
+    if drift:
+        drift_html = (
+            f"<p>offset-vs-T drift: slope <b>{drift['slope_c_per_c']:+.4f}</b> C/C, "
+            f"intercept {drift['intercept_c']:+.3f} C, R² {drift['r2']:.4f} "
+            f"({drift['n_bins']} bins)</p>")
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Go thermal-cal report</title><style>
+body {{ font-family: -apple-system, sans-serif; margin: 2em auto; max-width: 1100px;
+       color: #222; }}
+table {{ border-collapse: collapse; font-family: ui-monospace, monospace;
+         font-size: 13px; margin: 0.7em 0; }}
+th, td {{ border: 1px solid #ccc; padding: 4px 10px; text-align: right; }}
+th {{ background: #f0f0f0; }}
+td:first-child, td:nth-child(2), td:nth-child(3) {{ text-align: left; }}
+tr.best {{ background: #e8f5e9; font-weight: 600; }}
+img {{ max-width: 100%; margin: 0.5em 0; }}
+h2 {{ border-bottom: 1px solid #ddd; padding-bottom: 4px; margin-top: 1.6em; }}
+.meta {{ color: #666; }}
+</style></head><body>
+<h1>AirGradient Go — thermal-calibration report</h1>
+<p class="meta">{report['n_rows']} merged rows over {report['span_h']} h.
+Highlighted rows: best R² per regressor/segment.</p>
+
+<h2>Self-heating fits — t_dut − t_ref = f(T_int − t_dut)</h2>
+<table><tr><th>regressor</th><th>segment</th><th>model</th><th>coefficients</th>
+<th>R²</th><th>resid std (°C)</th><th>p95 (°C)</th><th>n</th></tr>
+{''.join(fit_rows) or '<tr><td colspan="8">insufficient data</td></tr>'}</table>
+
+<h2>Quiet offsets by reference temperature</h2>
+{bins.to_html() if not bins.empty else '<p>no quiet segments</p>'}
+{drift_html}
+
+<h2>Warm-up time constants</h2>
+<table><tr><th>signal</th><th>τ (s)</th><th>R²</th><th>range (°C)</th>
+<th>span (s)</th></tr>
+{''.join(tau_rows) or '<tr><td colspan="5">no cold-soak transient found</td></tr>'}</table>
+
+<h2>Plots</h2>
+{''.join(img_tag(p) for p in plot_files) or '<p>matplotlib not installed</p>'}
+</body></html>
+"""
+    path = out_dir / "report.html"
+    path.write_text(html)
+    return path
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     parser.add_argument("csv", nargs="+", type=Path, help="collector CSV file(s)")
@@ -323,7 +399,8 @@ def main() -> int:
     if not bins.empty:
         bins.to_csv(args.out / "bins.csv")
     plots = maybe_plots(m, fits, args.out)
-    print(f"\nreport -> {args.out}/cal_fit.json"
+    html_path = write_html(args.out, report, bins, plots)
+    print(f"\nreport -> {args.out}/cal_fit.json, {html_path.name}"
           + (f", bins.csv" if not bins.empty else "")
           + (f", {', '.join(plots)}" if plots else " (no matplotlib, plots skipped)"))
     return 0

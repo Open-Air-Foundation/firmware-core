@@ -154,5 +154,7 @@ automatically:
 - **warm-up tau** per sensor — the exponential recovery constant, which sets
   the low-pass filter for the firmware compensation.
 
-Outputs `cal_report/cal_fit.json` (machine-readable coefficients for the
-firmware step), `bins.csv`, and PNG plots.
+Outputs `cal_report/report.html` (self-contained report — tables, model
+comparison with the best R² highlighted, embedded plots; shareable as one
+file), `cal_fit.json` (machine-readable coefficients for the firmware step),
+`bins.csv`, and PNG plots.
