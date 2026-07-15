@@ -118,3 +118,41 @@ poking an authenticated characteristic, not the Cal one.
 Repeat at a second room temperature (AC on/off) to confirm k is
 temperature-independent. Spot-check the reference against a trusted
 thermometer once per run.
+
+## Cold-soak sweep (automated temperature-range characterization)
+
+Covers the low-temperature range and yields the sensors' thermal time
+constant in one unattended run.
+
+**Condensation warning:** a 0 degC board brought into tropical room air
+(dew point ~19-20 degC) WILL condense. Seal each board in a zip-lock bag
+(desiccant pack if available) before the soak and keep it sealed until the
+board is back at room temperature. Never power a visibly damp board.
+
+1. Charge both boards, start the collector (`--out coldsoak.csv`), confirm
+   both stream.
+2. Bag the boards, put both in the chamber/fridge at 0 degC for >= 45 min.
+   BLE will likely drop inside — that's fine, the collector reconnects.
+3. Take them out, place on the bench (still bagged, still on battery),
+   let them warm to room temperature undisturbed for 1-2 h.
+4. Stop the collector and run the fitter:
+
+```bash
+pip install pandas numpy matplotlib
+python3 products/go/tools/thermal_cal/cal_fit.py coldsoak.csv run1.csv --out cal_report/
+```
+
+Feed it every CSV you have (soak + scenario runs together) — it segments
+automatically:
+
+- **self-heating fits** — `t_dut - t_ref = k*(T_int - t_dut) + b` for each
+  candidate internal sensor (`tdps`/`tfg`/`tdie`), split into all / charging /
+  quiet segments, with R2 and residuals — pick the regressor with the best R2
+  and stable k across segments.
+- **quiet offsets by temperature bin** (1 degC) — shows whether the offsets
+  drift with absolute temperature across the swept range.
+- **warm-up tau** per sensor — the exponential recovery constant, which sets
+  the low-pass filter for the firmware compensation.
+
+Outputs `cal_report/cal_fit.json` (machine-readable coefficients for the
+firmware step), `bins.csv`, and PNG plots.
