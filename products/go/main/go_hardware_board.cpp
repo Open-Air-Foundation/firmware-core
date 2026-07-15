@@ -338,6 +338,15 @@ ConfigStore &GoHardwareBoard::config_store() {
 GoSettings GoHardwareBoard::load_settings() {
   if (!_settings_loaded) {
     _settings = load_go_settings(config_store());
+
+    // THERMAL-CAL REFERENCE BUILD (branch temperature_adjust-ref): this board
+    // is the low-heat reference of a calibration pair — SHT40/DPS368 only,
+    // outside the enclosure, battery-powered. Force every controllable heat
+    // source off and a fixed 10 s cadence, regardless of persisted settings.
+    AG_LOGW(TAG, "THERMAL-CAL REFERENCE BUILD: forcing GPS off, 10 s measure interval");
+    _settings.gps_mode = GpsMode::AlwaysOff;
+    _settings.measure_interval_seconds = 10;
+
     print_settings(_settings);
     _settings_loaded = true;
   }
