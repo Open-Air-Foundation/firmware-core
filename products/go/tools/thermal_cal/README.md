@@ -52,15 +52,58 @@ each cycle. Fine for thermal time constants (minutes).
   charged battery. Its own `tdps - t` spread is the cleanliness self-check:
   it must stay small and constant; discard any interval where it jumps.
 
-## Collector
+## Quick start (tester)
 
+You need: the two Go boards (DUT + bare reference), a USB-C cable, a laptop
+with BLE, ESP-IDF v5.5.x, Python 3.10+.
+
+**1. Flash the DUT (fully populated board):**
+
+```bash
+git switch temperature_adjust
+. "$HOME/esp/<your-idf>/esp-idf/export.sh"
+idf.py -C products/go build
+idf.py -C products/go -p <PORT> flash
 ```
+
+**2. Flash the reference (bare board):**
+
+```bash
+git switch temperature_adjust-ref
+idf.py -C products/go build          # full rebuild — same build dir!
+idf.py -C products/go -p <PORT> flash
+```
+
+Boot log must show `THERMAL-CAL REFERENCE BUILD: forcing GPS off, 10 s
+measure interval`. Always rebuild after switching branches — both branches
+share `products/go/build`, so the binary left there is whatever branch built
+last.
+
+Note each board's advertised BLE name (`AirGradient Go xxxx`; the suffix is
+the last 4 hex chars of the serial — shown in the About screen, or derive it
+from the MAC esptool prints while flashing).
+
+**3. Run the collector (laptop):**
+
+```bash
 pip install bleak cbor2
-python cal_collector.py --dut "AirGradient Go ef0e" --ref "AirGradient Go 12ab" --out run1.csv
+python3 products/go/tools/thermal_cal/cal_collector.py \
+    --dut "AirGradient Go <dut-suffix>" --ref "AirGradient Go <ref-suffix>" \
+    --out run1.csv
 ```
 
 Both devices stream into one CSV, host-timestamped on arrival (`role` column
-distinguishes them). Reconnects automatically; append-safe.
+distinguishes them). Reconnects automatically; append-safe. Expect a `[dut]`
+and a `[ref]` line every ~10 s once the first measurement cycle completes
+(~1–2 min after boot).
+
+**macOS**: if the script dies with `zsh: abort`, your terminal app has no
+Bluetooth permission. Run it from Apple's stock Terminal.app (it prompts —
+click Allow), or add your terminal via System Settings → Privacy & Security →
+Bluetooth → **+**, then fully restart the terminal.
+
+No pairing/passkey is ever required — if you get a pairing prompt you are
+poking an authenticated characteristic, not the Cal one.
 
 ## Suggested run matrix (still air, 10–20 cm apart, no direct sun)
 
