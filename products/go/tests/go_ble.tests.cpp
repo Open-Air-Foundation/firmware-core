@@ -253,6 +253,11 @@ public:
                                 const GpsData &gps, time_t ts) {
     return svc.encode_measures(buf, sz, m, gps, ts);
   }
+
+  static size_t encode_cal(BleService &svc, uint8_t *buf, size_t sz, const BleCalTelemetry &cal,
+                           time_t ts) {
+    return svc.encode_cal(buf, sz, cal, ts);
+  }
   static size_t encode_status(BleService &svc, uint8_t *buf, size_t sz, const PowerSnapshot &p,
                               const GpsData &gps, bool tracking, uint32_t session_id) {
     return svc.encode_status(buf, sz, p, gps, tracking, session_id);
@@ -982,6 +987,72 @@ TEST_CASE("BLE: status charging delta is within budget") {
   CHECK(find_entry(entries, "charging")->text_val == "trickle");
   CHECK(find_entry(entries, "bat_pct")->uint_val == 100);
   CHECK(find_entry(entries, "bat_v") != nullptr);
+}
+
+TEST_CASE("BLE: fully-populated cal telemetry is within budget") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+
+  // Worst case: every field valid, longest charging string, negative
+  // currents (widest int encoding), max uptime/timestamp.
+  BleCalTelemetry cal{};
+  cal.sht.temperature = -10.5f;
+  cal.sht.humidity = 100.0f;
+  cal.dps.temperature = -10.5f;
+  cal.pressure_hpa = 1013.25f;
+  cal.t_fg_c = -10.5f;
+  cal.t_die_c = -40;
+  cal.t_bat_c = -40;
+  cal.ibat_fg_ma = -32767;
+  cal.ibat_bms_ma = -32767;
+  cal.ibus_ma = -32767;
+  cal.vbus = 5.25f;
+  cal.vbat = 4.20f;
+  cal.charging = BmsChargingState::TrickleCharge;
+  cal.gps_active = true;
+  cal.uptime_s = 0xFFFFFFFFu;
+
+  uint8_t buf[256];
+  size_t len = BleServiceTestAccess::encode_cal(svc, buf, sizeof(buf), cal, 0x7FFFFFFF);
+  REQUIRE(len > 0);
+  CHECK(len <= TEST_NOTIFY_BUDGET);
+
+  auto entries = decode_cbor_map(buf, len);
+  CHECK(entries.size() == 16);
+  CHECK(find_entry(entries, "t") != nullptr);
+  CHECK(find_entry(entries, "h") != nullptr);
+  CHECK(find_entry(entries, "tdps") != nullptr);
+  CHECK(find_entry(entries, "pres") != nullptr);
+  CHECK(find_entry(entries, "tfg") != nullptr);
+  CHECK(find_entry(entries, "tdie") != nullptr);
+  CHECK(find_entry(entries, "tbat") != nullptr);
+  CHECK(find_entry(entries, "ibat") != nullptr);
+  CHECK(find_entry(entries, "ichg") != nullptr);
+  CHECK(find_entry(entries, "ibus") != nullptr);
+  CHECK(find_entry(entries, "vbus") != nullptr);
+  CHECK(find_entry(entries, "vbat") != nullptr);
+  CHECK(find_entry(entries, "chg")->text_val == "trickle");
+  CHECK(find_entry(entries, "gps")->uint_val == 1);
+  CHECK(find_entry(entries, "up") != nullptr);
+  CHECK(find_entry(entries, "ts") != nullptr);
+}
+
+TEST_CASE("BLE: all-invalid cal telemetry encodes only the always-present keys") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+
+  BleCalTelemetry cal{}; // all sensor/power fields at invalid sentinels
+
+  uint8_t buf[256];
+  size_t len = BleServiceTestAccess::encode_cal(svc, buf, sizeof(buf), cal, 1000);
+  REQUIRE(len > 0);
+
+  auto entries = decode_cbor_map(buf, len);
+  CHECK(entries.size() == 4); // chg + gps + up + ts
+  CHECK(find_entry(entries, "chg")->text_val == "unknown");
+  CHECK(find_entry(entries, "gps")->uint_val == 0);
+  CHECK(find_entry(entries, "up")->uint_val == 0);
+  CHECK(find_entry(entries, "ts")->uint_val == 1000);
 }
 
 // ---------------------------------------------------------------------------

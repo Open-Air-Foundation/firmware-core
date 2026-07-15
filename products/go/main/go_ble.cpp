@@ -46,6 +46,7 @@ static constexpr const char *MEASURES_CHAR_UUID = "d1c0c0a1-6b48-4b2a-9b1d-59f9f
 static constexpr const char *STATUS_CHAR_UUID = "d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1";
 static constexpr const char *CONFIG_CHAR_UUID = "d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1";
 static constexpr const char *HISTORY_CHAR_UUID = "d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1";
+static constexpr const char *CAL_CHAR_UUID = "d1c0c0a5-6b48-4b2a-9b1d-59f9f2b0a1e1";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -126,6 +127,13 @@ uint16_t BleService::config_properties() {
 
 uint16_t BleService::history_properties() {
   return AgBleProperty::WRITE | AgBleProperty::NOTIFY | AgBleProperty::WRITE_AUTHEN;
+}
+
+uint16_t BleService::cal_properties() {
+  // Deliberately NOT authenticated: the calibration collector (and the
+  // screenless reference board, which cannot display a passkey) must be able
+  // to subscribe without pairing. Read-only raw telemetry, nothing sensitive.
+  return AgBleProperty::READ | AgBleProperty::NOTIFY;
 }
 
 BleService::BleService(RtosQueueHandle event_queue, StorageService &storage,
@@ -210,6 +218,14 @@ bool BleService::init_stack_and_register(const char *serial) {
     return false;
   }
 
+  // Cal: Read + Notify, unauthenticated (see cal_properties())
+  _cal_char = svc->add_characteristic(CAL_CHAR_UUID, cal_properties());
+  if (_cal_char == nullptr) {
+    AG_LOGE(TAG, "add Cal characteristic failed");
+    _server->deinit();
+    return false;
+  }
+
   // --- Write callbacks ---
   _config_char->set_write_callback(
       [this](const uint8_t *data, size_t len) { on_config_write(data, len); });
@@ -288,6 +304,7 @@ void BleService::deinit() {
   _status_char = nullptr;
   _config_char = nullptr;
   _history_char = nullptr;
+  _cal_char = nullptr;
 
   AG_LOGI(TAG, "deinitialized");
 }
@@ -454,6 +471,29 @@ void BleService::notify_measures(const MeasuresAGo &measures, const GpsData &gps
 
   if (_connected.load()) {
     _measures_char->notify();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Data output: Cal telemetry
+// ---------------------------------------------------------------------------
+
+void BleService::notify_cal(const BleCalTelemetry &cal, time_t timestamp) {
+  if (_cal_char == nullptr) {
+    return;
+  }
+
+  uint8_t buf[CBOR_BUF_SIZE];
+  size_t len = encode_cal(buf, sizeof(buf), cal, timestamp);
+  if (len == 0) {
+    AG_LOGW(TAG, "cal encode failed");
+    return;
+  }
+
+  _cal_char->set_value(buf, len);
+
+  if (_connected.load()) {
+    _cal_char->notify();
   }
 }
 
@@ -1244,6 +1284,122 @@ size_t BleService::encode_measures(uint8_t *buf, size_t buf_size, const Measures
   }
 
   // Timestamp is always present
+  cbor_encode_text_stringz(&map, BLE_KEY_TS);
+  cbor_encode_uint(&map, static_cast<uint64_t>(ts));
+
+  cbor_encoder_close_container(&encoder, &map);
+
+  return cbor_encoder_get_buffer_size(&encoder, buf);
+}
+
+// ---------------------------------------------------------------------------
+// CBOR encoding: Cal telemetry
+// ---------------------------------------------------------------------------
+
+size_t BleService::encode_cal(uint8_t *buf, size_t buf_size, const BleCalTelemetry &cal,
+                              time_t ts) {
+  CborEncoder encoder;
+  cbor_encoder_init(&encoder, buf, buf_size, 0);
+
+  const bool pres_valid = cal.pressure_hpa >= MeasuresRange::MIN_VALID_PRESSURE &&
+                          cal.pressure_hpa <= MeasuresRange::MAX_VALID_PRESSURE;
+  const bool tfg_valid = cal.t_fg_c != BmsInvalid::FG_TEMP_C;
+  const bool tdie_valid = cal.t_die_c != BmsInvalid::TEMPERATURE_C;
+  const bool tbat_valid = cal.t_bat_c != BmsInvalid::TEMPERATURE_C;
+  const bool ibat_valid = cal.ibat_fg_ma != BmsInvalid::CURRENT_MA;
+  const bool ichg_valid = cal.ibat_bms_ma != BmsInvalid::CURRENT_MA;
+  const bool ibus_valid = cal.ibus_ma != BmsInvalid::CURRENT_MA;
+  const bool vbus_valid = cal.vbus >= BmsRange::MIN_VALID_VOLT;
+  const bool vbat_valid = cal.vbat >= BmsRange::MIN_VALID_VOLT;
+
+  // "chg", "gps", "up", "ts" are always present
+  size_t field_count = 4;
+  if (cal.sht.is_temp_valid())
+    field_count++;
+  if (cal.sht.is_hum_valid())
+    field_count++;
+  if (cal.dps.is_temp_valid())
+    field_count++;
+  if (pres_valid)
+    field_count++;
+  if (tfg_valid)
+    field_count++;
+  if (tdie_valid)
+    field_count++;
+  if (tbat_valid)
+    field_count++;
+  if (ibat_valid)
+    field_count++;
+  if (ichg_valid)
+    field_count++;
+  if (ibus_valid)
+    field_count++;
+  if (vbus_valid)
+    field_count++;
+  if (vbat_valid)
+    field_count++;
+
+  CborEncoder map;
+  cbor_encoder_create_map(&encoder, &map, field_count);
+
+  if (cal.sht.is_temp_valid()) {
+    cbor_encode_text_stringz(&map, BLE_KEY_TEMP);
+    cbor_encode_float(&map, cal.sht.temperature);
+  }
+  if (cal.sht.is_hum_valid()) {
+    cbor_encode_text_stringz(&map, BLE_KEY_HUM);
+    cbor_encode_float(&map, cal.sht.humidity);
+  }
+  if (cal.dps.is_temp_valid()) {
+    cbor_encode_text_stringz(&map, BLE_KEY_CAL_TDPS);
+    cbor_encode_float(&map, cal.dps.temperature);
+  }
+  if (pres_valid) {
+    cbor_encode_text_stringz(&map, BLE_KEY_PRES);
+    cbor_encode_float(&map, cal.pressure_hpa);
+  }
+  if (tfg_valid) {
+    cbor_encode_text_stringz(&map, BLE_KEY_CAL_TFG);
+    cbor_encode_float(&map, cal.t_fg_c);
+  }
+  if (tdie_valid) {
+    cbor_encode_text_stringz(&map, BLE_KEY_CAL_TDIE);
+    cbor_encode_int(&map, cal.t_die_c);
+  }
+  if (tbat_valid) {
+    cbor_encode_text_stringz(&map, BLE_KEY_CAL_TBAT);
+    cbor_encode_int(&map, cal.t_bat_c);
+  }
+  if (ibat_valid) {
+    cbor_encode_text_stringz(&map, BLE_KEY_CAL_IBAT);
+    cbor_encode_int(&map, cal.ibat_fg_ma);
+  }
+  if (ichg_valid) {
+    cbor_encode_text_stringz(&map, BLE_KEY_CAL_ICHG);
+    cbor_encode_int(&map, cal.ibat_bms_ma);
+  }
+  if (ibus_valid) {
+    cbor_encode_text_stringz(&map, BLE_KEY_CAL_IBUS);
+    cbor_encode_int(&map, cal.ibus_ma);
+  }
+  if (vbus_valid) {
+    cbor_encode_text_stringz(&map, BLE_KEY_CAL_VBUS);
+    cbor_encode_float(&map, cal.vbus);
+  }
+  if (vbat_valid) {
+    cbor_encode_text_stringz(&map, BLE_KEY_CAL_VBAT);
+    cbor_encode_float(&map, cal.vbat);
+  }
+
+  cbor_encode_text_stringz(&map, BLE_KEY_CAL_CHG);
+  cbor_encode_text_stringz(&map, charging_state_to_str(cal.charging));
+
+  cbor_encode_text_stringz(&map, BLE_KEY_CAL_GPS);
+  cbor_encode_uint(&map, cal.gps_active ? 1 : 0);
+
+  cbor_encode_text_stringz(&map, BLE_KEY_CAL_UP);
+  cbor_encode_uint(&map, cal.uptime_s);
+
   cbor_encode_text_stringz(&map, BLE_KEY_TS);
   cbor_encode_uint(&map, static_cast<uint64_t>(ts));
 

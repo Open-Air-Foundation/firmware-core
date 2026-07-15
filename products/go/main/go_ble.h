@@ -116,6 +116,27 @@ enum class BleHistoryOp : uint8_t {
   Invalid, ///< Decode failed or unknown op
 };
 
+/// Raw thermal-calibration telemetry for the Cal characteristic.  One sample
+/// per measurement cycle, assembled by the orchestrator from the freshest
+/// data it already holds (no extra sensor reads).  Invalid-sentinel fields
+/// are omitted from the encoded CBOR map.
+struct BleCalTelemetry {
+  TempHumData sht;              ///< SHT40 temp/hum (external stem)
+  TempHumData dps;              ///< DPS368 temp (main PCB; humidity invalid)
+  float pressure_hpa = MeasuresInvalid::PRESSURE;
+  float t_fg_c = BmsInvalid::FG_TEMP_C;                 ///< fuel-gauge internal temp
+  int16_t t_die_c = BmsInvalid::TEMPERATURE_C;          ///< BQ25629 die temp
+  int16_t t_bat_c = BmsInvalid::TEMPERATURE_C;          ///< battery NTC temp
+  int16_t ibat_fg_ma = BmsInvalid::CURRENT_MA;          ///< FG battery current (+charge)
+  int16_t ibat_bms_ma = BmsInvalid::CURRENT_MA;         ///< charger battery current
+  int16_t ibus_ma = BmsInvalid::CURRENT_MA;             ///< input/VBUS current
+  float vbus = BmsInvalid::VOLT;
+  float vbat = BmsInvalid::VOLT;
+  BmsChargingState charging = BmsChargingState::Unknown;
+  bool gps_active = false;
+  uint32_t uptime_s = 0;
+};
+
 /// Result of decoding a History characteristic write.
 struct BleHistoryDecodeResult {
   BleHistoryOp op = BleHistoryOp::Invalid;
@@ -174,6 +195,12 @@ public:
   /// when a client is connected. Call on every SensorDataReady regardless of
   /// connection state so the characteristic always holds the latest data.
   void notify_measures(const MeasuresAGo &measures, const GpsData &gps, time_t timestamp);
+
+  /// Encode a Cal telemetry sample as CBOR and update the characteristic
+  /// value. Always sets the value for READ access; additionally notifies when
+  /// a client is connected. Call on every SensorDataReady — the Cal
+  /// characteristic is the raw-data stream for thermal-calibration runs.
+  void notify_cal(const BleCalTelemetry &cal, time_t timestamp);
 
   /// Set the Status characteristic value (no notify). Use for steady-state
   /// refreshes (BMS poll, GPS fix, history delete) — clients see it on
@@ -313,6 +340,7 @@ private:
   AgBleCharacteristic *_status_char = nullptr;
   AgBleCharacteristic *_config_char = nullptr;
   AgBleCharacteristic *_history_char = nullptr;
+  AgBleCharacteristic *_cal_char = nullptr;
 
   // Advertised name; set in phase 1, used in phase 3 (start_advertising()).
   char _adv_name[BLE_ADV_NAME_BUF_SIZE] = {};
@@ -355,6 +383,9 @@ private:
                          time_t ts);
   size_t encode_status(uint8_t *buf, size_t buf_size, const PowerSnapshot &power,
                        const GpsData &gps, bool tracking, uint32_t session_id);
+  /// Encode a Cal telemetry sample (READ + NOTIFY form, omit-invalid).
+  /// Returns 0 on encoder overflow.
+  size_t encode_cal(uint8_t *buf, size_t buf_size, const BleCalTelemetry &cal, time_t ts);
   /// Encode the Status transition delta (`{tracking, session}`) for NOTIFY.
   /// Returns 0 on encoder overflow.
   size_t encode_status_transition(uint8_t *buf, size_t buf_size, bool tracking,
@@ -406,6 +437,9 @@ private:
 
   /// Characteristic properties for the History characteristic.
   static uint16_t history_properties();
+
+  /// Characteristic properties for the Cal characteristic.
+  static uint16_t cal_properties();
 };
 
 // --- Integration Notes ---

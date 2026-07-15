@@ -255,6 +255,10 @@ void SensorProducer::handle_measurement(uint32_t notify_value) {
     _last_temp_hum_valid = true;
   }
 
+  // Snapshot the pressure sensor's on-die temperature (driver cache, no bus
+  // traffic) for the BLE Cal telemetry stream.
+  _last_pressure_temp_hum = _manager.pressure_temp_hum();
+
   // Map to MeasuresAGo — select the primary sensor channels only.
   MeasuresAGo basic{};
   basic.temp_hum_a = measures.temp_hum_a;

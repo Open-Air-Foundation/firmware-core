@@ -61,6 +61,25 @@ inline constexpr const char *BLE_KEY_USED_KB = "used_kb";
 inline constexpr const char *BLE_KEY_DISC = "disc";
 
 // ---------------------------------------------------------------------------
+// Cal characteristic keys (thermal-calibration telemetry)
+// Reuses BLE_KEY_TEMP ("t"), BLE_KEY_HUM ("h"), BLE_KEY_PRES ("pres"),
+// BLE_KEY_TS ("ts") from the Measures keys, and BLE_VAL_CHARGE_* strings.
+// ---------------------------------------------------------------------------
+
+inline constexpr const char *BLE_KEY_CAL_TDPS = "tdps"; // DPS368 temp (°C, on main PCB)
+inline constexpr const char *BLE_KEY_CAL_TFG = "tfg";   // fuel-gauge internal temp (°C)
+inline constexpr const char *BLE_KEY_CAL_TDIE = "tdie"; // BQ25629 die temp (°C)
+inline constexpr const char *BLE_KEY_CAL_TBAT = "tbat"; // battery NTC temp (°C)
+inline constexpr const char *BLE_KEY_CAL_IBAT = "ibat"; // FG battery current (mA, +charge)
+inline constexpr const char *BLE_KEY_CAL_ICHG = "ichg"; // charger battery current (mA)
+inline constexpr const char *BLE_KEY_CAL_IBUS = "ibus"; // input/VBUS current (mA)
+inline constexpr const char *BLE_KEY_CAL_VBUS = "vbus"; // VBUS voltage (V)
+inline constexpr const char *BLE_KEY_CAL_VBAT = "vbat"; // battery voltage (V)
+inline constexpr const char *BLE_KEY_CAL_CHG = "chg";   // charging state string
+inline constexpr const char *BLE_KEY_CAL_GPS = "gps";   // GPS receiver active (0/1)
+inline constexpr const char *BLE_KEY_CAL_UP = "up";     // uptime (s)
+
+// ---------------------------------------------------------------------------
 // Config characteristic keys
 // ---------------------------------------------------------------------------
 

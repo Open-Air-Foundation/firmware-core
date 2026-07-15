@@ -143,6 +143,16 @@ public:
   /// True if a TVOC/NOx sensor is wired into this manager.
   bool has_tvoc_nox_sensor() const { return _sensors.tvoc_nox != nullptr; }
 
+  /// Last temperature reading cached by the wired pressure sensor (updated on
+  /// every pressure read — no bus traffic). Invalid sentinels when no pressure
+  /// sensor is wired or it does not expose temperature.
+  TempHumData pressure_temp_hum() const {
+    if (_sensors.pressure != nullptr && _sensors.pressure->supports_temp_hum()) {
+      return _sensors.pressure->temp_hum_data();
+    }
+    return TempHumData{};
+  }
+
   /// Initialise the gas-index algorithm for the wired SGP41 sensor.
   /// @param sampling_interval_ms must equal the cadence at which the caller
   ///        invokes start_measures(SensorGroup::TvocNox). Sensirion supports

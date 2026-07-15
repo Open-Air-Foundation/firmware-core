@@ -719,6 +719,8 @@ void BleService::notify_measures(const MeasuresAGo & /*m*/, const GpsData & /*gp
   test_spy::ble_notify_measures_called = true;
 }
 
+void BleService::notify_cal(const BleCalTelemetry & /*cal*/, time_t /*ts*/) {}
+
 void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
                                bool tracking, uint32_t session_id) {
   test_spy::ble_update_status_called = true;
