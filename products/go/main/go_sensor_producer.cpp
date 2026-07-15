@@ -131,12 +131,16 @@ void SensorProducer::run() {
   }
 
   uint32_t next_tick_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + SAMPLER_TICK_MS;
+  uint32_t next_cal_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + CAL_TICK_MS;
 
   while (_running) {
     uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
-    uint32_t timeout = UINT32_MAX;
+    uint32_t timeout = (next_cal_ms > now) ? (next_cal_ms - now) : 0;
     if (_sampler_enabled) {
-      timeout = (next_tick_ms > now) ? (next_tick_ms - now) : 0;
+      uint32_t sampler_timeout = (next_tick_ms > now) ? (next_tick_ms - now) : 0;
+      if (sampler_timeout < timeout) {
+        timeout = sampler_timeout;
+      }
     }
 
     uint32_t notify_value = 0;
@@ -166,6 +170,14 @@ void SensorProducer::run() {
     if (_sampler_enabled && now >= next_tick_ms) {
       handle_sampler_tick();
       next_tick_ms = now + SAMPLER_TICK_MS;
+    }
+
+    // Cal tick — 1 Hz thermal sample for the BLE Cal stream. Pauses while a
+    // blocking measurement runs (same task); missed intervals are skipped.
+    now = static_cast<uint32_t>(RTOS::get_time_ms());
+    if (now >= next_cal_ms) {
+      handle_cal_tick();
+      next_cal_ms = now + CAL_TICK_MS;
     }
   }
 }
@@ -255,10 +267,6 @@ void SensorProducer::handle_measurement(uint32_t notify_value) {
     _last_temp_hum_valid = true;
   }
 
-  // Snapshot the pressure sensor's on-die temperature (driver cache, no bus
-  // traffic) for the BLE Cal telemetry stream.
-  _last_pressure_temp_hum = _manager.pressure_temp_hum();
-
   // Map to MeasuresAGo — select the primary sensor channels only.
   MeasuresAGo basic{};
   basic.temp_hum_a = measures.temp_hum_a;
@@ -281,4 +289,16 @@ void SensorProducer::handle_sampler_tick() {
 
   Measures sampler = _manager.start_measures(1, SensorGroup::TvocNox);
   _last_tvoc_nox = sampler.tvoc_nox;
+}
+
+void SensorProducer::handle_cal_tick() {
+  ThermalSample sample{};
+  if (!_manager.read_thermal_sample(sample)) {
+    return;
+  }
+
+  Event event{};
+  event.type = EventType::CalSampleReady;
+  event.cal_sample = sample;
+  RTOS::queue_send(_event_queue, &event, 0);
 }

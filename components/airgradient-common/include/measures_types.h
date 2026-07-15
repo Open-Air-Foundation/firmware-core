@@ -196,6 +196,15 @@ struct MeasuresBasic {
   TVOCNOxData tvoc_nox;
 };
 
+/// One fast thermal-calibration sample: fresh temp/hum plus the pressure
+/// sensor's on-die temperature (PCB-heat proxy). Produced by the sensor
+/// task's 1 Hz cal tick, independent of the measurement cycle.
+struct ThermalSample {
+  TempHumData temp_hum;  // external temp/hum sensor (SHT)
+  TempHumData pcb_temp;  // pressure-sensor die temp (humidity stays invalid)
+  PressureData pressure;
+};
+
 struct MeasuresAGo {
   TempHumData temp_hum_a;
   PMData pm_a;

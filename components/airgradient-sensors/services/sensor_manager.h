@@ -143,14 +143,24 @@ public:
   /// True if a TVOC/NOx sensor is wired into this manager.
   bool has_tvoc_nox_sensor() const { return _sensors.tvoc_nox != nullptr; }
 
-  /// Last temperature reading cached by the wired pressure sensor (updated on
-  /// every pressure read — no bus traffic). Invalid sentinels when no pressure
-  /// sensor is wired or it does not expose temperature.
-  TempHumData pressure_temp_hum() const {
-    if (_sensors.pressure != nullptr && _sensors.pressure->supports_temp_hum()) {
-      return _sensors.pressure->temp_hum_data();
+  /// One fast thermal sample for the cal stream: fresh temp/hum read plus a
+  /// fresh pressure read (which refreshes the sensor's cached die temp).
+  /// ~10 ms of bus time; call only from the sensor task. Returns false when
+  /// nothing could be read (missing sensors keep invalid sentinels).
+  bool read_thermal_sample(ThermalSample &out) {
+    bool any = false;
+    if (_sensors.temp_hum != nullptr && _sensors.temp_hum->read(out.temp_hum)) {
+      any = true;
     }
-    return TempHumData{};
+    if (_sensors.pressure != nullptr) {
+      if (_sensors.pressure->read(out.pressure)) {
+        any = true;
+      }
+      if (_sensors.pressure->supports_temp_hum()) {
+        out.pcb_temp = _sensors.pressure->temp_hum_data();
+      }
+    }
+    return any;
   }
 
   /// Initialise the gas-index algorithm for the wired SGP41 sensor.

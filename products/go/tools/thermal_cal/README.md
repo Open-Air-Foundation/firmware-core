@@ -18,7 +18,9 @@ BQ25629 die, battery NTC.
 
 UUID `d1c0c0a5-6b48-4b2a-9b1d-59f9f2b0a1e1` (Read + Notify, **no pairing
 required** — the screenless reference board cannot display a passkey).
-Notified once per measurement cycle (default 10 s) with a CBOR map;
+Notified at **1 Hz** by a dedicated sensor-task tick that reads only
+SHT40 + DPS368 (~10 ms bus time, negligible self-heat) — the normal
+measurement cycle and its heat profile are untouched. CBOR map;
 invalid/missing sources are omitted:
 
 | Key | Value |
@@ -38,8 +40,9 @@ invalid/missing sources are omitted:
 | `up` | uptime (s) |
 | `ts` | device epoch timestamp |
 
-BMS-sourced fields refresh on the 30 s full BMS poll; sensor fields are fresh
-each cycle. Fine for thermal time constants (minutes).
+Sensor fields (`t`, `h`, `tdps`, `pres`) are fresh every tick; BMS-sourced
+fields refresh on the 5 s status / 30 s full BMS polls and repeat in between.
+The tick pauses for the few seconds a blocking measurement cycle runs.
 
 ## Boards
 

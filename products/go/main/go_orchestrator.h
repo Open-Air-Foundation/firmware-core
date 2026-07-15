@@ -247,6 +247,7 @@ private:
 
   // --- Event handlers ---
   void on_sensor_data(const MeasuresAGo &data);
+  void on_cal_sample(const ThermalSample &sample);
   void on_gps_fix(const GpsData &data);
   void on_input(const InputEventData &input);
   void on_co2_calibration_done(Co2CalibrationResult result);

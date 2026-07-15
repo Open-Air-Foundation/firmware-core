@@ -546,6 +546,9 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::SensorDataReady:
     on_sensor_data(event.sensor_data);
     break;
+  case EventType::CalSampleReady:
+    on_cal_sample(event.cal_sample);
+    break;
   case EventType::PmSensorAsleep:
     // PM sleep finished while still connected — isolate the bus now.
     _svc.power_service.set_pm_power(false);
@@ -726,26 +729,6 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   // Update BLE measures characteristic (always for READ; notifies when connected)
   _svc.ble_service.notify_measures(_cached_measures, _latest_gps, time(nullptr));
 
-  // Cal telemetry: one raw thermal sample per measurement cycle.
-  {
-    BleCalTelemetry cal{};
-    cal.sht = _cached_measures.temp_hum_a;
-    cal.dps = _svc.sensor_producer.last_pressure_temp_hum();
-    cal.pressure_hpa = _cached_measures.pressure.pressure;
-    cal.t_fg_c = _latest_power.fg_internal_temperature_c;
-    cal.t_die_c = _latest_power.telemetry.die_temperature_c;
-    cal.t_bat_c = _latest_power.telemetry.battery_temperature_c;
-    cal.ibat_fg_ma = _latest_power.fg_current_ma;
-    cal.ibat_bms_ma = _latest_power.telemetry.battery_current_ma;
-    cal.ibus_ma = _latest_power.telemetry.input_current_ma;
-    cal.vbus = _latest_power.charging_voltage;
-    cal.vbat = _latest_power.battery_voltage;
-    cal.charging = _latest_power.charging_status;
-    cal.gps_active = is_gps_active();
-    cal.uptime_s = static_cast<uint32_t>(RTOS::get_time_ms() / 1000);
-    _svc.ble_service.notify_cal(cal, time(nullptr));
-  }
-
   // Sleep PM sensor after measurement when interval justifies power-cycling.
   // The producer sleeps the sensor, then posts PmSensorAsleep so we isolate.
   uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
@@ -754,6 +737,25 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   }
 
   request_background_display_update();
+}
+
+void Orchestrator::on_cal_sample(const ThermalSample &sample) {
+  BleCalTelemetry cal{};
+  cal.sht = sample.temp_hum;
+  cal.dps = sample.pcb_temp;
+  cal.pressure_hpa = sample.pressure.pressure;
+  cal.t_fg_c = _latest_power.fg_internal_temperature_c;
+  cal.t_die_c = _latest_power.telemetry.die_temperature_c;
+  cal.t_bat_c = _latest_power.telemetry.battery_temperature_c;
+  cal.ibat_fg_ma = _latest_power.fg_current_ma;
+  cal.ibat_bms_ma = _latest_power.telemetry.battery_current_ma;
+  cal.ibus_ma = _latest_power.telemetry.input_current_ma;
+  cal.vbus = _latest_power.charging_voltage;
+  cal.vbat = _latest_power.battery_voltage;
+  cal.charging = _latest_power.charging_status;
+  cal.gps_active = is_gps_active();
+  cal.uptime_s = static_cast<uint32_t>(RTOS::get_time_ms() / 1000);
+  _svc.ble_service.notify_cal(cal, time(nullptr));
 }
 
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {

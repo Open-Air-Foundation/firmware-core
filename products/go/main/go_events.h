@@ -14,6 +14,7 @@
 enum class EventType : uint8_t {
   // --- Producer events ---
   SensorDataReady, // payload: MeasuresAGo
+  CalSampleReady,  // payload: ThermalSample cal_sample (1 Hz cal-stream tick)
   PmSensorAsleep,  // no payload (PM sleep done; orchestrator may isolate now)
   SensorTestDone,  // payload: SensorTestResults sensor_test_results (bulk AQ self-test)
   GpsFixUpdate,    // payload: GpsData
@@ -96,6 +97,7 @@ struct Event {
 
   union {
     MeasuresAGo sensor_data;               // SensorDataReady
+    ThermalSample cal_sample;              // CalSampleReady
     GpsData gps_data;                      // GpsFixUpdate (~68 bytes)
     InputEventData input;                  // InputPress (2 bytes)
     OperatingMode mode_change;             // UserChangeMode (1 byte)

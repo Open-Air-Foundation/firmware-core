@@ -84,12 +84,6 @@ public:
   /// orchestrator can isolate the bus. Non-blocking: returns immediately.
   void request_pm_sleep();
 
-  /// Pressure-sensor on-die temperature snapshotted at the end of the last
-  /// measurement cycle. Invalid sentinels before the first cycle or when no
-  /// pressure sensor is wired. Read by the orchestrator for Cal telemetry;
-  /// benign cross-task read (single aligned-float fields, 10s cadence).
-  TempHumData last_pressure_temp_hum() const { return _last_pressure_temp_hum; }
-
   /// Trigger the bulk AQ hardware self-test. Non-blocking: returns
   /// immediately. The task runs one measurement (start_measures with a single
   /// iteration) in its own context, classifies each Go sensor role by field
@@ -120,9 +114,6 @@ private:
   TempHumData _last_temp_hum{};
   bool _last_temp_hum_valid = false;
 
-  /// Pressure-sensor on-die temp snapshot for last_pressure_temp_hum().
-  TempHumData _last_pressure_temp_hum{};
-
   // A flag that indicate TVOC and NOx sampling enabled or not
   bool _sampler_enabled = false;
 
@@ -142,6 +133,11 @@ private:
   /// algorithm is successfully configured.
   static constexpr uint32_t SAMPLER_TICK_MS = SGP41_INDEX_SAMPLING_INTERVAL_MS;
 
+  /// Cal-stream cadence: one ThermalSample per second, independent of the
+  /// measurement interval so the normal duty cycle (and its heat profile)
+  /// stays untouched.
+  static constexpr uint32_t CAL_TICK_MS = 1000;
+
   static void task_entry(void *arg); ///< RTOS task entry point
   void run();                        ///< Actual task loop
 
@@ -152,4 +148,5 @@ private:
   void handle_self_test();
   void handle_measurement(uint32_t notify_value);
   void handle_sampler_tick();
+  void handle_cal_tick();
 };
