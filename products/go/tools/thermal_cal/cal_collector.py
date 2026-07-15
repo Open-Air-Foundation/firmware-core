@@ -67,30 +67,43 @@ class CsvSink:
         self._file.close()
 
 
-async def resolve_address(target: str) -> str:
-    """Resolve a device name (substring match) to a BLE address.
+def _looks_like_address(target: str) -> bool:
+    return ":" in target or ("-" in target and len(target) >= 36)
 
-    Targets that already look like an address (colon-separated or a macOS
-    UUID) are returned unchanged.
+
+async def resolve_targets(targets: list[tuple[str, str]]) -> dict[str, str]:
+    """Resolve all name targets to BLE addresses with a single shared scan.
+
+    One scan pass at a time (concurrent CoreBluetooth scans misbehave on
+    macOS); rescans until every named device has been seen. Targets that
+    already look like an address pass through unchanged.
     """
-    if ":" in target or ("-" in target and len(target) >= 36):
-        return target
-    logger.info("scanning for '%s'...", target)
-    devices = await BleakScanner.discover(timeout=SCAN_TIMEOUT_S)
-    matches = [d for d in devices if d.name and target.lower() in d.name.lower()]
-    if not matches:
-        raise RuntimeError(f"no BLE device found matching name '{target}'")
-    if len(matches) > 1:
-        names = ", ".join(f"{d.name} ({d.address})" for d in matches)
-        raise RuntimeError(f"ambiguous name '{target}': {names}")
-    logger.info("resolved '%s' -> %s (%s)", target, matches[0].address, matches[0].name)
-    return matches[0].address
+    resolved: dict[str, str] = {}
+    pending = {role: t for role, t in targets}
+    for role, t in list(pending.items()):
+        if _looks_like_address(t):
+            resolved[role] = t
+            del pending[role]
+
+    while pending:
+        logger.info("scanning for %s...", ", ".join(f"'{t}'" for t in pending.values()))
+        devices = await BleakScanner.discover(timeout=SCAN_TIMEOUT_S)
+        for role, t in list(pending.items()):
+            matches = [d for d in devices if d.name and t.lower() in d.name.lower()]
+            if len(matches) > 1:
+                names = ", ".join(f"{d.name} ({d.address})" for d in matches)
+                raise RuntimeError(f"ambiguous name '{t}': {names}")
+            if matches:
+                resolved[role] = matches[0].address
+                logger.info("resolved '%s' -> %s (%s)", t, matches[0].address, matches[0].name)
+                del pending[role]
+        if pending:
+            logger.warning("not found yet: %s — rescanning", ", ".join(pending.values()))
+    return resolved
 
 
-async def stream_device(role: str, target: str, sink: CsvSink) -> None:
+async def stream_device(role: str, address: str, sink: CsvSink) -> None:
     """Connect, subscribe, and re-connect forever. One task per device."""
-    address = await resolve_address(target)
-
     while True:
         disconnected = asyncio.Event()
         try:
@@ -135,7 +148,9 @@ async def main() -> int:
     sink = CsvSink(args.out)
     logger.info("writing to %s", args.out)
     try:
-        await asyncio.gather(*(stream_device(role, target, sink) for role, target in targets))
+        addresses = await resolve_targets(targets)
+        await asyncio.gather(
+            *(stream_device(role, addresses[role], sink) for role, _ in targets))
     except asyncio.CancelledError:
         pass
     finally:
