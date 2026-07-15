@@ -71,18 +71,45 @@ def merged(df: pd.DataFrame) -> pd.DataFrame:
     return m.dropna(subset=["t_d", "t_r"])
 
 
-def fit_line(x: np.ndarray, y: np.ndarray) -> tuple[float, float, float]:
-    """Least-squares y = k*x + b. Returns (k, b, r2)."""
-    k, b = np.polyfit(x, y, 1)
-    pred = k * x + b
+def _r2(y: np.ndarray, pred: np.ndarray) -> float:
     ss_res = float(np.sum((y - pred) ** 2))
     ss_tot = float(np.sum((y - np.mean(y)) ** 2))
-    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
-    return float(k), float(b), r2
+    return 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+
+def _resid_stats(y: np.ndarray, pred: np.ndarray) -> dict:
+    resid = y - pred
+    return {"r2": round(_r2(y, pred), 4),
+            "resid_std_c": round(float(np.std(resid)), 3),
+            "resid_p95_c": round(float(np.quantile(np.abs(resid), 0.95)), 3)}
+
+
+def fit_linear(x: np.ndarray, y: np.ndarray) -> dict:
+    """y = k*x + b"""
+    k, b = np.polyfit(x, y, 1)
+    return {"k": round(float(k), 4), "b": round(float(b), 3),
+            **_resid_stats(y, k * x + b)}
+
+
+def fit_quad(x: np.ndarray, y: np.ndarray) -> dict:
+    """y = k2*x^2 + k1*x + b"""
+    k2, k1, b = np.polyfit(x, y, 2)
+    return {"k1": round(float(k1), 4), "k2": round(float(k2), 5),
+            "b": round(float(b), 3), **_resid_stats(y, k2 * x * x + k1 * x + b)}
+
+
+def fit_with_power(x: np.ndarray, p: np.ndarray, y: np.ndarray) -> dict:
+    """y = k*x + kp*P + b  (P = charger input power, W)"""
+    a = np.column_stack([x, p, np.ones_like(x)])
+    coef, *_ = np.linalg.lstsq(a, y, rcond=None)
+    k, kp, b = (float(c) for c in coef)
+    return {"k": round(k, 4), "kp": round(kp, 4), "b": round(b, 3),
+            **_resid_stats(y, a @ coef)}
 
 
 def self_heating_fits(m: pd.DataFrame) -> dict:
-    """Fit T_bias = k*(T_int - T_sht) + b for every regressor and segment."""
+    """Fit T_bias = f(T_int - T_sht) per regressor/segment, comparing models:
+    linear, quadratic, and linear + charger-power term. R2 on every model."""
     out: dict = {}
     segments = {
         "all": pd.Series(True, index=m.index),
@@ -90,6 +117,7 @@ def self_heating_fits(m: pd.DataFrame) -> dict:
         "quiet": ~m["charging_d"] & (m.get("gps_d", 0) == 0),
     }
     bias = m["t_d"] - m["t_r"]
+    power_w = (m.get("vbus_d", 0).fillna(0) * m.get("ibus_d", 0).fillna(0) / 1000.0)
     for reg in REGRESSORS:
         col = f"{reg}_d"
         if col not in m or m[col].isna().all():
@@ -100,13 +128,13 @@ def self_heating_fits(m: pd.DataFrame) -> dict:
             n = int(sel.sum())
             if n < 30:
                 continue
-            k, b, r2 = fit_line(delta[sel].to_numpy(), bias[sel].to_numpy())
-            resid = bias[sel] - (k * delta[sel] + b)
-            out.setdefault(reg, {})[seg_name] = {
-                "k": round(k, 4), "b": round(b, 3), "r2": round(r2, 4),
-                "n": n, "resid_std_c": round(float(resid.std()), 3),
-                "resid_p95_c": round(float(resid.abs().quantile(0.95)), 3),
-            }
+            x = delta[sel].to_numpy()
+            y = bias[sel].to_numpy()
+            p = power_w[sel].to_numpy()
+            models = {"linear": fit_linear(x, y), "quad": fit_quad(x, y)}
+            if np.nanmax(p) > 0.05:  # power model only if charging data exists
+                models["power"] = fit_with_power(x, p, y)
+            out.setdefault(reg, {})[seg_name] = {"n": n, "models": models}
     return out
 
 
@@ -142,7 +170,11 @@ def find_warmup(t: pd.Series) -> pd.Series | None:
 
 
 def fit_tau(seg: pd.Series) -> dict | None:
-    """First-order fit T(t) = T_inf - (T_inf - T0)*exp(-t/tau) via log-linear LS."""
+    """First-order fit T(t) = T_inf - (T_inf - T0)*exp(-t/tau) via log-linear LS.
+
+    R2 is computed in the temperature domain (actual vs reconstructed T),
+    not on the log-transformed values.
+    """
     t_inf = seg.iloc[-min(len(seg), 30):].mean() + 0.1  # keep log argument > 0
     y = (t_inf - seg).clip(lower=1e-3)
     x = (seg.index - seg.index[0]).total_seconds().to_numpy()
@@ -150,12 +182,29 @@ def fit_tau(seg: pd.Series) -> dict | None:
     if slope >= 0:
         return None
     tau = -1.0 / slope
+    pred_t = t_inf - np.exp(intercept + slope * x)
     return {
         "tau_s": round(float(tau), 1),
         "t_start_c": round(float(seg.iloc[0]), 2),
         "t_inf_c": round(float(t_inf), 2),
         "span_s": round(float(x[-1]), 0),
+        "r2": round(_r2(seg.to_numpy(), pred_t), 4),
     }
+
+
+def offset_vs_temp_fit(bins: pd.DataFrame) -> dict | None:
+    """Linear drift of the DUT-ref offset across absolute temperature.
+
+    A slope indistinguishable from 0 (and high scatter / low R2) means the
+    offset b is temperature-independent and one constant suffices.
+    """
+    if len(bins) < 3:
+        return None
+    x = bins.index.to_numpy(dtype=float)
+    y = bins["dut_minus_ref_c"].to_numpy(dtype=float)
+    f = fit_linear(x, y)
+    return {"slope_c_per_c": f["k"], "intercept_c": f["b"], "r2": f["r2"],
+            "n_bins": len(bins)}
 
 
 def warmup_taus(m: pd.DataFrame) -> dict:
@@ -198,7 +247,7 @@ def maybe_plots(m: pd.DataFrame, fits: dict, out_dir: Path) -> list[str]:
     plt.close(fig)
     written.append(p.name)
 
-    best = fits.get("tdps", {}).get("all")
+    best = fits.get("tdps", {}).get("all", {}).get("models", {}).get("linear")
     if best:
         fig, ax = plt.subplots(figsize=(7, 6))
         x = (m["tdps_d"] - m["t_d"]).to_numpy()
@@ -237,30 +286,39 @@ def main() -> int:
           f"(dut charging {int(m['charging_d'].sum())} rows)")
 
     fits = self_heating_fits(m)
-    print("\n== self-heating fits: t_dut - t_ref = k*(T_int - t_dut) + b ==")
+    print("\n== self-heating fits: t_dut - t_ref = f(T_int - t_dut) — model comparison ==")
     for reg, segs in fits.items():
-        for seg_name, f in segs.items():
-            print(f"  {reg:>5s} [{seg_name:>8s}]  k={f['k']:+.4f}  b={f['b']:+.3f}  "
-                  f"R2={f['r2']:.3f}  resid std={f['resid_std_c']:.3f}C "
-                  f"p95={f['resid_p95_c']:.3f}C  (n={f['n']})")
+        for seg_name, entry in segs.items():
+            for model_name, f in entry["models"].items():
+                coefs = "  ".join(
+                    f"{c}={f[c]:+.4f}" for c in ("k", "k1", "k2", "kp", "b") if c in f)
+                print(f"  {reg:>5s} [{seg_name:>8s}] {model_name:>6s}  {coefs}  "
+                      f"R2={f['r2']:.4f}  resid std={f['resid_std_c']:.3f}C "
+                      f"p95={f['resid_p95_c']:.3f}C  (n={entry['n']})")
     if not fits:
         print("  (not enough overlapping data)")
 
     bins = temperature_bins(m)
+    drift = None
     if not bins.empty:
         print("\n== quiet offsets by reference temperature (degC bins) ==")
         print(bins.to_string())
+        drift = offset_vs_temp_fit(bins)
+        if drift:
+            print(f"  offset-vs-T drift: slope={drift['slope_c_per_c']:+.4f} C/C  "
+                  f"intercept={drift['intercept_c']:+.3f}C  R2={drift['r2']:.4f}  "
+                  f"({drift['n_bins']} bins)")
 
     taus = warmup_taus(m)
     if taus:
         print("\n== warm-up time constants ==")
         for label, f in taus.items():
-            print(f"  {label:>8s}: tau={f['tau_s']:.0f}s "
+            print(f"  {label:>8s}: tau={f['tau_s']:.0f}s  R2={f['r2']:.4f}  "
                   f"({f['t_start_c']}C -> {f['t_inf_c']}C over {f['span_s']:.0f}s)")
 
     args.out.mkdir(parents=True, exist_ok=True)
     report = {"n_rows": len(m), "span_h": round(span_h, 2),
-              "self_heating": fits, "warmup_tau": taus}
+              "self_heating": fits, "offset_vs_temp": drift, "warmup_tau": taus}
     (args.out / "cal_fit.json").write_text(json.dumps(report, indent=2))
     if not bins.empty:
         bins.to_csv(args.out / "bins.csv")
