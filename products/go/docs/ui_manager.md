@@ -67,6 +67,10 @@ on-screen password line agree.
 | `apply_to_settings(settings)` | Convert internal option indices back to `GoSettings` field values. Reverse of `sync_settings`. |
 | `reset_to_home()` | Reset to Home with no metric. Used on auto-lock and by the session-leave helpers. |
 | `show_pairing_passkey(passkey)` | Show 6-digit BLE passkey on dedicated screen. |
+| `show_watch_pairing_waiting()` | Show the persistent Pair Watch instructions and Cancel action. |
+| `show_watch_numeric_comparison(number)` | Show the Numeric Comparison value and Cancel/Confirm actions, with Confirm selected by default. |
+| `show_watch_pairing_confirming()` | Latch a submitted comparison decision until BLE completes pairing. |
+| `show_watch_pairing_result(success)` | Show the brief terminal pairing result. |
 | `dismiss_pairing_passkey()` | Dismiss passkey screen, return to Home. |
 | `show_info(text)` | Copy ASCII `text` into an internal buffer and switch to `Screen::Info`. Caller does not need to keep `text` alive. Null or empty renders a blank canvas. Used by cold boot for `Booting...`, by `Orchestrator::enter_stationary()` for the bring-up narration, and by `on_wifi_connected()` for the `Connected!\n<ip>` page. |
 | `open_provisioning(active)` | Enter `Screen::Provisioning` with the given active transport. Idempotently resets the per-session UI sub-state (connected-IP, ui-state, confirm-kind, confirm-index, row-index) and re-encodes the Provisioning-page QR so the first frame of every session is clean regardless of how the prior session was torn down. |
@@ -94,6 +98,9 @@ orchestrator what happened:
 | `ConfirmSwitchProvisioningTransport` | ProvisioningConfirm: "Yes" on a switch-transport overlay | Orchestrator latches `SwitchingTransport`, renders + flushes, then calls `WifiService::switch_provisioning_transport()` |
 | `ConfirmCancelProvisioning` | ProvisioningConfirm: "Yes" on a cancel-setup overlay | Orchestrator routes to `leave_session_to_portable()` |
 | `AckOnboarding` | GettingStarted (boot gate): `Start using` press | Orchestrator calls `mark_onboarding_done()` then `leave_session_to_home()` |
+| `PairWatchRequested` | Settings: `Pair Watch` | Starts the temporary Watch security profile in Portable mode when a connection slot is available; otherwise returns to Settings and shows `Use Portable mode`. |
+| `PairWatchCancelled` | Pair Watch: Cancel | Rejects a pending comparison, restores the normal profile, and returns to Settings. |
+| `PairWatchConfirmed` | Pair Watch: Confirm | Explicitly accepts the pending Numeric Comparison and holds the Confirming view until BLE completes. |
 
 Opening the main menu resets the active metric to `None`, clearing any
 hero/grid selection highlight behind the overlay.

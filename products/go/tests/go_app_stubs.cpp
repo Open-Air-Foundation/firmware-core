@@ -821,11 +821,11 @@ void Orchestrator::on_gps_fix(const GpsData & /*data*/) {}
 void Orchestrator::on_input(const InputEventData & /*input*/) {}
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult /*result*/) {}
 void Orchestrator::on_ble_connected() {}
-void Orchestrator::on_ble_disconnected() {}
+void Orchestrator::on_ble_disconnected(uint16_t /*conn_handle*/) {}
 void Orchestrator::on_ble_config_write() {}
 void Orchestrator::on_ble_history_write() {}
 void Orchestrator::on_ble_pairing_request(uint32_t /*passkey*/) {}
-void Orchestrator::on_ble_auth_complete(bool /*success*/) {}
+void Orchestrator::on_ble_auth_complete(uint16_t /*conn_handle*/, bool /*success*/) {}
 void Orchestrator::lock() {}
 void Orchestrator::unlock() {}
 bool Orchestrator::start_tracking() { return true; }

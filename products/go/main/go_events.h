@@ -25,12 +25,13 @@ enum class EventType : uint8_t {
   WakeFromSleep,     // payload: WakeEventData
 
   // --- BLE events ---
-  BleConnected,      // no payload
-  BleDisconnected,   // no payload
-  BleConfigWrite,    // no payload (data in BleService pending buffer)
-  BleHistoryWrite,   // no payload (data in BleService pending buffer)
-  BlePairingRequest, // payload: uint32_t ble_passkey
-  BleAuthComplete,   // payload: bool ble_auth_ok (link encrypted/authenticated)
+  BleConnected,         // no payload
+  BleDisconnected,      // payload: BleConnectionPayload
+  BleConfigWrite,       // no payload (data in BleService pending buffer)
+  BleHistoryWrite,      // no payload (data in BleService pending buffer)
+  BlePairingRequest,    // payload: uint32_t ble_passkey
+  BleAuthComplete,      // payload: BleAuthCompletePayload
+  BleNumericComparison, // payload: BleNumericComparisonPayload
 
   // --- Wi-Fi events ---
   WifiConnected,            // payload: uint32_t wifi_ip (network byte order)
@@ -86,6 +87,20 @@ struct WakeEventData {
   WakeCause cause;
 };
 
+struct BleNumericComparisonPayload {
+  uint16_t conn_handle;
+  uint32_t number;
+};
+
+struct BleConnectionPayload {
+  uint16_t conn_handle;
+};
+
+struct BleAuthCompletePayload {
+  uint16_t conn_handle;
+  bool success;
+};
+
 // --- Event struct ---
 //
 // Fixed-size struct with a type discriminator and a union of all possible
@@ -100,15 +115,17 @@ struct Event {
   EventType type;
 
   union {
-    MeasuresAGo sensor_data;                 // SensorDataReady
-    GpsData gps_data;                        // GpsFixUpdate (~68 bytes)
-    InputEventData input;                    // InputPress (2 bytes)
-    OperatingMode mode_change;               // UserChangeMode (1 byte)
-    WakeEventData wake;                      // WakeFromSleep (1 byte)
-    bool gps_enabled;                        // UserToggleGps (1 byte)
-    bool ble_auth_ok;                        // BleAuthComplete (1 byte, link encrypted)
-    uint8_t tag_index;                       // SaveTag (1 byte)
-    uint32_t ble_passkey;                    // BlePairingRequest (4 bytes)
+    MeasuresAGo sensor_data;                            // SensorDataReady
+    GpsData gps_data;                                   // GpsFixUpdate (~68 bytes)
+    InputEventData input;                               // InputPress (2 bytes)
+    OperatingMode mode_change;                          // UserChangeMode (1 byte)
+    WakeEventData wake;                                 // WakeFromSleep (1 byte)
+    bool gps_enabled;                                   // UserToggleGps (1 byte)
+    BleConnectionPayload ble_disconnected;              // BleDisconnected
+    BleAuthCompletePayload ble_auth_complete;           // BleAuthComplete
+    uint8_t tag_index;                                  // SaveTag (1 byte)
+    uint32_t ble_passkey;                               // BlePairingRequest (4 bytes)
+    BleNumericComparisonPayload ble_numeric_comparison; // BleNumericComparison
     uint8_t co2_cal_result;                  // Co2CalibrationDone (1 byte, Co2CalibrationResult)
     uint8_t co2_abc_result;                  // Co2AbcPeriodDone (1 byte, Co2AbcPeriodResult)
     uint8_t tvoc_nox_learning_offset_result; // TvocNoxLearningOffsetDone (1 byte)

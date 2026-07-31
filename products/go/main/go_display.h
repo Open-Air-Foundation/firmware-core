@@ -25,6 +25,7 @@ enum class Screen : uint8_t {
   ShutdownDischarge,   ///< Safety-trip shutdown — battery critically low (OverDischarge)
   ShutdownTemperature, ///< Safety-trip shutdown — battery overheated (OverTemperature)
   PairingPasskey,      ///< Shows 6-digit BLE pairing passkey
+  PairWatch,           ///< Explicit smartwatch pairing flow
   Provisioning,        ///< Stationary Wi-Fi provisioning page (QR + status + actions)
   ProvisioningConfirm, ///< Yes/No confirmation overlay for Provisioning actions
   Info,                ///< Generic single-text presentation surface (bring-up narration, etc.)
@@ -42,6 +43,14 @@ enum class Screen : uint8_t {
   FgLearnVerifying,  ///< Learning: re-plugged, checking pass criteria
   FgLearnComplete,   ///< Learning: verified pass (terminal)
   FgLearnFailed,     ///< Learning: rejected (terminal, sticky)
+};
+
+enum class WatchPairingView : uint8_t {
+  Waiting,
+  NumericComparison,
+  Confirming,
+  Success,
+  Failure,
 };
 
 enum class Metric : uint8_t {
@@ -155,6 +164,9 @@ struct DisplayValues {
 
   // --- BLE pairing ---
   uint32_t ble_passkey = 0; ///< 6-digit passkey for PairingPasskey screen
+  WatchPairingView watch_pairing_view = WatchPairingView::Waiting;
+  uint32_t watch_pairing_number = 0;
+  uint8_t watch_pairing_action_index = 0; ///< 0 = Cancel, 1 = Confirm
 
   // --- Stationary networking (Provisioning screen only — Home conveys
   // network state purely through the status-bar Wi-Fi icon per spec) ---
@@ -346,6 +358,7 @@ private:
   void _draw_snackbar(const DisplayValues &v);
   void _draw_shutdown(Screen s);
   void _draw_pairing_passkey(const DisplayValues &v);
+  void _draw_pair_watch(const DisplayValues &v);
   void _draw_chart(const DisplayValues &v);
   void _draw_info(const DisplayValues &v);
   void _draw_provisioning(const DisplayValues &v);

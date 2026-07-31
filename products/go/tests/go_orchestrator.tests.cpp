@@ -123,6 +123,11 @@ extern bool ble_deinit_called;
 extern bool ble_initialized;
 extern bool ble_connected;
 extern bool ble_authenticated;
+extern bool ble_begin_watch_pairing_called;
+extern bool ble_restore_normal_pairing_called;
+extern bool ble_confirm_numeric_comparison_called;
+extern uint16_t ble_numeric_comparison_handle;
+extern bool ble_numeric_comparison_accept;
 extern bool ble_notify_measures_called;
 extern MeasuresAGo ble_last_measures;
 extern bool ble_update_status_called;
@@ -503,8 +508,15 @@ public:
                                           bool persist = true) {
     return o.activate_settings_candidate(candidate, persist);
   }
-  static void on_ble_auth_complete(Orchestrator &o, bool success) {
-    o.on_ble_auth_complete(success);
+  static void on_ble_auth_complete(Orchestrator &o, bool success, uint16_t conn_handle = 0) {
+    o.on_ble_auth_complete(conn_handle, success);
+  }
+  static void set_watch_pairing(Orchestrator &o, bool active, uint16_t conn_handle) {
+    o._watch_pairing_active = active;
+    o._watch_pairing_conn_handle = conn_handle;
+  }
+  static void on_ble_numeric_comparison(Orchestrator &o, uint16_t conn_handle, uint32_t number) {
+    o.on_ble_numeric_comparison(conn_handle, number);
   }
   static void shutdown(Orchestrator &o) { o.shutdown(); }
   static void shutdown(Orchestrator &o, ShipModeRequest reason) { o.shutdown(reason); }
@@ -1516,6 +1528,113 @@ TEST_CASE("BLE auth failure leaves onboarding untouched", "[Orchestrator][onboar
   CHECK_FALSE(A::settings(orch).onboarding_done);
   A::on_ble_auth_complete(orch, /*success=*/false);
   CHECK_FALSE(A::settings(orch).onboarding_done);
+}
+
+TEST_CASE("Pair Watch Numeric Comparison defaults to Confirm", "[Orchestrator][pair-watch]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  A::set_watch_pairing(orch, true, 0);
+  A::on_ble_numeric_comparison(orch, 0, 123456);
+
+  DisplayValues values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(values.watch_pairing_view == WatchPairingView::NumericComparison);
+  CHECK(values.watch_pairing_action_index == 1);
+
+  A::on_input(orch, InputEventData{InputSource::TouchEnter, InputType::ShortPress});
+  CHECK(test_spy::ble_confirm_numeric_comparison_called);
+  CHECK(test_spy::ble_numeric_comparison_handle == 0);
+  CHECK(test_spy::ble_numeric_comparison_accept);
+  values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(values.watch_pairing_view == WatchPairingView::Confirming);
+}
+
+TEST_CASE("Pair Watch Numeric Comparison allows selecting Cancel", "[Orchestrator][pair-watch]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  A::set_watch_pairing(orch, true, 42);
+  A::on_ble_numeric_comparison(orch, 42, 123456);
+
+  A::on_input(orch, InputEventData{InputSource::TouchDown, InputType::ShortPress});
+  A::on_input(orch, InputEventData{InputSource::TouchEnter, InputType::ShortPress});
+  CHECK(test_spy::ble_confirm_numeric_comparison_called);
+  CHECK(test_spy::ble_numeric_comparison_handle == 42);
+  CHECK_FALSE(test_spy::ble_numeric_comparison_accept);
+  CHECK(test_spy::ble_restore_normal_pairing_called);
+  CHECK(f.ui_manager.current_screen() == Screen::Settings);
+}
+
+TEST_CASE("Pair Watch requires Portable mode", "[Orchestrator][pair-watch]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  A::set_mode(orch, OperatingMode::Stationary);
+
+  const InputEventData enter{InputSource::TouchEnter, InputType::ShortPress};
+  const InputEventData down{InputSource::TouchDown, InputType::ShortPress};
+  A::on_input(orch, enter); // Home → MainMenu
+  A::on_input(orch, down);  // 0 → 1
+  A::on_input(orch, down);  // 1 → 2 (Settings)
+  A::on_input(orch, enter); // MainMenu → Settings
+  A::on_input(orch, down);  // Back → Setup Guide
+  A::on_input(orch, down);  // Setup Guide → Pair Watch
+  A::on_input(orch, enter);
+
+  CHECK(f.ui_manager.current_screen() == Screen::Settings);
+  CHECK_FALSE(test_spy::ble_begin_watch_pairing_called);
+  const DisplayValues values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(std::string(values.snackbar_text) == "Use Portable mode");
+}
+
+TEST_CASE("Pair Watch ignores a different client disconnect", "[Orchestrator][pair-watch]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  A::set_watch_pairing(orch, true, 0);
+  A::on_ble_numeric_comparison(orch, 42, 123456);
+
+  Event evt{};
+  evt.type = EventType::BleDisconnected;
+  evt.ble_disconnected = BleConnectionPayload{41};
+  A::dispatch(orch, evt);
+
+  DisplayValues values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(values.watch_pairing_view == WatchPairingView::NumericComparison);
+  CHECK_FALSE(test_spy::ble_restore_normal_pairing_called);
+}
+
+TEST_CASE("Pair Watch ignores a different client authentication result",
+          "[Orchestrator][pair-watch]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  A::set_watch_pairing(orch, true, 0);
+  A::on_ble_numeric_comparison(orch, 42, 123456);
+
+  Event evt{};
+  evt.type = EventType::BleAuthComplete;
+  evt.ble_auth_complete = BleAuthCompletePayload{41, false};
+  A::dispatch(orch, evt);
+
+  DisplayValues values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(values.watch_pairing_view == WatchPairingView::NumericComparison);
+  CHECK_FALSE(test_spy::ble_restore_normal_pairing_called);
+}
+
+TEST_CASE("Pair Watch lock rejects a pending Numeric Comparison", "[Orchestrator][pair-watch]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  A::set_watch_pairing(orch, true, 0);
+  A::on_ble_numeric_comparison(orch, 0, 123456);
+
+  A::lock(orch);
+
+  CHECK(test_spy::ble_confirm_numeric_comparison_called);
+  CHECK(test_spy::ble_numeric_comparison_handle == 0);
+  CHECK_FALSE(test_spy::ble_numeric_comparison_accept);
+  CHECK(test_spy::ble_restore_normal_pairing_called);
 }
 
 TEST_CASE("change_mode marks onboarding done", "[Orchestrator][onboarding][change_mode]") {
@@ -3212,6 +3331,7 @@ TEST_CASE("dispatch: BleDisconnected dismisses pairing passkey screen", "[Orches
 
   Event evt{};
   evt.type = EventType::BleDisconnected;
+  evt.ble_disconnected = BleConnectionPayload{0};
   A::dispatch(orch, evt);
 
   CHECK(f.ui_manager.current_screen() == Screen::Home);
@@ -3247,7 +3367,7 @@ TEST_CASE("dispatch: BleAuthComplete dismisses pairing passkey screen", "[Orches
 
   Event evt{};
   evt.type = EventType::BleAuthComplete;
-  evt.ble_auth_ok = true;
+  evt.ble_auth_complete = BleAuthCompletePayload{0, true};
   A::dispatch(orch, evt);
 
   CHECK(f.ui_manager.current_screen() == Screen::Home);
@@ -3269,7 +3389,7 @@ TEST_CASE("dispatch: BleAuthComplete failure dismisses passkey to Home (no sessi
 
   Event evt{};
   evt.type = EventType::BleAuthComplete;
-  evt.ble_auth_ok = false;
+  evt.ble_auth_complete = BleAuthCompletePayload{0, false};
   A::dispatch(orch, evt);
 
   CHECK(f.ui_manager.current_screen() == Screen::Home);
@@ -3295,7 +3415,7 @@ TEST_CASE("dispatch: BleAuthComplete failure in setup session returns to boot gu
 
   Event evt{};
   evt.type = EventType::BleAuthComplete;
-  evt.ble_auth_ok = false;
+  evt.ble_auth_complete = BleAuthCompletePayload{0, false};
   A::dispatch(orch, evt);
 
   // Returns to the first-boot guide, session stays active, onboarding untouched.
@@ -3323,7 +3443,7 @@ TEST_CASE("dispatch: BleAuthComplete is no-op when not on passkey screen", "[Orc
 
   Event evt{};
   evt.type = EventType::BleAuthComplete;
-  evt.ble_auth_ok = true;
+  evt.ble_auth_complete = BleAuthCompletePayload{0, true};
   A::dispatch(orch, evt);
 
   CHECK(f.ui_manager.current_screen() == Screen::Home);
@@ -3564,8 +3684,8 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
 
-  // Navigate to CO2: Calibrate (index 14) — 13 down presses from Back (1)
-  for (int i = 0; i < 13; ++i)
+  // Navigate to CO2: Calibrate (display index 15) — 14 downs from Back (1)
+  for (int i = 0; i < 14; ++i)
     A::on_input(orch, touch_down);
 
   A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
@@ -3600,8 +3720,8 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
 
-  // Hardware Test is the last content row (index 16): 15 downs from Back (1).
-  for (int i = 0; i < 15; ++i)
+  // Hardware Test is the last content row (display index 17): 16 downs from Back (1).
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
@@ -3726,7 +3846,7 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   A::on_input(orch, touch_down);  // 0→1
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -3772,7 +3892,7 @@ TEST_CASE("Peripheral Test: double-press back mid-flow restores and exits",
   A::on_input(orch, touch_down);
   A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Settings
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -3794,7 +3914,7 @@ static void enter_gps_test(TestFixture &f, Orchestrator &orch) {
   A::on_input(orch, touch_down);  // 0→1
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -3881,7 +4001,7 @@ static void enter_accel_test(TestFixture &f, Orchestrator &orch) {
   A::on_input(orch, touch_down);  // 0→1
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -4513,6 +4633,7 @@ TEST_CASE("background suppression: BLE disconnect on About does not update displ
   DisplayService::spy_update_count = 0;
   Event evt{};
   evt.type = EventType::BleDisconnected;
+  evt.ble_disconnected = BleConnectionPayload{0};
   A::dispatch(orch, evt);
 
   CHECK(DisplayService::spy_update_count == 0);
@@ -6511,6 +6632,7 @@ TEST_CASE("BleDisconnected forwards to the provisioner", "[Orchestrator][portabl
 
   Event evt{};
   evt.type = EventType::BleDisconnected;
+  evt.ble_disconnected = BleConnectionPayload{0};
   A::dispatch(orch, evt);
 
   CHECK(test_spy::portable_on_ble_disconnected_called);

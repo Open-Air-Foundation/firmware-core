@@ -2,8 +2,8 @@
  * AirGradient Go — BLE Service
  *
  * BLE peripheral service exposing sensor measurements, device status,
- * configuration, and stored route data to a connected phone app over a
- * single custom GATT service.  Active only in Portable operating mode.
+ * configuration, and stored route data to connected clients over a single
+ * custom GATT service. Active only in Portable operating mode.
  *
  * AirGradient
  * https://airgradient.com
@@ -17,7 +17,7 @@
 // Event types required in go_events.h for compilation:
 //
 //   EventType::BleConnected        — no payload
-//   EventType::BleDisconnected     — no payload
+//   EventType::BleDisconnected     — payload: BleConnectionPayload
 //   EventType::BleConfigWrite      — no payload (data in BleService pending buffer)
 //   EventType::BleHistoryWrite     — no payload (data in BleService pending buffer)
 //   EventType::BlePairingRequest   — payload: uint32_t ble_passkey
@@ -129,6 +129,8 @@ struct BleHistoryDecodeResult {
 
 class BleService {
 public:
+  static constexpr uint8_t MAX_CONNECTED_CLIENTS = 2;
+
   // --- Construction ---
 
   /// event_queue: shared orchestrator event queue (for posting BLE events)
@@ -227,6 +229,16 @@ public:
   /// Returns true when BLE is not initialized or the driver reports success.
   bool delete_all_bonds();
 
+  /// Switch future pairing procedures to the explicit watch profile. Existing
+  /// GATT links and stored bonds remain unchanged.
+  bool begin_watch_pairing();
+
+  /// Restore the normal phone pairing profile after the watch flow exits.
+  bool restore_normal_pairing();
+
+  /// Explicitly answer the pending Numeric Comparison request.
+  bool confirm_numeric_comparison(uint16_t conn_handle, bool accept);
+
   // --- Pending write data (called by orchestrator after BLE events) ---
 
   /// Retrieve the raw CBOR bytes from the last Config write.
@@ -272,9 +284,10 @@ public:
   bool is_initialized() const;
   /// True while a GAP link exists (not necessarily usable).
   bool is_connected() const;
-  /// True while the active link is authenticated (MITM-paired) — the
-  /// usable-link signal that drives the BLE icon. Reads the stack's live
-  /// security state so it cannot get stuck after a bonded reconnect.
+  uint8_t connected_client_count() const;
+  /// True while any active link is authenticated (MITM-paired) — the usable-link
+  /// signal that drives the BLE icon. Reads the stack's live security state so
+  /// it cannot get stuck after a bonded reconnect.
   bool is_authenticated() const;
 
   // --- CBOR decode helpers (called by orchestrator after take_pending_*()) ---
@@ -318,7 +331,7 @@ private:
   // Advertised name; set in phase 1, used in phase 3 (start_advertising()).
   char _adv_name[BLE_ADV_NAME_BUF_SIZE] = {};
 
-  std::atomic<bool> _connected{false};
+  std::atomic<uint8_t> _connected_client_count{0};
 
   // Optional disconnect fan-out (OTA abort).  Invoked first in
   // on_disconnect(), synchronously on the NimBLE host task.  Nullable.
@@ -350,6 +363,7 @@ private:
   void on_config_write(const uint8_t *data, size_t len);
   void on_history_write(const uint8_t *data, size_t len);
   void on_passkey_request(uint32_t passkey);
+  void on_numeric_comparison(uint16_t conn_handle, uint32_t number);
 
   /// CBOR encoding helpers (stack-allocated buffers, no heap)
   size_t encode_measures(uint8_t *buf, size_t buf_size, const MeasuresAGo &m, const GpsData &gps,
@@ -414,7 +428,8 @@ private:
 // go_events.h:
 //   Add EventType entries: BleConnected, BleDisconnected, BleConfigWrite,
 //   BleHistoryWrite, BlePairingRequest, BleAuthComplete.
-//   Add Event union members: uint32_t ble_passkey; bool ble_auth_ok;
+//   Add Event union members: uint32_t ble_passkey; BleConnectionPayload
+//   ble_disconnected; BleAuthCompletePayload ble_auth_complete;
 //
 // go_orchestrator.h/.cpp:
 //   Add BleService member to Orchestrator::Services.

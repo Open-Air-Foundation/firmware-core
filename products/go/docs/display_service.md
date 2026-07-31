@@ -147,6 +147,7 @@ hardware-dependent and excluded from host builds (stubs provided).
 | `ShutdownDischarge` | Safety-trip shutdown for OverDischarge ("Battery critically low" / "Connect charger" / "Charge before use") |
 | `ShutdownTemperature` | Safety-trip shutdown for OverTemperature ("Battery overheated" / "Let device cool" / "Keep out of sun") |
 | `PairingPasskey` | Title-as-header + 3 px divider + large 6-digit BLE passkey + hint; no status bar, no snackbar |
+| `PairWatch` | Watch pairing instructions, Numeric Comparison, and result views; no status bar, no snackbar |
 | `Info` | Generic single-text presentation surface (cold-boot splash, Stationary bring-up narration); no status bar, no snackbar |
 | `Provisioning` | Stationary Wi-Fi provisioning page (QR + status + action rows); no status bar, no snackbar |
 | `ProvisioningConfirm` | Yes / No confirmation overlay for Provisioning actions; no status bar, no snackbar |
@@ -154,7 +155,9 @@ hardware-dependent and excluded from host builds (stubs provided).
 The three Stationary setup screens (`Info`, `Provisioning`,
 `ProvisioningConfirm`) form one logical "setup session". They share a
 distinct refresh policy and own the full canvas (no status bar drawn).
-See [Setup Session Refresh Policy](#setup-session-refresh-policy) below.
+Pair Watch uses the same full-canvas refresh policy without being part of the
+Stationary setup session. See [Full-Canvas Session Refresh Policy](#full-canvas-session-refresh-policy)
+below.
 
 ### DisplayValues
 
@@ -358,32 +361,33 @@ Writing both RAM planes ensures that after a Fast refresh, the basemap
 | Screen transition involving any `Shutdown*` variant (non-menu) | Fast |
 | Navigable screen transition, header changed (non-menu, non-session) | Fast |
 
-### Setup Session Refresh Policy
+### Full-Canvas Session Refresh Policy
 
-`Screen::Info`, `Screen::Provisioning`, and `Screen::ProvisioningConfirm`
-are treated as one logical setup session. The refresh policy has two
-rules layered on top of the general matrix:
+`Screen::Info`, `Screen::Provisioning`, `Screen::ProvisioningConfirm`,
+`Screen::GettingStarted`, and `Screen::PairWatch` are treated as full-canvas
+session screens. The refresh policy has two rules layered on top of the general
+matrix:
 
 - **Crossing the session boundary in either direction forces Full.**
-  Any non-session screen entering a session screen, or any session
-  screen returning to Home / Portable, runs a full GC waveform. This
+   Any non-session screen entering a session screen, or any session
+   screen returning to a non-session screen, runs a full GC waveform. This
   prevents the prior layout from ghosting under the new one. The
   partial-op counter and `_menu_exited` flag are reset at the boundary.
 - **All intra-session transitions are Partial, regardless of layout
-  change.** This includes `Info` text updates
+   change.** This includes `Info` text updates
   (`Connecting to saved Wi-Fi...` → `Trying default Wi-Fi...` →
   `Connected!\n<ip>`), Provisioning status updates, the
   `Provisioning ↔ ProvisioningConfirm` overlay, the No ↔ Yes toggle in
   the confirmation overlay, and the in-session `Info → Provisioning`
-  jump. The partial worker writes the **full canvas** (y = 0..249) for
-  session screens, so even visually-disjoint layouts (Info's centered
+   jump and Pair Watch view changes. The partial worker writes the **full
+   canvas** (y = 0..249) for session screens, so even visually-disjoint layouts (Info's centered
   text block versus Provisioning's full-canvas QR layout) clear
   cleanly without falling back to the Full waveform's ~3 s flash.
 
 Non-session partials still write only the body region (y = 18..249,
 232 px tall) to preserve the status bar without rewriting it. The
 selection between body-only and full-canvas partial happens in the
-worker loop based on `is_session_screen(_prev_values.screen)`.
+worker loop based on `is_full_canvas_session(_prev_values.screen)`.
 
 ### Session-Screen Drawing
 
@@ -409,6 +413,8 @@ Session screens skip `_draw_status_bar()` and `_draw_snackbar()`:
   `v.rows[0].text` (provided by `UIManager::populate_provisioning_confirm_rows()`)
   and two filled / framed buttons (`No` index 0, `Yes` index 1)
   driven by `provisioning_confirm_index`.
+- `_draw_pair_watch()` renders the pairing instructions, Numeric Comparison
+  code, actions, and result views without the status bar or snackbar.
 
 ### Display Update Suppression
 

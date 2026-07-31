@@ -58,22 +58,23 @@ static constexpr uint8_t TAG_COUNT = 10;
 // ---------------------------------------------------------------------------
 
 static constexpr uint8_t SETTING_SETUP_GUIDE = 2;
-static constexpr uint8_t SETTING_UNITS = 3;
-static constexpr uint8_t SETTING_PM_DISPLAY = 4;
-static constexpr uint8_t SETTING_MEASURE_INTERVAL = 5;
-static constexpr uint8_t SETTING_GPS_MODE = 6;
-static constexpr uint8_t SETTING_MODE = 7;
-static constexpr uint8_t SETTING_AUTO_LOCK = 8;
-static constexpr uint8_t SETTING_DISPLAY_LED = 9;
-static constexpr uint8_t SETTING_AQI_LED = 10;
-static constexpr uint8_t SETTING_TOUCH_LED = 11;
-static constexpr uint8_t SETTING_BUZZER = 12;
-static constexpr uint8_t SETTING_PLAY_MELODY = 13;
-static constexpr uint8_t SETTING_CO2_CALIBRATION = 14;
-static constexpr uint8_t SETTING_CLEAR_DATA = 15;
-static constexpr uint8_t SETTING_HARDWARE_TEST = 16; // navigation row -> Hardware Test submenu
+static constexpr uint8_t SETTING_PAIR_WATCH = 3;
+static constexpr uint8_t SETTING_UNITS = 4;
+static constexpr uint8_t SETTING_PM_DISPLAY = 5;
+static constexpr uint8_t SETTING_MEASURE_INTERVAL = 6;
+static constexpr uint8_t SETTING_GPS_MODE = 7;
+static constexpr uint8_t SETTING_MODE = 8;
+static constexpr uint8_t SETTING_AUTO_LOCK = 9;
+static constexpr uint8_t SETTING_DISPLAY_LED = 10;
+static constexpr uint8_t SETTING_AQI_LED = 11;
+static constexpr uint8_t SETTING_TOUCH_LED = 12;
+static constexpr uint8_t SETTING_BUZZER = 13;
+static constexpr uint8_t SETTING_PLAY_MELODY = 14;
+static constexpr uint8_t SETTING_CO2_CALIBRATION = 15;
+static constexpr uint8_t SETTING_CLEAR_DATA = 16;
+static constexpr uint8_t SETTING_HARDWARE_TEST = 17; // navigation row -> Hardware Test submenu
 
-static constexpr uint8_t SETTINGS_TOTAL = 17;       // indices 0..16
+static constexpr uint8_t SETTINGS_TOTAL = 18;       // indices 0..17
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
@@ -215,6 +216,8 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_gps_test(source, type);
   case Screen::AccelTest:
     return dispatch_accel_test(source, type);
+  case Screen::PairWatch:
+    return dispatch_pair_watch(source, type);
   case Screen::ShutdownUser:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
@@ -303,6 +306,11 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     break;
   case Screen::PairingPasskey:
     v.ble_passkey = _ble_passkey;
+    break;
+  case Screen::PairWatch:
+    v.watch_pairing_view = _watch_pairing_view;
+    v.watch_pairing_number = _watch_pairing_number;
+    v.watch_pairing_action_index = _watch_pairing_action_index;
     break;
   case Screen::Provisioning:
     populate_provisioning_rows(v);
@@ -402,7 +410,9 @@ bool UIManager::is_on_menu_screen() const {
   }
 }
 
-bool UIManager::is_focus_screen() const { return _screen == Screen::PairingPasskey; }
+bool UIManager::is_focus_screen() const {
+  return _screen == Screen::PairingPasskey || _screen == Screen::PairWatch;
+}
 
 bool UIManager::is_hardware_test_screen() const {
   return _screen == Screen::HardwareTest || _screen == Screen::PeripheralTest ||
@@ -578,6 +588,41 @@ void UIManager::dismiss_pairing_passkey() {
   if (_screen == Screen::PairingPasskey) {
     _screen = Screen::Home;
     _active_metric = Metric::None;
+  }
+}
+
+void UIManager::show_watch_pairing_waiting() {
+  _watch_pairing_view = WatchPairingView::Waiting;
+  _watch_pairing_number = 0;
+  _watch_pairing_action_index = 0;
+  _screen = Screen::PairWatch;
+}
+
+void UIManager::show_watch_numeric_comparison(uint32_t number) {
+  _watch_pairing_view = WatchPairingView::NumericComparison;
+  _watch_pairing_number = number;
+  _watch_pairing_action_index = 1;
+  _screen = Screen::PairWatch;
+}
+
+void UIManager::show_watch_pairing_confirming() {
+  _watch_pairing_view = WatchPairingView::Confirming;
+  _screen = Screen::PairWatch;
+}
+
+void UIManager::show_watch_pairing_result(bool success) {
+  _watch_pairing_view = success ? WatchPairingView::Success : WatchPairingView::Failure;
+  _watch_pairing_number = 0;
+  _screen = Screen::PairWatch;
+}
+
+void UIManager::dismiss_watch_pairing() {
+  _watch_pairing_number = 0;
+  _watch_pairing_action_index = 0;
+  if (_screen == Screen::PairWatch) {
+    _screen = Screen::Settings;
+    _settings_index = SETTING_PAIR_WATCH;
+    _settings_scroll_start = page_scroll(_settings_index);
   }
 }
 
@@ -1124,22 +1169,27 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
     } else if (_settings_index == 1) {
       // Back → MainMenu (cursor on "Settings")
       navigate_back();
-    } else if (_settings_index == SETTING_SETUP_GUIDE) {
-      // Setup Guide → Getting Started (Back returns here)
-      show_getting_started(/*from_boot=*/false);
-    } else if (_settings_index == SETTING_HARDWARE_TEST) {
-      // Hardware Test → submenu (Back returns here)
-      open_hardware_test();
-    } else if (_settings_index == SETTING_CO2_CALIBRATION ||
-               _settings_index == SETTING_CLEAR_DATA) {
-      // Open confirm dialog for action items
-      open_confirm(_settings_index);
-    } else if (_settings_index == SETTING_PLAY_MELODY) {
-      // Open choice screen for Play Melody
-      open_settings_choice(_settings_index);
-    } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_BUZZER) {
-      // Open choice screen for this setting
-      open_settings_choice(_settings_index);
+    } else {
+      if (_settings_index == SETTING_SETUP_GUIDE) {
+        // Setup Guide → Getting Started (Back returns here)
+        show_getting_started(/*from_boot=*/false);
+      } else if (_settings_index == SETTING_HARDWARE_TEST) {
+        // Hardware Test → submenu (Back returns here)
+        open_hardware_test();
+      } else if (_settings_index == SETTING_PAIR_WATCH) {
+        show_watch_pairing_waiting();
+        result.action = UIAction::PairWatchRequested;
+      } else if (_settings_index == SETTING_CO2_CALIBRATION ||
+                 _settings_index == SETTING_CLEAR_DATA) {
+        // Open confirm dialog for action items
+        open_confirm(_settings_index);
+      } else if (_settings_index == SETTING_PLAY_MELODY) {
+        // Open choice screen for Play Melody
+        open_settings_choice(_settings_index);
+      } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_BUZZER) {
+        // Open choice screen for this setting
+        open_settings_choice(_settings_index);
+      }
     }
     break;
   default:
@@ -1478,6 +1528,30 @@ UIActionResult UIManager::dispatch_accel_test(InputSource source, InputType type
   return {};
 }
 
+UIActionResult UIManager::dispatch_pair_watch(InputSource source, InputType type) {
+  (void)type;
+  UIActionResult result{};
+
+  if (_watch_pairing_view == WatchPairingView::Waiting) {
+    if (source == InputSource::TouchEnter) {
+      result.action = UIAction::PairWatchCancelled;
+    }
+    return result;
+  }
+
+  if (_watch_pairing_view == WatchPairingView::NumericComparison) {
+    if (source == InputSource::TouchUp) {
+      move_watch_pairing_action(-1);
+    } else if (source == InputSource::TouchDown) {
+      move_watch_pairing_action(1);
+    } else if (source == InputSource::TouchEnter) {
+      result.action = _watch_pairing_action_index == 0 ? UIAction::PairWatchCancelled
+                                                       : UIAction::PairWatchConfirmed;
+    }
+  }
+  return result;
+}
+
 void UIManager::move_provisioning(int delta) {
   // Two rows: 0 = switch transport, 1 = cancel setup.
   _provisioning_row_index =
@@ -1488,6 +1562,11 @@ void UIManager::move_provisioning_confirm(int delta) {
   // Two buttons: 0 = No (default), 1 = Yes.
   _provisioning_confirm_index =
       static_cast<uint8_t>(wrap(static_cast<int>(_provisioning_confirm_index) + delta, 2));
+}
+
+void UIManager::move_watch_pairing_action(int delta) {
+  _watch_pairing_action_index =
+      static_cast<uint8_t>(wrap(static_cast<int>(_watch_pairing_action_index) + delta, 2));
 }
 
 // ---------------------------------------------------------------------------
@@ -1513,11 +1592,11 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
   uint8_t scroll = page_scroll(_settings_index);
 
   // Content items: indices 2..10 (9 items total)
-  static constexpr uint8_t CONTENT_COUNT = SETTINGS_TOTAL - 2;
+  const uint8_t content_count = SETTINGS_TOTAL - 2;
   uint8_t visible = 0;
 
-  for (uint8_t i = 0; i < PAGE_SIZE && (scroll + i) < CONTENT_COUNT; ++i) {
-    uint8_t item_index = (uint8_t)(SETTING_SETUP_GUIDE + scroll + i);
+  for (uint8_t i = 0; i < PAGE_SIZE && (scroll + i) < content_count; ++i) {
+    const uint8_t item_index = static_cast<uint8_t>(SETTING_SETUP_GUIDE + scroll + i);
     char label[48];
 
     switch (item_index) {
@@ -1568,6 +1647,9 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       break;
     case SETTING_HARDWARE_TEST:
       (void)snprintf(label, sizeof(label), "Hardware Test");
+      break;
+    case SETTING_PAIR_WATCH:
+      (void)snprintf(label, sizeof(label), "Pair Watch");
       break;
     default:
       label[0] = '\0';

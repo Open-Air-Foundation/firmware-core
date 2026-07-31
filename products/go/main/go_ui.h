@@ -46,6 +46,9 @@ enum class UIAction : uint8_t {
   PeripheralTestExit, ///< Leave the peripheral test summary (restore hardware).
   OpenGpsTest,        ///< Enter the live GPS test screen (start receiver, TTFF timer).
   OpenAccelTest,      ///< Enter the live accelerometer test screen.
+  PairWatchRequested, ///< Enter the explicit watch pairing flow.
+  PairWatchCancelled, ///< Cancel a waiting or Numeric Comparison watch flow.
+  PairWatchConfirmed, ///< Confirm the displayed Numeric Comparison value.
 };
 
 /// View state for Screen::PeripheralTest. The orchestrator owns the flow and
@@ -229,6 +232,12 @@ public:
   /// Dismiss the pairing passkey screen and return to Home.
   void dismiss_pairing_passkey();
 
+  void show_watch_pairing_waiting();
+  void show_watch_numeric_comparison(uint32_t number);
+  void show_watch_pairing_confirming();
+  void show_watch_pairing_result(bool success);
+  void dismiss_watch_pairing();
+
   // --- Stationary networking surface ---
 
   /// Set the active provisioning transport on the currently-open
@@ -336,6 +345,9 @@ private:
 
   // BLE pairing
   uint32_t _ble_passkey = 0;
+  WatchPairingView _watch_pairing_view = WatchPairingView::Waiting;
+  uint32_t _watch_pairing_number = 0;
+  uint8_t _watch_pairing_action_index = 0; ///< 0 = Cancel, 1 = Confirm.
 
   // Stationary networking UI state
   ProvisioningTransport _provisioning_transport = ProvisioningTransport::BleOnly;
@@ -391,6 +403,7 @@ private:
   UIActionResult dispatch_peripheral_test(InputSource source, InputType type);
   UIActionResult dispatch_gps_test(InputSource source, InputType type);
   UIActionResult dispatch_accel_test(InputSource source, InputType type);
+  UIActionResult dispatch_pair_watch(InputSource source, InputType type);
 
   // --- Navigation helpers ---
   void go_home();
@@ -419,6 +432,7 @@ private:
   void move_hardware_test(int delta);
   void move_provisioning(int delta);
   void move_provisioning_confirm(int delta);
+  void move_watch_pairing_action(int delta);
   void browse_metric(int delta);
 
   // --- Row population ---

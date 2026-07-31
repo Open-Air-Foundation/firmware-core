@@ -135,6 +135,10 @@ private:
   ConfigAccess _local_api_access_before_ota = ConfigAccess::Disabled;
   bool _local_api_access_gated_for_ota = false;
 
+  bool _watch_pairing_active = false;
+  bool _watch_pairing_numeric_comparison_pending = false;
+  uint16_t _watch_pairing_conn_handle = 0;
+
   // --- PM sensor sleep (Portable mode power-cycling) ---
   bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle
 
@@ -249,6 +253,7 @@ private:
   /// Live accelerometer test poll cadence (~2 Hz X/Y/Z refresh).
   static constexpr uint32_t ACCEL_TEST_POLL_INTERVAL_MS = 500;
   static constexpr uint32_t LOCAL_API_ACTIVATION_RETRY_MS = 5000;
+  static constexpr uint32_t WATCH_PAIRING_RESULT_HOLD_MS = 1000;
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
@@ -266,11 +271,15 @@ private:
 
   // --- BLE event handlers ---
   void on_ble_connected();
-  void on_ble_disconnected();
+  void on_ble_disconnected(uint16_t conn_handle);
   void on_ble_config_write();
   void on_ble_history_write();
   void on_ble_pairing_request(uint32_t passkey);
-  void on_ble_auth_complete(bool success);
+  void on_ble_auth_complete(uint16_t conn_handle, bool success);
+  void on_ble_numeric_comparison(uint16_t conn_handle, uint32_t number);
+  void finish_watch_pairing(bool success);
+  void cancel_watch_pairing();
+  void restore_watch_pairing_profile();
 
   // --- State transitions ---
   void lock();

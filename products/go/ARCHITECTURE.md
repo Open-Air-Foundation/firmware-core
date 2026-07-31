@@ -268,11 +268,12 @@ Posted into the queue by background tasks.
 | `GpsFixUpdate` | GPS Task | `GpsData` from `airgradient-gps` — position, altitude, fix type, DOP, satellite count, timestamp |
 | `InputPress` | Input Task | source (touch_up / down / enter, btn_power, btn_boot), type (short / long) |
 | `BleConnected` | BLE Service | client connected |
-| `BleDisconnected` | BLE Service | client disconnected |
+| `BleDisconnected` | BLE Service | client disconnected; carries connection handle |
 | `BleConfigWrite` | BLE Service | pending Config characteristic write available |
 | `BleHistoryWrite` | BLE Service | pending History characteristic write available |
 | `BlePairingRequest` | BLE Service | 6-digit passkey for authenticated pairing |
-| `BleAuthComplete` | BLE Service | encryption-change result; carries `ble_auth_ok` (link encrypted/authenticated) |
+| `BleAuthComplete` | BLE Service | encryption-change result; carries connection handle and success (link encrypted/authenticated) |
+| `BleNumericComparison` | BLE Service | connection handle and six-digit comparison number |
 | `WifiConnected` | Wi-Fi Service | STA acquired IP; carries network-byte-order IPv4 |
 | `WifiDisconnected` | Wi-Fi Service | STA disconnect (real or synthetic from window expiry); carries normalised `WifiDisconnectReason` |
 | `ProvisioningStateChanged` | Wi-Fi Service | provisioning state transition; carries `ProvisioningEvent`, transport, stop reason, IP, `disable_cloud`, `static_ip` |
@@ -849,12 +850,13 @@ Settings fields:
 ### BLE Streams
 
 - BLE peripheral mode using `airgradient-ble` (NimBLE)
-- Streams sensor + GPS data to connected phone
+- Streams sensor + GPS data to up to two connected BLE central clients
 - Exposes live measures, device status, config read / write, command
   execution (including start / stop tracking), and route-history export
   over one custom GATT service
 - Only active in Portable mode
-- Always requires authenticated pairing / bonding (Passkey Entry, MITM);
+- Uses normal Display Only Passkey Entry with MITM bonding; the explicit Pair
+  Watch Settings flow temporarily enables Secure Connections Numeric Comparison;
   there is no unauthenticated access path
 
 ### Local Server

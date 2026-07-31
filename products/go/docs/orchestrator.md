@@ -289,11 +289,12 @@ Events are dispatched by type:
 | `MeasurementTimer` | `check_timers()` (legacy event, re-checks all timers) |
 | `WakeFromSleep` | No-op (handled in `init()`) |
 | `BleConnected` | Push current measures/status/config, dismiss passkey overlay |
-| `BleDisconnected` | Dismiss passkey overlay |
+| `BleDisconnected` | Dismiss passkey overlay; fail Pair Watch only when its Numeric Comparison candidate disconnected |
 | `BleConfigWrite` | Decode config/command write and apply it |
 | `BleHistoryWrite` | Decode history export request and delegate to BLE service |
 | `BlePairingRequest` | Show passkey overlay |
-| `BleAuthComplete` | On success (encrypted): mark onboarding done, dismiss overlay / leave setup session to Home. On failure: leave onboarding untouched; setup session returns to `Screen::GettingStarted` (stays active for retry), else dismiss to Home |
+| `BleNumericComparison` | Show Pair Watch Numeric Comparison UI; explicit UI action accepts or rejects it |
+| `BleAuthComplete` | Complete Pair Watch only for its Numeric Comparison candidate; otherwise, on success (encrypted), mark onboarding done and dismiss overlay / leave setup session to Home. On failure, leave onboarding untouched; setup session returns to `Screen::GettingStarted` (stays active for retry), else dismiss to Home |
 | `Co2CalibrationDone` | Show result snackbar, notify BLE command result, update display |
 | `WifiConnected` | `on_wifi_connected()` — bring-up success (`Connected!\n<ip>` on Info then leave to Home), or post-online reconnect snackbar on Home; unconditionally `cloud.start()` + `cloud.arm()` |
 | `WifiDisconnected` | `on_wifi_disconnected()` — `cloud.disarm()` then disconnect-policy router. Before first online, connectivity failures open provisioning; after first online, every reason except `requested_by_user` requests reconnect. |

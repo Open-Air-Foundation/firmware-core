@@ -75,7 +75,12 @@ class MockBleServer : public AgBleServer {
 public:
   bool init(const char * /*device_name*/) override { return true; }
   void deinit() override {}
-  bool set_security(AgBleIoCapability /*io_cap*/, uint8_t /*auth_flags*/) override { return true; }
+  bool set_security(AgBleIoCapability io_cap, uint8_t auth_flags) override {
+    last_io_cap = io_cap;
+    last_auth_flags = auth_flags;
+    set_security_count++;
+    return true;
+  }
   bool delete_all_bonds() override {
     delete_all_bonds_count++;
     return delete_all_bonds_result;
@@ -98,7 +103,15 @@ public:
   void set_connect_callback(AgBleConnectCallback /*cb*/) override {}
   void set_disconnect_callback(AgBleDisconnectCallback /*cb*/) override {}
   void set_passkey_display_callback(AgBlePasskeyDisplayCallback /*cb*/) override {}
+  void set_numeric_comparison_callback(AgBleNumericComparisonCallback /*cb*/) override {}
+  bool confirm_numeric_comparison(uint16_t conn_handle, bool accept) override {
+    last_numeric_comparison_handle = conn_handle;
+    last_numeric_comparison_accept = accept;
+    confirm_numeric_comparison_count++;
+    return true;
+  }
   void set_auth_complete_callback(AgBleAuthCompleteCallback /*cb*/) override {}
+  uint8_t connected_client_count() const override { return connected_count; }
   bool is_peer_authenticated() const override { return peer_authenticated; }
 
   // --- Test inspection ---
@@ -107,6 +120,13 @@ public:
   int delete_all_bonds_count = 0;
   bool delete_all_bonds_result = true;
   bool peer_authenticated = false;
+  uint8_t connected_count = 0;
+  int set_security_count = 0;
+  AgBleIoCapability last_io_cap = AgBleIoCapability::NO_INPUT_NO_OUTPUT;
+  uint8_t last_auth_flags = 0;
+  int confirm_numeric_comparison_count = 0;
+  uint16_t last_numeric_comparison_handle = 0;
+  bool last_numeric_comparison_accept = false;
 
   void reset() {
     start_advertising_count = 0;
@@ -114,6 +134,10 @@ public:
     delete_all_bonds_count = 0;
     delete_all_bonds_result = true;
     peer_authenticated = false;
+    connected_count = 0;
+    set_security_count = 0;
+    last_auth_flags = 0;
+    confirm_numeric_comparison_count = 0;
   }
 };
 
@@ -233,7 +257,10 @@ class BleServiceTestAccess {
 public:
   // --- State setters ---
   static void set_server(BleService &svc, AgBleServer *server) { svc._server = server; }
-  static void set_connected(BleService &svc, bool connected) { svc._connected.store(connected); }
+  static void set_connected(BleService &svc, bool connected) {
+    svc._connected_client_count.store(connected ? 1 : 0);
+  }
+  static void set_initialized(BleService &svc, bool initialized) { svc._initialized = initialized; }
   static void set_measures_char(BleService &svc, AgBleCharacteristic *c) { svc._measures_char = c; }
   static void set_status_char(BleService &svc, AgBleCharacteristic *c) { svc._status_char = c; }
   static void set_config_char(BleService &svc, AgBleCharacteristic *c) { svc._config_char = c; }
@@ -2204,7 +2231,7 @@ TEST_CASE("BLE: notify_command_result is no-op when not connected") {
 // Connection lifecycle
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: on_connect sets connected and stops advertising") {
+TEST_CASE("BLE: on_connect keeps advertising while a connection slot remains") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   MockBleServer server;
@@ -2215,7 +2242,54 @@ TEST_CASE("BLE: on_connect sets connected and stops advertising") {
   CHECK(svc.is_connected() == true);
   // Link starts unauthenticated until the peer pairs.
   CHECK(svc.is_authenticated() == false);
+  CHECK(server.stop_advertising_count == 0);
+  CHECK(server.start_advertising_count == 1);
+}
+
+TEST_CASE("BLE: connection count advertises only below capacity") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleServer server;
+  BleServiceTestAccess::set_server(svc, &server);
+
+  BleServiceTestAccess::on_connect(svc, 1);
+  CHECK(svc.connected_client_count() == 1);
+  CHECK(server.start_advertising_count == 1);
+
+  BleServiceTestAccess::on_connect(svc, 2);
+  CHECK(svc.connected_client_count() == BleService::MAX_CONNECTED_CLIENTS);
+  CHECK(server.start_advertising_count == 1);
   CHECK(server.stop_advertising_count == 1);
+
+  uint16_t disconnected_handle = UINT16_MAX;
+  svc.set_disconnect_observer([&disconnected_handle](uint16_t conn_handle, int /*reason*/) {
+    disconnected_handle = conn_handle;
+  });
+  BleServiceTestAccess::on_disconnect(svc, 1, 0);
+  CHECK(svc.connected_client_count() == 1);
+  CHECK(server.start_advertising_count == 2);
+  CHECK(disconnected_handle == 1);
+}
+
+TEST_CASE("BLE: watch profile and Numeric Comparison response are explicit") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleServer server;
+  BleServiceTestAccess::set_server(svc, &server);
+  BleServiceTestAccess::set_initialized(svc, true);
+
+  REQUIRE(svc.begin_watch_pairing());
+  CHECK(server.last_io_cap == AgBleIoCapability::DISPLAY_YES_NO);
+  CHECK(server.last_auth_flags == (AgBleAuth::BOND | AgBleAuth::MITM | AgBleAuth::SC));
+
+  REQUIRE(svc.confirm_numeric_comparison(7, true));
+  CHECK(server.confirm_numeric_comparison_count == 1);
+  CHECK(server.last_numeric_comparison_handle == 7);
+  CHECK(server.last_numeric_comparison_accept);
+
+  REQUIRE(svc.restore_normal_pairing());
+  CHECK(server.last_io_cap == AgBleIoCapability::DISPLAY_ONLY);
+  CHECK(server.last_auth_flags == (AgBleAuth::BOND | AgBleAuth::MITM));
 }
 
 TEST_CASE("BLE: is_authenticated tracks live peer state while connected") {

@@ -122,6 +122,13 @@ bool ble_deinit_called = false;
 bool ble_initialized = false;
 bool ble_connected = false;
 bool ble_authenticated = false;
+uint8_t ble_connected_client_count = 0;
+bool ble_begin_watch_pairing_called = false;
+bool ble_begin_watch_pairing_result = true;
+bool ble_restore_normal_pairing_called = false;
+bool ble_confirm_numeric_comparison_called = false;
+uint16_t ble_numeric_comparison_handle = 0;
+bool ble_numeric_comparison_accept = false;
 bool ble_notify_measures_called = false;
 MeasuresAGo ble_last_measures{};
 bool ble_update_status_called = false;
@@ -316,6 +323,13 @@ void reset() {
   ble_initialized = false;
   ble_connected = false;
   ble_authenticated = false;
+  ble_connected_client_count = 0;
+  ble_begin_watch_pairing_called = false;
+  ble_begin_watch_pairing_result = true;
+  ble_restore_normal_pairing_called = false;
+  ble_confirm_numeric_comparison_called = false;
+  ble_numeric_comparison_handle = 0;
+  ble_numeric_comparison_accept = false;
   ble_notify_measures_called = false;
   ble_last_measures = MeasuresAGo{};
   ble_update_status_called = false;
@@ -801,7 +815,26 @@ bool BleService::is_initialized() const { return test_spy::ble_initialized; }
 
 bool BleService::is_connected() const { return test_spy::ble_connected; }
 
+uint8_t BleService::connected_client_count() const { return test_spy::ble_connected_client_count; }
+
 bool BleService::is_authenticated() const { return test_spy::ble_authenticated; }
+
+bool BleService::begin_watch_pairing() {
+  test_spy::ble_begin_watch_pairing_called = true;
+  return test_spy::ble_begin_watch_pairing_result;
+}
+
+bool BleService::restore_normal_pairing() {
+  test_spy::ble_restore_normal_pairing_called = true;
+  return true;
+}
+
+bool BleService::confirm_numeric_comparison(uint16_t conn_handle, bool accept) {
+  test_spy::ble_confirm_numeric_comparison_called = true;
+  test_spy::ble_numeric_comparison_handle = conn_handle;
+  test_spy::ble_numeric_comparison_accept = accept;
+  return true;
+}
 
 void BleService::notify_measures(const MeasuresAGo &m, const GpsData & /*gps*/, time_t /*ts*/) {
   test_spy::ble_notify_measures_called = true;
@@ -910,6 +943,7 @@ void BleService::on_disconnect(uint16_t /*handle*/, int /*reason*/) {}
 void BleService::on_config_write(const uint8_t * /*data*/, size_t /*len*/) {}
 void BleService::on_history_write(const uint8_t * /*data*/, size_t /*len*/) {}
 void BleService::on_passkey_request(uint32_t /*passkey*/) {}
+void BleService::on_numeric_comparison(uint16_t /*conn_handle*/, uint32_t /*number*/) {}
 bool BleService::send_history_cbor(const uint8_t * /*data*/, size_t /*len*/) { return false; }
 bool BleService::send_history_binary(uint16_t /*idx*/, const uint8_t * /*data*/, size_t /*len*/) {
   return false;

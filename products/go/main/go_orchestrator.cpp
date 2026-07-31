@@ -664,7 +664,7 @@ void Orchestrator::dispatch(const Event &event) {
     on_ble_connected();
     break;
   case EventType::BleDisconnected:
-    on_ble_disconnected();
+    on_ble_disconnected(event.ble_disconnected.conn_handle);
     break;
   case EventType::BleConfigWrite:
     on_ble_config_write();
@@ -676,7 +676,11 @@ void Orchestrator::dispatch(const Event &event) {
     on_ble_pairing_request(event.ble_passkey);
     break;
   case EventType::BleAuthComplete:
-    on_ble_auth_complete(event.ble_auth_ok);
+    on_ble_auth_complete(event.ble_auth_complete.conn_handle, event.ble_auth_complete.success);
+    break;
+  case EventType::BleNumericComparison:
+    on_ble_numeric_comparison(event.ble_numeric_comparison.conn_handle,
+                              event.ble_numeric_comparison.number);
     break;
 
   // Calibration events
@@ -1198,6 +1202,33 @@ void Orchestrator::on_input(const InputEventData &input) {
   case UIAction::OpenAccelTest:
     start_accel_test();
     break;
+  case UIAction::PairWatchRequested:
+    if (_mode != OperatingMode::Portable) {
+      _svc.ui_manager.dismiss_watch_pairing();
+      _svc.ui_manager.show_snackbar("Use Portable mode");
+    } else if (_svc.ble_service.connected_client_count() >= BleService::MAX_CONNECTED_CLIENTS) {
+      _svc.ui_manager.dismiss_watch_pairing();
+      _svc.ui_manager.show_snackbar("2 clients already connected");
+    } else if (_svc.ble_service.begin_watch_pairing()) {
+      _watch_pairing_active = true;
+      _watch_pairing_numeric_comparison_pending = false;
+      _watch_pairing_conn_handle = 0;
+    } else {
+      finish_watch_pairing(false);
+    }
+    break;
+  case UIAction::PairWatchCancelled:
+    cancel_watch_pairing();
+    _svc.ui_manager.dismiss_watch_pairing();
+    break;
+  case UIAction::PairWatchConfirmed:
+    if (_watch_pairing_active && _watch_pairing_numeric_comparison_pending) {
+      _svc.ui_manager.show_watch_pairing_confirming();
+      if (!_svc.ble_service.confirm_numeric_comparison(_watch_pairing_conn_handle, true)) {
+        finish_watch_pairing(false);
+      }
+    }
+    break;
   case UIAction::ConfirmCancelProvisioning:
     // Cancel-setup confirmed — drop back to Portable via the session
     // leave path so battery / clocks / snackbar state are all restored
@@ -1253,6 +1284,7 @@ void Orchestrator::on_input(const InputEventData &input) {
 
 void Orchestrator::lock() {
   AG_LOGI(TAG, "lock");
+  cancel_watch_pairing();
   _svc.ui_manager.show_snackbar("Locked");
   _lock_state = LockState::Locked;
   _svc.ui_manager.reset_to_home();
@@ -1862,6 +1894,8 @@ bool Orchestrator::clear_data() {
 bool Orchestrator::factory_reset() {
   AG_LOGI(TAG, "factory_reset");
 
+  cancel_watch_pairing();
+
   // Erase temporary cache data and delete all persisted route files.
   const bool data_cleared = clear_data();
 
@@ -1977,16 +2011,23 @@ void Orchestrator::on_ble_connected() {
   request_background_display_update(/*wait=*/true);
 }
 
-void Orchestrator::on_ble_disconnected() {
+void Orchestrator::on_ble_disconnected(uint16_t conn_handle) {
   AG_LOGI(TAG, "BLE client disconnected");
-  // The provisioner has no transport disconnect callback; forward so it
-  // drops the radio.
-  _svc.portable_provisioner.on_ble_disconnected();
+  // The provisioner has no transport disconnect callback; only drop its radio
+  // after the final client departs.
+  if (!_svc.ble_service.is_connected()) {
+    _svc.portable_provisioner.on_ble_disconnected();
+  }
   _svc.ui_manager.dismiss_pairing_passkey();
+  if (_watch_pairing_active && _watch_pairing_numeric_comparison_pending &&
+      _watch_pairing_conn_handle == conn_handle) {
+    finish_watch_pairing(false);
+    return;
+  }
   request_background_display_update(/*wait=*/true);
 }
 
-void Orchestrator::on_ble_auth_complete(bool success) {
+void Orchestrator::on_ble_auth_complete(uint16_t conn_handle, bool success) {
   AG_LOGI(TAG, "BLE auth complete: %s", success ? "OK" : "FAILED");
 
   // Only an encrypted pairing counts as engagement; a failed/empty-PIN attempt
@@ -2007,8 +2048,61 @@ void Orchestrator::on_ble_auth_complete(bool success) {
     return;
   }
 
-  _svc.ui_manager.dismiss_pairing_passkey();
-  request_background_display_update(/*wait=*/true);
+  if (_watch_pairing_active && _watch_pairing_numeric_comparison_pending &&
+      _watch_pairing_conn_handle == conn_handle) {
+    finish_watch_pairing(success);
+  } else {
+    _svc.ui_manager.dismiss_pairing_passkey();
+    request_background_display_update(/*wait=*/true);
+  }
+}
+
+void Orchestrator::on_ble_numeric_comparison(uint16_t conn_handle, uint32_t number) {
+  if (!_watch_pairing_active) {
+    (void)_svc.ble_service.confirm_numeric_comparison(conn_handle, false);
+    return;
+  }
+
+  if (_watch_pairing_numeric_comparison_pending) {
+    (void)_svc.ble_service.confirm_numeric_comparison(conn_handle, false);
+    return;
+  }
+
+  _watch_pairing_conn_handle = conn_handle;
+  _watch_pairing_numeric_comparison_pending = true;
+  _svc.ui_manager.show_watch_numeric_comparison(number);
+  update_display(/*wait=*/true);
+}
+
+void Orchestrator::finish_watch_pairing(bool success) {
+  restore_watch_pairing_profile();
+
+  _svc.ui_manager.show_watch_pairing_result(success);
+  update_display(/*wait=*/true);
+  _svc.display_service.flush();
+  RTOS::delay_ms(WATCH_PAIRING_RESULT_HOLD_MS);
+  _svc.ui_manager.dismiss_watch_pairing();
+  update_display(/*wait=*/true);
+}
+
+void Orchestrator::cancel_watch_pairing() {
+  if (!_watch_pairing_active) {
+    return;
+  }
+
+  if (_watch_pairing_numeric_comparison_pending) {
+    (void)_svc.ble_service.confirm_numeric_comparison(_watch_pairing_conn_handle, false);
+  }
+  restore_watch_pairing_profile();
+}
+
+void Orchestrator::restore_watch_pairing_profile() {
+  _watch_pairing_active = false;
+  _watch_pairing_numeric_comparison_pending = false;
+  _watch_pairing_conn_handle = 0;
+  if (!_svc.ble_service.restore_normal_pairing()) {
+    AG_LOGW(TAG, "watch pairing: failed to restore normal security profile");
+  }
 }
 
 void Orchestrator::on_ble_config_write() {

@@ -89,8 +89,13 @@ local name goes in the scan response (the UUID plus AD flags consume 21 of the
 31-byte advertising payload, leaving insufficient room for the full name).
 The new 19-character name fits comfortably in the 29-byte scan response budget.
 
-Advertising is single-connection: `on_connect()` calls `stop_advertising()`,
-`on_disconnect()` calls `start_advertising()`.
+Portable Go supports two concurrent central connections. `on_connect()` keeps
+advertising while fewer than two clients are connected; `on_disconnect()`
+restarts advertising whenever a slot becomes available.
+
+NimBLE reserves 21 CCCDs: seven subscribable characteristics for each of the
+three persisted bonds. This prevents active subscriptions from displacing bond
+metadata when two peers are connected.
 
 ---
 
@@ -101,6 +106,13 @@ Advertising is single-connection: `on_connect()` calls `stop_advertising()`,
 Security is mandatory and always enabled: Passkey Entry with Display Only IO
 capability, bonding, and MITM protection. There is no build-time option to
 disable it; pairing is always required before any characteristic access.
+
+The explicit Portable-mode **Pair Watch** flow temporarily changes the global
+profile for future SMP procedures to Display Yes/No with Bond, MITM, and LE
+Secure Connections. Numeric Comparison is posted to the orchestrator with its
+connection handle and displayed number; only an explicit user decision injects
+the accept or reject response. The normal phone profile is restored after
+success, terminal failure, or cancellation without changing either bond type.
 
 The BLE SMP specification mandates a 6-digit numeric passkey (000000-999999).
 
@@ -124,7 +136,8 @@ _server->set_security(AgBleIoCapability::DISPLAY_ONLY,
 7. User enters the passkey on the phone.
 8. NimBLE completes the pairing handshake. The encryption-change callback
    (`set_auth_complete_callback`) fires with `success = isEncrypted()`, which
-   `BleService` forwards as the `BleAuthComplete` event payload (`ble_auth_ok`)
+    `BleService` forwards as the `BleAuthComplete` event payload (connection
+    handle and success)
    to drive onboarding. It fires for first-time pairing, pairing failure, and
    bonded reconnects (encryption restore). The icon does not cache this event
    (see `is_authenticated()` below).
@@ -929,8 +942,9 @@ correction-version identifier.
 | Method | Implementation | Description |
 |---|---|---|
 | `is_initialized()` | `_initialized` | True after successful `init()`, false after `deinit()`. The `_server` pointer is always non-null (borrowed from the board for the lifetime of the service), so the previous `_server != nullptr` gate is no longer valid. |
-| `is_connected()` | `_connected.load()` | `std::atomic<bool>`, thread-safe. True while a GAP link exists; does not imply the link is usable. |
-| `is_authenticated()` | `_connected.load() && _server->is_peer_authenticated()` | Reads the stack's live security state (`getPeerInfoByHandle(handle).isAuthenticated()`) instead of caching the encryption-change event, so it cannot get stuck after a bonded reconnect. True only while the active link is authenticated (MITM-paired). Drives the BLE "connected" icon. |
+| `is_connected()` | `_connected_client_count > 0` | Thread-safe. True while any GAP link exists; does not imply that link is usable. |
+| `connected_client_count()` | `_connected_client_count.load()` | Thread-safe current connection count, bounded to two in Portable mode. |
+| `is_authenticated()` | `count > 0 && _server->is_peer_authenticated()` | Reads every peer's live security state instead of caching an encryption-change event. True when any active link is authenticated (MITM-paired) and drives the BLE "connected" icon. |
 
 ---
 
@@ -949,7 +963,7 @@ The BLE service straddles two task contexts:
 |---|---|---|---|
 | `_config_write_buf` / `_config_write_len` / `_config_write_pending` | `_config_write_mutex` (`RtosMutex`) | NimBLE task (`on_config_write`) | Orchestrator (`take_pending_config_write`) |
 | `_history_write_buf` / `_history_write_len` / `_history_write_pending` | `_history_write_mutex` (`RtosMutex`) | NimBLE task (`on_history_write`) | Orchestrator (`take_pending_history_write`) |
-| `_connected` | `std::atomic<bool>` | NimBLE task (`on_connect`, `on_disconnect`) | Orchestrator (all `notify_*`, `handle_history_*`) |
+| `_connected_client_count` | `std::atomic<uint8_t>` | NimBLE task (`on_connect`, `on_disconnect`) | Orchestrator (all `notify_*`, `handle_history_*`) |
 | `_export_active`, `_export_session_id` | No mutex (single writer) | Orchestrator only | Orchestrator only |
 
 NimBLE callbacks copy data to the pending buffer under the mutex, then post a
@@ -1081,11 +1095,12 @@ vector. History delete uses `delete_route()`. Status reporting uses
 | Event | Orchestrator Action |
 |---|---|
 | `BleConnected` | Update display, push current measures/status/config, dismiss passkey overlay. |
-| `BleDisconnected` | Update display, clear any active history export, dismiss passkey overlay. |
+| `BleDisconnected` | Carries the connection handle. Update display, clear any active history export, dismiss passkey overlay, and fail Pair Watch only when its Numeric Comparison candidate disconnected. |
 | `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> re-assert the Config snapshot via `update_config()` (a GATT write stores the raw written bytes as the characteristic value, so READ would otherwise echo the write or an `op:cmd` payload) -> if `"set"`: reject before adoption when an unknown key is present (`unknown_config_key`) or more than one recognized config key is present (`single_field_only`), else merge, save NVS, `notify_config(prev, cur)`. If `"cmd"`: `co2_cal` sends progress and signals `SensorProducer`, with a later `Co2CalibrationDone` attempting the result; other commands produce their result synchronously. |
 | `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end/delete()`. For `delete`: check active tracking conflict first, then call `handle_history_delete()` and `update_status()`. |
 | `BlePairingRequest` | Render passkey on display (pairing overlay). |
-| `BleAuthComplete` | Carries `ble_auth_ok` (link encrypted). On success: mark onboarding done, leave setup session to Home (or dismiss overlay). On failure: leave onboarding untouched; in a setup session return to `Screen::GettingStarted` (session stays active so a retry shows a fresh PIN), otherwise dismiss overlay to Home. |
+| `BleAuthComplete` | Carries connection handle and success (link encrypted). Complete Pair Watch only for its Numeric Comparison candidate; otherwise, on success mark onboarding done and leave setup session to Home (or dismiss overlay). On failure, leave onboarding untouched; in a setup session return to `Screen::GettingStarted` (session stays active so a retry shows a fresh PIN), otherwise dismiss overlay to Home. |
+| `BleNumericComparison` | Carries connection handle and comparison number. Show the Pair Watch comparison view; the user action explicitly accepts or rejects it. |
 
 ### Mode Transitions
 

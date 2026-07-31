@@ -59,9 +59,9 @@ The complete local name is placed in the scan response data.
   This is robust to future name format changes.
 - **Fallback**: filter by name prefix `"AirGradient Go "` (note the trailing
   space).
-- The device supports a single concurrent connection. While a client is
-  connected, the device stops advertising. Advertising resumes after
-  disconnect.
+- The device supports up to two concurrent central connections. It continues
+  advertising while fewer than two peers are connected and resumes advertising
+  after either peer disconnects.
 
 ### Connection Parameters
 
@@ -84,6 +84,18 @@ Security features:
 - **Bonding**: Enabled. After successful pairing, the bond is stored and
   subsequent connections skip passkey entry.
 - **MITM protection**: Enabled.
+
+### Watch Pairing
+
+Select **Pair Watch** in Settings while the device is in Portable mode to
+temporarily switch future pairing procedures to Display Yes/No with Bond, MITM,
+and LE Secure Connections. Outside Portable mode, the option remains visible
+but shows the `Use Portable mode` snackbar.
+A compatible watch must complete Numeric Comparison after the user confirms the
+same six-digit number on both devices. Cancel, failure, or success restores the
+normal phone profile without changing existing bonds. A phone that starts a new
+pairing procedure while this page is active may also receive the temporary
+Numeric Comparison profile.
 
 ### Pairing Flow
 
@@ -1445,6 +1457,10 @@ All three require an authenticated (bonded MITM) link — the same pairing the
 data service uses, so no second bond. Status is **NOTIFY-only** (no readable
 value); subscribe to its CCCD before starting. Control payloads are **CBOR**;
 Data payloads are **raw image bytes** (not CBOR).
+
+OTA is device-global and exclusive. An OTA-capable client must subscribe to OTA
+Status. While a transfer is active, clients other than the initiator must not
+write OTA Control or Data. Smartwatch clients must not use the OTA service.
 
 Neither UUID is advertised; discover the service via GATT discovery after
 connecting. A phone bonded before this firmware may need a GATT-cache refresh

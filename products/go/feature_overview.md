@@ -128,8 +128,11 @@ Main BLE features:
 - Downloading stored route history.
 - BLE firmware update in Portable mode.
 
-Only one phone can be connected at a time. When a phone is connected, the device
-stops advertising until that phone disconnects.
+Up to two authenticated BLE central clients can connect concurrently. The device
+continues advertising while a connection slot remains, and broadcasts subscribed
+GATT notifications to both peers. Settings also provides an explicit **Pair
+Watch** flow for Secure Connections Numeric Comparison without changing normal
+phone passkey pairing.
 
 ## Wi-Fi, Local Server, And Cloud Features
 

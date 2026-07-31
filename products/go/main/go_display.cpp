@@ -580,6 +580,11 @@ constexpr int PAIRING_DIVIDER_Y = 86;
 constexpr int PAIRING_PASSKEY_BASELINE_Y = 145;
 constexpr int PAIRING_HINT_BASELINE_Y = 180;
 
+// Pair Watch action helper geometry.
+constexpr int PAIR_WATCH_ACTION_Y = 190;
+constexpr int PAIR_WATCH_ACTION_HEIGHT = 22;
+constexpr int PAIR_WATCH_ACTION_BASELINE_OFFSET_Y = 15;
+
 // Chart — shifted 1px down for 2px-thick 3rd grid divider when active
 constexpr int PLOT_X = 4;
 constexpr int PLOT_Y = 225;
@@ -672,7 +677,7 @@ bool is_shutdown_screen(Screen screen) {
 
 // A "navigable" screen is one the user reaches through normal menu interaction.
 // Transitions between navigable screens use body-only partial for snappy UX.
-// Screens NOT listed here (PairingPasskey, Shutdown*) trigger Fast on transition.
+// PairingPasskey and Shutdown screens trigger Fast on transition.
 bool is_navigable(Screen screen) { return is_home_like(screen) || is_list_screen(screen); }
 
 // A "menu-navigation" screen is any navigable screen except Home.
@@ -1013,9 +1018,10 @@ void draw_shutdown_text(u8g2_t *u, const char *title_l1, const char *title_l2, c
 // Full-canvas session-screen helpers
 // ---------------------------------------------------------------------------
 
-inline bool is_session_screen(Screen s) {
-  return s == Screen::Info || s == Screen::Provisioning || s == Screen::ProvisioningConfirm ||
-         s == Screen::GettingStarted;
+bool is_full_canvas_session(Screen screen) {
+  return screen == Screen::Info || screen == Screen::Provisioning ||
+         screen == Screen::ProvisioningConfirm || screen == Screen::GettingStarted ||
+         screen == Screen::PairWatch;
 }
 
 // Non-capturing StrWidthFn that forwards to u8g2_GetStrWidth.  The text
@@ -1074,6 +1080,21 @@ void draw_provisioning_action_row(u8g2_t *u, const char *text, int y, bool selec
   }
   u8g2_SetFont(u, u8g2_font_6x10_tr);
   draw_centered_text(u, SCREEN_W / 2, y + 12, text);
+  if (selected) {
+    u8g2_SetDrawColor(u, 0);
+  }
+}
+
+void draw_pair_watch_action(u8g2_t *u, int center_x, int width, const char *text, bool selected) {
+  const int x = center_x - width / 2;
+  if (selected) {
+    u8g2_DrawBox(u, x, PAIR_WATCH_ACTION_Y, width, PAIR_WATCH_ACTION_HEIGHT);
+    u8g2_SetDrawColor(u, 1);
+  } else {
+    u8g2_DrawFrame(u, x, PAIR_WATCH_ACTION_Y, width, PAIR_WATCH_ACTION_HEIGHT);
+  }
+  u8g2_SetFont(u, u8g2_font_helvB08_tf);
+  draw_centered_text(u, center_x, PAIR_WATCH_ACTION_Y + PAIR_WATCH_ACTION_BASELINE_OFFSET_Y, text);
   if (selected) {
     u8g2_SetDrawColor(u, 0);
   }
@@ -1207,8 +1228,8 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
   // ghosting from the prior layout remains. All in-session transitions use
   // partial refresh over y=0..249 so disjoint layouts clear cleanly without
   // the Full waveform's ~3 s flash.
-  const bool prev_in_session = is_session_screen(_prev_values.screen);
-  const bool next_in_session = is_session_screen(values.screen);
+  const bool prev_in_session = is_full_canvas_session(_prev_values.screen);
+  const bool next_in_session = is_full_canvas_session(values.screen);
   const bool crossing_session_boundary = prev_in_session != next_in_session;
 
   _render_frame(values);
@@ -1227,9 +1248,9 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
     _menu_exited = false;
   } else if (prev_in_session && next_in_session) {
     // Intra-session transitions (Info text update, Provisioning status
-    // change, Provisioning <-> ProvisioningConfirm, No <-> Yes) are always
-    // full-canvas partial refreshes.  The partial-op counter is NOT
-    // consulted inside the session.
+    // change, Provisioning <-> ProvisioningConfirm, Pair Watch view change,
+    // No <-> Yes) are always full-canvas partial refreshes. The partial-op
+    // counter is NOT consulted inside the session.
     _pending_mode = RefreshMode::Partial;
     _menu_exited = false;
   } else if (menu_navigation) {
@@ -1366,6 +1387,10 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     _draw_pairing_passkey(v);
     return;
   }
+  if (v.screen == Screen::PairWatch) {
+    _draw_pair_watch(v);
+    return;
+  }
 
   // Factory learning dashboard owns the full canvas — no status bar.
   if (v.show_fg_dashboard) {
@@ -1416,6 +1441,7 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
   case Screen::PairingPasskey:
+  case Screen::PairWatch:
   case Screen::Info:
   case Screen::Provisioning:
   case Screen::ProvisioningConfirm:
@@ -1779,6 +1805,65 @@ void DisplayService::_draw_pairing_passkey(const DisplayValues &v) {
 
   u8g2_SetFont(&_u8g2, u8g2_font_helvR12_tr);
   draw_centered_text(&_u8g2, SCREEN_W / 2, PAIRING_HINT_BASELINE_Y, "Enter on phone");
+}
+
+void DisplayService::_draw_pair_watch(const DisplayValues &v) {
+  constexpr int TITLE_BASELINE_Y = 58;
+  constexpr int DIVIDER_Y = 70;
+  constexpr int WAITING_LINE_1_BASELINE_Y = 98;
+  constexpr int WAITING_LINE_2_BASELINE_Y = 112;
+  constexpr int WAITING_LINE_3_BASELINE_Y = 126;
+  constexpr int STATUS_BASELINE_Y = 158;
+  constexpr int SINGLE_ACTION_WIDTH = 84;
+  constexpr int DUAL_ACTION_WIDTH = 54;
+  constexpr int CANCEL_CENTER_X = 34;
+  constexpr int CONFIRM_CENTER_X = 94;
+  constexpr int RESULT_BASELINE_Y = 140;
+
+  u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_BASELINE_Y, "Pair Watch");
+  for (int i = 0; i < SYSTEM_DIVIDER_THICKNESS; ++i) {
+    u8g2_DrawHLine(&_u8g2, SYSTEM_DIVIDER_X_MARGIN, DIVIDER_Y + i,
+                   SCREEN_W - 2 * SYSTEM_DIVIDER_X_MARGIN);
+  }
+
+  switch (v.watch_pairing_view) {
+  case WatchPairingView::Waiting:
+    u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, WAITING_LINE_1_BASELINE_Y, "Open Watch app");
+    draw_centered_text(&_u8g2, SCREEN_W / 2, WAITING_LINE_2_BASELINE_Y, "and select this");
+    draw_centered_text(&_u8g2, SCREEN_W / 2, WAITING_LINE_3_BASELINE_Y, "AirGradient Go");
+    u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, STATUS_BASELINE_Y, "Waiting for watch");
+    draw_pair_watch_action(&_u8g2, SCREEN_W / 2, SINGLE_ACTION_WIDTH, "Cancel", true);
+    break;
+  case WatchPairingView::NumericComparison: {
+    u8g2_SetFont(&_u8g2, u8g2_font_6x10_tr);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, WAITING_LINE_1_BASELINE_Y, "Does this match");
+    draw_centered_text(&_u8g2, SCREEN_W / 2, WAITING_LINE_2_BASELINE_Y, "your watch code?");
+    char passkey_str[8];
+    snprintf(passkey_str, sizeof(passkey_str), "%06" PRIu32, v.watch_pairing_number);
+    u8g2_SetFont(&_u8g2, u8g2_font_logisoso32_tr);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, STATUS_BASELINE_Y, passkey_str);
+    draw_pair_watch_action(&_u8g2, CANCEL_CENTER_X, DUAL_ACTION_WIDTH, "Cancel",
+                           v.watch_pairing_action_index == 0);
+    draw_pair_watch_action(&_u8g2, CONFIRM_CENTER_X, DUAL_ACTION_WIDTH, "Confirm",
+                           v.watch_pairing_action_index == 1);
+    break;
+  }
+  case WatchPairingView::Confirming:
+    u8g2_SetFont(&_u8g2, u8g2_font_helvB12_tf);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, RESULT_BASELINE_Y, "Confirming...");
+    break;
+  case WatchPairingView::Success:
+    u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, RESULT_BASELINE_Y, "Watch paired");
+    break;
+  case WatchPairingView::Failure:
+    u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, RESULT_BASELINE_Y, "Pairing failed");
+    break;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2243,7 +2328,7 @@ void DisplayService::_worker_loop() {
         // body-only partial would leave prior pixels there. Everything else
         // stays body-only.
         const auto region =
-            go_display_geometry::partial_region(is_session_screen(_prev_values.screen));
+            go_display_geometry::partial_region(is_full_canvas_session(_prev_values.screen));
         err = driver_part_write_region(0, region.y, _render_buf + region.byte_offset, region.height,
                                        SCREEN_W);
       }

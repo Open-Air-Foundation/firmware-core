@@ -106,6 +106,11 @@ static constexpr uint32_t NOTIFY_RETRY_DELAY_MS = 1;
 /// Sessions per page in paginated list response.
 static constexpr uint16_t SESSIONS_PER_PAGE = 6;
 
+static constexpr AgBleIoCapability NORMAL_IO_CAPABILITY = AgBleIoCapability::DISPLAY_ONLY;
+static constexpr uint8_t NORMAL_AUTH_FLAGS = AgBleAuth::BOND | AgBleAuth::MITM;
+static constexpr AgBleIoCapability WATCH_IO_CAPABILITY = AgBleIoCapability::DISPLAY_YES_NO;
+static constexpr uint8_t WATCH_AUTH_FLAGS = AgBleAuth::BOND | AgBleAuth::MITM | AgBleAuth::SC;
+
 namespace {
 
 uint64_t pm25_correction_algorithm_to_wire(Pm25CorrectionAlgorithm algorithm) {
@@ -544,8 +549,8 @@ bool BleService::init_stack_and_register(const char *serial) {
     return false;
   }
 
-  // --- Security: Passkey Entry (Display Only) ---
-  if (!_server->set_security(AgBleIoCapability::DISPLAY_ONLY, AgBleAuth::BOND | AgBleAuth::MITM)) {
+  // --- Security: normal phone pairing (Passkey Entry, Display Only) ---
+  if (!_server->set_security(NORMAL_IO_CAPABILITY, NORMAL_AUTH_FLAGS)) {
     AG_LOGE(TAG, "set_security failed");
     _server->deinit();
     return false;
@@ -611,13 +616,16 @@ bool BleService::init_stack_and_register(const char *serial) {
   _server->set_disconnect_callback(
       [this](uint16_t conn_handle, int reason) { on_disconnect(conn_handle, reason); });
   _server->set_passkey_display_callback([this](uint32_t passkey) { on_passkey_request(passkey); });
-  _server->set_auth_complete_callback([this](uint16_t /*conn_handle*/, bool success) {
+  _server->set_numeric_comparison_callback([this](uint16_t conn_handle, uint32_t number) {
+    on_numeric_comparison(conn_handle, number);
+  });
+  _server->set_auth_complete_callback([this](uint16_t conn_handle, bool success) {
     // Drives onboarding via the event. The icon reads live link state in
     // is_authenticated(), so no flag is cached here.
     AG_LOGI(TAG, "auth %s", success ? "OK" : "FAILED");
     Event evt{};
     evt.type = EventType::BleAuthComplete;
-    evt.ble_auth_ok = success;
+    evt.ble_auth_complete = BleAuthCompletePayload{conn_handle, success};
     RTOS::queue_send(_event_queue, &evt);
   });
 
@@ -657,7 +665,7 @@ void BleService::deinit() {
     return;
   }
 
-  _connected.store(false);
+  _connected_client_count.store(0);
   _export_active = false;
   _export_session_id = 0;
 
@@ -695,10 +703,24 @@ bool BleService::delete_all_bonds() {
 
 bool BleService::is_initialized() const { return _initialized; }
 
-bool BleService::is_connected() const { return _connected.load(); }
+bool BleService::is_connected() const { return _connected_client_count.load() > 0; }
+
+uint8_t BleService::connected_client_count() const { return _connected_client_count.load(); }
 
 bool BleService::is_authenticated() const {
-  return _connected.load() && _server->is_peer_authenticated();
+  return is_connected() && _server->is_peer_authenticated();
+}
+
+bool BleService::begin_watch_pairing() {
+  return _initialized && _server->set_security(WATCH_IO_CAPABILITY, WATCH_AUTH_FLAGS);
+}
+
+bool BleService::restore_normal_pairing() {
+  return _initialized && _server->set_security(NORMAL_IO_CAPABILITY, NORMAL_AUTH_FLAGS);
+}
+
+bool BleService::confirm_numeric_comparison(uint16_t conn_handle, bool accept) {
+  return _initialized && _server->confirm_numeric_comparison(conn_handle, accept);
 }
 
 // ---------------------------------------------------------------------------
@@ -707,11 +729,14 @@ bool BleService::is_authenticated() const {
 
 void BleService::on_connect(uint16_t conn_handle) {
   AG_LOGI(TAG, "client connected: handle=%u", conn_handle);
-  _connected.store(true);
+  _connected_client_count.fetch_add(1);
 
-  // Stop advertising — single connection device.  The borrowed server is
-  // always bound; the NimBLE callback would not have fired otherwise.
-  _server->stop_advertising();
+  // Remain discoverable until both peripheral slots are occupied.
+  if (_connected_client_count.load() < MAX_CONNECTED_CLIENTS) {
+    _server->start_advertising();
+  } else {
+    _server->stop_advertising();
+  }
 
   Event evt{};
   evt.type = EventType::BleConnected;
@@ -721,23 +746,26 @@ void BleService::on_connect(uint16_t conn_handle) {
 void BleService::on_disconnect(uint16_t conn_handle, int reason) {
   AG_LOGI(TAG, "client disconnected: handle=%u reason=%d", conn_handle, reason);
 
-  // Fan out to the observer FIRST so an in-flight OTA aborts synchronously,
-  // before advertising restarts. BleService keeps sole ownership of the slot.
+  // A BLE OTA transfer belongs to the link that started it. Without tracking
+  // that owner, retain the safe existing rule: any peer departure aborts it.
   if (_disconnect_observer) {
     _disconnect_observer(conn_handle, reason);
   }
-
-  _connected.store(false);
-
-  // Clean up active history export
   _export_active = false;
   _export_session_id = 0;
 
-  // Restart advertising — borrowed server is always bound.
-  _server->start_advertising();
+  uint8_t connected_count = _connected_client_count.load();
+  while (connected_count > 0 &&
+         !_connected_client_count.compare_exchange_weak(connected_count, connected_count - 1)) {
+  }
+
+  if (_connected_client_count.load() < MAX_CONNECTED_CLIENTS) {
+    _server->start_advertising();
+  }
 
   Event evt{};
   evt.type = EventType::BleDisconnected;
+  evt.ble_disconnected = BleConnectionPayload{conn_handle};
   RTOS::queue_send(_event_queue, &evt);
 }
 
@@ -781,6 +809,15 @@ void BleService::on_passkey_request(uint32_t passkey) {
   Event evt{};
   evt.type = EventType::BlePairingRequest;
   evt.ble_passkey = passkey;
+  RTOS::queue_send(_event_queue, &evt);
+}
+
+void BleService::on_numeric_comparison(uint16_t conn_handle, uint32_t number) {
+  AG_LOGI(TAG, "numeric comparison: handle=%u number=%06" PRIu32, conn_handle, number);
+
+  Event evt{};
+  evt.type = EventType::BleNumericComparison;
+  evt.ble_numeric_comparison = {conn_handle, number};
   RTOS::queue_send(_event_queue, &evt);
 }
 
@@ -835,7 +872,7 @@ void BleService::notify_measures(const MeasuresAGo &measures, const GpsData &gps
 
   _measures_char->set_value(buf, len);
 
-  if (_connected.load()) {
+  if (is_connected()) {
     _measures_char->notify();
   }
 }
@@ -865,7 +902,7 @@ void BleService::notify_tracking_status(const PowerSnapshot &power, const GpsDat
   // Refresh the full 9-key snapshot through the sole writer (READ stays full).
   update_status(power, gps, tracking_active, session_id);
 
-  if (!_connected.load() || _status_char == nullptr) {
+  if (!is_connected() || _status_char == nullptr) {
     return;
   }
 
@@ -883,7 +920,7 @@ void BleService::notify_charging_status(const PowerSnapshot &power, const GpsDat
   // Refresh the full 9-key snapshot through the sole writer (READ stays full).
   update_status(power, gps, tracking_active, session_id);
 
-  if (!_connected.load() || _status_char == nullptr) {
+  if (!is_connected() || _status_char == nullptr) {
     return;
   }
 
@@ -897,7 +934,7 @@ void BleService::notify_charging_status(const PowerSnapshot &power, const GpsDat
 }
 
 void BleService::notify_disconnect(BleDiscReason reason) {
-  if (!_connected.load() || _status_char == nullptr) {
+  if (!is_connected() || _status_char == nullptr) {
     return;
   }
 
@@ -936,7 +973,7 @@ void BleService::notify_config(const GoSettings &prev, const GoSettings &cur) {
   // out, closing the READ-vs-notify race without call-site ordering.
   update_config(cur);
 
-  if (!_connected.load() || _config_char == nullptr) {
+  if (!is_connected() || _config_char == nullptr) {
     return;
   }
 
@@ -950,7 +987,7 @@ void BleService::notify_config(const GoSettings &prev, const GoSettings &cur) {
 }
 
 void BleService::notify_command_result(BleCommand cmd, bool success, const char *error) {
-  if (!_connected.load() || _config_char == nullptr) {
+  if (!is_connected() || _config_char == nullptr) {
     return;
   }
 
@@ -991,7 +1028,7 @@ void BleService::notify_command_result(BleCommand cmd, bool success, const char 
 }
 
 void BleService::notify_command_progress(BleCommand cmd) {
-  if (!_connected.load() || _config_char == nullptr) {
+  if (!is_connected() || _config_char == nullptr) {
     return;
   }
 
@@ -1039,7 +1076,7 @@ void BleService::handle_history_list() {
   uint16_t total_pages =
       session_count > 0 ? (session_count + SESSIONS_PER_PAGE - 1) / SESSIONS_PER_PAGE : 1;
 
-  for (uint16_t page = 0; page < total_pages && _connected.load(); page++) {
+  for (uint16_t page = 0; page < total_pages && is_connected(); page++) {
     uint16_t start = page * SESSIONS_PER_PAGE;
     uint16_t page_count = std::min(static_cast<uint16_t>(SESSIONS_PER_PAGE),
                                    static_cast<uint16_t>(session_count - start));
@@ -1161,7 +1198,8 @@ void BleService::handle_history_start(uint32_t session_id) {
   uint32_t sent = 0;
   RoutePoint batch[ROUTE_READ_BATCH];
 
-  for (uint32_t offset = 0; offset < total_points && _connected.load(); /* incremented below */) {
+  for (uint32_t offset = 0; offset < total_points && is_connected();
+       /* incremented below */) {
     uint16_t to_read = static_cast<uint16_t>(
         std::min(static_cast<uint32_t>(ROUTE_READ_BATCH), total_points - offset));
     uint16_t actually_read = _storage.read_route_points(session_id, offset, batch, to_read);
@@ -1244,7 +1282,7 @@ void BleService::handle_history_fill(const uint32_t *point_indices, size_t count
 
   uint32_t sent = 0;
 
-  for (size_t i = 0; i < count && _connected.load(); i++) {
+  for (size_t i = 0; i < count && is_connected(); i++) {
     RoutePoint point;
     uint16_t actually_read =
         _storage.read_route_points(_export_session_id, point_indices[i], &point, 1);
@@ -1381,7 +1419,7 @@ bool BleService::send_history_cbor(const uint8_t *cbor_data, size_t cbor_len) {
 
   // Retry with backpressure
   while (!_history_char->notify()) {
-    if (!_connected.load()) {
+    if (!is_connected()) {
       return false;
     }
     RTOS::delay_ms(NOTIFY_RETRY_DELAY_MS);
@@ -1413,7 +1451,7 @@ bool BleService::send_history_binary(uint16_t first_point_index, const uint8_t *
 
   // Retry with backpressure
   while (!_history_char->notify()) {
-    if (!_connected.load()) {
+    if (!is_connected()) {
       return false;
     }
     RTOS::delay_ms(NOTIFY_RETRY_DELAY_MS);
