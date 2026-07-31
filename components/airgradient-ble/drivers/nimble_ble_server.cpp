@@ -204,6 +204,7 @@ void NimbleBleServer::deinit() {
   _connect_callback = nullptr;
   _disconnect_callback = nullptr;
   _passkey_display_callback = nullptr;
+  _numeric_comparison_callback = nullptr;
   _auth_complete_callback = nullptr;
 
   // Disconnect all active clients before teardown. Without this, pending GAP
@@ -223,7 +224,7 @@ void NimbleBleServer::deinit() {
     waited_ms += DISCONNECT_POLL_MS;
   }
 
-  _conn_handle.store(BLE_HS_CONN_HANDLE_NONE);
+  _numeric_comparison_handle.store(BLE_HS_CONN_HANDLE_NONE);
   _services.clear();
   _server = nullptr;
   NimBLEDevice::deinit(true);
@@ -362,13 +363,31 @@ void NimbleBleServer::set_passkey_display_callback(AgBlePasskeyDisplayCallback c
   _passkey_display_callback = std::move(callback);
 }
 
+void NimbleBleServer::set_numeric_comparison_callback(AgBleNumericComparisonCallback callback) {
+  _numeric_comparison_callback = std::move(callback);
+}
+
+bool NimbleBleServer::confirm_numeric_comparison(uint16_t conn_handle, bool accept) {
+  if (_server == nullptr || _numeric_comparison_handle.load() != conn_handle) {
+    return false;
+  }
+
+  const NimBLEConnInfo peer_info = _server->getPeerInfoByHandle(conn_handle);
+  if (peer_info.getConnHandle() != conn_handle ||
+      !NimBLEDevice::injectConfirmPasskey(peer_info, accept)) {
+    return false;
+  }
+
+  _numeric_comparison_handle.store(BLE_HS_CONN_HANDLE_NONE);
+  return true;
+}
+
 void NimbleBleServer::set_auth_complete_callback(AgBleAuthCompleteCallback callback) {
   _auth_complete_callback = std::move(callback);
 }
 
 void NimbleBleServer::onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) {
   (void)pServer;
-  _conn_handle.store(connInfo.getConnHandle());
   if (_connect_callback) {
     _connect_callback(connInfo.getConnHandle());
   }
@@ -376,18 +395,29 @@ void NimbleBleServer::onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo)
 
 void NimbleBleServer::onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason) {
   (void)pServer;
-  _conn_handle.store(BLE_HS_CONN_HANDLE_NONE);
+  const uint16_t conn_handle = connInfo.getConnHandle();
+  uint16_t expected = conn_handle;
+  (void)_numeric_comparison_handle.compare_exchange_strong(expected, BLE_HS_CONN_HANDLE_NONE);
   if (_disconnect_callback) {
-    _disconnect_callback(connInfo.getConnHandle(), reason);
+    _disconnect_callback(conn_handle, reason);
   }
 }
 
+uint8_t NimbleBleServer::connected_client_count() const {
+  return _server == nullptr ? 0 : static_cast<uint8_t>(_server->getConnectedCount());
+}
+
 bool NimbleBleServer::is_peer_authenticated() const {
-  const uint16_t handle = _conn_handle.load();
-  if (_server == nullptr || handle == BLE_HS_CONN_HANDLE_NONE) {
+  if (_server == nullptr) {
     return false;
   }
-  return _server->getPeerInfoByHandle(handle).isAuthenticated();
+
+  for (const uint16_t handle : _server->getPeerDevices()) {
+    if (_server->getPeerInfoByHandle(handle).isAuthenticated()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 uint32_t NimbleBleServer::onPassKeyDisplay() {
@@ -399,6 +429,14 @@ uint32_t NimbleBleServer::onPassKeyDisplay() {
   }
 
   return passkey;
+}
+
+void NimbleBleServer::onConfirmPassKey(NimBLEConnInfo &connInfo, uint32_t pin) {
+  const uint16_t conn_handle = connInfo.getConnHandle();
+  _numeric_comparison_handle.store(conn_handle);
+  if (_numeric_comparison_callback) {
+    _numeric_comparison_callback(conn_handle, pin);
+  }
 }
 
 void NimbleBleServer::onAuthenticationComplete(NimBLEConnInfo &connInfo) {

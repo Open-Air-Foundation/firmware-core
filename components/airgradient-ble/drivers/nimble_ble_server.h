@@ -90,13 +90,17 @@ public:
   void set_connect_callback(AgBleConnectCallback callback) override;
   void set_disconnect_callback(AgBleDisconnectCallback callback) override;
   void set_passkey_display_callback(AgBlePasskeyDisplayCallback callback) override;
+  void set_numeric_comparison_callback(AgBleNumericComparisonCallback callback) override;
+  bool confirm_numeric_comparison(uint16_t conn_handle, bool accept) override;
   void set_auth_complete_callback(AgBleAuthCompleteCallback callback) override;
+  uint8_t connected_client_count() const override;
   bool is_peer_authenticated() const override;
 
 private:
   void onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) override;
   void onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason) override;
   uint32_t onPassKeyDisplay() override;
+  void onConfirmPassKey(NimBLEConnInfo &connInfo, uint32_t pin) override;
   void onAuthenticationComplete(NimBLEConnInfo &connInfo) override;
 
   NimBLEServer *_server{nullptr};
@@ -105,13 +109,13 @@ private:
   // CONFIG_BT_NIMBLE_STATIC_TO_DYNAMIC (ESP-IDF #18489), so start_advertising()
   // re-applies it. +1 for the NUL terminator.
   char _device_name[CONFIG_BT_NIMBLE_GAP_DEVICE_NAME_MAX_LEN + 1]{};
-  // Active connection handle, written from the host task on connect/disconnect
-  // and read from app tasks by is_peer_authenticated().
-  std::atomic<uint16_t> _conn_handle{BLE_HS_CONN_HANDLE_NONE};
+  // Handle with a Numeric Comparison response awaiting UI confirmation.
+  std::atomic<uint16_t> _numeric_comparison_handle{BLE_HS_CONN_HANDLE_NONE};
   std::vector<std::unique_ptr<NimbleBleGattService>> _services;
   AgBleConnectCallback _connect_callback;
   AgBleDisconnectCallback _disconnect_callback;
   AgBlePasskeyDisplayCallback _passkey_display_callback;
+  AgBleNumericComparisonCallback _numeric_comparison_callback;
   AgBleAuthCompleteCallback _auth_complete_callback;
 };
 

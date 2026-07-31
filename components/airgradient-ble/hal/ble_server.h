@@ -97,10 +97,11 @@ public:
   // Safe to call multiple times.
   virtual void deinit() = 0;
 
-  // Configures BLE security parameters. io_cap selects the pairing IO model;
-  // auth_flags is a bitfield of AgBleAuth flags (BOND, MITM, SC). Must be
-  // called after init() and before start_advertising(). Returns false if
-  // the server is not initialised.
+  // Configures BLE security parameters for future SMP procedures. io_cap
+  // selects the pairing IO model; auth_flags is a bitfield of AgBleAuth flags
+  // (BOND, MITM, SC). May be called after init(), including while advertising
+  // and clients are connected; it must not rebuild GATT or disconnect peers.
+  // Returns false if the server is not initialised.
   virtual bool set_security(AgBleIoCapability io_cap, uint8_t auth_flags) = 0;
 
   // Deletes all stored bond information. Useful for factory reset or
@@ -166,12 +167,31 @@ public:
   // start_advertising() to guarantee delivery.
   virtual void set_passkey_display_callback(AgBlePasskeyDisplayCallback callback) = 0;
 
+  // Registers the explicit Numeric Comparison request callback. The caller
+  // must subsequently call confirm_numeric_comparison() with the same handle.
+  // Until then, the driver must leave the SMP request unanswered.
+  virtual void set_numeric_comparison_callback(AgBleNumericComparisonCallback callback) {
+    (void)callback;
+  }
+
+  // Accepts or rejects a pending Numeric Comparison request for conn_handle.
+  // Returns false when there is no matching pending request or injection fails.
+  virtual bool confirm_numeric_comparison(uint16_t conn_handle, bool accept) {
+    (void)conn_handle;
+    (void)accept;
+    return false;
+  }
+
   // Registers a callback invoked when pairing/authentication completes.
   // Stored by value. Must be set before start_advertising() to guarantee
   // delivery.
   virtual void set_auth_complete_callback(AgBleAuthCompleteCallback callback) = 0;
 
-  // True when the active link is authenticated (MITM-paired). Reflects the
+  // Returns the current number of connected clients. Default 0 for test
+  // doubles that do not model connection state.
+  virtual uint8_t connected_client_count() const { return 0; }
+
+  // True when any active link is authenticated (MITM-paired). Reflects the
   // stack's live security state rather than a one-shot pairing event, so it
   // cannot get stuck after a bonded reconnect. Default false for test doubles.
   // Thread-safe: may be called from any task; the driver takes the host lock.

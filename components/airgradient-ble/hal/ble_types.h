@@ -60,6 +60,11 @@ using AgBleWriteCallback = std::function<void(const uint8_t *data, size_t len)>;
 // shown to the user so they can enter it on the peer device.
 using AgBlePasskeyDisplayCallback = std::function<void(uint32_t passkey)>;
 
+// Invoked when LE Secure Connections Numeric Comparison requires an explicit
+// local accept or reject decision. The connection handle identifies the
+// pending pairing procedure; the driver must not accept by default.
+using AgBleNumericComparisonCallback = std::function<void(uint16_t conn_handle, uint32_t number)>;
+
 // Invoked when the pairing/authentication procedure completes.
 // success is true when the link is encrypted (and authenticated if MITM was
 // requested).

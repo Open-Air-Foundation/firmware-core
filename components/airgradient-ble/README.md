@@ -122,6 +122,15 @@ For a production wiring, see `products/go/main/go_ble.cpp`.
 `set_security()` is optional. If it is never called, the server operates
 without security (connections are unauthenticated and unencrypted).
 
+After `init()`, callers may update the security profile while advertising or
+while peers are connected. The change affects only future SMP pairing
+procedures; it does not rebuild GATT, disconnect peers, or modify stored bonds.
+
+Numeric Comparison requests are delivered through
+`set_numeric_comparison_callback()`. The caller must explicitly answer the
+pending request with `confirm_numeric_comparison()`; the NimBLE driver does not
+automatically accept it.
+
 ```cpp
 ble.set_security(AgBleIoCapability::DISPLAY_ONLY,
                  AgBleAuth::BOND | AgBleAuth::MITM);
