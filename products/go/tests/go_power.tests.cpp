@@ -39,6 +39,10 @@
 
 class MockBmsDevice : public trompeloeil::mock_interface<BmsDevice> {
 public:
+  MockBmsDevice() {
+    default_charge_enable = NAMED_ALLOW_CALL(*this, set_charge_enable(trompeloeil::_)).RETURN(true);
+  }
+
   IMPLEMENT_MOCK0(init);
   IMPLEMENT_MOCK1(read_telemetry);
   IMPLEMENT_MOCK1(read_status);
@@ -53,6 +57,9 @@ public:
   IMPLEMENT_MOCK1(set_charge_enable);
   IMPLEMENT_MOCK1(set_charge_current_ma);
   IMPLEMENT_MOCK1(set_watchdog_timeout_ms);
+
+private:
+  std::unique_ptr<trompeloeil::expectation> default_charge_enable;
 };
 
 // ============================================================================
@@ -1253,113 +1260,107 @@ TEST_CASE("poll_bms: EDV over-discharge trip", "[PowerService][edv]") {
 }
 
 // ============================================================================
-// TEST CASE 10 — poll_bms: OT (over-temperature) trip
+// TEST CASE 10 — poll_bms: battery temperature protection
 // ============================================================================
 
-TEST_CASE("poll_bms: OT over-temperature trip", "[PowerService][ot]") {
+TEST_CASE("poll_bms: battery temperature protection", "[PowerService][temperature]") {
   MockBmsDevice mock_bms;
   PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
-  SECTION("invalid temperature sentinel: no action") {
+  SECTION("invalid temperature disables charging without shutdown") {
     POLL_BMS_CYCLE(mock_bms, 3.8f, BmsPowerSource::None);
-    const PowerSnapshot snap = svc.poll_bms();
-    CHECK(snap.ship_mode_request == ShipModeRequest::None);
-  }
-
-  SECTION("temperature below cutoff (30°C): no action") {
-    POLL_BMS_TEMP_CYCLE(mock_bms, 30, BmsPowerSource::UsbSdp);
-    const PowerSnapshot snap = svc.poll_bms();
-    CHECK(snap.ship_mode_request == ShipModeRequest::None);
-  }
-
-  SECTION("temperature crosses cutoff (50°C): set_charge_enable(false)") {
-    POLL_BMS_TEMP_CYCLE(mock_bms, 50, BmsPowerSource::UsbSdp);
     REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
     const PowerSnapshot snap = svc.poll_bms();
     CHECK(snap.ship_mode_request == ShipModeRequest::None);
   }
 
-  SECTION("stays above cutoff for multiple polls: no further set_charge_enable") {
-    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
-        .SIDE_EFFECT(_1.battery_voltage = 3.8f; _1.battery_temperature_c = 52)
-        .RETURN(true);
-    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
-        .SIDE_EFFECT(*_1 = 50.0f)
-        .RETURN(true);
-    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
-        .SIDE_EFFECT(_1.power_source = BmsPowerSource::UsbSdp)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true).TIMES(1);
-
-    svc.poll_bms(); // crosses cutoff
-    svc.poll_bms(); // stays above — no new call
+  SECTION("-11°C disables charging and requests shutdown") {
+    POLL_BMS_TEMP_CYCLE(mock_bms, -11, BmsPowerSource::UsbSdp);
+    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.ship_mode_request == ShipModeRequest::OverTemperature);
   }
 
-  SECTION("temperature crosses resume (47°C) going down: set_charge_enable(true)") {
-    // Cross cutoff
-    {
-      POLL_BMS_TEMP_CYCLE(mock_bms, 50, BmsPowerSource::UsbSdp);
-      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
-      svc.poll_bms();
-    }
-    // Cool to resume
-    {
-      POLL_BMS_TEMP_CYCLE(mock_bms, 47, BmsPowerSource::UsbSdp);
-      REQUIRE_CALL(mock_bms, set_charge_enable(true)).RETURN(true);
-      svc.poll_bms();
-    }
+  SECTION("-10°C disables charging without shutdown") {
+    POLL_BMS_TEMP_CYCLE(mock_bms, -10, BmsPowerSource::UsbSdp);
+    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.ship_mode_request == ShipModeRequest::None);
   }
 
-  SECTION("hysteresis band (48°C) with charge disabled: no transition") {
-    {
-      POLL_BMS_TEMP_CYCLE(mock_bms, 50, BmsPowerSource::UsbSdp);
-      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
-      svc.poll_bms();
-    }
-    // In hysteresis band — no I2C writes
-    {
-      POLL_BMS_TEMP_CYCLE(mock_bms, 48, BmsPowerSource::UsbSdp);
-      svc.poll_bms();
-    }
+  SECTION("-1°C disables charging without shutdown") {
+    POLL_BMS_TEMP_CYCLE(mock_bms, -1, BmsPowerSource::UsbSdp);
+    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.ship_mode_request == ShipModeRequest::None);
   }
 
-  SECTION("ship threshold (60°C): charge disable + OverTemperature requested") {
+  SECTION("charge range boundaries are allowed") {
+    POLL_BMS_TEMP_CYCLE(mock_bms, 0, BmsPowerSource::UsbSdp);
+    FORBID_CALL(mock_bms, set_charge_enable(trompeloeil::_));
+    CHECK(svc.poll_bms().ship_mode_request == ShipModeRequest::None);
+  }
+
+  SECTION("45°C is allowed") {
+    POLL_BMS_TEMP_CYCLE(mock_bms, 45, BmsPowerSource::UsbSdp);
+    FORBID_CALL(mock_bms, set_charge_enable(trompeloeil::_));
+    CHECK(svc.poll_bms().ship_mode_request == ShipModeRequest::None);
+  }
+
+  SECTION("46°C disables charging without shutdown") {
+    POLL_BMS_TEMP_CYCLE(mock_bms, 46, BmsPowerSource::UsbSdp);
+    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.ship_mode_request == ShipModeRequest::None);
+  }
+
+  SECTION("60°C disables charging without shutdown") {
     POLL_BMS_TEMP_CYCLE(mock_bms, 60, BmsPowerSource::UsbSdp);
     REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
     const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.ship_mode_request == ShipModeRequest::None);
+  }
+
+  SECTION("61°C disables charging and requests shutdown") {
+    POLL_BMS_TEMP_CYCLE(mock_bms, 61, BmsPowerSource::UsbSdp);
+    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms();
     CHECK(snap.ship_mode_request == ShipModeRequest::OverTemperature);
   }
 
-  SECTION("request persists on subsequent polls while hot") {
-    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
-        .SIDE_EFFECT(_1.battery_voltage = 3.8f; _1.battery_temperature_c = 62)
-        .RETURN(true);
-    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
-        .SIDE_EFFECT(*_1 = 50.0f)
-        .RETURN(true);
-    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
-        .SIDE_EFFECT(_1.power_source = BmsPowerSource::UsbSdp)
-        .RETURN(true);
-    REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true).TIMES(1);
-
-    svc.poll_bms();                            // trip + charge disable
-    const PowerSnapshot snap = svc.poll_bms(); // still requested
-    CHECK(snap.ship_mode_request == ShipModeRequest::OverTemperature);
-  }
-
-  SECTION("cool below resume after cutoff: charge re-enabled, no ship request") {
-    // Cross cutoff (50°C, not ship threshold)
+  SECTION("cold cutoff recovers at 2°C but not 1°C") {
     {
-      POLL_BMS_TEMP_CYCLE(mock_bms, 50, BmsPowerSource::UsbSdp);
+      POLL_BMS_TEMP_CYCLE(mock_bms, -1, BmsPowerSource::UsbSdp);
       REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
       svc.poll_bms();
     }
-    // Cool to resume (47°C)
     {
-      POLL_BMS_TEMP_CYCLE(mock_bms, 47, BmsPowerSource::UsbSdp);
+      POLL_BMS_TEMP_CYCLE(mock_bms, 1, BmsPowerSource::UsbSdp);
+      FORBID_CALL(mock_bms, set_charge_enable(trompeloeil::_));
+      svc.poll_bms();
+    }
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 2, BmsPowerSource::UsbSdp);
       REQUIRE_CALL(mock_bms, set_charge_enable(true)).RETURN(true);
-      const PowerSnapshot snap = svc.poll_bms();
-      CHECK(snap.ship_mode_request == ShipModeRequest::None);
+      svc.poll_bms();
+    }
+  }
+
+  SECTION("hot cutoff recovers at 43°C but not 44°C") {
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 46, BmsPowerSource::UsbSdp);
+      REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
+      svc.poll_bms();
+    }
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 44, BmsPowerSource::UsbSdp);
+      FORBID_CALL(mock_bms, set_charge_enable(trompeloeil::_));
+      svc.poll_bms();
+    }
+    {
+      POLL_BMS_TEMP_CYCLE(mock_bms, 43, BmsPowerSource::UsbSdp);
+      REQUIRE_CALL(mock_bms, set_charge_enable(true)).RETURN(true);
+      svc.poll_bms();
     }
   }
 }
@@ -1732,7 +1733,7 @@ TEST_CASE("poll_bms: SOC source switching with FG", "[PowerService][fg][poll_bms
 // percentage, charging_state, and power_source are the primary knobs.
 #define STUB_BMS_READS(bms_mock, pct, charge_state, source)                                        \
   ALLOW_CALL(bms_mock, read_telemetry(trompeloeil::_))                                             \
-      .SIDE_EFFECT(_1.battery_voltage = 4.15f)                                                     \
+      .SIDE_EFFECT(_1.battery_voltage = 4.15f; _1.battery_temperature_c = 25)                      \
       .RETURN(true);                                                                               \
   ALLOW_CALL(bms_mock, get_battery_percentage(trompeloeil::_))                                     \
       .SIDE_EFFECT(*_1 = pct)                                                                      \
@@ -1862,7 +1863,8 @@ TEST_CASE("poll_bms: full-charge pause — Prototype (BMS fallback)",
 // TEST CASE 17 — Full-charge pause: thermal interaction
 // ============================================================================
 
-TEST_CASE("poll_bms: full-charge pause — thermal interaction", "[PowerService][full_charge][ot]") {
+TEST_CASE("poll_bms: full-charge pause — thermal interaction",
+          "[PowerService][full_charge][temperature]") {
   MockBmsDevice mock_bms;
   MockFuelGaugeDevice mock_fg;
   PowerService svc(mock_bms, test_gpio_hal, DEFAULT_CONFIG);
@@ -1937,11 +1939,11 @@ TEST_CASE("poll_bms: full-charge pause — thermal interaction", "[PowerService]
           .RETURN(true);
       svc.poll_bms();
     }
-    // Thermal clears (cooled to 47) — NO set_charge_enable(true) because full-charge paused
+    // Thermal clears at 43°C — NO set_charge_enable(true) because full-charge paused
     {
       STUB_FG_READS(mock_fg, 100, FgFlags::FC | FgFlags::CHG);
       ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
-          .SIDE_EFFECT(_1.battery_voltage = 4.15f; _1.battery_temperature_c = 47)
+          .SIDE_EFFECT(_1.battery_voltage = 4.15f; _1.battery_temperature_c = 43)
           .RETURN(true);
       ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
           .SIDE_EFFECT(*_1 = 100.0f)
@@ -1993,7 +1995,7 @@ TEST_CASE("poll_bms: full-charge pause — thermal interaction", "[PowerService]
     {
       STUB_FG_READS(mock_fg, 98, FgFlags::CHG);
       ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
-          .SIDE_EFFECT(_1.battery_voltage = 4.1f; _1.battery_temperature_c = 47)
+          .SIDE_EFFECT(_1.battery_voltage = 4.1f; _1.battery_temperature_c = 43)
           .RETURN(true);
       ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
           .SIDE_EFFECT(*_1 = 98.0f)
