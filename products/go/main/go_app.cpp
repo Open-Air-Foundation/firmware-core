@@ -370,8 +370,11 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     DisplayService &disp = _board.display();
     DisplayValues values =
         build_fast_path_display(ago, gps, bms_snap, settings, state.tracking_active);
-    if (bms_snap.ship_mode_request == ShipModeRequest::OverTemperature) {
-      values.screen = Screen::ShutdownTemperature;
+    if (bms_snap.ship_mode_request == ShipModeRequest::OverTemperature ||
+        bms_snap.ship_mode_request == ShipModeRequest::UnderTemperature) {
+      values.screen = bms_snap.ship_mode_request == ShipModeRequest::UnderTemperature
+                          ? Screen::ShutdownTemperatureLow
+                          : Screen::ShutdownTemperature;
       disp.init(values);
       return {
           .outcome = FastPathResult::Outcome::Shutdown,

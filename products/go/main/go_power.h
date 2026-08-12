@@ -55,6 +55,7 @@ enum class ShipModeRequest : uint8_t {
   None,
   OverDischarge,
   OverTemperature,
+  UnderTemperature,
 };
 
 // ---------------------------------------------------------------------------

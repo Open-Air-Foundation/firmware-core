@@ -1243,6 +1243,9 @@ TEST_CASE("UIManager: set_screen", "[UIManager][screen]") {
   ui.set_screen(Screen::ShutdownTemperature);
   CHECK(ui.current_screen() == Screen::ShutdownTemperature);
 
+  ui.set_screen(Screen::ShutdownTemperatureLow);
+  CHECK(ui.current_screen() == Screen::ShutdownTemperatureLow);
+
   ui.set_screen(Screen::Home);
   CHECK(ui.current_screen() == Screen::Home);
 }

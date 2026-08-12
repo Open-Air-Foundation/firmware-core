@@ -21,18 +21,19 @@ enum class Screen : uint8_t {
   TagList,
   About,
   Confirm,
-  ShutdownUser,        ///< Goodbye screen for user-initiated power-off
-  ShutdownDischarge,   ///< Safety-trip shutdown — battery critically low (OverDischarge)
-  ShutdownTemperature, ///< Safety-trip shutdown — battery overheated (OverTemperature)
-  PairingPasskey,      ///< Shows 6-digit BLE pairing passkey
-  Provisioning,        ///< Stationary Wi-Fi provisioning page (QR + status + actions)
-  ProvisioningConfirm, ///< Yes/No confirmation overlay for Provisioning actions
-  Info,                ///< Generic single-text presentation surface (bring-up narration, etc.)
-  GettingStarted,      ///< One-time first-boot guide (setup QR + single action row)
-  HardwareTest,        ///< Hardware Test submenu (peripheral/GPS/accel/FG-learning entry rows)
-  PeripheralTest,      ///< Guided actuator steps + bulk AQ sensor test + summary
-  GpsTest,             ///< Live GPS status: TTFF, fix, satellites, HDOP, position, UTC
-  AccelTest,           ///< Live accelerometer: WHO_AM_I, X/Y/Z, magnitude, pass/fail
+  ShutdownUser,           ///< Goodbye screen for user-initiated power-off
+  ShutdownDischarge,      ///< Safety-trip shutdown — battery critically low (OverDischarge)
+  ShutdownTemperature,    ///< Safety-trip shutdown — battery overheated
+  ShutdownTemperatureLow, ///< Safety-trip shutdown — battery temperature too low
+  PairingPasskey,         ///< Shows 6-digit BLE pairing passkey
+  Provisioning,           ///< Stationary Wi-Fi provisioning page (QR + status + actions)
+  ProvisioningConfirm,    ///< Yes/No confirmation overlay for Provisioning actions
+  Info,                   ///< Generic single-text presentation surface (bring-up narration, etc.)
+  GettingStarted,         ///< One-time first-boot guide (setup QR + single action row)
+  HardwareTest,           ///< Hardware Test submenu (peripheral/GPS/accel/FG-learning entry rows)
+  PeripheralTest,         ///< Guided actuator steps + bulk AQ sensor test + summary
+  GpsTest,                ///< Live GPS status: TTFF, fix, satellites, HDOP, position, UTC
+  AccelTest,              ///< Live accelerometer: WHO_AM_I, X/Y/Z, magnitude, pass/fail
 
   // --- Fuel-gauge learning (factory path) ---
   FgLearnCharging,   ///< Learning: charging to full

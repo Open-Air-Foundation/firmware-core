@@ -16,14 +16,14 @@ charging is allowed from 0 °C through 45 °C, and discharging is allowed from
 - Enforce the remaining temperature policy in the interactive and Offline
   fast paths.
 - Disable charging, without shutdown, when the NTC reading is invalid.
-- Reuse the existing temperature shutdown screen with generic wording.
+- Show distinct high- and low-temperature shutdown messages.
 - Cover the behavior with focused host tests.
 
 ## Non-Goals
 
 - Change factory fuel-gauge learning behavior.
 - Add thermal-chamber verification.
-- Add a separate cold-temperature screen or BLE disconnect reason.
+- Add a separate BLE disconnect reason for cold temperature.
 - Change the unused BQ25672/BQ25798 implementation.
 
 ## Design
@@ -33,7 +33,7 @@ The implementation is divided into the following categories:
 1. BQ25629 hardware configuration.
 2. Product temperature policy.
 3. Interactive and Offline fast-path shutdown handling.
-4. Generic temperature shutdown presentation.
+4. High- and low-temperature shutdown presentation.
 5. Focused host tests and documentation updates.
 
 Charge recovery after a temperature or invalid-NTC block uses the 2 °C through
@@ -55,9 +55,10 @@ below -10 °C or above 60 °C.
 - [x] **Category 3: Shutdown handling**
   - [x] Honor temperature shutdown in the interactive path.
   - [x] Honor temperature shutdown in the Offline fast path.
-- [ ] **Category 4: Generic temperature presentation**
-  - Reword the existing temperature shutdown screen for hot or cold trips.
-  - Keep the existing BLE temperature shutdown reason.
+- [x] **Category 4: Temperature presentation**
+  - [x] Show an overheated warning for high-temperature shutdown.
+  - [x] Show a too-cold warning for low-temperature shutdown.
+  - [x] Keep the existing BLE temperature shutdown reason.
 - [ ] **Category 5: Tests and documentation**
   - [x] Add focused host tests for policy boundaries and both runtime paths.
   - Update existing Go documentation that describes the old thresholds.

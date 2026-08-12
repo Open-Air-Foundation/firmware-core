@@ -145,7 +145,8 @@ hardware-dependent and excluded from host builds (stubs provided).
 | `Settings` / `SettingsChoice` / `TagList` / `About` / `Confirm` | Full-screen lists |
 | `ShutdownUser` | Goodbye screen for user long-press shutdown ("Powered off" / "Hold button" / "to turn on") |
 | `ShutdownDischarge` | Safety-trip shutdown for OverDischarge ("Battery critically low" / "Connect charger" / "Charge before use") |
-| `ShutdownTemperature` | Safety-trip shutdown for OverTemperature ("Battery overheated" / "Let device cool" / "Keep out of sun") |
+| `ShutdownTemperature` | High-temperature safety shutdown ("Battery overheated" / "Move device to a" / "cooler location") |
+| `ShutdownTemperatureLow` | Low-temperature safety shutdown ("Battery too cold" / "Move device to a" / "warmer location") |
 | `PairingPasskey` | Title-as-header + 3 px divider + large 6-digit BLE passkey + hint; no status bar, no snackbar |
 | `Info` | Generic single-text presentation surface (cold-boot splash, Stationary bring-up narration); no status bar, no snackbar |
 | `Provisioning` | Stationary Wi-Fi provisioning page (QR + status + action rows); no status bar, no snackbar |

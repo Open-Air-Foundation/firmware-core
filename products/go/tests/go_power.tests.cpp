@@ -1278,7 +1278,7 @@ TEST_CASE("poll_bms: battery temperature protection", "[PowerService][temperatur
     POLL_BMS_TEMP_CYCLE(mock_bms, -11, BmsPowerSource::UsbSdp);
     REQUIRE_CALL(mock_bms, set_charge_enable(false)).RETURN(true);
     const PowerSnapshot snap = svc.poll_bms();
-    CHECK(snap.ship_mode_request == ShipModeRequest::OverTemperature);
+    CHECK(snap.ship_mode_request == ShipModeRequest::UnderTemperature);
   }
 
   SECTION("-10°C disables charging without shutdown") {

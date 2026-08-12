@@ -265,7 +265,9 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
           _thermal_charge_disabled = true;
         }
       }
-      status.ship_mode_request = ShipModeRequest::OverTemperature;
+      status.ship_mode_request = batt_temp < DISCHARGE_MIN_TEMPERATURE_C
+                                     ? ShipModeRequest::UnderTemperature
+                                     : ShipModeRequest::OverTemperature;
     } else if (!charge_allowed && !_thermal_charge_disabled) {
       AG_LOGW(TAG, "battery temperature %d°C outside charge range %d-%d°C -> disable charging",
               batt_temp, CHARGE_MIN_TEMPERATURE_C, CHARGE_MAX_TEMPERATURE_C);

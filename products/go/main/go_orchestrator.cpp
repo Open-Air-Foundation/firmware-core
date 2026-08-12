@@ -27,6 +27,7 @@
 #include "go_local_api.h"
 #include "go_melody.h"
 #include "go_melody_sync.h"
+#include "go_power.h"
 #include "rtos.h"
 #include "services/ag_client.h"
 
@@ -88,6 +89,7 @@ static BleDiscReason disc_reason_for_mode(OperatingMode new_mode) {
 static BleDiscReason disc_reason_for_shutdown(ShipModeRequest reason) {
   switch (reason) {
   case ShipModeRequest::OverTemperature:
+  case ShipModeRequest::UnderTemperature:
     return BleDiscReason::Overheat;
   case ShipModeRequest::OverDischarge:
     return BleDiscReason::LowBatt;
@@ -2062,6 +2064,9 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
     break;
   case ShipModeRequest::OverTemperature:
     screen = Screen::ShutdownTemperature;
+    break;
+  case ShipModeRequest::UnderTemperature:
+    screen = Screen::ShutdownTemperatureLow;
     break;
   case ShipModeRequest::None:
   default:

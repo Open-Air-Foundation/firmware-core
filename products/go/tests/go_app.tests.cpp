@@ -723,26 +723,36 @@ TEST_CASE("execute_fast_path: cold sensors full warmup, measure, sleep") {
 }
 
 TEST_CASE("Offline fast path: temperature trip paints shutdown screen and shuts down") {
-  test_spy::reset();
-  test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverTemperature;
+  const auto run_trip = [](ShipModeRequest request, Screen expected_screen) {
+    test_spy::reset();
+    test_spy::snapshot_to_return.ship_mode_request = request;
 
-  MockBoard board;
-  GoApp app(board);
-  GoAppTestAccess access(app);
+    MockBoard board;
+    GoApp app(board);
+    GoAppTestAccess access(app);
 
-  RtcAppState state{};
-  state.mode = OperatingMode::Offline;
-  state.lock_state = LockState::Locked;
-  state.sensors_warm = true;
+    RtcAppState state{};
+    state.mode = OperatingMode::Offline;
+    state.lock_state = LockState::Locked;
+    state.sensors_warm = true;
 
-  access.run_fast_path(state);
+    access.run_fast_path(state);
 
-  CHECK(test_spy::shutdown_called);
-  CHECK(DisplayService::spy_init_count == 1);
-  CHECK(DisplayService::spy_last_screen == Screen::ShutdownTemperature);
-  CHECK(board.isr_removed);
-  CHECK_FALSE(test_spy::enter_sleep_called);
-  CHECK_FALSE(test_spy::orchestrator_init_called);
+    CHECK(test_spy::shutdown_called);
+    CHECK(DisplayService::spy_init_count == 1);
+    CHECK(DisplayService::spy_last_screen == expected_screen);
+    CHECK(board.isr_removed);
+    CHECK_FALSE(test_spy::enter_sleep_called);
+    CHECK_FALSE(test_spy::orchestrator_init_called);
+  };
+
+  SECTION("over-temperature uses the overheated page") {
+    run_trip(ShipModeRequest::OverTemperature, Screen::ShutdownTemperature);
+  }
+
+  SECTION("under-temperature uses the low-temperature page") {
+    run_trip(ShipModeRequest::UnderTemperature, Screen::ShutdownTemperatureLow);
+  }
 }
 
 TEST_CASE("execute_fast_path: button during warmup -> promote unlocked") {
