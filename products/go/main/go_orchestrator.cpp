@@ -282,6 +282,10 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
 
   _latest_power =
       _svc.power_service.poll_bms(_first_measurement_done && !_raw_measures.pm_a.is_pm_25_valid());
+  if (_latest_power.ship_mode_request == ShipModeRequest::OverTemperature) {
+    shutdown(_latest_power.ship_mode_request);
+    return;
+  }
 
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   _last_measurement_ms = now;

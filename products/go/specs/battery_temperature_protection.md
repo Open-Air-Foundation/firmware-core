@@ -52,14 +52,14 @@ below -10 °C or above 60 °C.
   - [x] Disable charging when the NTC reading is invalid.
   - [x] Request temperature shutdown outside -10 °C through 60 °C.
   - [x] Resume charging only from 2 °C through 43 °C after a thermal block.
-- [ ] **Category 3: Shutdown handling**
-  - Honor temperature shutdown in the interactive path.
-  - Honor temperature shutdown in the Offline fast path.
+- [x] **Category 3: Shutdown handling**
+  - [x] Honor temperature shutdown in the interactive path.
+  - [x] Honor temperature shutdown in the Offline fast path.
 - [ ] **Category 4: Generic temperature presentation**
   - Reword the existing temperature shutdown screen for hot or cold trips.
   - Keep the existing BLE temperature shutdown reason.
 - [ ] **Category 5: Tests and documentation**
-  - Add focused host tests for policy boundaries and both runtime paths.
+  - [x] Add focused host tests for policy boundaries and both runtime paths.
   - Update existing Go documentation that describes the old thresholds.
   - Review the Go VHUB template; no thermal-chamber test is required.
 

@@ -29,7 +29,7 @@ private:
   // --- Testable fast-path core ---
 
   struct FastPathResult {
-    enum class Outcome { Sleep, Promote };
+    enum class Outcome { Sleep, Promote, Shutdown };
     Outcome outcome;
     BootHandoff handoff;
     MeasuresAGo measures;

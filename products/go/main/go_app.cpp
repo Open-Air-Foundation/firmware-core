@@ -210,6 +210,11 @@ void GoApp::run_fast_path(const RtcAppState &state) {
 
   _board.remove_button_isr(PIN_BUTTON_POWER);
 
+  if (result.outcome == FastPathResult::Outcome::Shutdown) {
+    _board.power().shutdown();
+    return;
+  }
+
   if (result.outcome == FastPathResult::Outcome::Sleep) {
     RtcAppState save = state;
     save.sensors_warm = result.sensors_warm;
@@ -365,6 +370,18 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     DisplayService &disp = _board.display();
     DisplayValues values =
         build_fast_path_display(ago, gps, bms_snap, settings, state.tracking_active);
+    if (bms_snap.ship_mode_request == ShipModeRequest::OverTemperature) {
+      values.screen = Screen::ShutdownTemperature;
+      disp.init(values);
+      return {
+          .outcome = FastPathResult::Outcome::Shutdown,
+          .handoff = {},
+          .measures = ago,
+          .has_measures = has_measures,
+          .sleep_duration_ms = 0,
+          .sensors_warm = false,
+      };
+    }
     disp.init(values);
 
     uint32_t awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;

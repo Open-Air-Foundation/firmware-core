@@ -773,6 +773,19 @@ TEST_CASE("init(PowerOn): default state with first measurement and BMS poll",
   REQUIRE(test_spy::bms_polled);
 }
 
+TEST_CASE("init: temperature trip shuts down before interactive operation",
+          "[Orchestrator][init][temperature]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverTemperature;
+
+  orch.init(WakeCause::PowerOn);
+
+  CHECK(test_spy::shutdown_called);
+  CHECK(f.ui_manager.current_screen() == Screen::ShutdownTemperature);
+  CHECK_FALSE(test_spy::ble_init_called);
+}
+
 TEST_CASE("init(PowerOn): cold-boot splash flag set when UIManager is on Screen::Info",
           "[Orchestrator][init][boot-splash]") {
   TestFixture f;

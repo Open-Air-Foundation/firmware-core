@@ -384,10 +384,15 @@ public:
 
   explicit DisplayService(const Config &) {}
 
-  bool init(const DisplayValues &, bool = false) { return true; }
+  bool init(const DisplayValues &values, bool = false) {
+    ++spy_init_count;
+    spy_last_screen = values.screen;
+    return true;
+  }
 
-  bool update(const DisplayValues &, bool = false) {
+  bool update(const DisplayValues &values, bool = false) {
     ++spy_update_count;
+    spy_last_screen = values.screen;
     return true;
   }
 
@@ -399,8 +404,10 @@ public:
 
   // Test spies — reset via test_spy::reset() in stubs.
   inline static bool spy_deep_sleep_called = false;
+  inline static uint32_t spy_init_count = 0;
   inline static uint32_t spy_update_count = 0;
   inline static uint32_t spy_flush_count = 0;
+  inline static Screen spy_last_screen = Screen::Home;
 };
 
 // Stub implementations for host builds.

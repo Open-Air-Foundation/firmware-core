@@ -77,6 +77,7 @@ extern PowerService::SleepDecision sleep_decision_to_return;
 extern bool enter_sleep_called;
 extern uint32_t enter_sleep_duration_ms;
 extern bool should_hold_pm_result;
+extern bool shutdown_called;
 extern bool orchestrator_init_called;
 extern bool orchestrator_run_called;
 extern WakeCause orchestrator_wake_cause;
@@ -395,6 +396,8 @@ public:
   }
 
   void run_button_wake_path(const RtcAppState &state) { _app.run_button_wake_path(state); }
+
+  void run_fast_path(const RtcAppState &state) { _app.run_fast_path(state); }
 
   void run_interactive(WakeCause cause, BootHandoff handoff = {}) {
     _app.run_interactive(cause, handoff);
@@ -717,6 +720,29 @@ TEST_CASE("execute_fast_path: cold sensors full warmup, measure, sleep") {
   CHECK(test_spy::pm_sleep_count == 1); // long sleep — fan stopped for the window
   // Warmup iterations should have been called
   CHECK(test_spy::warmup_step_count > 0);
+}
+
+TEST_CASE("Offline fast path: temperature trip paints shutdown screen and shuts down") {
+  test_spy::reset();
+  test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverTemperature;
+
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  RtcAppState state{};
+  state.mode = OperatingMode::Offline;
+  state.lock_state = LockState::Locked;
+  state.sensors_warm = true;
+
+  access.run_fast_path(state);
+
+  CHECK(test_spy::shutdown_called);
+  CHECK(DisplayService::spy_init_count == 1);
+  CHECK(DisplayService::spy_last_screen == Screen::ShutdownTemperature);
+  CHECK(board.isr_removed);
+  CHECK_FALSE(test_spy::enter_sleep_called);
+  CHECK_FALSE(test_spy::orchestrator_init_called);
 }
 
 TEST_CASE("execute_fast_path: button during warmup -> promote unlocked") {
