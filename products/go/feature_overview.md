@@ -229,7 +229,8 @@ User-visible battery features:
 - USB plugged-in indication.
 - Low-battery warnings.
 - Automatic protective shutdown when the battery is critically low.
-- Over-temperature protection.
+- Battery-temperature protection, including charge inhibition, invalid-NTC
+  handling, and distinct hot/cold protective shutdowns.
 - Charging pause when the battery is full to reduce battery stress.
 
 The firmware also manages sensor power to reduce drain. For example, the PM

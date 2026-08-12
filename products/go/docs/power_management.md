@@ -16,10 +16,12 @@ For AGo, the power service also manages:
   (`ShipModeRequest::OverDischarge`) when cell voltage stays below 2.9 V
   for 3 consecutive polls while on battery. The orchestrator shows a
   warning on `Screen::Info` then calls `shutdown()`
-- **OT (over-temperature) trip:** two-tier policy — charge cutoff at 50 °C
-  with 47 °C hysteresis resume; requests ship mode
-  (`ShipModeRequest::OverTemperature`) at 60 °C. The orchestrator shows a
-  warning then calls `shutdown()`
+- **Battery-temperature protection:** charging is allowed from 0 °C through
+  45 °C. After a temperature or invalid-NTC block, charging resumes only from
+  2 °C through 43 °C. Discharging is allowed from -10 °C through 60 °C;
+  temperatures outside that range request the corresponding
+  `ShipModeRequest::UnderTemperature` or `ShipModeRequest::OverTemperature`.
+  An invalid NTC reading disables charging only and does not request shutdown
 - **Full-charge pause:** disables charging when the battery is full and
   USB is present. Resumes when SOC drops to 95 %. V1 detects full via
   BQ27427 FC flag; Prototype falls back to `ChargeTerminationDone` +
@@ -69,7 +71,7 @@ fields default to invalid sentinels (`BmsInvalid::VOLT` / `-1.0f` / `false`).
 | `fg_internal_temperature_c` | `float` | `-273.16` | FG die temperature (C) |
 | `fg_flags` | `uint16_t` | `0` | FG flags register (decoded via `FgFlags::FC`, `CHG`, `DSG`, etc.) |
 | `full_charge_paused` | `bool` | `false` | True when charging is paused because battery is full + USB present |
-| `ship_mode_request` | `ShipModeRequest` | `None` | Non-`None` when a safety trip requires the orchestrator to show a warning and enter ship mode (`OverDischarge` or `OverTemperature`) |
+| `ship_mode_request` | `ShipModeRequest` | `None` | Non-`None` when a safety trip requires warning and ship mode: `OverDischarge`, `OverTemperature`, or `UnderTemperature`. Invalid NTC alone never sets this field |
 
 ### SOC Source Preference
 
@@ -540,10 +542,12 @@ latches. The actual `set_charge_enable()` I2C write is only issued when it
 would change the effective state. When either flag wants charging off, the
 hardware stays off. The last flag to clear re-enables charging:
 
-- OT resume with full-charge active → `_thermal_charge_disabled` cleared,
-  no `set_charge_enable(true)` (full-charge pause holds)
-- Full-charge resume with thermal active → `_full_charge_paused` cleared,
-  no `set_charge_enable(true)` (thermal holds)
+- Temperature or invalid-NTC recovery with full-charge active →
+  `_thermal_charge_disabled` clears only for a valid battery temperature from
+  2 °C through 43 °C; no `set_charge_enable(true)` (full-charge pause holds)
+- Full-charge resume with temperature protection active →
+  `_full_charge_paused` cleared, no `set_charge_enable(true)` (temperature
+  protection holds)
 
 ### Snapshot
 
@@ -580,15 +584,18 @@ is refused (the deep-sleep fallback runs instead), so the restart
 behavior applies only on battery.
 
 Ship mode is no longer called directly from `poll_bms()`. Instead,
-safety trips (EDV and OT) set `PowerSnapshot::ship_mode_request` and the
-orchestrator handles the actual shutdown after displaying a warning.
+safety trips (EDV and high- or low-battery-temperature) set
+`PowerSnapshot::ship_mode_request`, and the orchestrator handles the actual
+shutdown after displaying a warning. An invalid NTC reading disables charging
+without setting a ship-mode request.
 
 The orchestrator's unified `shutdown(ShipModeRequest reason)` pipeline:
 
 1. Show the reason-specific shutdown screen — all variants share the
    same unified template: `Screen::ShutdownDischarge` (EDV),
-   `Screen::ShutdownTemperature` (OT), or `Screen::ShutdownUser`
-   (user-initiated long-press)
+   `Screen::ShutdownTemperature` (high temperature),
+   `Screen::ShutdownTemperatureLow` (low temperature), or
+   `Screen::ShutdownUser` (user-initiated long-press)
 2. Queue the shutdown frame with `update_display(wait=true)` and
    `DisplayService::flush()` so the e-paper paint is complete before continuing
 3. Stop tracking if active; backup chart cache

@@ -474,15 +474,17 @@ Screen dispatch:
   6-digit passkey (`logisoso32_tr`, baseline y=145), and "Enter on
   phone" hint (`helvR12_tr`, baseline y=215). No status bar, no
   snackbar.
-- **ShutdownUser / ShutdownDischarge / ShutdownTemperature:** Unified
-  template — `"AirGradient"` brand header (`helvB14_tf`, baseline y=34),
+- **ShutdownUser / ShutdownDischarge / ShutdownTemperature /
+  ShutdownTemperatureLow:** Unified template — `"AirGradient"` brand header
+  (`helvB14_tf`, baseline y=34),
   3 px-thick divider at y=49, reason-specific icon centred at
   (`SCREEN_W / 2`, y=94), and a title/action/detail text block
   (`helvB14_tf` titles at y=151/169, `helvR12_tr` action at y=198,
   `helvR08_tr` detail at y=214). Icons are drawn from u8g2 primitives
   (power circle, battery body, thermometer with heat-wave lines). No
   status bar, no snackbar. The renderer dispatches on the Screen
-  variant.
+  variant. The temperature icons use heat-wave lines for high temperature and
+  a snowflake for low temperature.
 
 ### Fonts
 

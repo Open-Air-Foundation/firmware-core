@@ -393,7 +393,7 @@ notification), treat the disconnect itself as the signal.
 
 | `"disc"` value | Meaning |
 |---|---|
-| `"overheat"` | Safety shutdown — battery over-temperature |
+| `"overheat"` | Safety shutdown — battery temperature outside the discharge range, hot or cold. This legacy value is shared by both temperature shutdown reasons |
 | `"low_batt"` | Safety shutdown — battery over-discharge (critically low) |
 | `"user"` | User-initiated shutdown (long-press power) |
 | `"op_stationary"` | Operating mode changing to Stationary |
