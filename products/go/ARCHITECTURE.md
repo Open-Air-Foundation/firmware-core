@@ -697,8 +697,9 @@ Button 1 (`PIN_BUTTON_POWER`, GPIO5) is wired to **both** the ESP32 GPIO
   `enter_ship_mode()` is refused and the path falls back to deep sleep, so
   the restart behavior only applies on battery.
 
-Ship mode is also triggered automatically by the EDV and OT safety trips —
-see [Power Management](docs/power_management.md) for details.
+Ship mode is also triggered automatically by the EDV and high- or
+low-battery-temperature safety trips — see
+[Power Management](docs/power_management.md) for details.
 
 ## Services
 
@@ -782,9 +783,12 @@ Two tiers of storage:
   can exceed 1S cell-protection OCP. Between measurements the SPS30 is
   power-managed via its native Sleep command. See
   [`docs/power_management.md`](docs/power_management.md#why-pmid-is-session-armed)
-- **Cell safety trips:** EDV (over-discharge at 2.9 V, 3-poll debounce)
-  and OT (charge cutoff at 50 C / resume at 47 C, ship mode at 60 C)
-  fire `enter_ship_mode()` to protect the battery
+- **Cell safety trips:** EDV uses a 2.9 V, three-poll debounce. Battery charging
+  is permitted from 0 °C through 45 °C and recovers from a temperature or
+  invalid-NTC block only from 2 °C through 43 °C. An invalid NTC disables
+  charging without shutdown. Discharge is permitted from -10 °C through 60 °C;
+  crossing either limit requests the corresponding cold- or hot-temperature
+  ship-mode shutdown
 - **Fuel gauge (V1 only):** `PowerService::set_fuel_gauge()` attaches an
   already-initialised `FuelGaugeDevice` for runtime SOC reads. `poll_bms()`
   prefers FG-derived SOC and tags the log line with `src=FG|BMS`

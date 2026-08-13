@@ -102,8 +102,12 @@ onboarding. Button 2 long press remains factory reset.
 - **EDV (over-discharge):** ship mode requested when cell voltage stays
   below 2.9 V for 3 consecutive polls while on battery. The orchestrator
   shows a warning on `Screen::Info` before entering ship mode.
-- **OT (over-temperature):** charge cutoff at 50 C (resume at 47 C);
-  ship mode requested at 60 C with a warning display before shutdown.
+- **Battery-temperature protection:** charging is allowed from 0 °C through
+  45 °C. After a temperature or invalid-NTC block, charging resumes only from
+  2 °C through 43 °C. Discharging is allowed from -10 °C through 60 °C;
+  temperatures outside that range cause distinct cold- or hot-temperature
+  shutdowns. An invalid NTC reading disables charging only and does not request
+  shutdown.
 - **Full-charge pause:** when the battery is full and USB is present,
   charging is disabled to reduce cell stress. Resumes when SOC drops
   to 95 %. V1 uses the BQ27427 FC flag; Prototype falls back to

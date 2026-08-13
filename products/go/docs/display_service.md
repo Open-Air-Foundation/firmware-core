@@ -145,7 +145,8 @@ hardware-dependent and excluded from host builds (stubs provided).
 | `Settings` / `SettingsChoice` / `TagList` / `About` / `Confirm` | Full-screen lists |
 | `ShutdownUser` | Goodbye screen for user long-press shutdown ("Powered off" / "Hold button" / "to turn on") |
 | `ShutdownDischarge` | Safety-trip shutdown for OverDischarge ("Battery critically low" / "Connect charger" / "Charge before use") |
-| `ShutdownTemperature` | Safety-trip shutdown for OverTemperature ("Battery overheated" / "Let device cool" / "Keep out of sun") |
+| `ShutdownTemperature` | High-temperature safety shutdown ("Battery overheated" / "Move device to a" / "cooler location") |
+| `ShutdownTemperatureLow` | Low-temperature safety shutdown ("Battery too cold" / "Move device to a" / "warmer location") |
 | `PairingPasskey` | Title-as-header + 3 px divider + large 6-digit BLE passkey + hint; no status bar, no snackbar |
 | `Info` | Generic single-text presentation surface (cold-boot splash, Stationary bring-up narration); no status bar, no snackbar |
 | `Provisioning` | Stationary Wi-Fi provisioning page (QR + status + action rows); no status bar, no snackbar |
@@ -473,15 +474,17 @@ Screen dispatch:
   6-digit passkey (`logisoso32_tr`, baseline y=145), and "Enter on
   phone" hint (`helvR12_tr`, baseline y=215). No status bar, no
   snackbar.
-- **ShutdownUser / ShutdownDischarge / ShutdownTemperature:** Unified
-  template — `"AirGradient"` brand header (`helvB14_tf`, baseline y=34),
+- **ShutdownUser / ShutdownDischarge / ShutdownTemperature /
+  ShutdownTemperatureLow:** Unified template — `"AirGradient"` brand header
+  (`helvB14_tf`, baseline y=34),
   3 px-thick divider at y=49, reason-specific icon centred at
   (`SCREEN_W / 2`, y=94), and a title/action/detail text block
   (`helvB14_tf` titles at y=151/169, `helvR12_tr` action at y=198,
   `helvR08_tr` detail at y=214). Icons are drawn from u8g2 primitives
   (power circle, battery body, thermometer with heat-wave lines). No
   status bar, no snackbar. The renderer dispatches on the Screen
-  variant.
+  variant. The temperature icons use heat-wave lines for high temperature and
+  a snowflake for low temperature.
 
 ### Fonts
 

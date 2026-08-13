@@ -773,6 +773,33 @@ TEST_CASE("init(PowerOn): default state with first measurement and BMS poll",
   REQUIRE(test_spy::bms_polled);
 }
 
+TEST_CASE("init: temperature trip shuts down before interactive operation",
+          "[Orchestrator][init][temperature]") {
+  SECTION("over-temperature uses the overheated page") {
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverTemperature;
+
+    orch.init(WakeCause::PowerOn);
+
+    CHECK(test_spy::shutdown_called);
+    CHECK(f.ui_manager.current_screen() == Screen::ShutdownTemperature);
+    CHECK_FALSE(test_spy::ble_init_called);
+  }
+
+  SECTION("under-temperature uses the low-temperature page") {
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::UnderTemperature;
+
+    orch.init(WakeCause::PowerOn);
+
+    CHECK(test_spy::shutdown_called);
+    CHECK(f.ui_manager.current_screen() == Screen::ShutdownTemperatureLow);
+    CHECK_FALSE(test_spy::ble_init_called);
+  }
+}
+
 TEST_CASE("init(PowerOn): cold-boot splash flag set when UIManager is on Screen::Info",
           "[Orchestrator][init][boot-splash]") {
   TestFixture f;
@@ -2850,6 +2877,11 @@ TEST_CASE("shutdown: pushes a disc notice to a connected client", "[Orchestrator
 
   SECTION("over-temperature maps to overheat") {
     A::shutdown(orch, ShipModeRequest::OverTemperature);
+    CHECK(test_spy::ble_notify_disconnect_called);
+    CHECK(test_spy::ble_last_disc_reason == BleDiscReason::Overheat);
+  }
+  SECTION("under-temperature maps to overheat for protocol compatibility") {
+    A::shutdown(orch, ShipModeRequest::UnderTemperature);
     CHECK(test_spy::ble_notify_disconnect_called);
     CHECK(test_spy::ble_last_disc_reason == BleDiscReason::Overheat);
   }

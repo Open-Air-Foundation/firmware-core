@@ -269,7 +269,7 @@ is NOTIFY-only and does **not** touch the snapshot:
 | `update_status()` | No (set-value only) | — | Steady-state polls (BMS, GPS fix, history-delete, on-connect snapshot) |
 | `notify_tracking_status()` | Yes, when subscribed | `{tracking, session}` | Urgent tracking transitions: start success, start failure, manual stop |
 | `notify_charging_status()` | Yes, when subscribed | `{charging, bat_pct, bat_v}` | Charging transitions: plug in, unplug, charge complete |
-| `notify_disconnect()` | Yes, when connected | `{disc}` | Imminent link drop: shutdown (overheat / low_batt / user) or leaving Portable (op_stationary / op_offline) |
+| `notify_disconnect()` | Yes, when connected | `{disc}` | Imminent link drop: shutdown (`overheat` for hot or cold battery temperature, `low_batt`, or `user`) or leaving Portable (`op_stationary` or `op_offline`) |
 
 The delta shapes have **disjoint keys** and carry **no** `"type"` discriminator,
 so the client merges whichever keys arrive. The Read value stays the full 9-key
@@ -313,6 +313,7 @@ briefly before teardown so the fire-and-forget notice can drain:
 | `change_mode()` leaving Portable → Stationary | `op_stationary` | `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms) |
 | `change_mode()` leaving Portable → Offline | `op_offline` | `BLE_MODE_CHANGE_NOTIFY_SETTLE_MS` (200 ms) |
 | `shutdown(OverTemperature)` | `overheat` | `SHUTDOWN_POWER_OFF_SETTLE_MS` (500 ms post-paint dwell) |
+| `shutdown(UnderTemperature)` | `overheat` | `SHUTDOWN_POWER_OFF_SETTLE_MS` (500 ms post-paint dwell) |
 | `shutdown(OverDischarge)` | `low_batt` | `SHUTDOWN_POWER_OFF_SETTLE_MS` (500 ms) |
 | `shutdown(None)` — user long-press | `user` | `SHUTDOWN_POWER_OFF_SETTLE_MS` (500 ms) |
 
@@ -900,7 +901,7 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 | `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only. Sole writer of the Status snapshot. Used for steady-state polls (BMS, GPS fix, history-delete reconciliation). |
 | `notify_tracking_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{tracking, session}` transition delta via `notify(data, len)`. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
 | `notify_charging_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{charging, bat_pct, bat_v}` power delta via `notify(data, len)`. Used for charging transitions (plug in, unplug, charge complete). Disjoint keys from the tracking delta, no `"type"` discriminator — client merges by key. |
-| `notify_disconnect(reason)` | Pushes a NOTIFY-only `{disc}` delta via `notify(data, len)` (snapshot untouched) announcing an imminent link drop and why (`overheat`/`low_batt`/`user`/`op_stationary`/`op_offline`). Called from `change_mode()` (leaving Portable) and `shutdown()`; gated on `is_connected()`; the caller settles before teardown so it can drain. |
+| `notify_disconnect(reason)` | Pushes a NOTIFY-only `{disc}` delta via `notify(data, len)` (snapshot untouched) announcing an imminent link drop and why (`overheat`/`low_batt`/`user`/`op_stationary`/`op_offline`). Both `OverTemperature` and `UnderTemperature` use the legacy `overheat` value. Called from `change_mode()` (leaving Portable) and `shutdown()`; gated on `is_connected()`; the caller settles before teardown so it can drain. |
 | `update_config(settings)` | Encode the full snapshot via `encode_config()` (16 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
 | `notify_config(prev, cur)` | Refreshes the snapshot via `update_config(cur)`, then sends the changed-fields delta (`encode_config_delta()`: `"type":"config"` + changed keys) via `notify(data, len)`. |
 | `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `notify(data, len)` (stored value untouched). Sent before long-running commands. |

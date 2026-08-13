@@ -421,15 +421,11 @@ public:
   esp_err_t estimate_battery_percent(uint8_t &percent);
 
   /**
-   * @brief Configure JEITA temperature profile
+   * @brief Configure battery temperature protection
    *
-   * Sets temperature thresholds and charge current limits:
-   * - TH1 = 0°C (cold threshold)
-   * - TH2 = 10°C (cool threshold)
-   * - TH5 = 45°C (warm threshold)
-   * - TH6 = 60°C (hot threshold)
-   * - COOL/WARM zones: 20% charge current
-   * - NORMAL zone: 100% charge current
+   * Charging is suspended below 0°C and above 45°C. The COOL zone from
+   * 0°C to 10°C uses 20% charge current. OTG is suspended outside the
+   * -10°C to 60°C range. Written values are read back and verified.
    *
    * @return ESP_OK on success
    */

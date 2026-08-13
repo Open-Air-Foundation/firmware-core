@@ -87,6 +87,7 @@ PowerService::SleepDecision sleep_decision_to_return = {PowerService::SleepType:
 bool enter_sleep_called = false;
 uint32_t enter_sleep_duration_ms = 0;
 bool should_hold_pm_result = false;
+bool shutdown_called = false;
 
 // --- BleService ---
 bool ble_init_called = false;
@@ -168,6 +169,7 @@ void reset() {
   enter_sleep_called = false;
   enter_sleep_duration_ms = 0;
   should_hold_pm_result = false;
+  shutdown_called = false;
 
   ble_init_called = false;
 
@@ -200,7 +202,10 @@ void reset() {
   bms_battery_pct = -1.0f;
 
   DisplayService::spy_deep_sleep_called = false;
+  DisplayService::spy_init_count = 0;
   DisplayService::spy_update_count = 0;
+  DisplayService::spy_flush_count = 0;
+  DisplayService::spy_last_screen = Screen::Home;
 }
 
 } // namespace test_spy
@@ -450,7 +455,7 @@ void PowerService::recover_pm_sensor() {}
 
 bool PowerService::reset_watchdog() { return true; }
 
-void PowerService::shutdown() {}
+void PowerService::shutdown() { test_spy::shutdown_called = true; }
 
 bool PowerService::set_watchdog_timeout_ms(uint32_t /*timeout_ms*/) { return true; }
 

@@ -489,11 +489,14 @@ Unified shutdown pipeline for all shutdown paths. Takes an optional
 
 1. If a BLE client is connected, push a `disc` Status notice
    (`notify_disconnect()` — `overheat` / `low_batt` / `user`) so the client knows
-   the link is about to drop. Sent early so it drains before power is cut.
+   the link is about to drop. Both high- and low-temperature shutdowns use the
+   legacy `overheat` value for protocol compatibility. Sent early so it drains
+   before power is cut.
 2. Show the reason-specific shutdown screen — all variants share the
    same unified template (brand header + icon + title/action/detail):
    `Screen::ShutdownDischarge` for `OverDischarge`,
    `Screen::ShutdownTemperature` for `OverTemperature`,
+   `Screen::ShutdownTemperatureLow` for `UnderTemperature`,
    `Screen::ShutdownUser` for user-initiated long-press
 3. Queue the shutdown frame with `update_display(wait=true)` and
    `DisplayService::flush()` so the e-paper paint is complete before continuing
@@ -503,11 +506,12 @@ Unified shutdown pipeline for all shutdown paths. Takes an optional
    painted reason screen remains visible and the `disc` notice can drain
 7. `PowerService::shutdown()` — BMS ship mode → deep sleep fallback
 
-Safety trips (EDV/OT) are detected by `poll_bms()` and signalled via
-`PowerSnapshot::ship_mode_request`. The orchestrator checks this field
-in `on_bms_timer()` and routes to `shutdown(reason)`. The `disc` notice is
-the safety/user-shutdown counterpart of the leave-Portable notice in
-[`change_mode()`](#change_mode).
+EDV and high- or low-battery-temperature safety trips are detected by
+`poll_bms()` and signalled via `PowerSnapshot::ship_mode_request`. Invalid NTC
+disables charging but does not create a ship-mode request. The orchestrator
+checks the request in `on_bms_timer()` and routes to `shutdown(reason)`. The
+`disc` notice is the safety/user-shutdown counterpart of the leave-Portable
+notice in [`change_mode()`](#change_mode).
 
 ## Stationary Networking
 

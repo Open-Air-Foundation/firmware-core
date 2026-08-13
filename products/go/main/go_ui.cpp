@@ -218,6 +218,7 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
   case Screen::ShutdownUser:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
+  case Screen::ShutdownTemperatureLow:
   case Screen::PairingPasskey:
   case Screen::Info:
   // FG learning screens are owned by FgLearningRunner, not UIManager.
@@ -300,6 +301,7 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   case Screen::ShutdownUser:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
+  case Screen::ShutdownTemperatureLow:
     break;
   case Screen::PairingPasskey:
     v.ble_passkey = _ble_passkey;
