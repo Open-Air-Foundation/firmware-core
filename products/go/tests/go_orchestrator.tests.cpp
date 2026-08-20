@@ -2578,6 +2578,36 @@ TEST_CASE("BLE config set: reschedules timer when interval changes",
   CHECK(A::last_measurement_ms(orch) == 9000);
 }
 
+TEST_CASE("BLE config set: applies altitude display unit", "[Orchestrator][settings][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_connected = true;
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.use_feet = true;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).use_feet);
+  CHECK(A::build_context(orch).use_feet);
+  CHECK(test_spy::ble_notify_config_called);
+
+  GoSettings ui_settings{};
+  f.ui_manager.apply_to_settings(ui_settings);
+  CHECK(ui_settings.use_feet);
+}
+
 TEST_CASE("BLE config set: commit failure retains settings and reports save failure",
           "[Orchestrator][settings][ble][failure]") {
   TestFixture f;

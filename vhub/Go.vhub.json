@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "altitude-unit-ui",
+  "rev": "altitude-unit-ble",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -78,7 +78,7 @@
       "sub_category": "Units and presentation",
       "applies_to": ["V1"],
       "description": "Temperature, altitude, and PM presentation settings update labels, values, and persistence",
-      "expected_result": "Changing Temperature Unit from C to F updates the row label and Home value; changing back restores Celsius. Changing Altitude Unit from m to ft updates the row label and Home value; changing back restores meters. Changing Mass to USAQI updates the PM2.5 label and value. Raw BLE temperature, altitude, and PM2.5 remain unchanged. Temperature and PM UI changes match BLE Config, and all three choices persist after cold reboot.",
+      "expected_result": "Changing Temperature Unit from C to F updates the row label and Home value; changing back restores Celsius. Changing Altitude Unit from m to ft updates the row label and Home value; changing back restores meters. Changing Mass to USAQI updates the PM2.5 label and value. Changes made through either the UI or BLE are reflected in the Settings row, Home value, and BLE Config. Raw BLE temperature, altitude, and PM2.5 remain unchanged. All three choices persist after cold reboot.",
       "notes": "Record the starting presentation settings and BLE values, verify each display change, then restore the original settings."
     },
     {
@@ -240,7 +240,7 @@
       "sub_category": "GATT protocol",
       "applies_to": ["V1"],
       "description": "The production Portable GATT profile and command contract pass the hardware integration suite",
-      "expected_result": "The Portable BLE integration suite exits with zero failures or unexpected skips; route download tests run against the seeded non-empty route, while the two co2_cal command tests are deselected. Debug capture contains one BLE Measures map with pm1, pm25, pm10, and pres. With a client MTU that requires a long read, BLE Config returns all 16 documented keys without truncation. The complete recorded BLE Config is restored.",
+      "expected_result": "The Portable BLE integration suite exits with zero failures or unexpected skips; route download tests run against the seeded non-empty route, while the two co2_cal command tests are deselected. Debug capture contains one BLE Measures map with pm1, pm25, pm10, and pres. With a client MTU that requires a long read, BLE Config returns all 17 documented keys without truncation. The complete recorded BLE Config is restored.",
       "notes": "Seed one completed route with at least one point, bond the test host, and run pytest products/go/tests/ble-integration/ -v --log-cli-level=DEBUG with --deselect for TestConfigCommand::test_command_progress_and_result_format and ::test_read_after_command_returns_config_snapshot. Record the client and negotiated MTU used for the separate Read-Long check."
     },
     {
