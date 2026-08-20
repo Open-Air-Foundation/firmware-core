@@ -703,6 +703,10 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   auto *touch = _board.new_touch_sensor();
 
   // --- Storage ---
+  // NAND shares the display SPI bus. Finish the early splash refresh before
+  // mounting storage so its initialization cannot contend with the EPD.
+  DisplayService &disp = _board.display();
+  disp.flush();
   StorageService &stor = _board.storage();
 
   // --- Event queue ---
@@ -764,7 +768,6 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
                                           .pin_button_boot = PIN_BUTTON_BOOT,
                                           .suppress_button_wake = handoff.suppress_wake_press});
 
-  DisplayService &disp = _board.display();
   PowerService &pwr = _board.power();
 
   auto *ui_manager = new UIManager({
