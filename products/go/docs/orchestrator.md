@@ -659,14 +659,15 @@ The policy splits on `has_been_online()`:
 - **Runtime** (after the first online): the orchestrator never opens
   provisioning and never gives up. Any reason except `requested_by_user`
   schedules a reconnect via `WifiService::schedule_reconnect()`, which
-  retries the saved networks indefinitely (see the Wi-Fi service doc).
+  retries saved networks when present or the transient factory-default
+  network otherwise (see the Wi-Fi service doc).
   `requested_by_user` is the service's own teardown and is left alone.
 
 A runtime reconnect preserves the `has_been_online()` latch, so repeated
 runtime failures keep routing here (reconnect) rather than falling back
-to the bring-up provisioning branch. A fallback-only session (factory-
-default AP, never saved) has nothing to reconnect to, so it stays
-disconnected at runtime.
+to the bring-up provisioning branch. A fallback-only session retries the
+explicit factory-default credentials after each reconnect delay without
+persisting them or applying the saved-network static IP.
 
 Both transitions are logged at INFO: `on_wifi_disconnected()` logs the
 decoded reason (`wifi_disconnect_reason_to_string`) plus the runtime

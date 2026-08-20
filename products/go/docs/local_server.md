@@ -269,11 +269,11 @@ needed.
 
 After a Stationary session has been online, a transient disconnect does not
 return to provisioning. It omits `wifiRssi`, retains local routes and the HTTP
-listener, leaves admitted FIFO work intact, and requests a saved-network
-reconnect after the configured 5-second delay. The request is a no-op for a
-factory-fallback-only session with no saved networks. The `StaIpAuto` mDNS
-profile follows the STA address lifecycle; reconnect reuses the local server and
-starts mDNS again instead of rebuilding the route set.
+listener, leaves admitted FIFO work intact, and requests a reconnect after the
+configured 5-second delay. The reconnect uses saved networks when present or
+retries the transient factory-default network otherwise. The `StaIpAuto` mDNS
+profile follows the STA address lifecycle; reconnect reuses the local server
+and starts mDNS again instead of rebuilding the route set.
 
 Entering provisioning, leaving Stationary, and entering committed OTA clear the
 mixed FIFO and increment its epoch. Stale central events therefore cannot pop
