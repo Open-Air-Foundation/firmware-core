@@ -206,6 +206,7 @@ void reset() {
   DisplayService::spy_update_count = 0;
   DisplayService::spy_flush_count = 0;
   DisplayService::spy_last_screen = Screen::Home;
+  DisplayService::spy_last_init_deferred = false;
 }
 
 } // namespace test_spy
