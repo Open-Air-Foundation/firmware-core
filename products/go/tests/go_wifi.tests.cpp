@@ -572,13 +572,14 @@ TEST_CASE("schedule_reconnect arms the reconnect timer reconnect_delay_ms out",
   CHECK(f.hal.connect_calls == 0);
 }
 
-TEST_CASE("schedule_reconnect is a no-op without saved networks", "[go_wifi][reconnect]") {
+TEST_CASE("schedule_reconnect arms the reconnect timer without saved networks",
+          "[go_wifi][reconnect][fallback]") {
   Fixture f; // store empty
   f.rtos.set_now(1000);
 
   f.svc.schedule_reconnect();
 
-  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 1000 + 5000);
 }
 
 TEST_CASE("tick fires the reconnect without resetting has_been_online", "[go_wifi][reconnect]") {
@@ -605,6 +606,56 @@ TEST_CASE("tick fires the reconnect without resetting has_been_online", "[go_wif
   CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
   CHECK(WifiServiceTestAccess::deadline(f.svc) == 0); // runtime reconnect arms no window
   CHECK(f.svc.has_been_online());                     // not reset
+}
+
+TEST_CASE("tick reconnects a fallback-only session without saving credentials",
+          "[go_wifi][reconnect][fallback]") {
+  Fixture f;
+  f.rtos.set_now(1000);
+
+  f.svc.try_default_fallback_credentials();
+  f.hal.got_ip_cb(0x01010101);
+  f.svc.tick(1000); // consume the deferred initial-deadline clear
+  REQUIRE(f.svc.has_been_online());
+  REQUIRE(WifiServiceTestAccess::deadline(f.svc) == 0);
+  REQUIRE_FALSE(f.svc.has_saved_networks());
+
+  f.rtos.captured.clear();
+  REQUIRE(f.hal.sta_disconnected_cb);
+  f.hal.sta_disconnected_cb(/*WIFI_REASON_AUTH_EXPIRE*/ 2);
+  REQUIRE_FALSE(f.svc.is_online());
+  REQUIRE(f.rtos.has_event(EventType::WifiDisconnected));
+
+  WifiStaticIpConfig static_ip{};
+  static_ip.ip = 0x0200A8C0;
+  f.svc.schedule_reconnect(&static_ip);
+  REQUIRE(WifiServiceTestAccess::reconnect_at(f.svc) == 1000 + 5000);
+  const int connects_before = f.hal.connect_calls;
+
+  f.svc.tick(5999);
+  CHECK(f.hal.connect_calls == connects_before);
+
+  f.svc.tick(6000);
+  CHECK(f.hal.connect_calls == connects_before + 1);
+  CHECK(f.hal.last_ssid == "airgradient");
+  CHECK(f.hal.last_password == "cleanair");
+  CHECK(f.hal.set_static_ip_calls == 0);
+  CHECK(f.hal.clear_static_ip_calls == 2);
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
+  CHECK(f.svc.has_been_online());
+  CHECK_FALSE(f.svc.has_saved_networks());
+
+  // A terminal failure of the runtime attempt can drive another identical
+  // orchestrator-scheduled cycle without falling back to bring-up policy.
+  f.hal.sta_disconnected_cb(/*WIFI_REASON_AUTH_EXPIRE*/ 2);
+  f.rtos.set_now(6000);
+  f.svc.schedule_reconnect(&static_ip);
+  f.svc.tick(11000);
+  CHECK(f.hal.connect_calls == connects_before + 2);
+  CHECK(f.hal.last_ssid == "airgradient");
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
+  CHECK(f.svc.has_been_online());
 }
 
 TEST_CASE("next_deadline_ms returns the nearer of connect window and reconnect timer",

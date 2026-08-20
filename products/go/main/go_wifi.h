@@ -91,9 +91,10 @@ public:
   /// WifiDisconnected when the WifiManager reports NotFound up front.
   void connect_with_saved_credentials(const WifiStaticIpConfig *static_ip = nullptr);
 
-  /// Arm a runtime reconnect to the saved networks, issued from tick() after
-  /// reconnect_delay_ms. Keeps has_been_online() latched (stays "runtime")
-  /// and arms no connect window. No-op when no networks are saved.
+  /// Arm a runtime reconnect, issued from tick() after reconnect_delay_ms.
+  /// Reconnects saved networks when present, otherwise retries the transient
+  /// factory-default network. Keeps has_been_online() latched (stays
+  /// "runtime") and arms no connect window.
   void schedule_reconnect(const WifiStaticIpConfig *static_ip = nullptr);
 
   /// Connect to the factory-default airgradient/cleanair AP. Explicit SSID,
@@ -174,6 +175,7 @@ private:
   // both false = runtime reconnect (keeps has_been_online(), no window).
   void _connect_saved_internal(const WifiStaticIpConfig *static_ip, bool reset_online_latches,
                                bool arm_window);
+  void _connect_fallback_internal(bool reset_online_latches, bool arm_window);
 
   void _reset_deadline();
   void _arm_deadline(uint32_t window_ms);
@@ -219,7 +221,7 @@ private:
 
   // Runtime reconnect timer (single-writer, orchestrator task): armed by
   // schedule_reconnect(), fired/cleared by tick(). Carries the static IP to
-  // reapply on the deferred reconnect.
+  // reapply when reconnecting saved networks.
   uint32_t _reconnect_at_ms = 0;
   WifiStaticIpConfig _reconnect_static_ip{};
   bool _reconnect_has_static_ip = false;
