@@ -552,11 +552,10 @@ the NOTIFY payload is decoupled from the Read snapshot and kept small at the
 source: a `set` is restricted to a single config key per write, so the largest
 delta is one field. `notify_config()` first refreshes the stored snapshot via
 `update_config(cur)` (closing the Read-vs-notify race), then sends the delta via
-`encode_config_delta()`. Production emits this delta only when settings change;
-a no-op write produces no notification. The standalone encoder can produce
-`{"type":"config"}` for equal settings, but the orchestrator does not use that
-path. The full snapshot is produced by `encode_config()` (no `"type"`), served
-by Read / Read-Long.
+`encode_config_delta()`. The encoder returns no payload when none of the
+BLE-visible fields changed, so a no-op write or a device-only setting change
+produces no notification. The full snapshot is produced by `encode_config()`
+(no `"type"`), served by Read / Read-Long.
 
 #### Command Progress (`notify_command_progress()`)
 

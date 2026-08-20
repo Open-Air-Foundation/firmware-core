@@ -940,7 +940,7 @@ void BleService::notify_config(const GoSettings &prev, const GoSettings &cur) {
   uint8_t buf[CBOR_BUF_SIZE];
   size_t len = encode_config_delta(buf, sizeof(buf), prev, cur);
   if (len == 0) {
-    return; // encoder overflow guard (logged in encode_config_delta)
+    return; // no BLE-visible change, or encoder overflow (logged by the encoder)
   }
   _config_char->notify(buf, len);
 }
@@ -1958,6 +1958,10 @@ size_t BleService::encode_config_delta(uint8_t *buf, size_t buf_size, const GoSe
     if (f.differs(prev, cur)) {
       changed++;
     }
+  }
+
+  if (changed == 0) {
+    return 0;
   }
 
   CborEncoder encoder;

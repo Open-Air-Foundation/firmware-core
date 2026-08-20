@@ -989,19 +989,35 @@ TEST_CASE("BLE: encode_config_delta includes compact device config changes") {
   CHECK(find_entry(entries, "nlo")->uint_val == LEARNING_OFFSET_HOURS_MAX);
 }
 
-TEST_CASE("BLE: encode_config_delta no change yields only type") {
+TEST_CASE("BLE: encode_config_delta skips changes outside the BLE config surface") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
 
   GoSettings s = make_default_settings();
 
   uint8_t buf[256];
-  size_t len = BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), s, s);
-  REQUIRE(len > 0);
+  CHECK(BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), s, s) == 0);
 
-  auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 1);
-  CHECK(find_entry(entries, "type")->text_val == "config");
+  GoSettings feet = s;
+  feet.use_feet = true;
+  CHECK(BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), s, feet) == 0);
+}
+
+TEST_CASE("BLE: notify_config skips altitude-unit-only changes") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  GoSettings meters = make_default_settings();
+  GoSettings feet = meters;
+  feet.use_feet = true;
+
+  svc.notify_config(meters, feet);
+
+  CHECK(config_char.set_value_count == 1);
+  CHECK(config_char.notify_count == 0);
 }
 
 // ---------------------------------------------------------------------------
