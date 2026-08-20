@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "early-display-init",
+  "rev": "altitude-unit-ui",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -42,8 +42,8 @@
       "sub_category": "Home dashboard",
       "applies_to": ["V1"],
       "description": "Home renders every supported measurement and unavailable value correctly",
-      "expected_result": "For one timestamp-aligned completed measurement, Home shows PM2.5, CO2, temperature, humidity, TVOC, NOx, pressure, and pressure-derived altitude in the selected mass/USAQI and C/F presentation. PM2.5, CO2, climate, and gas values equal their corrected Local Server Measures fields after conversion and display rounding. Pressure equals the same-cycle serial sensor value, and altitude equals the repository pressure-to-altitude calculation after display rounding. During cold-start CO2 or gas warm-up, a field supported by Local Server Measures but omitted from that response is a dash on Home by the next refresh, not zero or the preceding value.",
-      "notes": "Use Stationary mode with Local Server and serial access. Record Local Server Config, Local Server Measures, serial pressure, and a Home photo for the same cycle. Use natural CO2 or gas warm-up for omission; do not disconnect sensors. Use the configured temperature unit and PM standard without changing them during this case."
+      "expected_result": "For one timestamp-aligned completed measurement, Home shows PM2.5, CO2, temperature, humidity, TVOC, NOx, pressure, and pressure-derived altitude in the selected mass/USAQI, C/F, and m/ft presentation. PM2.5, CO2, climate, and gas values equal their corrected Local Server Measures fields after conversion and display rounding. Pressure equals the same-cycle serial sensor value, and altitude uses the selected unit. During cold-start CO2 or gas warm-up, a field supported by Local Server Measures but omitted from that response is a dash on Home by the next refresh, not zero or the preceding value.",
+      "notes": "Use Stationary mode with Local Server and serial access. Record Local Server Config, Local Server Measures, serial pressure, and a Home photo for the same cycle. Use natural CO2 or gas warm-up for omission; do not disconnect sensors. Restore the configured temperature, altitude, and PM presentation settings after the case."
     },
     {
       "id": "display.home.metric-charts",
@@ -77,9 +77,9 @@
       "category": "User Interface",
       "sub_category": "Units and presentation",
       "applies_to": ["V1"],
-      "description": "Temperature and PM presentation settings update labels, values, and persistence",
-      "expected_result": "Changing C to F changes the label and displays corrected_C x 9/5 + 32 rounded to the screen precision; changing back restores the recorded Celsius value. Changing Mass to USAQI changes the PM2.5 label and produces the value from the repository US-AQI breakpoint calculation, while the timestamp-matched raw pm25 value from BLE Measures is unchanged. Each UI change emits one BLE Config delta containing only temp_f or pm_aqi, matches a BLE Config Read, and persists after cold reboot.",
-      "notes": "Record a complete BLE Config Read and one raw BLE Measures payload before starting. Use a PM2.5 value away from an AQI breakpoint, calculate the expected USAQI before changing the setting, then restore the exact recorded BLE Config values."
+      "description": "Temperature, altitude, and PM presentation settings update labels, values, and persistence",
+      "expected_result": "Changing Temperature Unit from C to F updates the row label and Home value; changing back restores Celsius. Changing Altitude Unit from m to ft updates the row label and Home value; changing back restores meters. Changing Mass to USAQI updates the PM2.5 label and value. Raw BLE temperature, altitude, and PM2.5 remain unchanged. Temperature and PM UI changes match BLE Config, and all three choices persist after cold reboot.",
+      "notes": "Record the starting presentation settings and BLE values, verify each display change, then restore the original settings."
     },
     {
       "id": "ui.settings.measurement-gps-and-lock",
