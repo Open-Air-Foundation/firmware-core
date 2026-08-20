@@ -464,12 +464,12 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   AG_LOGI(TAG,
           "button_wake: snapshot_valid=%d co2=%d pm25=%.1f temp=%.1f hum=%.1f "
           "tvoc=%d nox=%d pres=%.1f alt=%.1f batt=%d charging=%d "
-          "gps_en=%d gps_fix=%d tracking=%d ble=%d fahrenheit=%d usaqi=%d",
+          "gps_en=%d gps_fix=%d tracking=%d ble=%d fahrenheit=%d feet=%d usaqi=%d",
           snapshot_valid, snapshot.co2_ppm, snapshot.pm25_ugm3, snapshot.temperature_c,
           snapshot.humidity_pct, snapshot.tvoc_index, snapshot.nox_index, snapshot.pressure_hpa,
           snapshot.altitude_m, snapshot.battery_pct, snapshot.is_battery_charging,
           snapshot.gps_enabled, snapshot.gps_fix, snapshot.tracking_active, snapshot.ble_enabled,
-          snapshot.use_fahrenheit, snapshot.pm_use_usaqi);
+          snapshot.use_fahrenheit, snapshot.use_feet, snapshot.pm_use_usaqi);
 
   DisplayValues wake_values = build_wake_values(snapshot, snapshot_valid);
 
@@ -928,6 +928,7 @@ DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData
   v.tracking_active = tracking_active;
 
   v.use_fahrenheit = settings.use_fahrenheit;
+  v.use_feet = settings.use_feet;
   v.pm_use_usaqi = settings.pm_use_usaqi;
   v.display_off = false;
 
@@ -962,6 +963,7 @@ DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapsho
     v.tracking_active = snapshot.tracking_active;
     v.ble_enabled = snapshot.ble_enabled;
     v.use_fahrenheit = snapshot.use_fahrenheit;
+    v.use_feet = snapshot.use_feet;
     v.pm_use_usaqi = snapshot.pm_use_usaqi;
   }
 

@@ -17,6 +17,9 @@ static constexpr const char *SETUP_GUIDE_URL = "https://l.airgradient.net/GO";
 static const char *const UNITS_OPTIONS[] = {"C", "F"};
 static constexpr uint8_t UNITS_COUNT = 2;
 
+static const char *const ALTITUDE_UNIT_OPTIONS[] = {"m", "ft"};
+static constexpr uint8_t ALTITUDE_UNIT_COUNT = 2;
+
 static const char *const PM_DISPLAY_OPTIONS[] = {"ug/m3", "USAQI"};
 static constexpr uint8_t PM_DISPLAY_COUNT = 2;
 
@@ -59,21 +62,22 @@ static constexpr uint8_t TAG_COUNT = 10;
 
 static constexpr uint8_t SETTING_SETUP_GUIDE = 2;
 static constexpr uint8_t SETTING_UNITS = 3;
-static constexpr uint8_t SETTING_PM_DISPLAY = 4;
-static constexpr uint8_t SETTING_MEASURE_INTERVAL = 5;
-static constexpr uint8_t SETTING_GPS_MODE = 6;
-static constexpr uint8_t SETTING_MODE = 7;
-static constexpr uint8_t SETTING_AUTO_LOCK = 8;
-static constexpr uint8_t SETTING_DISPLAY_LED = 9;
-static constexpr uint8_t SETTING_AQI_LED = 10;
-static constexpr uint8_t SETTING_TOUCH_LED = 11;
-static constexpr uint8_t SETTING_BUZZER = 12;
-static constexpr uint8_t SETTING_PLAY_MELODY = 13;
-static constexpr uint8_t SETTING_CO2_CALIBRATION = 14;
-static constexpr uint8_t SETTING_CLEAR_DATA = 15;
-static constexpr uint8_t SETTING_HARDWARE_TEST = 16; // navigation row -> Hardware Test submenu
+static constexpr uint8_t SETTING_ALTITUDE_UNIT = 4;
+static constexpr uint8_t SETTING_PM_DISPLAY = 5;
+static constexpr uint8_t SETTING_MEASURE_INTERVAL = 6;
+static constexpr uint8_t SETTING_GPS_MODE = 7;
+static constexpr uint8_t SETTING_MODE = 8;
+static constexpr uint8_t SETTING_AUTO_LOCK = 9;
+static constexpr uint8_t SETTING_DISPLAY_LED = 10;
+static constexpr uint8_t SETTING_AQI_LED = 11;
+static constexpr uint8_t SETTING_TOUCH_LED = 12;
+static constexpr uint8_t SETTING_BUZZER = 13;
+static constexpr uint8_t SETTING_PLAY_MELODY = 14;
+static constexpr uint8_t SETTING_CO2_CALIBRATION = 15;
+static constexpr uint8_t SETTING_CLEAR_DATA = 16;
+static constexpr uint8_t SETTING_HARDWARE_TEST = 17; // navigation row -> Hardware Test submenu
 
-static constexpr uint8_t SETTINGS_TOTAL = 17;       // indices 0..16
+static constexpr uint8_t SETTINGS_TOTAL = 18;       // indices 0..17
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
@@ -268,6 +272,7 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   v.tracking_active = ctx.tracking_active;
   v.display_off = ctx.display_off;
   v.use_fahrenheit = ctx.use_fahrenheit;
+  v.use_feet = ctx.use_feet;
   v.pm_use_usaqi = ctx.pm_use_usaqi;
 
   // --- Screen navigation ---
@@ -440,6 +445,7 @@ void UIManager::clear_expired_snackbar(uint32_t now_ms) {
 
 void UIManager::sync_settings(const GoSettings &s) {
   _setting_units = s.use_fahrenheit ? 1 : 0;
+  _setting_altitude_unit = s.use_feet ? 1 : 0;
   _setting_pm_display = s.pm_use_usaqi ? 1 : 0;
 
   // Map interval seconds to option index.
@@ -507,6 +513,7 @@ void UIManager::sync_settings(const GoSettings &s) {
 void UIManager::apply_to_settings(GoSettings &settings) const {
   // Boolean flags
   settings.use_fahrenheit = (_setting_units == 1);
+  settings.use_feet = (_setting_altitude_unit == 1);
   settings.pm_use_usaqi = (_setting_pm_display == 1);
 
   // Map interval option index back to seconds.
@@ -919,6 +926,8 @@ uint8_t UIManager::setting_option_count(uint8_t setting_id) const {
   switch (setting_id) {
   case SETTING_UNITS:
     return UNITS_COUNT;
+  case SETTING_ALTITUDE_UNIT:
+    return ALTITUDE_UNIT_COUNT;
   case SETTING_PM_DISPLAY:
     return PM_DISPLAY_COUNT;
   case SETTING_MEASURE_INTERVAL:
@@ -947,6 +956,8 @@ uint8_t UIManager::setting_current_option(uint8_t setting_id) const {
   switch (setting_id) {
   case SETTING_UNITS:
     return _setting_units;
+  case SETTING_ALTITUDE_UNIT:
+    return _setting_altitude_unit;
   case SETTING_PM_DISPLAY:
     return _setting_pm_display;
   case SETTING_MEASURE_INTERVAL:
@@ -980,6 +991,9 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
   switch (_editing_setting_id) {
   case SETTING_UNITS:
     _setting_units = option_index;
+    break;
+  case SETTING_ALTITUDE_UNIT:
+    _setting_altitude_unit = option_index;
     break;
   case SETTING_PM_DISPLAY:
     _setting_pm_display = option_index;
@@ -1514,7 +1528,7 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
   // Compute page-based scroll
   uint8_t scroll = page_scroll(_settings_index);
 
-  // Content items: indices 2..10 (9 items total)
+  // Content items begin after the fixed Exit and Back rows.
   static constexpr uint8_t CONTENT_COUNT = SETTINGS_TOTAL - 2;
   uint8_t visible = 0;
 
@@ -1528,6 +1542,10 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       break;
     case SETTING_UNITS:
       (void)snprintf(label, sizeof(label), "Units: %s", UNITS_OPTIONS[_setting_units]);
+      break;
+    case SETTING_ALTITUDE_UNIT:
+      (void)snprintf(label, sizeof(label), "Altitude Unit: %s",
+                     ALTITUDE_UNIT_OPTIONS[_setting_altitude_unit]);
       break;
     case SETTING_PM_DISPLAY:
       (void)snprintf(label, sizeof(label), "PM Display: %s",
@@ -1595,6 +1613,9 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   switch (_editing_setting_id) {
   case SETTING_UNITS:
     options = UNITS_OPTIONS;
+    break;
+  case SETTING_ALTITUDE_UNIT:
+    options = ALTITUDE_UNIT_OPTIONS;
     break;
   case SETTING_PM_DISPLAY:
     options = PM_DISPLAY_OPTIONS;

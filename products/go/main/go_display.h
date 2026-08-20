@@ -127,6 +127,7 @@ struct DisplayValues {
   bool tracking_active = false;
   bool display_off = false;
   bool use_fahrenheit = false;
+  bool use_feet = false;
   bool pm_use_usaqi = false;
 
   // --- Screen navigation ---
@@ -226,6 +227,7 @@ struct RtcDisplaySnapshot {
 
   // Rendering settings
   bool use_fahrenheit;
+  bool use_feet;
   bool pm_use_usaqi;
 };
 

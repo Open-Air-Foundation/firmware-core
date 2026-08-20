@@ -447,9 +447,10 @@ Saved by `save_rtc_display_snapshot(values)` in `prepare_for_sleep()` after
 the final display update. Loaded by `load_rtc_display_snapshot(out)` in
 `run_button_wake_path()` before the early paint.
 
-Contains the sensor values, GPS clock, battery state, status flags, and
-rendering settings from the last displayed frame. Allows the button-wake path
-to render a meaningful Home screen without reading NVS or sensors.
+Contains the sensor values, battery state, status flags, and rendering settings,
+including the altitude unit, from the last displayed frame. Allows the
+button-wake path to render a meaningful Home screen without reading NVS or
+sensors.
 
 ### RTC memory budget
 
@@ -457,7 +458,7 @@ to render a meaningful Home screen without reading NVS or sensors.
 |---|---|---|
 | `RtcAppState` + valid flag | ~14 B | `go_power.cpp` |
 | `PayloadCacheStorageData` | ~1.5 KB | `rtc_payload_cache_storage.cpp` |
-| `RtcDisplaySnapshot` + valid flag | ~43 B | `go_display.cpp` |
+| `RtcDisplaySnapshot` + valid flag | ~45 B | `go_display.cpp` |
 | **Total** | **~1.6 KB** | ESP32-C5: 8 KB available |
 
 ## LP Core Watchdog Feed (Deep Sleep)

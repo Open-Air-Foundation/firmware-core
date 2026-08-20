@@ -815,7 +815,8 @@ Settings fields:
 - PM interval, other sensor interval (independent timers; 0 = off)
 - Display refresh interval (0 = display off while locked; unlocked always
   shows dashboard)
-- Temperature units (C / F), PM display (µg/m³ / USAQI)
+- Temperature units (C / F), altitude units (m / ft), PM display
+  (µg/m³ / USAQI)
 - GPS mode (AlwaysOff / OnWhenTracking / AlwaysOn)
 - Operating mode (Portable / Stationary / Offline; default: Portable)
 - Auto-lock timeout (0 = disabled, 10 s / 30 s / 60 s)

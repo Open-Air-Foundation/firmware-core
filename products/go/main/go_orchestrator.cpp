@@ -3038,6 +3038,7 @@ BuildContext Orchestrator::build_context() const {
       .tracking_active = _tracking_active,
       .display_off = false,
       .use_fahrenheit = _settings.use_fahrenheit,
+      .use_feet = _settings.use_feet,
       .pm_use_usaqi = _settings.pm_use_usaqi,
       .cache = _cache_buf,
       .cache_count = static_cast<uint8_t>(cache_count),

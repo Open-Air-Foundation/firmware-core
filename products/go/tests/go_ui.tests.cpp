@@ -57,6 +57,7 @@ static BuildContext make_default_ctx() {
       .tracking_active = false,
       .display_off = false,
       .use_fahrenheit = false,
+      .use_feet = false,
       .pm_use_usaqi = false,
       .cache = nullptr,
       .cache_count = 0,
@@ -229,7 +230,7 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   UIManager ui(DEFAULT_UI_CONFIG);
 
   // Navigate to Settings: Home → MainMenu → Settings (cursor starts at 1 = Back).
-  // Settings has 17 indices: Exit(0), Back(1), items(2..16).
+  // Settings has 18 indices: Exit(0), Back(1), items(2..17).
   auto go_to_settings = [&]() {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
@@ -240,12 +241,12 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
   SECTION("Down past last item wraps to Exit") {
     go_to_settings(); // cursor at 1 (Back)
 
-    // Navigate down from index 1 to index 16 (last item): 15 presses.
-    for (int i = 0; i < 15; ++i) {
+    // Navigate down from index 1 to index 17 (last item): 16 presses.
+    for (int i = 0; i < 16; ++i) {
       press(ui, InputSource::TouchDown);
     }
 
-    press(ui, InputSource::TouchDown); // 16→0 (wrap to Exit)
+    press(ui, InputSource::TouchDown); // 17→0 (wrap to Exit)
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
@@ -260,14 +261,14 @@ TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settin
     DisplayValues v = ui.build_values(ctx);
     CHECK(v.selected_row == 0); // confirm we're on Exit
 
-    press(ui, InputSource::TouchUp); // 0→16 (wrap to last item)
+    press(ui, InputSource::TouchUp); // 0→17 (wrap to last item)
 
     v = ui.build_values(ctx);
-    // After wrapping to index 16, scroll resets to page_scroll(16).
+    // After wrapping to index 17, scroll resets to page_scroll(17).
     CHECK(ui.current_screen() == Screen::Settings);
     // Pressing Enter on Exit would go Home; instead, press Down to verify we
-    // advance to 0 (confirming we were at 16).
-    press(ui, InputSource::TouchDown); // 16→0 (Exit)
+    // advance to 0 (confirming we were at 17).
+    press(ui, InputSource::TouchDown); // 17→0 (Exit)
     v = ui.build_values(ctx);
     CHECK(v.selected_row == 0);
   }
@@ -427,15 +428,43 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
     // navigating to Settings screen, but the action was correct.
   }
 
+  SECTION("changing altitude unit returns SettingsChanged") {
+    go_to_settings(ui);
+    press(ui, InputSource::TouchDown);  // 1→2 (Setup Guide)
+    press(ui, InputSource::TouchDown);  // 2→3 (Units)
+    press(ui, InputSource::TouchDown);  // 3→4 (Altitude Unit)
+    press(ui, InputSource::TouchEnter); // → SettingsChoice
+
+    auto ctx = make_default_ctx();
+    DisplayValues v = ui.build_values(ctx);
+    REQUIRE(v.row_count == 4);
+    CHECK(v.selected_row == 2);
+    CHECK(std::string(v.rows[2].text) == "m");
+    CHECK(std::string(v.rows[3].text) == "ft");
+
+    press(ui, InputSource::TouchDown); // m→ft
+    const auto result = press(ui, InputSource::TouchEnter);
+
+    CHECK(result.action == UIAction::SettingsChanged);
+    CHECK(ui.current_screen() == Screen::Settings);
+
+    GoSettings settings;
+    ui.apply_to_settings(settings);
+    CHECK(settings.use_feet);
+
+    v = ui.build_values(ctx);
+    CHECK(std::string(v.rows[v.selected_row].text) == "Altitude Unit: ft");
+  }
+
   SECTION("changing mode returns ChangeMode with new mode") {
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
     press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor 1 = Back)
 
-    // Navigate down to Mode (index 7)
-    for (int i = 0; i < 6; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→3→4→5→6→7
+    // Navigate down to Mode (index 8)
+    for (int i = 0; i < 7; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→3→4→5→6→7→8
 
     press(ui, InputSource::TouchEnter); // → SettingsChoice for Mode
 
@@ -470,8 +499,8 @@ TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
   SECTION("Display LED opens SettingsChoice and applies Dim") {
     go_to_settings();
 
-    // Navigate to Display LED (index 9) — 8 presses from Back (1)
-    for (int i = 0; i < 8; ++i)
+    // Navigate to Display LED (index 10) — 9 presses from Back (1)
+    for (int i = 0; i < 9; ++i)
       press(ui, InputSource::TouchDown);
 
     press(ui, InputSource::TouchEnter);
@@ -493,8 +522,8 @@ TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
   SECTION("AQI LED opens SettingsChoice and applies Bright") {
     go_to_settings();
 
-    // Navigate to AQI LED (index 10) — 9 presses from Back (1)
-    for (int i = 0; i < 9; ++i)
+    // Navigate to AQI LED (index 11) — 10 presses from Back (1)
+    for (int i = 0; i < 10; ++i)
       press(ui, InputSource::TouchDown);
 
     press(ui, InputSource::TouchEnter);
@@ -517,8 +546,8 @@ TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
   SECTION("Touch LED opens SettingsChoice and applies Dim") {
     go_to_settings();
 
-    // Navigate to Touch LED (index 11) — 10 presses from Back (1)
-    for (int i = 0; i < 10; ++i)
+    // Navigate to Touch LED (index 12) — 11 presses from Back (1)
+    for (int i = 0; i < 11; ++i)
       press(ui, InputSource::TouchDown);
 
     press(ui, InputSource::TouchEnter);
@@ -605,6 +634,7 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
   SECTION("syncs display settings to internal state") {
     GoSettings s{};
     s.use_fahrenheit = true;
+    s.use_feet = true;
     s.pm_use_usaqi = true;
     s.measure_interval_seconds = 60;
     s.gps_mode = GpsMode::AlwaysOn;
@@ -631,6 +661,16 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     GoSettings out{};
     ui.apply_to_settings(out);
     CHECK(out.measure_interval_seconds == 10);
+  }
+
+  SECTION("sync_settings round-trips altitude unit") {
+    GoSettings input{};
+    input.use_feet = true;
+    ui.sync_settings(input);
+
+    GoSettings output{};
+    ui.apply_to_settings(output);
+    CHECK(output.use_feet);
   }
 
   SECTION("sync_settings maps measure_interval 300s to index 4") {
@@ -697,6 +737,14 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     s.auto_lock_seconds = 60;
     ui.sync_settings(s); // 60s = index 3
   }
+}
+
+TEST_CASE("UIManager: build_values passes altitude unit through", "[UIManager][settings]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  auto ctx = make_default_ctx();
+  ctx.use_feet = true;
+
+  CHECK(ui.build_values(ctx).use_feet);
 }
 
 // ============================================================================
@@ -776,9 +824,9 @@ TEST_CASE("UIManager: clear data confirm dialog", "[UIManager][confirm]") {
     press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
 
-    // Navigate to "Clear Data" (index 15)
-    for (int i = 0; i < 14; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→15
+    // Navigate to "Clear Data" (index 16)
+    for (int i = 0; i < 15; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→16
 
     press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
   };
@@ -821,9 +869,9 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
     press(ui, InputSource::TouchDown);  // 1→2
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
 
-    // Navigate to "CO2: Calibrate" (index 14)
-    for (int i = 0; i < 13; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→14
+    // Navigate to "CO2: Calibrate" (index 15)
+    for (int i = 0; i < 14; ++i)
+      press(ui, InputSource::TouchDown); // 1→2→...→15
 
     press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
   };
@@ -881,11 +929,11 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
 TEST_CASE("UIManager: Hardware Test submenu navigation", "[UIManager][hwtest]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  // Settings → "Hardware Test" is the last content row (index 16).  From the
-  // Settings entry cursor (index 1 = Back), 15 downs land on it.
+  // Settings → "Hardware Test" is the last content row (index 17).  From the
+  // Settings entry cursor (index 1 = Back), 16 downs land on it.
   auto navigate_to_hardware_test = [&]() {
     go_to_settings(ui); // cursor at 1
-    for (int i = 0; i < 15; ++i)
+    for (int i = 0; i < 16; ++i)
       press(ui, InputSource::TouchDown);
     press(ui, InputSource::TouchEnter); // → Hardware Test submenu
   };
@@ -928,7 +976,7 @@ TEST_CASE("UIManager: FG Learning arm confirm dialog", "[UIManager][hwtest][fg]"
 
   auto navigate_to_fg_confirm = [&]() {
     go_to_settings(ui);
-    for (int i = 0; i < 15; ++i)
+    for (int i = 0; i < 16; ++i)
       press(ui, InputSource::TouchDown); // → Hardware Test row
     press(ui, InputSource::TouchEnter);  // → Hardware Test submenu (cursor 1)
     press(ui, InputSource::TouchDown);   // 1→2 (Peripheral Test)
@@ -983,7 +1031,7 @@ TEST_CASE("UIManager: Peripheral Test flow", "[UIManager][hwtest][peripheral]") 
 
   auto open_peripheral = [&]() {
     go_to_settings(ui);
-    for (int i = 0; i < 15; ++i)
+    for (int i = 0; i < 16; ++i)
       press(ui, InputSource::TouchDown);       // → Hardware Test row
     press(ui, InputSource::TouchEnter);        // → submenu (cursor 1)
     press(ui, InputSource::TouchDown);         // 1→2 (Peripheral Test)
@@ -1045,7 +1093,7 @@ TEST_CASE("UIManager: GPS Test screen", "[UIManager][hwtest][gps]") {
 
   auto open_gps = [&]() {
     go_to_settings(ui);
-    for (int i = 0; i < 15; ++i)
+    for (int i = 0; i < 16; ++i)
       press(ui, InputSource::TouchDown);       // → Hardware Test row
     press(ui, InputSource::TouchEnter);        // → submenu (cursor 1)
     press(ui, InputSource::TouchDown);         // 1→2 (Peripheral Test)
@@ -1116,7 +1164,7 @@ TEST_CASE("UIManager: Accel Test screen", "[UIManager][hwtest][accel]") {
 
   auto open_accel = [&]() {
     go_to_settings(ui);
-    for (int i = 0; i < 15; ++i)
+    for (int i = 0; i < 16; ++i)
       press(ui, InputSource::TouchDown);       // → Hardware Test row
     press(ui, InputSource::TouchEnter);        // → submenu (cursor 1)
     press(ui, InputSource::TouchDown);         // 1→2 (Peripheral Test)

@@ -2448,6 +2448,26 @@ TEST_CASE("apply_settings_change: leaves GPS service cadence alone", "[Orchestra
   REQUIRE(test_spy::gps_posting_interval_ms == 0);
 }
 
+TEST_CASE("apply_settings_change: persists altitude unit", "[Orchestrator][settings]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  GoSettings updated = f.settings;
+  updated.use_feet = true;
+  f.ui_manager.sync_settings(updated);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::apply_settings_change(orch);
+
+  CHECK(A::settings(orch).use_feet);
+  CHECK(A::build_context(orch).use_feet);
+}
+
 TEST_CASE("apply_settings_change: reschedules timer when interval changes",
           "[Orchestrator][settings]") {
   TestFixture f;
@@ -2786,6 +2806,7 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   TestFixture f;
   f.settings.gps_mode = GpsMode::AlwaysOn;
   f.settings.use_fahrenheit = true;
+  f.settings.use_feet = true;
   f.settings.pm_use_usaqi = true;
   auto orch = f.make_orchestrator();
 
@@ -2802,6 +2823,7 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   REQUIRE(ctx.locked == true); // still locked by default
   REQUIRE(ctx.gps_enabled == true);
   REQUIRE(ctx.use_fahrenheit == true);
+  REQUIRE(ctx.use_feet == true);
   REQUIRE(ctx.pm_use_usaqi == true);
 }
 
@@ -3694,8 +3716,8 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
 
-  // Navigate to CO2: Calibrate (index 14) — 13 down presses from Back (1)
-  for (int i = 0; i < 13; ++i)
+  // Navigate to CO2: Calibrate (index 15) — 14 down presses from Back (1)
+  for (int i = 0; i < 14; ++i)
     A::on_input(orch, touch_down);
 
   A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
@@ -3730,8 +3752,8 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
 
-  // Hardware Test is the last content row (index 16): 15 downs from Back (1).
-  for (int i = 0; i < 15; ++i)
+  // Hardware Test is the last content row (index 17): 16 downs from Back (1).
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
@@ -3856,7 +3878,7 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   A::on_input(orch, touch_down);  // 0→1
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -3902,7 +3924,7 @@ TEST_CASE("Peripheral Test: double-press back mid-flow restores and exits",
   A::on_input(orch, touch_down);
   A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Settings
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -3924,7 +3946,7 @@ static void enter_gps_test(TestFixture &f, Orchestrator &orch) {
   A::on_input(orch, touch_down);  // 0→1
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -4011,7 +4033,7 @@ static void enter_accel_test(TestFixture &f, Orchestrator &orch) {
   A::on_input(orch, touch_down);  // 0→1
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)

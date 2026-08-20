@@ -285,6 +285,7 @@ Common configurable settings include:
 
 - Measurement interval from 3 seconds up to 1 hour.
 - Temperature unit: Celsius or Fahrenheit.
+- Altitude unit: meters or feet.
 - PM display: micrograms per cubic meter or US AQI.
 - GPS mode: always off, on when tracking, or always on.
 - Operating mode: Portable, Stationary, or Offline.

@@ -101,11 +101,11 @@ struct RtcDisplaySnapshot {
   uint8_t battery_pct;  bool is_battery_charging;  bool is_plugged_in;
   // Status flags & rendering settings
   bool gps_enabled;  bool gps_fix;  bool tracking_active;  bool ble_enabled;
-  bool use_fahrenheit;  bool pm_use_usaqi;
+  bool use_fahrenheit;  bool use_feet;  bool pm_use_usaqi;
 };
 ```
 
-Estimated size: ~40 bytes (well within the ~50 B budget; total RTC usage
+Estimated size: ~44 bytes (well within the ~50 B budget; total RTC usage
 ~1.6 KB of the 8 KB available on ESP32-C5).
 
 ### Free functions
@@ -172,6 +172,8 @@ Key points:
 - `wifi_enabled` (`bool`): show the Wi-Fi status-bar icon (true for the whole Stationary session)
 - `wifi_connected` (`bool`): selects the connected vs disconnected Wi-Fi glyph (`WifiService::is_online()`)
 - Invalid sentinels from `MeasuresInvalid`; `0xFF` for battery
+- `use_feet` (`bool`): convert the pressure-derived meter value to whole feet
+  only while formatting the Home altitude cell
 - `ble_passkey` (`uint32_t`): 6-digit passkey for PairingPasskey screen
 - `info_text` (`const char *`): caller-owned ASCII string for `Screen::Info`; null or empty renders a blank canvas
 - `provisioning_status` (`const char *`): transport-aware status text for `Screen::Provisioning`; auto-wrapped to at most 2 lines so long strings (`Connected! 192.168.x.y`, `Connect failed - try again`) stay inside the canvas
@@ -541,5 +543,5 @@ transitions trigger a status bar redraw.
 | Humidity | Integer percent |
 | TVOC/NOx | Integer (index values) |
 | Pressure | Integer hPa; >9999: "9999+ hPa" |
-| Altitude | Integer meters; >9999: "9999+ m" |
+| Altitude | Integer meters by default; `use_feet` converts with `m × 3.28084` and renders the full rounded value with `ft`; meters >9999 render `9999+ m` |
 | Invalid | "-" for any metric |
