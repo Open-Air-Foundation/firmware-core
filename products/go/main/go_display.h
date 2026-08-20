@@ -385,9 +385,10 @@ public:
 
   explicit DisplayService(const Config &) {}
 
-  bool init(const DisplayValues &values, bool = false) {
+  bool init(const DisplayValues &values, bool defer_refresh = false) {
     ++spy_init_count;
     spy_last_screen = values.screen;
+    spy_last_init_deferred = defer_refresh;
     return true;
   }
 
@@ -409,6 +410,7 @@ public:
   inline static uint32_t spy_update_count = 0;
   inline static uint32_t spy_flush_count = 0;
   inline static Screen spy_last_screen = Screen::Home;
+  inline static bool spy_last_init_deferred = false;
 };
 
 // Stub implementations for host builds.

@@ -181,23 +181,25 @@ a fresh power-on boot.
 ## Interactive Boot (GoApp::run_interactive)
 
 Handles both fresh boot (empty BootHandoff) and fast-path promotion.
-All init is idempotent via GoBoard lazy accessors:
+When no frame was already painted by the fast path, it starts a deferred
+snapshot or `Getting Ready` splash refresh before core initialization. Core and
+I2C initialization then run while the display refreshes. All init is idempotent
+via GoBoard lazy accessors:
 
 | # | What | GoBoard call |
 |---|---|---|
-| 1 | Core init | `_board.init_core()` (no-op if already done) |
-| 2 | Settings | `_board.load_settings()` |
-| 3 | LED service | `_board.led_service()` → `init()` + `start()` + boot animation on `PowerOn` |
-| 4 | Sensors | `_board.sensors()` |
-| 5 | GPS + touch | `_board.new_gps_driver()`, `_board.new_touch_sensor()` |
-| 6 | Storage | `_board.storage()` |
-| 7 | Event queue, BLE, Wi-Fi, Cloud | `BleService` borrows `_board.ble_server()`; `WifiService` borrows `_board.wifi_manager()`, `_board.ble_server()`, `_board.http_server()`; `CloudService` borrows `_board.ag_client()` + `WifiService` |
-| 8 | Producer services | SensorProducer, GpsService, InputService |
-| 9 | Display | `_board.display()` |
+| 1 | Early display | `_board.init_spi()` → `_board.display().init(..., true)` if `!handoff.display_painted` |
+| 2 | Core init | `_board.init_core()` (no-op if already done) |
+| 3 | Settings | `_board.load_settings()` |
+| 4 | LED service | `_board.led_service()` → `init()` + `start()` + boot animation on `PowerOn` |
+| 5 | Sensors | `_board.sensors()` |
+| 6 | GPS + touch | `_board.new_gps_driver()`, `_board.new_touch_sensor()` |
+| 7 | Storage | `_board.display().flush()` → `_board.storage()`; waits for the early display refresh before NAND uses SPI |
+| 8 | Event queue, BLE, Wi-Fi, Cloud | `BleService` borrows `_board.ble_server()`; `WifiService` borrows `_board.wifi_manager()`, `_board.ble_server()`, `_board.http_server()`; `CloudService` borrows `_board.ag_client()` + `WifiService` |
+| 9 | Producer services | SensorProducer, GpsService, InputService |
 | 10 | Power | `_board.power()` |
 | 11 | UIManager | Always constructed |
-| 12 | Display init | If `!handoff.display_painted` |
-| 13 | Start tasks + Orchestrator | `orchestrator->init()` + `run()` |
+| 12 | Start tasks + Orchestrator | `orchestrator->init()` + `run()` |
 
 ## Fast-Path Boot (GoApp::execute_fast_path)
 

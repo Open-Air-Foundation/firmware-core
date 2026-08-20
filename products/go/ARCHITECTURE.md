@@ -631,14 +631,15 @@ done (display painted, measurement completed, lock state) so the
 orchestrator can skip redundant work.
 
 On a fresh interactive power-on with no RTC snapshot and no fast-path
-measurement, `GoApp` paints `Screen::Info` with `Booting...` before
-starting the orchestrator. The orchestrator keeps this splash until the
-first `SensorDataReady` event, then runs the first-boot gate: when the
-durable `onboarding_done` NVS flag is unset it shows the one-time
-`Screen::GettingStarted` guide (setup QR + `Start using`), otherwise it
-resets the UI to Home. A short press on Button 1 is ignored while the
-splash is active so the first boot screen is not replaced by an
-unlock / lock transition.
+measurement, `GoApp` initializes SPI and starts a deferred `Screen::Info`
+`Getting Ready` splash before core initialization. Core and I2C initialization
+run while the display refreshes; `GoApp` flushes that refresh before mounting
+NAND storage. The orchestrator keeps the splash until the first
+`SensorDataReady` event, then runs the first-boot gate: when the durable
+`onboarding_done` NVS flag is unset it shows the one-time
+`Screen::GettingStarted` guide (setup QR + `Start using`), otherwise it resets
+the UI to Home. A short press on Button 1 is ignored while the splash is active
+so the first boot screen is not replaced by an unlock / lock transition.
 
 **First-boot onboarding.** The Getting Started guide is informational and
 non-blocking — the device is already measuring and BLE-discoverable while

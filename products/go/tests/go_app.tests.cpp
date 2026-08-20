@@ -991,8 +991,19 @@ TEST_CASE("run_interactive wires a valid local API with shared identity and queu
 
   access.run_interactive(WakeCause::PowerOn);
 
+  CHECK(board.call_index("init_spi") >= 0);
+  CHECK(board.call_index("display") >= 0);
+  CHECK(board.call_index("init_core") >= 0);
+  CHECK(board.call_index("init_spi") < board.call_index("display"));
+  CHECK(board.call_index("display") < board.call_index("init_core"));
+  CHECK(DisplayService::spy_init_count == 1);
+  CHECK(DisplayService::spy_last_screen == Screen::Info);
+  CHECK(DisplayService::spy_last_init_deferred);
+  CHECK(DisplayService::spy_flush_count == 1);
+
   REQUIRE(test_spy::orchestrator_init_called);
   REQUIRE(test_spy::orchestrator_run_called);
+  CHECK(test_spy::orchestrator_handoff.display_painted);
   REQUIRE(test_spy::orchestrator_local_api != nullptr);
   REQUIRE(test_spy::orchestrator_event_queue != nullptr);
   CHECK(test_spy::orchestrator_local_api->is_valid());

@@ -655,6 +655,27 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
 // ===========================================================================
 
 void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
+  // --- Early display paint ---
+  // Start the e-paper refresh before the slower I2C, BMS, sensor, and NAND
+  // initialization. The display worker owns SPI while it refreshes; NAND
+  // initialization naturally waits for that refresh before using the bus.
+  bool boot_splash_requested = false;
+  if (!handoff.display_painted) {
+    _board.init_spi();
+    DisplayService &early_display = _board.display();
+
+    DisplayValues initial_values{};
+    if (handoff.display_snapshot != nullptr) {
+      initial_values = build_wake_values(*handoff.display_snapshot, true);
+    } else {
+      initial_values = build_boot_splash_values();
+      boot_splash_requested = true;
+    }
+
+    early_display.init(initial_values, /* defer_refresh= */ true);
+    handoff.display_painted = true;
+  }
+
   // --- Complete any missing core init (idempotent) ---
   _board.init_core();
   _board.release_gpio_holds();
@@ -682,6 +703,10 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   auto *touch = _board.new_touch_sensor();
 
   // --- Storage ---
+  // NAND shares the display SPI bus. Finish the early splash refresh before
+  // mounting storage so its initialization cannot contend with the EPD.
+  DisplayService &disp = _board.display();
+  disp.flush();
   StorageService &stor = _board.storage();
 
   // --- Event queue ---
@@ -743,13 +768,18 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
                                           .pin_button_boot = PIN_BUTTON_BOOT,
                                           .suppress_button_wake = handoff.suppress_wake_press});
 
-  DisplayService &disp = _board.display();
   PowerService &pwr = _board.power();
 
   auto *ui_manager = new UIManager({
       .firmware_version = firmware_version,
       .serial_number = serial.c_str(),
   });
+
+  // Seed UI state after the early splash paint, so Orchestrator retains the
+  // splash until the first completed measurement.
+  if (boot_splash_requested) {
+    ui_manager->show_info(BOOT_SPLASH_TEXT);
+  }
 
   // --- OtaService (borrows the shared server + PowerService; owns the writer) ---
   auto *ota_service = new OtaService(_board.ble_server(), pwr,
@@ -759,24 +789,8 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
                                          .http_domain = OTA_HTTP_DOMAIN,
                                      });
 
-  // --- Display init (if boot hasn't painted) ---
-  if (!handoff.display_painted) {
-    if (handoff.display_snapshot != nullptr) {
-      DisplayValues wake = build_wake_values(*handoff.display_snapshot, true);
-      disp.init(wake);
-    } else {
-      // Cold-boot: show "Booting..." instead of Home sentinels.
-      // Seed UIManager so subsequent update_display() keeps the splash
-      // until the Orchestrator transitions to Home on first measurement.
-      DisplayValues splash = build_boot_splash_values();
-      ui_manager->show_info(BOOT_SPLASH_TEXT);
-      disp.init(splash);
-    }
-    handoff.display_painted = true;
-  }
-
-  // Boot animation — runs after the splash is painted so the screen is up
-  // before the chime/LED play.
+  // Boot animation — runs after the splash refresh is scheduled so the screen
+  // can update in parallel with the chime/LED.
   if (cause == WakeCause::PowerOn) {
     if (!settings.onboarding_done) {
       // Fresh unit defaults buzzer + back LED off; force a one-time synced
