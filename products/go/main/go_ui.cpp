@@ -1541,7 +1541,7 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       (void)snprintf(label, sizeof(label), "Setup Guide");
       break;
     case SETTING_UNITS:
-      (void)snprintf(label, sizeof(label), "Units: %s", UNITS_OPTIONS[_setting_units]);
+      (void)snprintf(label, sizeof(label), "Temperature Unit: %s", UNITS_OPTIONS[_setting_units]);
       break;
     case SETTING_ALTITUDE_UNIT:
       (void)snprintf(label, sizeof(label), "Altitude Unit: %s",

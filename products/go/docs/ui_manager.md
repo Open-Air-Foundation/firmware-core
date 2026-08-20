@@ -224,7 +224,7 @@ SettingsChoice screen.
 | Setting ID | Label | Options |
 |---|---|---|
 | Setup Guide | `Setup Guide` (first content item) | Action row — opens `Screen::GettingStarted` |
-| Units | `Units: C / F` | C, F |
+| Temperature Unit | `Temperature Unit: C / F` | C, F |
 | Altitude Unit | `Altitude Unit: m / ft` | m, ft |
 | PM Display | `PM Display: ug/m3 / USAQI` | ug/m3, USAQI |
 | Measure Interval | `Measure Int.: 3s..1h` | 3s, 10s, 30s, 60s, 5m, 15m, 1h |

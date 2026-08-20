@@ -397,15 +397,15 @@ TEST_CASE("UIManager: tracking start/stop", "[UIManager][tracking]") {
 TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  SECTION("changing units returns SettingsChanged") {
-    // Navigate: Home → MainMenu → Settings → Units → select "F"
+  SECTION("changing temperature unit returns SettingsChanged") {
+    // Navigate: Home → MainMenu → Settings → Temperature Unit → select "F"
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0→1
     press(ui, InputSource::TouchDown);  // 1→2 (Settings)
     press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
     press(ui, InputSource::TouchDown);  // 1→2 (Setup Guide)
-    press(ui, InputSource::TouchDown);  // 2→3 (Units)
-    press(ui, InputSource::TouchEnter); // → SettingsChoice for Units
+    press(ui, InputSource::TouchDown);  // 2→3 (Temperature Unit)
+    press(ui, InputSource::TouchEnter); // → SettingsChoice for Temperature Unit
 
     CHECK(ui.current_screen() == Screen::SettingsChoice);
 
@@ -418,20 +418,15 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
     CHECK(result.action == UIAction::SettingsChanged);
     CHECK(ui.current_screen() == Screen::Settings);
 
-    // Verify the setting took effect via build_values.
-    // The UIManager stores _setting_units=1 now.
-    // build_values uses ctx.use_fahrenheit (passed by orchestrator), so
-    // we verify indirectly by checking the settings row label.
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    // Can't easily check the setting label from build_values without
-    // navigating to Settings screen, but the action was correct.
+    CHECK(std::string(v.rows[v.selected_row].text) == "Temperature Unit: F");
   }
 
   SECTION("changing altitude unit returns SettingsChanged") {
     go_to_settings(ui);
     press(ui, InputSource::TouchDown);  // 1→2 (Setup Guide)
-    press(ui, InputSource::TouchDown);  // 2→3 (Units)
+    press(ui, InputSource::TouchDown);  // 2→3 (Temperature Unit)
     press(ui, InputSource::TouchDown);  // 3→4 (Altitude Unit)
     press(ui, InputSource::TouchEnter); // → SettingsChoice
 
