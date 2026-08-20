@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "9d41961-wifi-reconnect",
+  "rev": "early-display-init",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -14,9 +14,9 @@
       "category": "Boot & Onboarding",
       "sub_category": "Cold boot",
       "applies_to": ["V1"],
-      "description": "Cold boot detects the V1 board and initializes its production sensors",
-      "expected_result": "The display shows \"Getting Ready\" and the serial log identifies the V1 board, BQ27427 gauge, SHT40, DPS368, SGP41, SPS30, and exactly one fitted CO2 sensor without an initialization failure. Within five minutes, one completed measurement contains PM1/PM2.5/PM10, SPS30 PM0.5/PM1/PM2.5/PM10 counts, CO2, temperature, humidity, TVOC/NOx, pressure, and battery data. Home renders fields from that measurement and uses dashes for fields that are still unavailable.",
-      "notes": "Run two cold-boot subruns on already-onboarded production units: one S12 and one SCD4x. Capture serial from reset through the first complete measurement. Require \"CO2 sensor: S12 selected\" only on the S12 unit and \"CO2 sensor: SCD4x selected\" only on the SCD4x unit."
+      "description": "Cold boot starts a complete early splash, detects the V1 board, and initializes its production sensors",
+      "expected_result": "At the start of cold boot, the display begins the \"Getting Ready\" splash and completes one full refresh without stopping on a partial frame before NAND storage initialization proceeds. The serial log identifies the V1 board, BQ27427 gauge, SHT40, DPS368, SGP41, SPS30, and exactly one fitted CO2 sensor without an initialization failure. Within five minutes, one completed measurement contains PM1/PM2.5/PM10, SPS30 PM0.5/PM1/PM2.5/PM10 counts, CO2, temperature, humidity, TVOC/NOx, pressure, and battery data. Home renders fields from that measurement and uses dashes for fields that are still unavailable.",
+      "notes": "Run two cold-boot subruns on already-onboarded production units: one S12 and one SCD4x. Capture serial from reset through the first complete measurement and record the full \"Getting Ready\" refresh. Require \"CO2 sensor: S12 selected\" only on the S12 unit and \"CO2 sensor: SCD4x selected\" only on the SCD4x unit."
     },
     {
       "id": "onboarding.getting-started.complete-and-persist",

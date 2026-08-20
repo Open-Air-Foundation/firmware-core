@@ -71,14 +71,14 @@ bool init(const DisplayValues &initial, bool defer_refresh = false);
 
 | `defer_refresh` | Behavior |
 |---|---|
-| `false` (default) | Synchronous: renders frame, performs full SPI refresh (~3 s), then starts worker. Used by `run_interactive()` and `run_fast_path()`. |
-| `true` | Deferred: renders and reserves the framebuffer, marks a full refresh pending, starts the worker, and immediately signals it to run the initial refresh in the background. Returns in ~10 ms. |
+| `false` (default) | Synchronous: renders frame, performs full SPI refresh (~3 s), then starts worker. Used by `run_fast_path()`. |
+| `true` | Deferred: renders and reserves the framebuffer, marks a full refresh pending, starts the worker, and immediately signals it to run the initial refresh in the background. Returns in ~10 ms. Used by button-wake and interactive boots with no painted frame. |
 
 When `defer_refresh=true`, `init()` returns before the SPI refresh begins.
 The worker task acquires the SPI bus and holds it for the duration of the
-refresh (~3 s). Any other SPI device that calls `spi_device_transmit()` during
-this window (e.g. NAND flash) blocks until the worker releases the bus —
-natural serialization without an explicit semaphore.
+refresh (~3 s). Button-wake storage relies on the SPI bus arbitration during
+this window. Interactive boot calls `flush()` before mounting NAND storage, so
+it deterministically waits for the early splash refresh to finish.
 
 `_worker_busy` is set to `true` before the worker starts so that a concurrent
 `update()` call will not corrupt the in-progress refresh.
