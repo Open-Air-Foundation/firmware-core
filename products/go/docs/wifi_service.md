@@ -43,7 +43,7 @@ reads.
 | `WifiService(event_queue, deps, cfg)` | — | Construct with the central event queue, borrowed Wi-Fi/BLE/HTTP/local-server dependencies, and product config. Installs Wi-Fi callbacks initially and the provisioning event callback once for the service lifetime. |
 | `has_saved_networks()` | `bool` | True when at least one network is saved. Delegates to `WifiManager`. |
 | `connect_with_saved_credentials(static_ip)` | `void` | Restore Wi-Fi callbacks, arm the initial-connect deadline, and call `WifiManager::connect` with an empty SSID. One saved network connects directly with normal retry/backoff; multiple networks are scanned, ranked by RSSI, and tried with single-attempt failover. Applies `static_ip` when non-null, clears it otherwise. Resets the online latches (fresh bring-up). Posts a synthetic `WifiDisconnected` when the manager returns `NotFound`. |
-| `schedule_reconnect(static_ip)` | `void` | Arm the runtime reconnect timer `reconnect_delay_ms` from now. Unlike the bring-up connect it preserves the `has_been_online()` latch and does not arm the connect window; the reconnect is issued from `tick()`. No-op when no networks are saved. Used by the orchestrator for runtime disconnects. |
+| `schedule_reconnect(static_ip)` | `void` | Arm the runtime reconnect timer `reconnect_delay_ms` from now. Unlike the bring-up connect it preserves the `has_been_online()` latch and does not arm the connect window. On expiry, `tick()` reconnects saved networks when present or retries the transient factory-default network otherwise. Used by the orchestrator for runtime disconnects. |
 | `try_default_fallback_credentials()` | `void` | Restore Wi-Fi callbacks, then single-shot STA connect to the factory-default AP (`airgradient` / `cleanair`). The explicit SSID makes the connect transient, so nothing is written to the saved-networks store. Bounded by the fallback window. |
 | `start_provisioning(transport)` | `void` | Clear retained success, stop the local endpoint, cancel STA/deadlines, and start the requested provisioning transport. Defaults to `BleOnly`. |
 | `switch_provisioning_transport()` | `void` | Back-to-back stop/start that flips transport, swallows the intermediate `Stopped`, and requests listener retention when one is already bound. |
@@ -208,20 +208,22 @@ disconnect policy opens provisioning.
 After the first successful IP (`has_been_online()` latched), a disconnect
 is a _runtime_ event: the orchestrator calls `schedule_reconnect()`
 instead of opening provisioning. The service arms a `reconnect_delay_ms`
-(5 s) timer; when `tick()` fires it, the service re-issues the saved-
-network connect through the shared `_connect_saved_internal()` helper
-with `reset_online_latches = false` and `arm_window = false`. Preserving
-the `has_been_online()` latch keeps subsequent delivered failures routing back
-to the runtime branch (reconnect), never the bring-up provisioning branch.
+(5 s) timer. When `tick()` fires it, the service checks the credential store:
+saved networks use `_connect_saved_internal()`, while an empty store retries
+the explicit factory-default network through `_connect_fallback_internal()`.
+Both paths pass `reset_online_latches = false` and `arm_window = false`.
+Preserving the `has_been_online()` latch keeps subsequent delivered failures
+routing back to the runtime branch (reconnect), never the bring-up provisioning
+branch. The fallback path also clears static IP and remains transient, so its
+credentials are never written to the saved-network store.
 
-Within each reconnect cycle the `WifiManager` applies its own retry /
-backoff for retriable reasons (including `no_ap_found`); when it gives up
-it emits a terminal disconnect, which schedules the next cycle. The fixed
-inter-cycle delay also spaces out instant-fail reasons (`auth_failed`,
-`assoc_failed`, `dhcp_failed`) so they cannot tight-loop the radio. Each
-delivered terminal event schedules another cycle; runtime never intentionally
-gives up or provisions. `schedule_reconnect()` is a no-op when no networks are
-saved (a fallback-only session has nothing to reconnect to). Ordinary
+Within each saved-network reconnect cycle the `WifiManager` applies its own
+retry / backoff for retriable reasons (including `no_ap_found`). A
+fallback-only cycle remains single-attempt (`max_retry_count = 0`). When either
+path emits a terminal disconnect, the orchestrator schedules the next cycle.
+The fixed inter-cycle delay also spaces out instant-fail reasons
+(`auth_failed`, `assoc_failed`, `dhcp_failed`) so they cannot tight-loop the
+radio. Runtime never intentionally gives up or provisions. Ordinary
 connected/disconnected events use non-blocking central-queue sends and are not
 retained, so queue saturation can skip endpoint activation or a reconnect
 schedule.
@@ -424,7 +426,8 @@ callback) to clear the armed connect-window deadline, then checks whether
 it has expired without an IP. On expiry it posts a synthetic
 `WifiDisconnected{connection_lost}` and the orchestrator's disconnect
 policy opens provisioning. `tick()` then checks the separate runtime
-reconnect timer and, on expiry, issues the saved-network reconnect.
+reconnect timer and, on expiry, reconnects saved networks when present or
+retries the transient factory-default network otherwise.
 
 The service holds two independent timers — the connect window and the
 runtime reconnect timer — and `next_deadline_ms()` returns the nearer of
@@ -519,9 +522,9 @@ in `products/go/tests/go_wifi.tests.cpp` and cover:
 - Online latches around `ProvisioningEvent::Connected` so
   `has_been_online()` reads true on the subsequent `Stopped`.
 - Runtime reconnect: `schedule_reconnect()` arms the reconnect timer,
-  `tick()` issues the saved connect without resetting `has_been_online()`,
-  the no-op when no networks are saved, and `next_deadline_ms()` returning
-  the nearer of the two timers.
+  `tick()` selects saved or transient fallback credentials without resetting
+  `has_been_online()`, fallback retries do not apply static IP or persist
+  credentials, and `next_deadline_ms()` returns the nearer of the two timers.
 - Shutdown path (detaches callbacks, zeroes latches, sets mode `Off`).
 
 The orchestrator tests in `products/go/tests/go_orchestrator.tests.cpp`

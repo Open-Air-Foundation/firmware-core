@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "05583a8-track3",
+  "rev": "9d41961-wifi-reconnect",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -338,9 +338,9 @@
       "category": "Stationary Networking",
       "sub_category": "Provisioning",
       "applies_to": ["V1"],
-      "description": "A fresh Stationary unit can use the transient factory-default Wi-Fi fallback",
-      "expected_result": "With no saved credentials and a 2.4 GHz WPA2 AP named airgradient with password cleanair, entering Stationary shows \"Trying default Wi-Fi...\", associates within the 15-second fallback window, reaches Home, and never opens a provisioning page. Remove that AP, cold reboot, and re-enter Stationary: after the fallback window, the app-provisioning page opens and no saved-network entry for airgradient is present.",
-      "notes": "Use a dedicated factory-reset unit and an AP that can be fully disabled. Capture association records and serial from mode entry through both outcomes. Reset the unit after the case."
+      "description": "A fresh manufacturing-mode unit reconnects to the transient factory-default Wi-Fi fallback",
+      "expected_result": "With no saved credentials and a 2.4 GHz WPA2 AP named airgradient with password cleanair, short-press BOOT before onboarding. Stationary manufacturing mode shows \"Trying default Wi-Fi...\", associates within the 15-second fallback window, reaches Home, and never opens provisioning. Disable the AP until the disconnected Wi-Fi glyph appears and serial logs \"runtime link lost; scheduling reconnect\" plus \"runtime reconnect: attempting default fallback\". Restore the AP: within 15 seconds the device reconnects, shows \"Wi-Fi connected\", and logs \"wifi reconnected\" without opening provisioning. Remove the AP, perform a Power-button shutdown and cold start, then re-enter manufacturing mode: after the fallback window, provisioning opens and no saved-network entry for airgradient is present.",
+      "notes": "Use a dedicated factory-reset unit and an AP that can be fully disabled. Keep the AP unavailable through at least one runtime reconnect attempt, capture association records and serial throughout, and reset the unit after the case."
     },
     {
       "id": "stationary.provisioning.first-connect",
