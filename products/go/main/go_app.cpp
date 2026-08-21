@@ -64,6 +64,10 @@ static constexpr const char *TAG = "app";
 // domain; keep in sync with the Cloud service host.
 static constexpr const char *OTA_HTTP_DOMAIN = "hw.airgradient.com";
 
+// The GPS receiver remains powered and tracking through Offline deep sleep.
+// Allow several NMEA epochs after reconnecting the UART on timer wake.
+static constexpr uint32_t GPS_FAST_PATH_READ_TIMEOUT_MS = 3000;
+
 // Strings owned by GoApp that WifiService::Config holds pointers into.
 // Stack-allocated in run_*; lifetime = process (functions never return).
 namespace {
@@ -313,7 +317,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
 
   if (!promote && state.tracking_active && gps_active) {
     auto *gps_driver = _board.new_gps_driver();
-    gps = gps_read_once(*gps_driver, GPS_BAUD, 2000, button_pressed);
+    gps = gps_read_once(*gps_driver, GPS_BAUD, GPS_FAST_PATH_READ_TIMEOUT_MS, button_pressed);
     AG_LOGI(TAG, "fast-path: gps fix_type=%d sat=%d lat=%.6f lon=%.6f alt=%.1f hdop=%.1f",
             static_cast<int>(gps.fix.fix_type), gps.fix.satellite_count, gps.position.latitude,
             gps.position.longitude, gps.altitude_m, gps.fix.hdop);

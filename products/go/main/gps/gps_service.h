@@ -98,13 +98,17 @@ private:
 /// timeout_ms expires, or abort becomes true. For use in the fast-path
 /// timer-wake boot path only — does not require a running RTOS task.
 ///
-/// @param driver     GPS driver; begin() / end() are called internally.
-/// @param baud_rate  Baud rate passed to GpsDriver::begin().
-/// @param timeout_ms Maximum time to wait for a valid fix, in milliseconds.
+/// The receiver must have remained powered and tracking through deep sleep.
+/// The function reconnects directly at @p baud_rate without reconfiguring or
+/// restarting the receiver, then waits for a valid fix with valid coordinates.
+///
+/// @param driver     GPS driver; begin_hot_resume() / end() are called internally.
+/// @param baud_rate  Active receiver baud rate.
+/// @param timeout_ms Maximum time to wait for a valid position, in milliseconds.
 /// @param abort      When true, the polling loop exits early. Intended for
 ///                   ISR-driven abort flags (volatile bool set by ISR).
 ///                   Default: a static false constant (no abort support).
-/// @return           Latest GpsData; check is_fix_valid(data.fix) for validity.
+/// @return           Latest GpsData; validate both fix and position before use.
 inline const volatile bool gps_no_abort = false;
 
 GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms,
