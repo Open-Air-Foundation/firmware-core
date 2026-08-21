@@ -48,6 +48,7 @@ struct LocalServerConfig {
   std::optional<std::string> country;               // "country"
   std::optional<std::string> pm_standard;           // "pmStandard"
   std::optional<std::string> temperature_unit;      // "temperatureUnit"
+  std::optional<std::string> altitude_unit;         // "altitudeUnit"
   std::optional<bool> post_data_to_cloud;           // "postDataToCloud"
   std::optional<bool> cloud_connection;             // "cloudConnection"
   std::optional<std::string> configuration_control; // "configurationControl"
