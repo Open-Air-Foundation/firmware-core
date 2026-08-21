@@ -241,16 +241,36 @@ void GpsService::sync_system_clock(const GpsTimestamp &ts) {
 
 GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms,
                       const volatile bool &abort) {
-  driver.begin(baud_rate);
-  driver.gnss_start(); // defensive: ensures module is tracking
+  if (!driver.begin_hot_resume(baud_rate)) {
+    AG_LOGE(TAG, "hot-resume: failed to open GPS UART");
+    return {};
+  }
+
+  AG_LOGI(TAG, "hot-resume: listening at %d baud for %lu ms", baud_rate,
+          static_cast<unsigned long>(timeout_ms));
+
+  bool received_sentence = false;
+  bool acquired_position = false;
   const uint64_t deadline_ms = RTOS::get_time_ms() + timeout_ms;
   while (RTOS::get_time_ms() < deadline_ms && !abort) {
-    if (driver.read() && driver.has_valid_fix()) {
-      break;
+    if (driver.read()) {
+      received_sentence = true;
+      const GpsData data = driver.get_data();
+      if (is_fix_valid(data.fix) && is_position_valid(data.position)) {
+        acquired_position = true;
+        break;
+      }
     }
     RTOS::delay_ms(10);
   }
   const GpsData data = driver.get_data();
   driver.end();
+
+  if (acquired_position) {
+    AG_LOGI(TAG, "hot-resume: acquired valid position");
+  } else {
+    AG_LOGW(TAG, "hot-resume: no valid position (sentence=%d aborted=%d)", received_sentence,
+            static_cast<bool>(abort));
+  }
   return data;
 }

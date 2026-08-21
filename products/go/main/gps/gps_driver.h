@@ -48,6 +48,12 @@ public:
   /// powered during deep sleep) the 9600-baud command bytes are received as
   /// garbage and silently ignored, so the sequence is safe in both cases.
   bool begin(int baud_rate);
+
+  /// Reconnect to a receiver that remained powered and tracking while the MCU
+  /// was in deep sleep. Opens the UART directly at the active baud rate and
+  /// skips receiver configuration so live NMEA output is not drained.
+  bool begin_hot_resume(int baud_rate);
+
   void end();
 
   /// Process all available serial data and update internal state.

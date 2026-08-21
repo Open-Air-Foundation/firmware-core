@@ -333,6 +333,12 @@ bool GpsDriver::begin(int baud_rate) {
   return true;
 }
 
+bool GpsDriver::begin_hot_resume(int baud_rate) {
+  _data = GpsData{};
+  _buffer_pos = 0;
+  return _serial.begin(baud_rate);
+}
+
 void GpsDriver::end() { _serial.end(); }
 
 bool GpsDriver::read() {
