@@ -166,6 +166,7 @@ TEST_CASE("Go local API initializes safe snapshots") {
   const LocalServerConfig config = fixture.service->get_config();
   REQUIRE(config.pm_standard.has_value());
   REQUIRE(config.temperature_unit.has_value());
+  REQUIRE(config.altitude_unit.has_value());
   REQUIRE(config.cloud_connection.has_value());
   REQUIRE(config.configuration_control.has_value());
   REQUIRE(config.measurement_interval_seconds.has_value());
@@ -179,6 +180,7 @@ TEST_CASE("Go local API initializes safe snapshots") {
   REQUIRE(config.nox_learning_offset.has_value());
   CHECK(*config.pm_standard == "ugm3");
   CHECK(*config.temperature_unit == "c");
+  CHECK(*config.altitude_unit == "m");
   CHECK(*config.cloud_connection);
   CHECK(*config.configuration_control == "both");
   CHECK(*config.measurement_interval_seconds == MEASURE_INTERVAL_SECONDS_DEFAULT);
@@ -344,6 +346,7 @@ TEST_CASE("Go local API maps the supported active config subset") {
   GoSettings settings{};
   settings.pm_use_usaqi = true;
   settings.use_fahrenheit = true;
+  settings.use_feet = true;
   settings.disable_cloud = true;
   settings.configuration_control = ConfigurationControl::Local;
   settings.measure_interval_seconds = 30;
@@ -363,6 +366,7 @@ TEST_CASE("Go local API maps the supported active config subset") {
   const LocalServerConfig config = fixture.service->get_config();
   CHECK(*config.pm_standard == "us-aqi");
   CHECK(*config.temperature_unit == "f");
+  CHECK(*config.altitude_unit == "ft");
   CHECK_FALSE(*config.cloud_connection);
   CHECK(*config.configuration_control == "local");
   CHECK(config.measurement_interval_seconds == 30);
@@ -425,6 +429,7 @@ TEST_CASE("Go local API translates one atomic supported update") {
   LocalServerConfig partial{};
   partial.pm_standard = "us-aqi";
   partial.temperature_unit = "f";
+  partial.altitude_unit = "ft";
   partial.cloud_connection = false;
   partial.configuration_control = "local";
   partial.measurement_interval_seconds = 30;
@@ -445,8 +450,9 @@ TEST_CASE("Go local API translates one atomic supported update") {
   REQUIRE(request.kind == LocalApiRequestKind::Config);
   const uint32_t expected_mask =
       field_mask(GoConfigField::PmStandard) | field_mask(GoConfigField::TemperatureUnit) |
-      field_mask(GoConfigField::CloudConnection) | field_mask(GoConfigField::ConfigurationControl) |
-      field_mask(GoConfigField::Pm25Correction) | field_mask(GoConfigField::TemperatureCorrection) |
+      field_mask(GoConfigField::AltitudeUnit) | field_mask(GoConfigField::CloudConnection) |
+      field_mask(GoConfigField::ConfigurationControl) | field_mask(GoConfigField::Pm25Correction) |
+      field_mask(GoConfigField::TemperatureCorrection) |
       field_mask(GoConfigField::HumidityCorrection) |
       field_mask(GoConfigField::MeasurementInterval) | field_mask(GoConfigField::GpsMode) |
       field_mask(GoConfigField::FrontLedBrightness) | field_mask(GoConfigField::BackLedBrightness) |
@@ -454,6 +460,7 @@ TEST_CASE("Go local API translates one atomic supported update") {
   CHECK(request.config.update_mask == expected_mask);
   CHECK(request.config.pm_use_usaqi);
   CHECK(request.config.use_fahrenheit);
+  CHECK(request.config.use_feet);
   CHECK(request.config.disable_cloud);
   CHECK(request.config.configuration_control == ConfigurationControl::Local);
   CHECK(request.config.measure_interval_seconds == 30);
@@ -549,6 +556,9 @@ TEST_CASE("Go local API permits only exact control recovery from cloud control")
   recovery.pm_standard = "ugm3";
   require_status(fixture.service->submit_config(recovery), ConfigSubmitStatus::Forbidden);
   recovery.pm_standard.reset();
+  recovery.altitude_unit = "ft";
+  require_status(fixture.service->submit_config(recovery), ConfigSubmitStatus::Forbidden);
+  recovery.altitude_unit.reset();
   recovery.corrections = Corrections{};
   require_status(fixture.service->submit_config(recovery), ConfigSubmitStatus::Forbidden);
   recovery.corrections.reset();
@@ -628,6 +638,10 @@ TEST_CASE("Go local API rejects invalid scalar values and cross-field candidates
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::TemperatureUnit);
   partial = LocalServerConfig{};
+  partial.altitude_unit = "feet";
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
+                 ConfigFieldId::AltitudeUnit);
+  partial = LocalServerConfig{};
   partial.configuration_control = "remote";
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::ConfigurationControl);
@@ -673,6 +687,24 @@ TEST_CASE("Go local API rejects invalid scalar values and cross-field candidates
   partial.configuration_control = "cloud";
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::ConfigurationControl);
+}
+
+TEST_CASE("Go local API maps altitude units into config updates") {
+  Fixture fixture;
+  fixture.service->set_access(ConfigAccess::ReadWrite);
+
+  LocalServerConfig partial{};
+  partial.altitude_unit = "ft";
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+  LocalApiRequest request = fixture.receive_request();
+  CHECK(request.config.update_mask == field_mask(GoConfigField::AltitudeUnit));
+  CHECK(request.config.use_feet);
+
+  partial.altitude_unit = "m";
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+  request = fixture.receive_request();
+  CHECK(request.config.update_mask == field_mask(GoConfigField::AltitudeUnit));
+  CHECK_FALSE(request.config.use_feet);
 }
 
 TEST_CASE("Go local API rejects invalid interval, GPS mode, and output settings") {

@@ -22,6 +22,7 @@ namespace {
 // Enum value sets. Kept identical to the existing Home Assistant integration.
 constexpr const char *PM_STANDARD_VALUES[] = {"ugm3", "us-aqi"};
 constexpr const char *TEMP_UNIT_VALUES[] = {"c", "f"};
+constexpr const char *ALTITUDE_UNIT_VALUES[] = {"m", "ft"};
 constexpr const char *CONFIG_CONTROL_VALUES[] = {"cloud", "local", "both"};
 constexpr const char *GPS_MODE_VALUES[] = {"off", "tracking", "always"};
 constexpr const char *LED_MODE_VALUES[] = {"co2", "pm", "iaqs", "off"};
@@ -221,6 +222,11 @@ ParseStatus apply_item(const cJSON *item, LocalServerConfig &out, ConfigFieldId 
     field = ConfigFieldId::TemperatureUnit;
     return take_enum(item, TEMP_UNIT_VALUES, out.temperature_unit) ? ParseStatus::Ok
                                                                    : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::ALTITUDE_UNIT) == 0) {
+    field = ConfigFieldId::AltitudeUnit;
+    return take_enum(item, ALTITUDE_UNIT_VALUES, out.altitude_unit) ? ParseStatus::Ok
+                                                                    : ParseStatus::InvalidValue;
   }
   if (std::strcmp(key, fields::POST_DATA_TO_CLOUD) == 0) {
     field = ConfigFieldId::PostDataToCloud;
@@ -425,6 +431,9 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
   if (cfg.temperature_unit.has_value()) {
     cJSON_AddStringToObject(root, fields::TEMPERATURE_UNIT, cfg.temperature_unit->c_str());
   }
+  if (cfg.altitude_unit.has_value()) {
+    cJSON_AddStringToObject(root, fields::ALTITUDE_UNIT, cfg.altitude_unit->c_str());
+  }
   if (cfg.post_data_to_cloud.has_value()) {
     cJSON_AddBoolToObject(root, fields::POST_DATA_TO_CLOUD, *cfg.post_data_to_cloud);
   }
@@ -556,6 +565,8 @@ const char *config_field_wire_key(ConfigFieldId id) {
     return fields::CORRECTIONS_TEMPERATURE;
   case ConfigFieldId::CorrectionsHumidity:
     return fields::CORRECTIONS_HUMIDITY;
+  case ConfigFieldId::AltitudeUnit:
+    return fields::ALTITUDE_UNIT;
   case ConfigFieldId::None:
     return nullptr;
   }

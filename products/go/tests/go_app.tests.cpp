@@ -551,6 +551,7 @@ TEST_CASE("build_fast_path_display: valid sensors -> values populated") {
   bms.battery_percentage = 75.0f;
   GoSettings settings{};
   settings.use_fahrenheit = true;
+  settings.use_feet = true;
   settings.pm_use_usaqi = true;
 
   DisplayValues v = build_fast_path_display(m, gps, bms, settings, true);
@@ -563,6 +564,7 @@ TEST_CASE("build_fast_path_display: valid sensors -> values populated") {
   CHECK(v.locked == true);
   CHECK(v.tracking_active == true);
   CHECK(v.use_fahrenheit == true);
+  CHECK(v.use_feet == true);
   CHECK(v.pm_use_usaqi == true);
 }
 
@@ -597,6 +599,7 @@ TEST_CASE("build_fast_path_display: invalid sensors -> sentinels preserved") {
   CHECK(v.gps_fix == false);
   CHECK(v.tracking_active == false);
   CHECK(v.use_fahrenheit == false);
+  CHECK(v.use_feet == false);
   CHECK(v.pm_use_usaqi == false);
 }
 
@@ -634,11 +637,13 @@ TEST_CASE("build_wake_values: snapshot valid -> values seeded") {
   snap.pm25_ugm3 = 10.0f;
   snap.temperature_c = 21.0f;
   snap.humidity_pct = 50.0f;
+  snap.use_feet = true;
 
   DisplayValues v = build_wake_values(snap, true);
 
   CHECK(v.co2_ppm == 500);
   CHECK(v.pm25_ugm3 == 10.0f);
+  CHECK(v.use_feet);
   CHECK(v.locked == false);
   CHECK(v.snackbar_text != nullptr);
 }
@@ -650,6 +655,7 @@ TEST_CASE("build_wake_values: snapshot invalid -> defaults, unlocked") {
 
   CHECK(v.locked == false);
   CHECK(v.screen == Screen::Home);
+  CHECK_FALSE(v.use_feet);
   CHECK(v.snackbar_text != nullptr);
 }
 

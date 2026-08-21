@@ -111,6 +111,10 @@ static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource sou
     candidate.use_fahrenheit = update.use_fahrenheit;
     has_update = true;
   }
+  if (has_go_config_field(update.update_mask, GoConfigField::AltitudeUnit)) {
+    candidate.use_feet = update.use_feet;
+    has_update = true;
+  }
   if (has_go_config_field(update.update_mask, GoConfigField::MeasurementInterval)) {
     candidate.measure_interval_seconds = update.measure_interval_seconds;
     has_update = true;
@@ -3038,6 +3042,7 @@ BuildContext Orchestrator::build_context() const {
       .tracking_active = _tracking_active,
       .display_off = false,
       .use_fahrenheit = _settings.use_fahrenheit,
+      .use_feet = _settings.use_feet,
       .pm_use_usaqi = _settings.pm_use_usaqi,
       .cache = _cache_buf,
       .cache_count = static_cast<uint8_t>(cache_count),

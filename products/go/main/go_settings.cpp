@@ -12,6 +12,7 @@ constexpr const char *KEY_MEASURE_INTERVAL_SECONDS = "mi";
 constexpr const char *KEY_GPS_MODE = "gpm";
 constexpr const char *KEY_OPERATING_MODE = "opm";
 constexpr const char *KEY_USE_FAHRENHEIT = "uf";
+constexpr const char *KEY_USE_FEET = "auf";
 constexpr const char *KEY_PM_USE_USAQI = "pmu";
 constexpr const char *KEY_AUTO_LOCK_SECONDS = "als";
 constexpr const char *KEY_DISABLE_CLOUD = "dc";
@@ -201,6 +202,11 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.use_fahrenheit = use_fahrenheit;
   }
 
+  bool use_feet = false;
+  if (store.get_bool(KEY_USE_FEET, use_feet) == ConfigStoreResult::OK) {
+    settings.use_feet = use_feet;
+  }
+
   bool pm_use_usaqi = false;
   if (store.get_bool(KEY_PM_USE_USAQI, pm_use_usaqi) == ConfigStoreResult::OK) {
     settings.pm_use_usaqi = pm_use_usaqi;
@@ -289,9 +295,9 @@ GoSettings load_go_settings(ConfigStore &store) {
 
 bool GoSettings::equals(const GoSettings &other) const {
   return measure_interval_seconds == other.measure_interval_seconds &&
-         use_fahrenheit == other.use_fahrenheit && pm_use_usaqi == other.pm_use_usaqi &&
-         gps_mode == other.gps_mode && operating_mode == other.operating_mode &&
-         auto_lock_seconds == other.auto_lock_seconds &&
+         use_fahrenheit == other.use_fahrenheit && use_feet == other.use_feet &&
+         pm_use_usaqi == other.pm_use_usaqi && gps_mode == other.gps_mode &&
+         operating_mode == other.operating_mode && auto_lock_seconds == other.auto_lock_seconds &&
          front_led_brightness == other.front_led_brightness &&
          back_led_brightness == other.back_led_brightness &&
          touch_led_intensity == other.touch_led_intensity &&
@@ -375,6 +381,10 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
   }
 
   if (store.set_bool(KEY_USE_FAHRENHEIT, settings.use_fahrenheit) != ConfigStoreResult::OK) {
+    return false;
+  }
+
+  if (store.set_bool(KEY_USE_FEET, settings.use_feet) != ConfigStoreResult::OK) {
     return false;
   }
 
@@ -536,14 +546,15 @@ bool clear_factory_settings(ConfigStore &store) {
 void print_settings(const GoSettings &settings) {
   AG_LOGI(TAG,
           "** settings | meas_int=%d | gps_mode=%d "
-          "op_mode=%d | auto_lock=%d | fahrenheit=%s usaqi=%s | "
+          "op_mode=%d | auto_lock=%d | fahrenheit=%s feet=%s usaqi=%s | "
           "led: front=%d back=%d touch=%d | buzzer=%s | "
           "disable_cloud=%s config_control=%d co2_abc_days=%d "
           "tvoc_learning_offset=%d nox_learning_offset=%d static_ip=%s "
           "onboarding_done=%s **",
           settings.measure_interval_seconds, settings.gps_mode, settings.operating_mode,
           settings.auto_lock_seconds, settings.use_fahrenheit ? "true" : "false",
-          settings.pm_use_usaqi ? "true" : "false", static_cast<int>(settings.front_led_brightness),
+          settings.use_feet ? "true" : "false", settings.pm_use_usaqi ? "true" : "false",
+          static_cast<int>(settings.front_led_brightness),
           static_cast<int>(settings.back_led_brightness),
           static_cast<int>(settings.touch_led_intensity), settings.buzzer_enabled ? "on" : "off",
           settings.disable_cloud ? "true" : "false",

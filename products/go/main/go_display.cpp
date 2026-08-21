@@ -51,6 +51,7 @@ void save_rtc_display_snapshot(const DisplayValues &values) {
   s_rtc_display_snapshot.tracking_active = values.tracking_active;
   s_rtc_display_snapshot.ble_enabled = values.ble_enabled;
   s_rtc_display_snapshot.use_fahrenheit = values.use_fahrenheit;
+  s_rtc_display_snapshot.use_feet = values.use_feet;
   s_rtc_display_snapshot.pm_use_usaqi = values.pm_use_usaqi;
   s_rtc_display_snapshot_valid = true;
 }
@@ -687,7 +688,7 @@ bool is_float_non_negative(float value) { return value >= 0.0f; }
 
 bool is_temperature_valid(float celsius) { return celsius > MeasuresInvalid::TEMPERATURE; }
 
-bool is_altitude_valid(float altitude_m) { return altitude_m > -10000.0f; }
+bool is_altitude_valid(float altitude_m) { return altitude_m > MeasuresInvalid::ALTITUDE; }
 
 float temp_for_display(float celsius, bool use_fahrenheit) {
   if (!is_temperature_valid(celsius))
@@ -819,16 +820,28 @@ void format_pressure_value(char *out, size_t out_size, float pressure_hpa) {
   snprintf(out, out_size, "%.0f hPa", pressure_hpa);
 }
 
-void format_altitude_value(char *out, size_t out_size, float altitude_m) {
+void format_altitude_value(char *out, size_t out_size, float altitude_m, bool use_feet) {
+  constexpr float METERS_TO_FEET = 3.28084f;
+  constexpr float MAX_DISPLAY_ALTITUDE_METERS = 9999.0f;
+
   if (!is_altitude_valid(altitude_m)) {
     snprintf(out, out_size, "-");
     return;
   }
-  if (altitude_m > 9999.0f) {
+
+  if (use_feet) {
+    const long altitude_ft = lroundf(altitude_m * METERS_TO_FEET);
+    snprintf(out, out_size, "%ld ft", altitude_ft);
+    return;
+  }
+
+  if (altitude_m > MAX_DISPLAY_ALTITUDE_METERS) {
     snprintf(out, out_size, "9999+ m");
     return;
   }
-  snprintf(out, out_size, "%.0f m", altitude_m);
+
+  const long rounded_altitude_m = lroundf(altitude_m);
+  snprintf(out, out_size, "%ld m", rounded_altitude_m);
 }
 
 void format_chart_stat(char *out, size_t out_size, Metric metric, float value, bool use_fahrenheit,
@@ -1709,7 +1722,7 @@ void DisplayService::_draw_home(const DisplayValues &v) {
     char pressure_buf[24];
     char altitude_buf[24];
     format_pressure_value(pressure_buf, sizeof(pressure_buf), v.pressure_hpa);
-    format_altitude_value(altitude_buf, sizeof(altitude_buf), v.altitude_m);
+    format_altitude_value(altitude_buf, sizeof(altitude_buf), v.altitude_m, v.use_feet);
     draw_cell(&_u8g2, 4, "Pressure", pressure_buf, false);
     draw_cell(&_u8g2, 5, "Altitude", altitude_buf, false);
   }

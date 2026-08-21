@@ -123,6 +123,7 @@ TEST_CASE("GET config serializes the provider config", "[handler][config]") {
   FakeMeasuresProvider measures;
   FakeConfigProvider config;
   config.config.temperature_unit = "f";
+  config.config.altitude_unit = "ft";
 
   LocalServer ls(server, {measures, &config, ConfigAccess::ReadOnly});
   REQUIRE(ls.begin());
@@ -133,6 +134,7 @@ TEST_CASE("GET config serializes the provider config", "[handler][config]") {
   REQUIRE(resp.status == HttpStatus::Ok);
   cJSON *root = cJSON_Parse(body_string(resp).c_str());
   REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "temperatureUnit")->valuestring, "f") == 0);
+  REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "altitudeUnit")->valuestring, "ft") == 0);
   cJSON_Delete(root);
 }
 
@@ -175,12 +177,12 @@ TEST_CASE("PUT config maps submit results to status codes", "[handler][config]")
   SECTION("Accepted -> empty 202 and the partial reaches the provider") {
     config.submit_result = {ConfigSubmitStatus::Accepted, ConfigFieldId::None};
     HttpResponse resp;
-    put(R"({"temperatureUnit":"c"})", resp);
+    put(R"({"altitudeUnit":"m"})", resp);
     REQUIRE(resp.status == HttpStatus::Accepted);
     REQUIRE(resp.content_type == nullptr);
     REQUIRE(resp.body_size() == 0);
     REQUIRE(config.submit_called);
-    REQUIRE(*config.last_submitted.temperature_unit == "c");
+    REQUIRE(*config.last_submitted.altitude_unit == "m");
   }
 
   SECTION("parse invalid_body -> 400, provider not called") {
@@ -245,13 +247,22 @@ TEST_CASE("PUT config maps submit results to status codes", "[handler][config]")
     REQUIRE(error_field(resp).empty());
   }
 
-  SECTION("submit NotSupported -> 404 not_found with mapped field") {
+  SECTION("submit NotSupported -> 404 not_found with existing mapped field") {
     config.submit_result = {ConfigSubmitStatus::NotSupported, ConfigFieldId::LedMode};
     HttpResponse resp;
     put(R"({"ledMode":"pm"})", resp);
     REQUIRE(resp.status == HttpStatus::NotFound);
     REQUIRE(error_code(resp) == "not_found");
     REQUIRE(error_field(resp) == "ledMode");
+  }
+
+  SECTION("submit NotSupported -> 404 not_found with altitude field") {
+    config.submit_result = {ConfigSubmitStatus::NotSupported, ConfigFieldId::AltitudeUnit};
+    HttpResponse resp;
+    put(R"({"altitudeUnit":"ft"})", resp);
+    REQUIRE(resp.status == HttpStatus::NotFound);
+    REQUIRE(error_code(resp) == "not_found");
+    REQUIRE(error_field(resp) == "altitudeUnit");
   }
 
   SECTION("submit Busy -> 503 busy without retry metadata") {

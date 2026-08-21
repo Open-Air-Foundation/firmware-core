@@ -14,6 +14,7 @@ struct GoSettings {
 
   // --- Display ---
   bool use_fahrenheit = false;
+  bool use_feet = false;
   bool pm_use_usaqi = false;
 
   // --- GPS ---

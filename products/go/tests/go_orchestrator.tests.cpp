@@ -2448,6 +2448,26 @@ TEST_CASE("apply_settings_change: leaves GPS service cadence alone", "[Orchestra
   REQUIRE(test_spy::gps_posting_interval_ms == 0);
 }
 
+TEST_CASE("apply_settings_change: persists altitude unit", "[Orchestrator][settings]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  GoSettings updated = f.settings;
+  updated.use_feet = true;
+  f.ui_manager.sync_settings(updated);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::apply_settings_change(orch);
+
+  CHECK(A::settings(orch).use_feet);
+  CHECK(A::build_context(orch).use_feet);
+}
+
 TEST_CASE("apply_settings_change: reschedules timer when interval changes",
           "[Orchestrator][settings]") {
   TestFixture f;
@@ -2556,6 +2576,36 @@ TEST_CASE("BLE config set: reschedules timer when interval changes",
 
   CHECK(A::settings(orch).measure_interval_seconds == 30);
   CHECK(A::last_measurement_ms(orch) == 9000);
+}
+
+TEST_CASE("BLE config set: applies altitude display unit", "[Orchestrator][settings][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_connected = true;
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.use_feet = true;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).use_feet);
+  CHECK(A::build_context(orch).use_feet);
+  CHECK(test_spy::ble_notify_config_called);
+
+  GoSettings ui_settings{};
+  f.ui_manager.apply_to_settings(ui_settings);
+  CHECK(ui_settings.use_feet);
 }
 
 TEST_CASE("BLE config set: commit failure retains settings and reports save failure",
@@ -2786,6 +2836,7 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   TestFixture f;
   f.settings.gps_mode = GpsMode::AlwaysOn;
   f.settings.use_fahrenheit = true;
+  f.settings.use_feet = true;
   f.settings.pm_use_usaqi = true;
   auto orch = f.make_orchestrator();
 
@@ -2802,6 +2853,7 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   REQUIRE(ctx.locked == true); // still locked by default
   REQUIRE(ctx.gps_enabled == true);
   REQUIRE(ctx.use_fahrenheit == true);
+  REQUIRE(ctx.use_feet == true);
   REQUIRE(ctx.pm_use_usaqi == true);
 }
 
@@ -3694,8 +3746,8 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
 
-  // Navigate to CO2: Calibrate (index 14) — 13 down presses from Back (1)
-  for (int i = 0; i < 13; ++i)
+  // Navigate to CO2: Calibrate (index 15) — 14 down presses from Back (1)
+  for (int i = 0; i < 14; ++i)
     A::on_input(orch, touch_down);
 
   A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
@@ -3730,8 +3782,8 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
 
-  // Hardware Test is the last content row (index 16): 15 downs from Back (1).
-  for (int i = 0; i < 15; ++i)
+  // Hardware Test is the last content row (index 17): 16 downs from Back (1).
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
@@ -3856,7 +3908,7 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   A::on_input(orch, touch_down);  // 0→1
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -3902,7 +3954,7 @@ TEST_CASE("Peripheral Test: double-press back mid-flow restores and exits",
   A::on_input(orch, touch_down);
   A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Settings
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -3924,7 +3976,7 @@ static void enter_gps_test(TestFixture &f, Orchestrator &orch) {
   A::on_input(orch, touch_down);  // 0→1
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -4011,7 +4063,7 @@ static void enter_accel_test(TestFixture &f, Orchestrator &orch) {
   A::on_input(orch, touch_down);  // 0→1
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -7061,6 +7113,7 @@ TEST_CASE("local snapshots publish initial settings and measurement handoff",
     TestFixture f;
     f.settings.pm_use_usaqi = true;
     f.settings.use_fahrenheit = true;
+    f.settings.use_feet = true;
     f.settings.disable_cloud = true;
     f.settings.configuration_control = ConfigurationControl::Local;
     auto orch = f.make_orchestrator();
@@ -7070,6 +7123,7 @@ TEST_CASE("local snapshots publish initial settings and measurement handoff",
     const LocalServerConfig config = f.local_api.get_config();
     CHECK(*config.pm_standard == "us-aqi");
     CHECK(*config.temperature_unit == "f");
+    CHECK(*config.altitude_unit == "ft");
     CHECK_FALSE(*config.cloud_connection);
     CHECK(*config.configuration_control == "local");
     CHECK_FALSE(f.local_api.get_system_info().wifi_rssi.has_value());
@@ -7133,6 +7187,44 @@ TEST_CASE("local config event persists activates and publishes one request",
   CHECK(*f.local_api.get_config().temperature_unit == "f");
   A::dispatch(orch, event);
   CHECK(A::settings(orch).use_fahrenheit);
+}
+
+TEST_CASE("local altitude activation persists syncs redraws publishes and converges",
+          "[Orchestrator][local-api][config][altitude]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+
+  LocalServerConfig partial{};
+  partial.altitude_unit = "ft";
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  DisplayService::spy_update_count = 0;
+  {
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+    dispatch_next_local_request(f, orch);
+  }
+
+  CHECK(A::settings(orch).use_feet);
+  CHECK(A::build_context(orch).use_feet);
+  CHECK(*f.local_api.get_config().altitude_unit == "ft");
+  CHECK(DisplayService::spy_update_count == 1);
+  GoSettings ui_settings{};
+  f.ui_manager.apply_to_settings(ui_settings);
+  CHECK(ui_settings.use_feet);
+
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  DisplayService::spy_update_count = 0;
+  {
+    FORBID_CALL(f.mock_config, commit());
+    dispatch_next_local_request(f, orch);
+  }
+  CHECK(A::settings(orch).use_feet);
+  CHECK(*f.local_api.get_config().altitude_unit == "ft");
+  CHECK(DisplayService::spy_update_count == 0);
 }
 
 TEST_CASE("four local requests merge sequentially with last processed value winning",

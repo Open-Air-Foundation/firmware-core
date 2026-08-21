@@ -837,7 +837,8 @@ a `DisplayValues` snapshot:
    chart cache, extract battery info, status flags, and `is_plugged_in`
    (derived from `bms_power_source_has_external_input()`). The Wi-Fi icon
    is shown for the whole Stationary session (`wifi_enabled`); its glyph
-   reflects link state via `wifi_connected = wifi.is_online()`
+   reflects link state via `wifi_connected = wifi.is_online()`. Temperature,
+   altitude, and PM presentation flags come from the active `GoSettings`
 3. `UIManager::build_values(ctx)` — produce `DisplayValues`
 4. `DisplayService::update(values)` — non-blocking render submission
 5. If a snackbar is active and no refresh timer is pending, schedule a

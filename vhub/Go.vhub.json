@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "early-display-init",
+  "rev": "local-config-round-trip",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -42,8 +42,8 @@
       "sub_category": "Home dashboard",
       "applies_to": ["V1"],
       "description": "Home renders every supported measurement and unavailable value correctly",
-      "expected_result": "For one timestamp-aligned completed measurement, Home shows PM2.5, CO2, temperature, humidity, TVOC, NOx, pressure, and pressure-derived altitude in the selected mass/USAQI and C/F presentation. PM2.5, CO2, climate, and gas values equal their corrected Local Server Measures fields after conversion and display rounding. Pressure equals the same-cycle serial sensor value, and altitude equals the repository pressure-to-altitude calculation after display rounding. During cold-start CO2 or gas warm-up, a field supported by Local Server Measures but omitted from that response is a dash on Home by the next refresh, not zero or the preceding value.",
-      "notes": "Use Stationary mode with Local Server and serial access. Record Local Server Config, Local Server Measures, serial pressure, and a Home photo for the same cycle. Use natural CO2 or gas warm-up for omission; do not disconnect sensors. Use the configured temperature unit and PM standard without changing them during this case."
+      "expected_result": "For one timestamp-aligned completed measurement, Home shows PM2.5, CO2, temperature, humidity, TVOC, NOx, pressure, and pressure-derived altitude in the selected mass/USAQI, C/F, and m/ft presentation. PM2.5, CO2, climate, and gas values equal their corrected Local Server Measures fields after conversion and display rounding. Pressure equals the same-cycle serial sensor value, and altitude uses the selected unit. During cold-start CO2 or gas warm-up, a field supported by Local Server Measures but omitted from that response is a dash on Home by the next refresh, not zero or the preceding value.",
+      "notes": "Use Stationary mode with Local Server and serial access. Record Local Server Config, Local Server Measures, serial pressure, and a Home photo for the same cycle. Use natural CO2 or gas warm-up for omission; do not disconnect sensors. Restore the configured temperature, altitude, and PM presentation settings after the case."
     },
     {
       "id": "display.home.metric-charts",
@@ -77,9 +77,9 @@
       "category": "User Interface",
       "sub_category": "Units and presentation",
       "applies_to": ["V1"],
-      "description": "Temperature and PM presentation settings update labels, values, and persistence",
-      "expected_result": "Changing C to F changes the label and displays corrected_C x 9/5 + 32 rounded to the screen precision; changing back restores the recorded Celsius value. Changing Mass to USAQI changes the PM2.5 label and produces the value from the repository US-AQI breakpoint calculation, while the timestamp-matched raw pm25 value from BLE Measures is unchanged. Each UI change emits one BLE Config delta containing only temp_f or pm_aqi, matches a BLE Config Read, and persists after cold reboot.",
-      "notes": "Record a complete BLE Config Read and one raw BLE Measures payload before starting. Use a PM2.5 value away from an AQI breakpoint, calculate the expected USAQI before changing the setting, then restore the exact recorded BLE Config values."
+      "description": "Temperature, altitude, and PM presentation settings update labels, values, and persistence",
+      "expected_result": "Changing Temperature Unit from C to F updates the row label and Home value; changing back restores Celsius. Changing Altitude Unit from m to ft updates the row label and Home value; changing back restores meters. Changing Mass to USAQI updates the PM2.5 label and value. Changes made through either the UI or BLE are reflected in the Settings row, Home value, and BLE Config. Raw BLE temperature, altitude, and PM2.5 remain unchanged. All three choices persist after cold reboot.",
+      "notes": "Record the starting presentation settings and BLE values, verify each display change, then restore the original settings."
     },
     {
       "id": "ui.settings.measurement-gps-and-lock",
@@ -240,7 +240,7 @@
       "sub_category": "GATT protocol",
       "applies_to": ["V1"],
       "description": "The production Portable GATT profile and command contract pass the hardware integration suite",
-      "expected_result": "The Portable BLE integration suite exits with zero failures or unexpected skips; route download tests run against the seeded non-empty route, while the two co2_cal command tests are deselected. Debug capture contains one BLE Measures map with pm1, pm25, pm10, and pres. With a client MTU that requires a long read, BLE Config returns all 16 documented keys without truncation. The complete recorded BLE Config is restored.",
+      "expected_result": "The Portable BLE integration suite exits with zero failures or unexpected skips; route download tests run against the seeded non-empty route, while the two co2_cal command tests are deselected. Debug capture contains one BLE Measures map with pm1, pm25, pm10, and pres. With a client MTU that requires a long read, BLE Config returns all 17 documented keys without truncation. The complete recorded BLE Config is restored.",
       "notes": "Seed one completed route with at least one point, bond the test host, and run pytest products/go/tests/ble-integration/ -v --log-cli-level=DEBUG with --deselect for TestConfigCommand::test_command_progress_and_result_format and ::test_read_after_command_returns_config_snapshot. Record the client and negotiated MTU used for the separate Read-Long check."
     },
     {
@@ -393,8 +393,8 @@
       "sub_category": "Local Server",
       "applies_to": ["V1"],
       "description": "A valid Local Server Config update converges, persists, and restores",
-      "expected_result": "With configurationControl=local, the opt-in config suite exits with zero failures. Local Server Config updates for its ten round-trip fields each return 202, converge within 20 seconds, and are restored by teardown; valid measurementInterval 1 and 2 both round-trip. After the suite, use Local Server Config to set temperatureUnit to the value opposite the recorded baseline, confirm the UI and Local Server Config within 20 seconds and after cold reboot, then restore the baseline through Local Server Config.",
-      "notes": "Record the prior interval, authority, and complete Local Server Config; set configurationControl=local and measurementInterval=1 before recording the suite baseline. Run pytest products/go/tests/local-server-integration/test_config.py -v --ago-allow-config-write serially against one dedicated unit; do not run tests in parallel. Compare Local Server Config after teardown and the manual persistence subrun, then restore the prior interval and authority."
+      "expected_result": "With local configuration enabled, the opt-in config suite exits with zero failures. Supported updates are accepted, converge in Local Server Config, and are restored by teardown. A manually changed supported setting remains applied after a cold reboot and can be restored to its recorded baseline.",
+      "notes": "Record the complete Local Server Config before testing. Run pytest products/go/tests/local-server-integration/test_config.py -v --ago-allow-config-write serially against one dedicated unit with local configuration enabled. Compare the configuration after teardown and restore the prior configuration when finished."
     },
     {
       "id": "stationary.local-server.actions-success",

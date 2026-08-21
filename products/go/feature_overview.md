@@ -167,6 +167,7 @@ Local clients can change this selected configuration:
 
 - PM display standard: mass concentration or US AQI.
 - Temperature unit: Celsius or Fahrenheit.
+- Altitude unit: meters or feet for the device display.
 - Cloud connection enabled or disabled.
 - Configuration source: cloud, local, or both.
 - PM2.5, temperature, and humidity measurement corrections.
@@ -285,6 +286,7 @@ Common configurable settings include:
 
 - Measurement interval from 3 seconds up to 1 hour.
 - Temperature unit: Celsius or Fahrenheit.
+- Altitude unit: meters or feet.
 - PM display: micrograms per cubic meter or US AQI.
 - GPS mode: always off, on when tracking, or always on.
 - Operating mode: Portable, Stationary, or Offline.
