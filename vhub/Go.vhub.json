@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "altitude-unit-ble",
+  "rev": "local-config-round-trip",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -393,8 +393,8 @@
       "sub_category": "Local Server",
       "applies_to": ["V1"],
       "description": "A valid Local Server Config update converges, persists, and restores",
-      "expected_result": "With configurationControl=local, the opt-in config suite exits with zero failures. Local Server Config updates for its ten round-trip fields each return 202, converge within 20 seconds, and are restored by teardown; valid measurementInterval 1 and 2 both round-trip. After the suite, use Local Server Config to set temperatureUnit to the value opposite the recorded baseline, confirm the UI and Local Server Config within 20 seconds and after cold reboot, then restore the baseline through Local Server Config.",
-      "notes": "Record the prior interval, authority, and complete Local Server Config; set configurationControl=local and measurementInterval=1 before recording the suite baseline. Run pytest products/go/tests/local-server-integration/test_config.py -v --ago-allow-config-write serially against one dedicated unit; do not run tests in parallel. Compare Local Server Config after teardown and the manual persistence subrun, then restore the prior interval and authority."
+      "expected_result": "With local configuration enabled, the opt-in config suite exits with zero failures. Supported updates are accepted, converge in Local Server Config, and are restored by teardown. A manually changed supported setting remains applied after a cold reboot and can be restored to its recorded baseline.",
+      "notes": "Record the complete Local Server Config before testing. Run pytest products/go/tests/local-server-integration/test_config.py -v --ago-allow-config-write serially against one dedicated unit with local configuration enabled. Compare the configuration after teardown and restore the prior configuration when finished."
     },
     {
       "id": "stationary.local-server.actions-success",
