@@ -7113,6 +7113,7 @@ TEST_CASE("local snapshots publish initial settings and measurement handoff",
     TestFixture f;
     f.settings.pm_use_usaqi = true;
     f.settings.use_fahrenheit = true;
+    f.settings.use_feet = true;
     f.settings.disable_cloud = true;
     f.settings.configuration_control = ConfigurationControl::Local;
     auto orch = f.make_orchestrator();
@@ -7122,6 +7123,7 @@ TEST_CASE("local snapshots publish initial settings and measurement handoff",
     const LocalServerConfig config = f.local_api.get_config();
     CHECK(*config.pm_standard == "us-aqi");
     CHECK(*config.temperature_unit == "f");
+    CHECK(*config.altitude_unit == "ft");
     CHECK_FALSE(*config.cloud_connection);
     CHECK(*config.configuration_control == "local");
     CHECK_FALSE(f.local_api.get_system_info().wifi_rssi.has_value());
@@ -7185,6 +7187,44 @@ TEST_CASE("local config event persists activates and publishes one request",
   CHECK(*f.local_api.get_config().temperature_unit == "f");
   A::dispatch(orch, event);
   CHECK(A::settings(orch).use_fahrenheit);
+}
+
+TEST_CASE("local altitude activation persists syncs redraws publishes and converges",
+          "[Orchestrator][local-api][config][altitude]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+
+  LocalServerConfig partial{};
+  partial.altitude_unit = "ft";
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  DisplayService::spy_update_count = 0;
+  {
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+    dispatch_next_local_request(f, orch);
+  }
+
+  CHECK(A::settings(orch).use_feet);
+  CHECK(A::build_context(orch).use_feet);
+  CHECK(*f.local_api.get_config().altitude_unit == "ft");
+  CHECK(DisplayService::spy_update_count == 1);
+  GoSettings ui_settings{};
+  f.ui_manager.apply_to_settings(ui_settings);
+  CHECK(ui_settings.use_feet);
+
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  DisplayService::spy_update_count = 0;
+  {
+    FORBID_CALL(f.mock_config, commit());
+    dispatch_next_local_request(f, orch);
+  }
+  CHECK(A::settings(orch).use_feet);
+  CHECK(*f.local_api.get_config().altitude_unit == "ft");
+  CHECK(DisplayService::spy_update_count == 0);
 }
 
 TEST_CASE("four local requests merge sequentially with last processed value winning",

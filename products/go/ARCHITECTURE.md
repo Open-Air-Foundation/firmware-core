@@ -875,9 +875,9 @@ Settings fields:
   firmware identity returned by the measures endpoint
 - Serves corrected measurement, system-information, and active-config snapshots
   cached by `GoLocalApiService` behind a short-held RTOS mutex
-- Supports `pmStandard`, `temperatureUnit`, `cloudConnection`,
-  `configurationControl`, `co2AbcDays`, and PM2.5, temperature, and humidity corrections;
-  other generic catalog fields are not exposed by Go
+- Supports `pmStandard`, `temperatureUnit`, `altitudeUnit`, `cloudConnection`,
+  `configurationControl`, `co2AbcDays`, and PM2.5, temperature, and humidity
+  corrections; other generic catalog fields are not exposed by Go
 - Accepts validated config updates asynchronously: HTTP `202` means admitted,
   not persisted or applied; clients read config until the cached value converges
 - Uses one four-entry FIFO for config and action requests. Each admitted entry

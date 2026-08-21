@@ -167,6 +167,7 @@ Local clients can change this selected configuration:
 
 - PM display standard: mass concentration or US AQI.
 - Temperature unit: Celsius or Fahrenheit.
+- Altitude unit: meters or feet for the device display.
 - Cloud connection enabled or disabled.
 - Configuration source: cloud, local, or both.
 - PM2.5, temperature, and humidity measurement corrections.

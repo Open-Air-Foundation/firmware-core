@@ -111,6 +111,10 @@ static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource sou
     candidate.use_fahrenheit = update.use_fahrenheit;
     has_update = true;
   }
+  if (has_go_config_field(update.update_mask, GoConfigField::AltitudeUnit)) {
+    candidate.use_feet = update.use_feet;
+    has_update = true;
+  }
   if (has_go_config_field(update.update_mask, GoConfigField::MeasurementInterval)) {
     candidate.measure_interval_seconds = update.measure_interval_seconds;
     has_update = true;

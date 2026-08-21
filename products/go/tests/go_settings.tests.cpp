@@ -255,6 +255,7 @@ TEST_CASE("shared Go config fields and update model", "[settings][config]") {
   REQUIRE(static_cast<uint32_t>(GoConfigField::TvocLearningOffset) == (1U << 8));
   REQUIRE(static_cast<uint32_t>(GoConfigField::NoxLearningOffset) == (1U << 9));
   REQUIRE(static_cast<uint32_t>(GoConfigField::MeasurementInterval) == (1U << 10));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::AltitudeUnit) == (1U << 11));
   REQUIRE(static_cast<uint32_t>(GoConfigField::GpsMode) == (1U << 12));
   REQUIRE(static_cast<uint32_t>(GoConfigField::FrontLedBrightness) == (1U << 13));
   REQUIRE(static_cast<uint32_t>(GoConfigField::BackLedBrightness) == (1U << 14));
@@ -266,6 +267,9 @@ TEST_CASE("shared Go config fields and update model", "[settings][config]") {
   REQUIRE(has_go_config_field(mask, GoConfigField::CloudConnection));
   REQUIRE(has_go_config_field(mask, GoConfigField::HumidityCorrection));
   REQUIRE_FALSE(has_go_config_field(mask, GoConfigField::TemperatureUnit));
+
+  const GoConfigUpdate update{};
+  REQUIRE_FALSE(update.use_feet);
 }
 
 TEST_CASE("shared Go config validation covers interface-managed fields", "[settings][config]") {
@@ -409,7 +413,7 @@ TEST_CASE("cloud control permits only an exact local recovery update", "[setting
   }
 
   SECTION("Recovery cannot include another field") {
-    update.update_mask = control_mask | static_cast<uint32_t>(GoConfigField::PmStandard);
+    update.update_mask = control_mask | static_cast<uint32_t>(GoConfigField::AltitudeUnit);
     update.configuration_control = ConfigurationControl::Both;
     REQUIRE_FALSE(is_go_config_update_allowed(ConfigurationControl::Cloud,
                                               GoConfigSource::LocalServer, update));

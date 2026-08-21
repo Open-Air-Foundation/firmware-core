@@ -42,6 +42,8 @@ def test_invalid_enum(ago_http_client: httpx.Client) -> None:
 @pytest.mark.parametrize(
     "preserved_config_setting",
     [
+        pytest.param(("altitudeUnit", "yards"), id="altitudeUnit-enum"),
+        pytest.param(("altitudeUnit", True), id="altitudeUnit-type"),
         pytest.param(("measurementInterval", 0), id="measurementInterval-range"),
         pytest.param(("measurementInterval", 1.5), id="measurementInterval-type"),
         pytest.param(("gpsMode", "sometimes"), id="gpsMode"),

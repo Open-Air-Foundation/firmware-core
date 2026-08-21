@@ -145,6 +145,7 @@ objects from the same subset. Device behavior fields are:
 |---|---|---|
 | `pmStandard` | `ugm3`, `us-aqi` | Select mass concentration or US AQI presentation |
 | `temperatureUnit` | `c`, `f` | Select product display temperature unit |
+| `altitudeUnit` | `m`, `ft` | Select product display altitude unit; raw GPS and stored route altitude remain in meters |
 | `measurementInterval` | Integer 1 .. 3600 | Set the measurement interval in seconds |
 | `gpsMode` | `off`, `tracking`, `always` | Disable GPS, run it only while tracking, or keep it active |
 | `frontLedBrightness` | Integer 0 .. 3 | Set front LED brightness: off, dim, mid, or bright |
