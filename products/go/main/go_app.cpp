@@ -349,7 +349,9 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
         storage_failure_promote = true;
       } else {
         float battery_pct = -1.0f;
-        _board.bms().get_battery_percentage(&battery_pct);
+        if (BmsDevice *bms = _board.bms(); bms != nullptr) {
+          bms->get_battery_percentage(&battery_pct);
+        }
         RoutePoint point{};
         point.timestamp = time(nullptr);
         point.gps = gps;

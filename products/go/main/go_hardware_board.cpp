@@ -208,8 +208,9 @@ void GoHardwareBoard::init_spi() {
 }
 
 void GoHardwareBoard::init_bms() {
-  if (_bms_ready)
+  if (_bms_init_attempted)
     return;
+  _bms_init_attempted = true;
 
   constexpr drivers::BQ25629_Config config = {
       .charge_voltage_mv = 4200,
@@ -224,7 +225,9 @@ void GoHardwareBoard::init_bms() {
   };
   _bms_driver = new BQ25629Bms(_i2c_bus, config, I2C_ADDR_BMS);
   if (!_bms_driver->init()) {
-    AG_LOGE(TAG, "BMS init failed");
+    AG_LOGE(TAG, "BMS init failed — continuing without charger telemetry");
+    delete _bms_driver;
+    _bms_driver = nullptr;
   }
 
   // --- V1 fuel-gauge bring-up ---
@@ -293,8 +296,6 @@ void GoHardwareBoard::init_bms() {
       AG_LOGI(TAG, "BQ27427 boot: soc=%u%% v=%umV i=%dmA t=%.1fC", soc, mv, ma, tc);
     }
   }
-
-  _bms_ready = true;
 }
 
 void GoHardwareBoard::init_wifi_subsystem() {
@@ -344,10 +345,7 @@ GoSettings GoHardwareBoard::load_settings() {
   return _settings;
 }
 
-BmsDevice &GoHardwareBoard::bms() {
-  assert(_bms_ready && "bms() requires init_bms()");
-  return *_bms_driver;
-}
+BmsDevice *GoHardwareBoard::bms() { return _bms_driver; }
 
 // ---------------------------------------------------------------------------
 // Cold-boot PMID gate
@@ -360,7 +358,10 @@ static constexpr uint32_t PMID_WAIT_TIMEOUT_MS = 500;
 static constexpr uint32_t PMID_WAIT_POLL_MS = 50;
 
 void GoHardwareBoard::_ensure_pmid_ready() {
-  assert(_bms_driver && "init_bms() must precede _ensure_pmid_ready()");
+  if (_bms_driver == nullptr) {
+    AG_LOGW(TAG, "PMID readiness check skipped: BMS unavailable");
+    return;
+  }
 
   bool rekicked = false;
   uint32_t elapsed_ms = 0;
@@ -396,7 +397,7 @@ void GoHardwareBoard::_ensure_pmid_ready() {
 
 SensorManager &GoHardwareBoard::sensors(bool warm) {
   assert(_buses_ready && "sensors() requires init_buses()");
-  assert(_bms_ready && "sensors() requires init_bms()");
+  assert(_bms_init_attempted && "sensors() requires init_bms()");
   assert(_power_ready && "sensors() requires power()");
   if (!_sensor_manager) {
     auto *sgp41 = new SGP41(_i2c_bus, I2C_ADDR_SGP41);
@@ -572,9 +573,9 @@ AgClient &GoHardwareBoard::ag_client() {
 }
 
 PowerService &GoHardwareBoard::power() {
-  assert(_bms_ready && "power() requires init_bms()");
+  assert(_bms_init_attempted && "power() requires init_bms()");
   if (!_power) {
-    _power = new PowerService(*_bms_driver, gpio::native::hal,
+    _power = new PowerService(_bms_driver, gpio::native::hal,
                               {
                                   .pin_wake_button_power = PIN_BUTTON_POWER,
                                   .pin_wake_button_boot = -1,

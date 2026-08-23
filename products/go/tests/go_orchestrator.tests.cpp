@@ -360,7 +360,7 @@ public:
 
   ConfigStore &config_store() override { return *reinterpret_cast<ConfigStore *>(_buf); }
   GoSettings load_settings() override { return {}; }
-  BmsDevice &bms() override { return *reinterpret_cast<BmsDevice *>(_buf); }
+  BmsDevice *bms() override { return reinterpret_cast<BmsDevice *>(_buf); }
   SensorManager &sensors(bool) override { return *reinterpret_cast<SensorManager *>(_buf); }
   StorageService &storage() override { return *reinterpret_cast<StorageService *>(_buf); }
   DisplayService &display() override { return *reinterpret_cast<DisplayService *>(_buf); }
@@ -640,7 +640,7 @@ struct TestFixture {
         gps_service(stub_gps, nullptr, GpsService::Config{}),
         input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config{}),
         display_service(DisplayService::Config{}), storage_service(payload_cache, stub_nand),
-        power_service(stub_bms, test_gpio_hal, PowerService::Config{}),
+        power_service(&stub_bms, test_gpio_hal, PowerService::Config{}),
         ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service, stub_ble_server),
         wifi_service(nullptr,
                      {*reinterpret_cast<WifiManager *>(_stub_buf),
@@ -5033,7 +5033,7 @@ struct PmSleepFixture {
         gps_service(stub_gps, nullptr, GpsService::Config{}),
         input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config{}),
         display_service(DisplayService::Config{}), storage_service(payload_cache, stub_nand),
-        power_service(stub_bms, test_gpio_hal,
+        power_service(&stub_bms, test_gpio_hal,
                       PowerService::Config{
                           .pin_wake_button_power = 0,
                           .pin_wake_button_boot = 1,

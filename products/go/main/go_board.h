@@ -128,7 +128,8 @@ struct GoBoard {
 
   virtual ConfigStore &config_store() = 0;
   virtual GoSettings load_settings() = 0;
-  virtual BmsDevice &bms() = 0;
+  /// Return the initialized charger, or nullptr when BMS initialization failed.
+  virtual BmsDevice *bms() = 0;
   virtual SensorManager &sensors(bool warm = false) = 0;
   virtual StorageService &storage() = 0;
   virtual DisplayService &display() = 0;

@@ -34,7 +34,7 @@ public:
   // --- Lazy service accessors ---
   ConfigStore &config_store() override;
   GoSettings load_settings() override;
-  BmsDevice &bms() override;
+  BmsDevice *bms() override;
   SensorManager &sensors(bool warm) override;
   StorageService &storage() override;
   DisplayService &display() override;
@@ -75,7 +75,7 @@ private:
   bool _nvs_ready = false;
   bool _buses_ready = false;
   bool _spi_ready = false;
-  bool _bms_ready = false;
+  bool _bms_init_attempted = false;
   bool _power_ready = false;
   bool _wifi_inited = false;
 

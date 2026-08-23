@@ -145,7 +145,7 @@ public:
 
   ConfigStore &config_store() override { return *reinterpret_cast<ConfigStore *>(_buf); }
   GoSettings load_settings() override { return {}; }
-  BmsDevice &bms() override { return *reinterpret_cast<BmsDevice *>(_buf); }
+  BmsDevice *bms() override { return reinterpret_cast<BmsDevice *>(_buf); }
   SensorManager &sensors(bool) override { return *reinterpret_cast<SensorManager *>(_buf); }
   StorageService &storage() override { return *reinterpret_cast<StorageService *>(_buf); }
   DisplayService &display() override { return *reinterpret_cast<DisplayService *>(_buf); }

@@ -426,7 +426,7 @@ uint32_t StorageService::used_kb() const { return 0; }
 // PowerService stubs
 // ============================================================================
 
-PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config)
+PowerService::PowerService(BmsDevice *bms, const gpio::Hal &gpio, const Config &config)
     : _bms(bms), _gpio(gpio), _config(config) {}
 
 void PowerService::set_fuel_gauge(FuelGaugeDevice * /*fg*/) {}

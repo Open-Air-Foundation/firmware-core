@@ -242,9 +242,9 @@ public:
     call_log.push_back("load_settings");
     return settings;
   }
-  BmsDevice &bms() override {
+  BmsDevice *bms() override {
     call_log.push_back("bms");
-    return _bms;
+    return &_bms;
   }
   SensorManager &sensors(bool warm) override {
     call_log.push_back("sensors");
@@ -374,7 +374,7 @@ private:
   DisplayService _display{{}};
   LedService _led{{}};       // inert mode (null driver)
   BuzzerService _buzzer{{}}; // inert mode (null driver)
-  PowerService _power{_bms, stub_gpio_hal, {}};
+  PowerService _power{&_bms, stub_gpio_hal, {}};
 };
 
 // ============================================================================
