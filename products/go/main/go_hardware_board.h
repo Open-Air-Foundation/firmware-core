@@ -27,7 +27,8 @@ public:
   void init_nvs() override;
   void init_buses() override;
   void init_spi() override;
-  void init_bms() override;
+  void init_fuel_gauge() override;
+  bool init_bms() override;
   void init_wifi_subsystem() override;
   void init_core() override;
 
@@ -62,6 +63,7 @@ public:
   void release_gpio_holds() override;
   void ulp_stop() override;
   void ulp_start() override;
+  void restart() override;
   void install_button_isr(int pin, volatile bool *flag) override;
   void remove_button_isr(int pin) override;
   bool start_pm_fan() override;
@@ -76,6 +78,7 @@ private:
   bool _buses_ready = false;
   bool _spi_ready = false;
   bool _bms_init_attempted = false;
+  bool _fuel_gauge_init_attempted = false;
   bool _power_ready = false;
   bool _wifi_inited = false;
 

@@ -200,6 +200,10 @@ public:
   /// @param config  Runtime configuration (wake pins, sleep threshold).
   PowerService(BmsDevice *bms, const gpio::Hal &gpio, const Config &config);
 
+  /// Attach a BMS that became available after this service was constructed.
+  /// Non-owning: the BMS must outlive PowerService.
+  void set_bms(BmsDevice *bms);
+
   /// Attach an already-initialised fuel gauge for runtime use.
   /// Non-owning: the fuel gauge must outlive PowerService.
   /// Pass nullptr (or skip the call entirely) on prototype boards.

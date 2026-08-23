@@ -68,6 +68,10 @@ static constexpr const char *OTA_HTTP_DOMAIN = "hw.airgradient.com";
 // Allow several NMEA epochs after reconnecting the UART on timer wake.
 static constexpr uint32_t GPS_FAST_PATH_READ_TIMEOUT_MS = 3000;
 
+/// A transient BMS communication failure gets one same-boot retry.
+static constexpr uint8_t BMS_INIT_MAX_ATTEMPTS = 2;
+static constexpr uint32_t BMS_INIT_RETRY_DELAY_MS = 100;
+
 // Strings owned by GoApp that WifiService::Config holds pointers into.
 // Stack-allocated in run_*; lifetime = process (functions never return).
 namespace {
@@ -120,6 +124,24 @@ PortableWifiProvisioner::Config make_portable_prov_config(const char *serial,
 
 GoApp::GoApp(GoBoard &board) : _board(board) {}
 
+bool GoApp::init_bms_with_retry() {
+  for (uint8_t attempt = 1; attempt <= BMS_INIT_MAX_ATTEMPTS; ++attempt) {
+    if (_board.init_bms()) {
+      return true;
+    }
+
+    AG_LOGE(TAG, "BMS initialization attempt %u/%u failed", static_cast<unsigned int>(attempt),
+            static_cast<unsigned int>(BMS_INIT_MAX_ATTEMPTS));
+    if (attempt < BMS_INIT_MAX_ATTEMPTS) {
+      RTOS::delay_ms(BMS_INIT_RETRY_DELAY_MS);
+    }
+  }
+
+  AG_LOGE(TAG, "BMS initialization failed after %u attempts",
+          static_cast<unsigned int>(BMS_INIT_MAX_ATTEMPTS));
+  return false;
+}
+
 // ===========================================================================
 // GoApp::run() — boot path selection
 // ===========================================================================
@@ -131,9 +153,9 @@ void GoApp::run() {
 
   // Factory fuel-gauge learning pre-empts every normal boot path. Only the
   // lightweight, idempotent init_nvs() is needed to read FactorySettings; the
-  // heavy init_core() happens inside the factory path. A timer wake, button
-  // wake, or charger re-plug during an active run always routes here, which is
-  // what makes resume-across-ship-off automatic.
+  // heavy hardware initialization and BMS retry happen inside the factory
+  // path. A timer wake, button wake, or charger re-plug during an active run
+  // always routes here, which makes resume-across-ship-off automatic.
   _board.init_nvs();
   FactorySettings fs{};
   load_factory_settings(_board.config_store(), fs);
@@ -175,7 +197,13 @@ void GoApp::run() {
 void GoApp::run_factory_learning_path(const RtcAppState & /*state*/) {
   AG_LOGI(TAG, "run_factory_learning_path: entering factory fuel-gauge learning");
 #ifndef TEST_HOST
-  _board.init_core(); // full init here (buses, SPI, BMS) — NOT in run()
+  _board.init_core();
+  _board.init_fuel_gauge();
+  if (!init_bms_with_retry()) {
+    AG_LOGE(TAG, "BMS unavailable during factory learning; restarting");
+    _board.restart();
+    return;
+  }
   _board.release_gpio_holds();
 
   FgLearningRunner runner({
@@ -254,6 +282,10 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
 
   // --- Core init (NVS must be ready before load_settings) ---
   _board.init_core();
+  _board.init_fuel_gauge();
+  if (!init_bms_with_retry()) {
+    AG_LOGW(TAG, "fast-path continuing without BMS");
+  }
   _board.release_gpio_holds();
   _board.power().set_pm_power(true);
 
@@ -491,6 +523,12 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // -----------------------------------------------------------------------
 
   _board.init_core();
+  _board.init_fuel_gauge();
+  if (!init_bms_with_retry()) {
+    AG_LOGE(TAG, "BMS unavailable during button wake; restarting");
+    _board.restart();
+    return;
+  }
   _board.release_gpio_holds();
   _board.power().set_pm_power(true);
 
@@ -684,6 +722,12 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
 
   // --- Complete any missing core init (idempotent) ---
   _board.init_core();
+  _board.init_fuel_gauge();
+  if (!init_bms_with_retry()) {
+    AG_LOGE(TAG, "BMS unavailable during interactive boot; restarting");
+    _board.restart();
+    return;
+  }
   _board.release_gpio_holds();
   _board.power().set_pm_power(true);
 

@@ -18,6 +18,7 @@
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
 #include <esp_app_desc.h>
+#include <esp_system.h>
 #include <nvs_flash.h>
 
 #include "ag_i2c.h"
@@ -207,9 +208,10 @@ void GoHardwareBoard::init_spi() {
   _spi_ready = true;
 }
 
-void GoHardwareBoard::init_bms() {
-  if (_bms_init_attempted)
-    return;
+bool GoHardwareBoard::init_bms() {
+  if (_bms_driver != nullptr) {
+    return true;
+  }
   _bms_init_attempted = true;
 
   constexpr drivers::BQ25629_Config config = {
@@ -225,10 +227,23 @@ void GoHardwareBoard::init_bms() {
   };
   _bms_driver = new BQ25629Bms(_i2c_bus, config, I2C_ADDR_BMS);
   if (!_bms_driver->init()) {
-    AG_LOGE(TAG, "BMS init failed — continuing without charger telemetry");
+    AG_LOGE(TAG, "BMS init failed");
     delete _bms_driver;
     _bms_driver = nullptr;
+    return false;
   }
+
+  if (_power != nullptr) {
+    _power->set_bms(_bms_driver);
+  }
+  return true;
+}
+
+void GoHardwareBoard::init_fuel_gauge() {
+  if (_fuel_gauge_init_attempted) {
+    return;
+  }
+  _fuel_gauge_init_attempted = true;
 
   // --- V1 fuel-gauge bring-up ---
   if (_variant == BoardVariant::V1) {
@@ -321,7 +336,6 @@ void GoHardwareBoard::init_core() {
   init_nvs();
   init_buses();
   init_spi();
-  init_bms();
 }
 
 // ===========================================================================
@@ -573,6 +587,7 @@ AgClient &GoHardwareBoard::ag_client() {
 }
 
 PowerService &GoHardwareBoard::power() {
+  assert(_fuel_gauge_init_attempted && "power() requires init_fuel_gauge()");
   assert(_bms_init_attempted && "power() requires init_bms()");
   if (!_power) {
     _power = new PowerService(_bms_driver, gpio::native::hal,
@@ -655,6 +670,8 @@ void GoHardwareBoard::release_gpio_holds() { PowerService::release_sleep_gpio_ho
 void GoHardwareBoard::ulp_stop() { ulp_wdt_stop(); }
 
 void GoHardwareBoard::ulp_start() { ulp_wdt_start(); }
+
+void GoHardwareBoard::restart() { esp_restart(); }
 
 void GoHardwareBoard::install_button_isr(int pin, volatile bool *flag) {
   gpio_install_isr_service(0); // idempotent

@@ -363,6 +363,17 @@ TEST_CASE("reset_watchdog: pass-through to BmsDevice", "[PowerService][watchdog]
   }
 }
 
+TEST_CASE("set_bms: attaches charger after degraded construction", "[PowerService][bms]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(nullptr, test_gpio_hal, DEFAULT_CONFIG);
+
+  CHECK_FALSE(svc.reset_watchdog());
+
+  svc.set_bms(&mock_bms);
+  REQUIRE_CALL(mock_bms, update_watchdog()).RETURN(true);
+  CHECK(svc.reset_watchdog());
+}
+
 // ============================================================================
 // TEST CASE 3 — poll_status (plain pass-through, no PMID sync)
 // ============================================================================

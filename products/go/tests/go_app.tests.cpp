@@ -184,10 +184,14 @@ public:
   bool nvs_init_called = false;
   bool buses_init_called = false;
   bool spi_init_called = false;
+  bool fuel_gauge_init_called = false;
   bool bms_init_called = false;
+  int bms_init_attempts = 0;
+  int bms_failures_remaining = 0;
   bool core_init_called = false;
   bool sensors_warm_arg = false;
   bool sensors_called = false;
+  bool restart_called = false;
 
   // ISR
   volatile bool *isr_flag = nullptr;
@@ -211,9 +215,22 @@ public:
     call_log.push_back("init_spi");
     spi_init_called = true;
   }
-  void init_bms() override {
+  void init_fuel_gauge() override {
+    call_log.push_back("init_fuel_gauge");
+    fuel_gauge_init_called = true;
+  }
+  bool init_bms() override {
     call_log.push_back("init_bms");
     bms_init_called = true;
+    ++bms_init_attempts;
+    if (bms_failures_remaining > 0) {
+      --bms_failures_remaining;
+      bms_available = false;
+      return false;
+    }
+    bms_available = true;
+    _power.set_bms(&_bms);
+    return true;
   }
   void init_core() override {
     call_log.push_back("init_core");
@@ -221,7 +238,6 @@ public:
     init_nvs();
     init_buses();
     init_spi();
-    init_bms();
   }
 
   // Radio subsystem init.  CP1 does not exercise this from GoApp — it is
@@ -244,7 +260,7 @@ public:
   }
   BmsDevice *bms() override {
     call_log.push_back("bms");
-    return &_bms;
+    return bms_available ? &_bms : nullptr;
   }
   SensorManager &sensors(bool warm) override {
     call_log.push_back("sensors");
@@ -320,6 +336,10 @@ public:
   void release_gpio_holds() override { call_log.push_back("release_gpio_holds"); }
   void ulp_stop() override {}
   void ulp_start() override {}
+  void restart() override {
+    call_log.push_back("restart");
+    restart_called = true;
+  }
 
   void install_button_isr(int pin, volatile bool *flag) override {
     isr_pin = pin;
@@ -346,6 +366,7 @@ public:
 
   // Configurable test state
   GoSettings settings{};
+  bool bms_available = false;
 
 private:
   // Stub service instances.
@@ -374,7 +395,7 @@ private:
   DisplayService _display{{}};
   LedService _led{{}};       // inert mode (null driver)
   BuzzerService _buzzer{{}}; // inert mode (null driver)
-  PowerService _power{&_bms, stub_gpio_hal, {}};
+  PowerService _power{nullptr, stub_gpio_hal, {}};
 };
 
 // ============================================================================
@@ -928,6 +949,75 @@ TEST_CASE("execute_fast_path: no tracking -> no route") {
 // Tests: call ordering in execute_fast_path
 // ============================================================================
 
+TEST_CASE("execute_fast_path: retries BMS initialization once") {
+  test_spy::reset();
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+
+  MockBoard board;
+  board.bms_failures_remaining = 1;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  RtcAppState state{};
+  state.sensors_warm = true;
+  volatile bool button = false;
+
+  const auto result = access.execute_fast_path(state, button);
+
+  CHECK(result.outcome == GoAppTestAccess::Outcome::Sleep);
+  CHECK(board.bms_init_attempts == 2);
+  CHECK(board.sensors_called);
+}
+
+TEST_CASE("execute_fast_path: exhausted BMS retries continue without BMS") {
+  test_spy::reset();
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+
+  MockBoard board;
+  board.bms_failures_remaining = 2;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  RtcAppState state{};
+  volatile bool button = false;
+
+  const auto result = access.execute_fast_path(state, button);
+
+  CHECK(result.outcome == GoAppTestAccess::Outcome::Sleep);
+  CHECK(board.bms_init_attempts == 2);
+  CHECK_FALSE(board.bms_available);
+  CHECK(board.call_index("release_gpio_holds") >= 0);
+  CHECK(board.call_index("power") >= 0);
+  CHECK(board.call_index("sensors") >= 0);
+  CHECK(board.call_index("storage") >= 0);
+}
+
+TEST_CASE("fast-path promotion retries BMS for required interactive boot") {
+  test_spy::reset();
+
+  MockBoard board;
+  board.bms_failures_remaining = 2;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  RtcAppState state{};
+  volatile bool button = true;
+
+  const auto result = access.execute_fast_path(state, button);
+
+  REQUIRE(result.outcome == GoAppTestAccess::Outcome::Promote);
+  CHECK(board.bms_init_attempts == 2);
+  CHECK_FALSE(board.bms_available);
+
+  access.run_interactive(WakeCause::Timer, result.handoff);
+
+  CHECK(board.bms_init_attempts == 3);
+  CHECK(board.bms_available);
+  CHECK_FALSE(board.restart_called);
+  CHECK(test_spy::orchestrator_init_called);
+  CHECK(test_spy::orchestrator_run_called);
+}
+
 TEST_CASE("execute_fast_path: init ordering — init_core before load_settings before sensors") {
   test_spy::reset();
   test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
@@ -942,10 +1032,16 @@ TEST_CASE("execute_fast_path: init ordering — init_core before load_settings b
 
   access.execute_fast_path(state, button);
 
-  // init_core must happen before load_settings (NVS prerequisite)
+  // Core infrastructure, fuel gauge, and BMS attempt precede services.
   CHECK(board.call_index("init_core") >= 0);
+  CHECK(board.call_index("init_fuel_gauge") >= 0);
+  CHECK(board.call_index("init_bms") >= 0);
   CHECK(board.call_index("load_settings") >= 0);
   CHECK(board.call_index("sensors") >= 0);
+  CHECK(board.call_index("init_core") < board.call_index("init_fuel_gauge"));
+  CHECK(board.call_index("init_fuel_gauge") < board.call_index("init_bms"));
+  CHECK(board.call_index("init_core") < board.call_index("init_bms"));
+  CHECK(board.call_index("init_bms") < board.call_index("load_settings"));
   CHECK(board.call_index("init_core") < board.call_index("load_settings"));
   CHECK(board.call_index("load_settings") < board.call_index("sensors"));
 }
@@ -1045,6 +1141,24 @@ TEST_CASE("run_interactive wires a valid local API with shared identity and queu
   CHECK(event.type == EventType::LocalApiRequestReady);
 }
 
+TEST_CASE("run_interactive: exhausted BMS retries restart before orchestrator") {
+  test_spy::reset();
+  MockBoard board;
+  board.bms_failures_remaining = 2;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  access.run_interactive(WakeCause::PowerOn);
+
+  CHECK(board.bms_init_attempts == 2);
+  CHECK(board.fuel_gauge_init_called);
+  CHECK(board.restart_called);
+  CHECK_FALSE(test_spy::orchestrator_init_called);
+  CHECK_FALSE(test_spy::orchestrator_run_called);
+  CHECK(board.call_index("power") < 0);
+  CHECK(board.call_index("sensors") < 0);
+}
+
 TEST_CASE("button wake path wires a valid local API with shared identity") {
   test_spy::reset();
   MockBoard board;
@@ -1072,4 +1186,22 @@ TEST_CASE("button wake path wires a valid local API with shared identity") {
   test_spy::orchestrator_local_api->set_access(ConfigAccess::ReadWrite);
   CHECK(test_spy::orchestrator_local_api->trigger(ActionId::CalibrateCo2).status ==
         ActionStatus::Dispatched);
+}
+
+TEST_CASE("button wake path: exhausted BMS retries restart before orchestrator") {
+  test_spy::reset();
+  MockBoard board;
+  board.bms_failures_remaining = 2;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  access.run_button_wake_path(RtcAppState{});
+
+  CHECK(board.bms_init_attempts == 2);
+  CHECK(board.fuel_gauge_init_called);
+  CHECK(board.restart_called);
+  CHECK_FALSE(test_spy::orchestrator_init_called);
+  CHECK_FALSE(test_spy::orchestrator_run_called);
+  CHECK(board.call_index("power") < 0);
+  CHECK(board.call_index("sensors") < 0);
 }

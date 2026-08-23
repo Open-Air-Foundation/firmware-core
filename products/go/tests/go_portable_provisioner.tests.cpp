@@ -139,7 +139,8 @@ public:
   void init_nvs() override {}
   void init_buses() override {}
   void init_spi() override {}
-  void init_bms() override {}
+  void init_fuel_gauge() override {}
+  bool init_bms() override { return true; }
   void init_wifi_subsystem() override { ++init_wifi_subsystem_calls; }
   void init_core() override {}
 
@@ -167,6 +168,7 @@ public:
   void release_gpio_holds() override {}
   void ulp_stop() override {}
   void ulp_start() override {}
+  void restart() override {}
   void install_button_isr(int, volatile bool *) override {}
   void remove_button_isr(int) override {}
 
