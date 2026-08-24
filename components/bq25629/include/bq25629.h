@@ -438,7 +438,7 @@ public:
    * and determines the current temperature zone.
    *
    * NTC: KNTC0805/10KF (R25=10kΩ, B=3950K)
-   * Divider: RT1=5.23kΩ, RT2=30.1kΩ
+   * Divider: RT1=4.12kΩ, RT2=17.33kΩ
    *
    * @param data Output: NTC temperature data
    * @return ESP_OK on success
