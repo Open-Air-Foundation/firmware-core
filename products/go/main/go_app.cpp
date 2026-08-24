@@ -258,6 +258,14 @@ void GoApp::run_fast_path(const RtcAppState &state) {
     log_heap(TAG, "boot:fast-path:before-sleep");
     _board.power().enter_sleep(result.sleep_duration_ms);
     // Never returns — CPU reboots on wake.
+    return;
+  }
+
+  if (result.outcome == FastPathResult::Outcome::Promote && _board.bms() == nullptr &&
+      !init_bms_with_retry()) {
+    AG_LOGE(TAG, "BMS unavailable during fast-path promotion; restarting");
+    _board.restart();
+    return;
   }
 
   // Promotion to interactive — wire fast_path_measures pointer into

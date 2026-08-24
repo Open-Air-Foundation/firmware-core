@@ -198,6 +198,7 @@ public:
   int isr_pin = -1;
   bool isr_installed = false;
   bool isr_removed = false;
+  bool press_button_on_isr_install = false;
 
   // GPS
   bool new_gps_driver_called = false;
@@ -222,6 +223,9 @@ public:
   bool init_bms() override {
     call_log.push_back("init_bms");
     bms_init_called = true;
+    if (bms_available) {
+      return true;
+    }
     ++bms_init_attempts;
     if (bms_failures_remaining > 0) {
       --bms_failures_remaining;
@@ -345,6 +349,9 @@ public:
     isr_pin = pin;
     isr_flag = flag;
     isr_installed = true;
+    if (press_button_on_isr_install) {
+      *flag = true;
+    }
   }
   void remove_button_isr(int /*pin*/) override { isr_removed = true; }
 
@@ -997,25 +1004,54 @@ TEST_CASE("fast-path promotion retries BMS for required interactive boot") {
 
   MockBoard board;
   board.bms_failures_remaining = 2;
+  board.press_button_on_isr_install = true;
   GoApp app(board);
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  volatile bool button = true;
-
-  const auto result = access.execute_fast_path(state, button);
-
-  REQUIRE(result.outcome == GoAppTestAccess::Outcome::Promote);
-  CHECK(board.bms_init_attempts == 2);
-  CHECK_FALSE(board.bms_available);
-
-  access.run_interactive(WakeCause::Timer, result.handoff);
+  access.run_fast_path(state);
 
   CHECK(board.bms_init_attempts == 3);
   CHECK(board.bms_available);
   CHECK_FALSE(board.restart_called);
   CHECK(test_spy::orchestrator_init_called);
   CHECK(test_spy::orchestrator_run_called);
+}
+
+TEST_CASE("fast-path promotion restarts when BMS retry is exhausted") {
+  test_spy::reset();
+
+  MockBoard board;
+  board.bms_failures_remaining = 4;
+  board.press_button_on_isr_install = true;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  access.run_fast_path(RtcAppState{});
+
+  CHECK(board.bms_init_attempts == 4);
+  CHECK_FALSE(board.bms_available);
+  CHECK(board.restart_called);
+  CHECK_FALSE(test_spy::orchestrator_init_called);
+  CHECK_FALSE(test_spy::orchestrator_run_called);
+}
+
+TEST_CASE("fast-path sleep does not retry unavailable BMS during handoff") {
+  test_spy::reset();
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+
+  MockBoard board;
+  board.bms_failures_remaining = 2;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  access.run_fast_path(RtcAppState{});
+
+  CHECK(board.bms_init_attempts == 2);
+  CHECK_FALSE(board.bms_available);
+  CHECK(test_spy::enter_sleep_called);
+  CHECK_FALSE(board.restart_called);
+  CHECK_FALSE(test_spy::orchestrator_init_called);
 }
 
 TEST_CASE("execute_fast_path: init ordering — init_core before load_settings before sensors") {
