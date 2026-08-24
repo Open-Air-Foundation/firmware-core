@@ -354,13 +354,14 @@ public:
   void init_nvs() override {}
   void init_buses() override {}
   void init_spi() override {}
-  void init_bms() override {}
+  void init_fuel_gauge() override {}
+  bool init_bms() override { return true; }
   void init_wifi_subsystem() override { ++init_wifi_subsystem_calls; }
   void init_core() override {}
 
   ConfigStore &config_store() override { return *reinterpret_cast<ConfigStore *>(_buf); }
   GoSettings load_settings() override { return {}; }
-  BmsDevice &bms() override { return *reinterpret_cast<BmsDevice *>(_buf); }
+  BmsDevice *bms() override { return reinterpret_cast<BmsDevice *>(_buf); }
   SensorManager &sensors(bool) override { return *reinterpret_cast<SensorManager *>(_buf); }
   StorageService &storage() override { return *reinterpret_cast<StorageService *>(_buf); }
   DisplayService &display() override { return *reinterpret_cast<DisplayService *>(_buf); }
@@ -388,6 +389,7 @@ public:
   void release_gpio_holds() override {}
   void ulp_stop() override {}
   void ulp_start() override {}
+  void restart() override {}
   void install_button_isr(int, volatile bool *) override {}
   void remove_button_isr(int) override {}
 
@@ -640,7 +642,7 @@ struct TestFixture {
         gps_service(stub_gps, nullptr, GpsService::Config{}),
         input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config{}),
         display_service(DisplayService::Config{}), storage_service(payload_cache, stub_nand),
-        power_service(stub_bms, test_gpio_hal, PowerService::Config{}),
+        power_service(&stub_bms, test_gpio_hal, PowerService::Config{}),
         ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service, stub_ble_server),
         wifi_service(nullptr,
                      {*reinterpret_cast<WifiManager *>(_stub_buf),
@@ -5033,7 +5035,7 @@ struct PmSleepFixture {
         gps_service(stub_gps, nullptr, GpsService::Config{}),
         input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config{}),
         display_service(DisplayService::Config{}), storage_service(payload_cache, stub_nand),
-        power_service(stub_bms, test_gpio_hal,
+        power_service(&stub_bms, test_gpio_hal,
                       PowerService::Config{
                           .pin_wake_button_power = 0,
                           .pin_wake_button_boot = 1,

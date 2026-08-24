@@ -65,8 +65,13 @@ exceed 1S cell-protection OCP, opening the protection FET and causing a
 POWERON reset. Holding `EN_OTG=1` trades ~220 µA quiescent for indefinite
 uptime on battery.
 
-All three boot paths call `init_core()` (which runs `init_bms()` →
-arms PMID) before `power().set_pm_power(true)` and `sensors()`.
+All three normal boot paths call `init_core()` for NVS, GPIO/I2C buses, and
+SPI, then initialize the optional fuel gauge and try BQ25629 initialization
+twice, 100 ms apart. A successful BQ25629 initialization arms PMID before
+`power().set_pm_power(true)` and `sensors()`. Interactive, button-wake,
+factory-learning, and fast-path promotion boots restart if both BQ25629
+attempts fail. A fast path that can return directly to sleep continues in
+degraded mode so fuel-gauge SOC and non-PM measurements remain available.
 
 ### Power Button and Restart
 
@@ -117,12 +122,13 @@ onboarding. Button 2 long press remains factory reset.
 
 ### Fuel Gauge (V1 Only)
 
-On V1, `init_bms()` initialises the BQ27427 with a two-pass corruption
-recovery sequence and idempotent cell-config write. At runtime,
-`poll_bms()` prefers FG-derived SOC and surfaces FG telemetry in
-`PowerSnapshot`. Three log lines are emitted per poll: charger status,
-BQ25629 ADC telemetry, and FG telemetry with decoded flags
-(`FgFlags::FC`, `CHG`, `DSG`, etc.).
+On V1, `init_fuel_gauge()` initializes the BQ27427 independently from the
+BQ25629, using a two-pass corruption-recovery sequence and idempotent
+cell-config write. At runtime, `poll_bms()` prefers FG-derived SOC and surfaces
+FG telemetry in `PowerSnapshot`, even when the charger is unavailable. Fast-path
+route points and display rendering use the same snapshot. Three log lines are
+emitted per poll: charger status, BQ25629 ADC telemetry, and FG telemetry with
+decoded flags (`FgFlags::FC`, `CHG`, `DSG`, etc.).
 
 ## Build
 

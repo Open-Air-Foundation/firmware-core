@@ -26,6 +26,9 @@ private:
   /// core, constructs FgLearningRunner, and hands off. Never returns on target.
   void run_factory_learning_path(const RtcAppState &state);
 
+  /// Try BMS initialization twice to recover transient communication failures.
+  bool init_bms_with_retry();
+
   // --- Testable fast-path core ---
 
   struct FastPathResult {

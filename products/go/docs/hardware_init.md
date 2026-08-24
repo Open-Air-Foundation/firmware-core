@@ -76,20 +76,21 @@ no hardware dependencies.
 
 The `GoBoard` abstract interface provides:
 
-### Init methods (idempotent)
+### Init Methods (Idempotent)
 
-Each initialises one subsystem. Safe to call multiple times — subsequent
-calls are no-ops. Boot paths call these in the order their hardware
-sequencing requires.
+Each initializes one subsystem. Successful initialization is idempotent;
+`init_bms()` remains retryable after failure. Boot paths call these in the order
+their hardware sequencing requires.
 
 | Method | What it initialises |
 |---|---|
 | `init_nvs()` | NVS flash |
 | `init_buses()` | GPIO power enables + I2C bus + settling delays + board variant detection (BQ27427 probe) + PM polarity write |
 | `init_spi()` | SPI bus |
-| `init_bms()` | BMS driver (requires buses). On V1: also BQ27427 fuel gauge with corruption recovery + idempotent cell-config |
+| `init_fuel_gauge()` | Optional BQ27427 driver on V1 (requires buses), with corruption recovery + idempotent cell-config; independent from the charger |
+| `init_bms()` | BQ25629 charger driver (requires buses); returns availability and remains retryable after failure |
 | `init_wifi_subsystem()` | ESP-IDF Wi-Fi stack: netif, event loop, `esp_wifi_init`, storage mode, event handlers, single-shot timers. **Not** called by `init_core()` — only `Orchestrator::enter_stationary()` invokes it, so Portable-only boots never pay the cost. Idempotent at both the board layer (`_wifi_inited` flag) and the HAL layer. |
-| `init_core()` | Convenience gate: calls `init_nvs` + `init_buses` + `init_spi` + `init_bms` (skips what's done). Deliberately excludes `init_wifi_subsystem()`. |
+| `init_core()` | Convenience gate: calls `init_nvs` + `init_buses` + `init_spi` (skips what's done). Deliberately excludes fuel-gauge, BMS, and Wi-Fi initialization. |
 
 ### Lazy service accessors
 
@@ -100,12 +101,12 @@ process lifetime (never freed — the app never returns).
 |---|---|---|
 | `config_store()` | NvsConfigStore | NVS |
 | `load_settings()` | Loads GoSettings from NVS | NVS (via config_store) |
-| `bms()` | Returns BmsDevice ref | BMS init |
-| `sensors(warm)` | All sensor drivers + SensorManager | Buses, BMS |
+| `bms()` | Returns the initialized `BmsDevice`, or `nullptr` after failed initialization | BMS init attempted |
+| `sensors(warm)` | All sensor drivers + SensorManager | Buses, BMS attempted, PowerService constructed |
 | `storage()` | PayloadCache + NAND + StorageService | SPI |
 | `display()` | DisplayService | SPI |
 | `led_service()` | LedService (LP5036 driver on V1, inert on Prototype) | Buses |
-| `power()` | PowerService + ext watchdog | BMS |
+| `power()` | PowerService + ext watchdog; accepts a nullable BMS and optional fuel gauge | Fuel-gauge and BMS init attempted |
 | `wifi_hal()` | `EspWifiHal` instance | — (lazy C++ construction only; ESP-IDF Wi-Fi init runs in `init_wifi_subsystem()`) |
 | `wifi_manager()` | `WifiManager` constructed against the HAL | `wifi_hal()` — the manager's constructor only registers callbacks, so construction against an uninitialised HAL is safe; driver calls fire when `WifiService` actions run |
 | `http_server()` | `IdfHttpServer` for the Wi-Fi captive-portal transport | — (lazy) |
@@ -129,7 +130,7 @@ runtime overhead in production.
 
 `variant()`, `serial_number()`, `firmware_version()`, `gpio_hal()`,
 `release_gpio_holds()`, `ulp_stop()`, `ulp_start()`,
-`install_button_isr()`, `remove_button_isr()`.
+`restart()`, `install_button_isr()`, `remove_button_isr()`.
 
 `variant()` returns the `BoardVariant` detected during `init_buses()`. Must
 not be called before `init_buses()` has completed. Fail-safe default is
@@ -139,9 +140,10 @@ not be called before `init_buses()` has completed. Fail-safe default is
 
 | Boot path | Init sequence |
 |---|---|
-| **Fast path** | `init_core()` → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors(warm)` → `storage()` → `display()` |
-| **Button wake** | `init_spi()` → `display()` → early paint → `init_core()` → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors()` → ... |
-| **Interactive** | `init_core()` → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors()` → `storage()` → `display()` → orchestrator may call `init_wifi_subsystem()` on first `enter_stationary()` |
+| **Fast path** | `init_core()` → `init_fuel_gauge()` → BMS retry → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors(warm)` → `storage()` → `display()`; may sleep degraded after BMS failure |
+| **Button wake** | `init_spi()` → `display()` → early paint → `init_core()` → `init_fuel_gauge()` → BMS retry → restart on failure → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors()` → ... |
+| **Interactive** | `init_core()` → `init_fuel_gauge()` → BMS retry → restart on failure → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors()` → `storage()` → `display()` → orchestrator may call `init_wifi_subsystem()` on first `enter_stationary()` |
+| **Factory learning** | `init_core()` → `init_fuel_gauge()` → BMS retry → restart on failure → `release_gpio_holds()` → construct runner |
 
 Hardware sequencing constraints:
 
@@ -150,14 +152,19 @@ Hardware sequencing constraints:
   `init_buses()` also runs board variant detection (BQ27427 probe at
   `0x55`) and writes the variant-appropriate PM enable GPIO level
 - **SPI** must be ready before display and NAND flash
-- **BMS** must be initialised before sensors. On V1, `init_bms()` also
-  initialises the BQ27427 fuel gauge (corruption recovery + idempotent
-  cell-config write)
-- **PMID** must be armed before sensors. `init_bms()` arms the PMID boost
+- **Fuel gauge** is initialized independently before the charger retry. Its
+  failure leaves FG telemetry offline without preventing the charger from
+  operating
+- **BMS** must be attempted before `power()` and `sensors()`. `GoApp` tries
+  twice, 100 ms apart. Interactive, button-wake, factory-learning, and
+  fast-path promotion boots restart after both attempts fail; a sleeping fast
+  path continues with a nullable BMS
+- **PMID** is armed by successful BMS initialization. `init_bms()` arms the boost
   converter (`EN_OTG=1`); `power().set_pm_power(true)` then drives the EN_PM
   GPIO (PMID→SPS30 load switch on Prototype, I2C bus isolation on V1).
-  All three boot paths call this before `sensors()`. `GoHardwareBoard`
-  enforces this with a `_power_ready` assertion in `sensors()`
+  `GoHardwareBoard` enforces that BMS initialization was attempted and
+  `PowerService` was constructed before `sensors()`. During degraded fast-path
+  operation the PMID readiness check is skipped, so SPS30 data may be invalid
 - **Wi-Fi subsystem** must be initialised before any STA / AP / scan
   call hits the driver. The lazy accessors only construct the C++
   objects; the orchestrator's first Stationary entry triggers
@@ -190,16 +197,17 @@ via GoBoard lazy accessors:
 |---|---|---|
 | 1 | Early display | `_board.init_spi()` → `_board.display().init(..., true)` if `!handoff.display_painted` |
 | 2 | Core init | `_board.init_core()` (no-op if already done) |
-| 3 | Settings | `_board.load_settings()` |
-| 4 | LED service | `_board.led_service()` → `init()` + `start()` + boot animation on `PowerOn` |
-| 5 | Sensors | `_board.sensors()` |
-| 6 | GPS + touch | `_board.new_gps_driver()`, `_board.new_touch_sensor()` |
-| 7 | Storage | `_board.display().flush()` → `_board.storage()`; waits for the early display refresh before NAND uses SPI |
-| 8 | Event queue, BLE, Wi-Fi, Cloud | `BleService` borrows `_board.ble_server()`; `WifiService` borrows `_board.wifi_manager()`, `_board.ble_server()`, `_board.http_server()`; `CloudService` borrows `_board.ag_client()` + `WifiService` |
-| 9 | Producer services | SensorProducer, GpsService, InputService |
-| 10 | Power | `_board.power()` |
-| 11 | UIManager | Always constructed |
-| 12 | Start tasks + Orchestrator | `orchestrator->init()` + `run()` |
+| 3 | Battery devices | `_board.init_fuel_gauge()` → BMS retry; restart if unavailable |
+| 4 | Settings | `_board.load_settings()` |
+| 5 | LED service | `_board.led_service()` → `init()` + `start()` + boot animation on `PowerOn` |
+| 6 | Sensors | `_board.sensors()` |
+| 7 | GPS + touch | `_board.new_gps_driver()`, `_board.new_touch_sensor()` |
+| 8 | Storage | `_board.display().flush()` → `_board.storage()`; waits for the early display refresh before NAND uses SPI |
+| 9 | Event queue, BLE, Wi-Fi, Cloud | `BleService` borrows `_board.ble_server()`; `WifiService` borrows `_board.wifi_manager()`, `_board.ble_server()`, `_board.http_server()`; `CloudService` borrows `_board.ag_client()` + `WifiService` |
+| 10 | Producer services | SensorProducer, GpsService, InputService |
+| 11 | Power | Reuses the `PowerService` constructed before sensor initialization |
+| 12 | UIManager | Always constructed |
+| 13 | Start tasks + Orchestrator | `orchestrator->init()` + `run()` |
 
 ## Fast-Path Boot (GoApp::execute_fast_path)
 
@@ -208,19 +216,21 @@ tasks, no input handling. Returns a `FastPathResult` for testability.
 
 | # | What | GoBoard call |
 |---|---|---|
-| 1 | Core init + GPIO holds | `_board.init_core()`, `_board.release_gpio_holds()` |
-| 1a | Drive EN_PM GPIO (connect PM) | `_board.power().set_pm_power(true)` |
-| 2 | Load settings | `_board.load_settings()` |
-| 3 | Sensor init | `_board.sensors(state.sensors_warm)` |
-| 4 | Interruptible warmup | `sm.warmup_step()` with button checks |
-| 5 | One-shot measurement | `sm.start_measures()` (skip if button) |
-| 6 | One-shot GPS | `_board.new_gps_driver()` (skip if button/inactive) |
-| 7 | Storage + cache | `_board.storage()` (skip if button) |
-| 8 | Display + sleep decision | `_board.display()`, `_board.power().decide_sleep()` |
-| 9 | Return result | `FastPathResult{Outcome::Sleep, ...}` or `{Outcome::Promote, ...}` |
+| 1 | Core init | `_board.init_core()` |
+| 2 | Battery devices | `_board.init_fuel_gauge()`, then retry `_board.init_bms()` twice; continue degraded on failure |
+| 3 | GPIO holds + EN_PM | `_board.release_gpio_holds()`, then `_board.power().set_pm_power(true)` |
+| 4 | Load settings | `_board.load_settings()` |
+| 5 | Sensor init | `_board.sensors(state.sensors_warm)` |
+| 6 | Interruptible warmup | `sm.warmup_step()` with button checks |
+| 7 | One-shot measurement | `sm.start_measures()` (skip if button) |
+| 8 | One-shot GPS | `_board.new_gps_driver()` (skip if button/inactive) |
+| 9 | Storage + cache | `_board.storage()` (skip if button); one PowerSnapshot supplies route SOC and display |
+| 10 | Display + sleep decision | `_board.display()`, `_board.power().decide_sleep()` |
+| 11 | Return result | `FastPathResult{Outcome::Sleep, ...}` or `{Outcome::Promote, ...}` |
 
-The caller (`run_fast_path`) handles ISR setup/teardown, sleep entry, and
-promotion to `run_interactive()` based on the returned outcome.
+The caller (`run_fast_path`) handles ISR setup/teardown and sleep entry. Before
+promotion to `run_interactive()`, it retries BMS initialization if the degraded
+fast path did not acquire the charger; failure restarts the device.
 
 ### Button detection during fast path
 
@@ -244,7 +254,8 @@ individual init methods for fine-grained ordering:
 
 ```text
 Phase 1:  _board.init_spi() → _board.display() → early paint → _board.ulp_stop()
-Phase 2:  _board.init_core() → _board.release_gpio_holds()
+Phase 2:  _board.init_core() → _board.init_fuel_gauge() → BMS retry
+          → restart on BMS failure → _board.release_gpio_holds()
           → _board.power().set_pm_power(true)
           → _board.sensors() → _board.new_touch_sensor() → _board.new_gps_driver()
           → start producer tasks
@@ -282,11 +293,12 @@ GoHardwareBoard: board variant: Prototype (BQ27427 @ 0x55 NACK)
 
 ## Fuel Gauge Bring-Up (V1 Only)
 
-`init_bms()` gains a V1 branch gated on `_variant == BoardVariant::V1`
-that constructs the BQ27427 driver and runs the `evaluate_fg_state` pure
-helper (inline in `go_board.h`). The helper examines the chip's persistent
-Data Memory and decides whether a factory reset and/or cell-config write
-is needed.
+`init_fuel_gauge()` has a V1 branch gated on
+`_variant == BoardVariant::V1` that constructs the BQ27427 driver and runs the
+`evaluate_fg_state` pure helper (inline in `go_board.h`). The helper examines
+the chip's persistent Data Memory and decides whether a factory reset and/or
+cell-config write is needed. Fuel-gauge bring-up is independent from the
+retryable BQ25629 initialization.
 
 The two-pass recovery sequence:
 
@@ -316,7 +328,10 @@ See [`go_board.h`](../main/go_board.h) for `evaluate_fg_state` and
   `SensorManager` handles `nullptr` sensors gracefully.
 - **NAND mount failure**: `StorageService::init()` returns false. Temporary
   cache still works (RTC-backed).
-- **BMS init failure**: Logged. PowerSnapshot returns invalid sentinels.
+- **BMS init failure**: Retried once after 100 ms. A sleeping fast path can
+  continue with fuel-gauge SOC and invalid charger fields. Interactive,
+  button-wake, factory-learning, and promoted fast paths restart after both
+  attempts fail.
 
 ## Board Configuration
 

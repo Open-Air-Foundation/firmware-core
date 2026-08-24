@@ -195,10 +195,14 @@ public:
   // Construction
   // -------------------------------------------------------------------------
 
-  /// @param bms     BMS device (via BmsDevice HAL).  Must outlive this service.
+  /// @param bms     Optional BMS device. A non-null device must outlive this service.
   /// @param gpio    GPIO HAL function-pointer table.
   /// @param config  Runtime configuration (wake pins, sleep threshold).
-  PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config);
+  PowerService(BmsDevice *bms, const gpio::Hal &gpio, const Config &config);
+
+  /// Attach a BMS that became available after this service was constructed.
+  /// Non-owning: the BMS must outlive PowerService.
+  void set_bms(BmsDevice *bms);
 
   /// Attach an already-initialised fuel gauge for runtime use.
   /// Non-owning: the fuel gauge must outlive PowerService.
@@ -437,7 +441,7 @@ public:
   static constexpr uint8_t FULL_CHARGE_RESUME_SOC = 95;
 
 private:
-  BmsDevice &_bms;
+  BmsDevice *_bms;
   const gpio::Hal &_gpio;
   Config _config;
   FuelGaugeDevice *_fg = nullptr;

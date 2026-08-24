@@ -80,6 +80,7 @@ bool append_route_point_result = true;
 
 // --- PowerService ---
 bool bms_polled = false;
+int bms_poll_count = 0;
 bool state_saved = false;
 RtcAppState last_saved_state{};
 PowerSnapshot snapshot_to_return{};
@@ -162,6 +163,7 @@ void reset() {
   append_route_point_result = true;
 
   bms_polled = false;
+  bms_poll_count = 0;
   state_saved = false;
   last_saved_state = RtcAppState{};
   snapshot_to_return = PowerSnapshot{};
@@ -426,13 +428,16 @@ uint32_t StorageService::used_kb() const { return 0; }
 // PowerService stubs
 // ============================================================================
 
-PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config)
+PowerService::PowerService(BmsDevice *bms, const gpio::Hal &gpio, const Config &config)
     : _bms(bms), _gpio(gpio), _config(config) {}
+
+void PowerService::set_bms(BmsDevice *bms) { _bms = bms; }
 
 void PowerService::set_fuel_gauge(FuelGaugeDevice * /*fg*/) {}
 
 PowerSnapshot PowerService::poll_bms(bool /*pm_invalid_hint*/) {
   test_spy::bms_polled = true;
+  ++test_spy::bms_poll_count;
   return test_spy::snapshot_to_return;
 }
 

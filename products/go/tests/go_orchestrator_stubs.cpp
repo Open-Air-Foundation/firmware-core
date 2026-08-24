@@ -637,8 +637,10 @@ bool StorageService::clear_routes() {
 // PowerService stubs
 // ============================================================================
 
-PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config)
+PowerService::PowerService(BmsDevice *bms, const gpio::Hal &gpio, const Config &config)
     : _bms(bms), _gpio(gpio), _config(config) {}
+
+void PowerService::set_bms(BmsDevice *bms) { _bms = bms; }
 
 void PowerService::set_fuel_gauge(FuelGaugeDevice * /*fg*/) {}
 
