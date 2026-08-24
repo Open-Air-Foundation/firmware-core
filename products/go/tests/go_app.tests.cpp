@@ -65,11 +65,13 @@ extern bool route_started;
 extern bool route_resumed;
 extern uint32_t route_session_id;
 extern bool route_point_appended;
+extern RoutePoint last_route_point;
 extern bool resume_route_result;
 extern bool append_route_point_result;
 extern bool route_ended;
 extern bool cache_backed_up;
 extern bool bms_polled;
+extern int bms_poll_count;
 extern bool state_saved;
 extern RtcAppState last_saved_state;
 extern PowerSnapshot snapshot_to_return;
@@ -831,7 +833,8 @@ TEST_CASE("execute_fast_path: sleep too short -> promote locked") {
 TEST_CASE("execute_fast_path: tracking + GPS active -> route point stored") {
   test_spy::reset();
   test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
-  test_spy::bms_battery_pct = 80.0f;
+  test_spy::snapshot_to_return.battery_percentage = 80.0f;
+  test_spy::snapshot_to_return.battery_percent_source = BatteryPercentSource::FuelGauge;
 
   MockBoard board;
   board.settings.gps_mode = GpsMode::AlwaysOn;
@@ -852,8 +855,36 @@ TEST_CASE("execute_fast_path: tracking + GPS active -> route point stored") {
   CHECK(test_spy::route_started == false);
   CHECK(test_spy::route_session_id == 12345);
   CHECK(test_spy::route_point_appended == true);
+  CHECK(test_spy::last_route_point.battery_percentage == 80.0f);
   CHECK(test_spy::route_ended == true);
+  CHECK(test_spy::bms_poll_count == 1);
   CHECK(board.new_gps_driver_called == true);
+}
+
+TEST_CASE("execute_fast_path: degraded route uses fuel-gauge battery snapshot") {
+  test_spy::reset();
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+  test_spy::snapshot_to_return.battery_percentage = 74.0f;
+  test_spy::snapshot_to_return.battery_percent_source = BatteryPercentSource::FuelGauge;
+
+  MockBoard board;
+  board.bms_failures_remaining = 2;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  RtcAppState state{};
+  state.sensors_warm = true;
+  state.tracking_active = true;
+  state.tracking_session_id = 12345;
+  volatile bool button = false;
+
+  const auto result = access.execute_fast_path(state, button);
+
+  CHECK(result.outcome == GoAppTestAccess::Outcome::Sleep);
+  CHECK_FALSE(board.bms_available);
+  CHECK(test_spy::route_point_appended);
+  CHECK(test_spy::last_route_point.battery_percentage == 74.0f);
+  CHECK(test_spy::bms_poll_count == 1);
 }
 
 TEST_CASE("execute_fast_path: resume_route failure -> promote, no display painted") {

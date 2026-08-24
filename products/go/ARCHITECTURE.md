@@ -602,25 +602,29 @@ GoApp::run():
 | `PowerOn` | -- | `Interactive` |
 
 Hardware initialization is managed by **GoHardwareBoard** through
-idempotent init methods (`init_nvs()`, `init_buses()`, `init_spi()`,
-`init_bms()`) and lazy service accessors (`sensors()`, `storage()`,
-`display()`, `power()`). Each boot path calls these in the order its
-hardware sequencing requires. The convenience gate `init_core()` calls all
-four init methods (skipping any already done).
+fine-grained init methods and lazy service accessors. `init_nvs()`,
+`init_buses()`, and `init_spi()` are idempotent and grouped by `init_core()`.
+Optional BQ27427 initialization remains explicit through
+`init_fuel_gauge()`. BQ25629 initialization remains explicit through the
+retryable `init_bms()` method, and `GoApp` gives transient communication
+failures two attempts separated by 100 ms.
 
-All three boot paths follow a uniform pre-sensor sequence:
+All three normal boot paths follow this pre-sensor sequence:
 
 ```text
-init_core() → release_gpio_holds() → power().set_pm_power(true) → sensors()
+init_core() → init_fuel_gauge() → retry init_bms() → power() → sensors()
 ```
 
-`set_pm_power(true)` drives the EN_PM GPIO to the variant-appropriate level
-(Prototype: SPS30 VDD load switch; V1: SPS30 I2C bus isolation). PMID itself
-(`EN_OTG`) is armed once by `init_bms()` inside `init_core()` and the chip
-handles buck↔boost transitions autonomously thereafter. Both must run before
-`sensors()` because the SPS30 needs the PMID +5 V rail and the I2C bus
-connected. Between measurements the SPS30 is power-managed via its native
-Sleep command, not the GPIO (see [`docs/power_management.md`](docs/power_management.md)).
+After the BMS attempt, `release_gpio_holds()` and `set_pm_power(true)` drive the
+EN_PM GPIO to the variant-appropriate level (Prototype: SPS30 VDD load switch;
+V1: SPS30 I2C bus isolation). A successful `init_bms()` arms PMID (`EN_OTG`)
+once, and the chip handles buck↔boost transitions autonomously thereafter.
+Interactive, button-wake, factory-learning, and promoted fast-path boots
+restart after both BMS attempts fail. A fast path that is returning directly to
+sleep continues without the charger; `PowerService` remains usable with the
+fuel gauge alone, while the unavailable PMID rail can leave SPS30 data invalid.
+Between measurements the SPS30 is power-managed via its native Sleep command,
+not the GPIO (see [`docs/power_management.md`](docs/power_management.md)).
 
 When transitioning from the fast path to the interactive event loop
 (either because sleep is too short or the user pressed a button), the
@@ -1045,8 +1049,9 @@ sequenceDiagram
    - If Promote: wire measures pointer, call run_interactive()
 
 4. execute_fast_path() (testable core):
-    - _board.init_core() (NVS, GPIO/I2C, SPI, BMS — idempotent;
-      `init_bms()` arms PMID `EN_OTG=1` once for the session)
+   - _board.init_core() (NVS, GPIO/I2C, and SPI — idempotent)
+   - _board.init_fuel_gauge() (optional BQ27427, one attempt)
+   - Retry _board.init_bms() twice; continue degraded if unavailable
     - _board.release_gpio_holds() — pad transitions glitch-free
     - _board.power().set_pm_power(true) — drives EN_PM GPIO only;
       `EN_OTG` already armed by `init_bms()`
@@ -1057,7 +1062,9 @@ sequenceDiagram
    - One-shot measurement (skip if button pressed)
    - One-shot GPS via _board.new_gps_driver() if tracking + GPS active
    - Storage: _board.storage().cache_measurement() + route point
-    - Display + sleep decision via _board.power().decide_sleep()
+     - One _board.power().poll_bms() snapshot supplies route SOC, display,
+       and thermal shutdown policy
+     - Display + sleep decision via _board.power().decide_sleep()
     - Before a long deep sleep (not held warm): sm.pm_sleep() stops the fan
     - Returns FastPathResult{Outcome::Sleep, ...} or {Outcome::Promote, ...}
 ```
@@ -1092,28 +1099,29 @@ starting the async worker task.
         → returns immediately
 
    Phase 2 (~300 ms, parallel with display refresh):
-      8. _board.init_core() (NVS, GPIO/I2C, SPI, BMS — idempotent;
-         `init_bms()` arms PMID `EN_OTG=1` once for the session)
-      9. _board.release_gpio_holds()
-      10. _board.power().set_pm_power(true) — drives EN_PM GPIO only
-      11. _board.load_settings(), _board.sensors()
-     12. _board.new_gps_driver(), _board.new_touch_sensor()
-     13. Event queue, SensorProducer, GpsService, InputService
-     14. Start producer tasks → sensors and touch input operational
+      8. _board.init_core() (NVS, GPIO/I2C, and SPI — idempotent)
+      9. _board.init_fuel_gauge(), then retry _board.init_bms() twice
+     10. Restart if BMS remains unavailable
+     11. _board.release_gpio_holds()
+     12. _board.power().set_pm_power(true) — drives EN_PM GPIO only
+     13. _board.load_settings(), _board.sensors()
+     14. _board.new_gps_driver(), _board.new_touch_sensor()
+     15. Event queue, SensorProducer, GpsService, InputService
+     16. Start producer tasks → sensors and touch input operational
 
    Phase 3 (~3 s, blocks on SPI):
-     15. _board.storage() → SpiNandStorage spi_device_transmit() blocks
+     17. _board.storage() → SpiNandStorage spi_device_transmit() blocks
          until display worker releases bus (natural serialization)
-     16. BLE service (requires StorageService from Phase 3)
+     18. BLE service (requires StorageService from Phase 3)
 
    Phase 4 (~10 ms):
-     17. Build BootHandoff: display_painted=true, suppress_wake_press=true,
+     19. Build BootHandoff: display_painted=true, suppress_wake_press=true,
          initial_lock_state=Unlocked, display_snapshot=&snapshot
-     18. Orchestrator::init(Button, handoff)
+     20. Orchestrator::init(Button, handoff)
          → sets lock=Unlocked, pre-arms snackbar + schedules refresh timer,
             seeds cached measurement state from snapshot, requests fresh measurement
          → skips update_display() (screen already correct)
-     19. Orchestrator::run()
+     21. Orchestrator::run()
 ```
 
 First meaningful paint: ~3 s. Single display flash (no empty-frame

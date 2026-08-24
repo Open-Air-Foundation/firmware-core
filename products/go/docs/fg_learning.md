@@ -223,8 +223,11 @@ flowchart TD
     B --> C{learning stage active?}
     C -->|no: Idle| D[select_boot_path: normal operation]
     C -->|yes, incl. Complete/Failed| E[run_factory_learning_path]
-    E --> F[init_core, construct FgLearningRunner]
-    F --> G[runner.run: bring up hw, resume]
+    E --> F[init_core, init fuel gauge, retry BMS]
+    F --> I{BMS available?}
+    I -->|no| J[restart]
+    I -->|yes| K[construct FgLearningRunner]
+    K --> G[runner.run: bring up hw, resume]
     G --> H[poll loop]
 ```
 
@@ -233,6 +236,8 @@ idempotent gauge prerequisites (`set_chemistry_4v2()`; Update-Status learning
 bits on cycle 1), takes one poll, and runs the controller's resume matrix. The
 loss signal during resume is `fg_itpor` alone — `qmax_up` is legitimately `0`
 for all of cycle 1, so gating on it would misclassify a benign mid-cycle reboot.
+The factory path requires the BQ25629: it makes two initialization attempts
+100 ms apart and restarts instead of constructing the runner when both fail.
 
 ### EDV / Ship-Mode Integration
 

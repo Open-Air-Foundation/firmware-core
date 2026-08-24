@@ -377,6 +377,8 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   // painted. tracking_active is left intact in RTC so the orchestrator's
   // init() retries resume_route() and surfaces persistent faults there.
   bool storage_failure_promote = false;
+  bool power_polled = false;
+  PowerSnapshot power_snapshot{};
   if (!promote) {
     StorageService &stor = _board.storage();
     stor.cache_measurement(ago);
@@ -388,15 +390,13 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
         promote = true;
         storage_failure_promote = true;
       } else {
-        float battery_pct = -1.0f;
-        if (BmsDevice *bms = _board.bms(); bms != nullptr) {
-          bms->get_battery_percentage(&battery_pct);
-        }
+        power_snapshot = _board.power().poll_bms();
+        power_polled = true;
         RoutePoint point{};
         point.timestamp = time(nullptr);
         point.gps = gps;
         point.sensors = ago;
-        point.battery_percentage = battery_pct;
+        point.battery_percentage = power_snapshot.battery_percentage;
         if (!stor.append_route_point(point)) {
           AG_LOGW(TAG, "fast-path: append_route_point failed → promote");
           promote = true;
@@ -411,14 +411,16 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   // --- Display + sleep decision ---
   if (!promote) {
     PowerService &pwr = _board.power();
-    PowerSnapshot bms_snap = pwr.poll_bms();
+    if (!power_polled) {
+      power_snapshot = pwr.poll_bms();
+    }
 
     DisplayService &disp = _board.display();
     DisplayValues values =
-        build_fast_path_display(ago, gps, bms_snap, settings, state.tracking_active);
-    if (bms_snap.ship_mode_request == ShipModeRequest::OverTemperature ||
-        bms_snap.ship_mode_request == ShipModeRequest::UnderTemperature) {
-      values.screen = bms_snap.ship_mode_request == ShipModeRequest::UnderTemperature
+        build_fast_path_display(ago, gps, power_snapshot, settings, state.tracking_active);
+    if (power_snapshot.ship_mode_request == ShipModeRequest::OverTemperature ||
+        power_snapshot.ship_mode_request == ShipModeRequest::UnderTemperature) {
+      values.screen = power_snapshot.ship_mode_request == ShipModeRequest::UnderTemperature
                           ? Screen::ShutdownTemperatureLow
                           : Screen::ShutdownTemperature;
       disp.init(values);
