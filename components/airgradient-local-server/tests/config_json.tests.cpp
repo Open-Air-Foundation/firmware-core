@@ -181,9 +181,9 @@ TEST_CASE("config parse: corrections with populated pm25 and null slr", "[config
   REQUIRE(cfg.corrections->pm25->algorithm == "slr_PMS5003_20231030");
   REQUIRE(cfg.corrections->pm25->slr.has_value());
   REQUIRE(cfg.corrections->pm25->slr->intercept.has_value());
-  REQUIRE(*cfg.corrections->pm25->slr->intercept == 0.0);
+  REQUIRE(*cfg.corrections->pm25->slr->intercept == 0.0f);
   REQUIRE(cfg.corrections->pm25->slr->scaling_factor.has_value());
-  REQUIRE(*cfg.corrections->pm25->slr->scaling_factor == 0.02838);
+  REQUIRE(*cfg.corrections->pm25->slr->scaling_factor == 0.02838f);
   REQUIRE(cfg.corrections->pm25->slr->use_epa2021.has_value());
   REQUIRE(*cfg.corrections->pm25->slr->use_epa2021 == true);
   REQUIRE(cfg.corrections->temperature.has_value());
@@ -341,9 +341,9 @@ TEST_CASE("config serialize: rejects incomplete correction SLR", "[config][seria
   entry.algorithm = "custom";
   SlrParams slr;
 
-  SECTION("missing intercept") { slr.scaling_factor = 1.0; }
+  SECTION("missing intercept") { slr.scaling_factor = 1.0f; }
 
-  SECTION("missing scalingFactor") { slr.intercept = 0.0; }
+  SECTION("missing scalingFactor") { slr.intercept = 0.0f; }
 
   entry.slr = slr;
   corrections.temperature = entry;
@@ -358,8 +358,8 @@ TEST_CASE("config serialize: corrections nest with slr and null slr", "[config][
   CorrectionEntry pm25;
   pm25.algorithm = "slr_PMS5003_20231030";
   SlrParams slr;
-  slr.intercept = 0.0;
-  slr.scaling_factor = 0.02838;
+  slr.intercept = 2.227f;
+  slr.scaling_factor = 0.02838f;
   slr.use_epa2021 = true;
   pm25.slr = slr;
   corr.pm25 = pm25;
@@ -371,6 +371,8 @@ TEST_CASE("config serialize: corrections nest with slr and null slr", "[config][
   char buf[1024] = {};
   const size_t len = config_json::serialize(cfg, buf, sizeof(buf));
   REQUIRE(len > 0);
+  REQUIRE(std::strstr(buf, "\"intercept\":2.227,") != nullptr);
+  REQUIRE(std::strstr(buf, "\"scalingFactor\":0.02838,") != nullptr);
 
   cJSON *root = cJSON_Parse(buf);
   REQUIRE(root != nullptr);
