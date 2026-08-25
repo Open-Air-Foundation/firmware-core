@@ -891,7 +891,8 @@ void LedService::_render_back() {
     chase_active = _back_effect.steps[_back_effect.current_step].effect == BackStep::Effect::Chase;
   }
 
-  if (chase_active) {
+  if (_back_brightness != LedBrightness::Off && chase_active) {
+    _uniform_back_output.reset();
     uint32_t elapsed = _now_ms - _back_effect.started_at_ms;
     for (uint8_t i = 0; i < NUM_BACK_LEDS; ++i) {
       uint32_t threshold = static_cast<uint32_t>(i) * _back_effect.param_ms;
@@ -904,10 +905,18 @@ void LedService::_render_back() {
       ok = _config.driver->set_rgb(BACK_B_CHANNELS[i], led_color.r, led_color.g, led_color.b) && ok;
     }
   } else {
-    // Uniform: all 5 LEDs same color
-    Rgb scaled = scale_rgb(_last_rendered_back, scale);
+    const Rgb output = scale_rgb(_last_rendered_back, scale);
+    if (_uniform_back_output.has_value() && rgb_eq(*_uniform_back_output, output)) {
+      return;
+    }
+
     for (uint8_t i = 0; i < NUM_BACK_LEDS; ++i) {
-      ok = _config.driver->set_rgb(BACK_B_CHANNELS[i], scaled.r, scaled.g, scaled.b) && ok;
+      ok = _config.driver->set_rgb(BACK_B_CHANNELS[i], output.r, output.g, output.b) && ok;
+    }
+    if (ok) {
+      _uniform_back_output = output;
+    } else {
+      _uniform_back_output.reset();
     }
   }
 

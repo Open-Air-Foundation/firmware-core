@@ -157,9 +157,16 @@ The worker task uses an adaptive queue timeout:
 - **Touch off-edge pending:** wake at the deadline.
 - **All static:** block on queue indefinitely (zero CPU).
 
-Each group has an independent dirty flag. The flag is set when state
-changes and cleared after each write attempt regardless of success or
-failure. Failed writes are not retried.
+Each group has an independent dirty flag. The back renderer caches its last
+successful uniform physical output and skips the full group when the effective
+RGB value has not changed. Logical AQI and effect state therefore remain
+current while back brightness is Off without repeatedly writing zero over I2C.
+Enabling brightness renders the latest logical state. Chase frames remain
+per-LED and invalidate the uniform cache.
+
+Dirty flags are cleared after each render pass. A failed uniform write clears
+the output cache, but it is not retried until another state change requests a
+render.
 
 ### Back Effect Engine
 
@@ -233,7 +240,8 @@ back_update_aqi(pm25);          // kills sequence immediately, clears saved stat
 - `touch_flash(pad)` turns off the previous pad (if any), writes white
   to the new pad, schedules off-edge at `now + touch_flash_ms`.
 - A new flash before the off-edge preempts: old pad off, new pad on.
-- `TouchLedIntensity::Off` suppresses all flashes immediately.
+- `TouchLedIntensity::Off` suppresses all flashes immediately without driver
+  writes or an off-edge wake.
 
 ### Touch Steady (All Pads)
 

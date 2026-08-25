@@ -19,6 +19,7 @@
 #include "rtos.h"
 
 #include <cstdint>
+#include <optional>
 
 class LedService {
 public:
@@ -193,6 +194,7 @@ private:
   bool _touch_steady = false; // all pads lit steadily (test), independent of flash
   uint32_t _touch_started_at_ms = 0;
   Rgb _last_rendered_back;
+  std::optional<Rgb> _uniform_back_output;
   BackEffectState _saved_back_effect;
   bool _has_saved_back_effect = false;
 

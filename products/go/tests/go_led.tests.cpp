@@ -204,6 +204,48 @@ TEST_CASE("LedService: back solid", "[LedService][back][solid]") {
   }
 }
 
+TEST_CASE("LedService: uniform back output cache", "[LedService][back]") {
+  TestFixture f;
+  f.build();
+
+  SECTION("Off preserves latest AQI without repeated zero writes") {
+    f.svc->back_update_aqi(9.0f);
+    REQUIRE_CALL(f.driver, set_rgb(6, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(12, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(15, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(18, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(24, 0, 0, 0)).RETURN(true);
+    f.svc->pump_for_test(0);
+
+    // Update logical AQI while the physical output remains off.
+    f.svc->back_update_aqi(35.4f);
+    f.svc->pump_for_test(10);
+
+    // Enabling brightness renders the latest cached category (Moderate).
+    f.svc->back_set_brightness(LedBrightness::Bright);
+    REQUIRE_CALL(f.driver, set_rgb(6, 255, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(12, 255, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(15, 255, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(18, 255, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(24, 255, 255, 0)).RETURN(true);
+    f.svc->pump_for_test(20);
+  }
+
+  SECTION("repeated AQI category skips unchanged physical output") {
+    f.svc->back_set_brightness(LedBrightness::Bright);
+    f.svc->back_update_aqi(9.0f);
+    REQUIRE_CALL(f.driver, set_rgb(6, 0, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(12, 0, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(15, 0, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(18, 0, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(24, 0, 255, 0)).RETURN(true);
+    f.svc->pump_for_test(0);
+
+    f.svc->back_update_aqi(8.0f);
+    f.svc->pump_for_test(10);
+  }
+}
+
 // ============================================================================
 // Back -- Blink
 // ============================================================================
@@ -321,12 +363,7 @@ TEST_CASE("LedService: back fade", "[LedService][back][fade]") {
 
     f.svc->back_fade_to({0, 255, 0}, 500);
 
-    // t=0: fade starts from red (captured from solid)
-    REQUIRE_CALL(f.driver, set_rgb(6, 255, 0, 0)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_rgb(12, 255, 0, 0)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_rgb(15, 255, 0, 0)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_rgb(18, 255, 0, 0)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_rgb(24, 255, 0, 0)).RETURN(true);
+    // t=0: fade starts from the already-rendered red, so no writes are needed.
     f.svc->pump_for_test(100); // cmd processed at t=100, started_at=100
 
     // t=350: halfway (elapsed=250 of 500)
@@ -761,6 +798,14 @@ TEST_CASE("LedService: touch flash wait timeout", "[LedService][touch]") {
 TEST_CASE("LedService: touch flash", "[LedService][touch]") {
   TestFixture f;
   f.build();
+
+  SECTION("flash while Off performs no driver writes or timeout wake") {
+    f.svc->touch_flash(TouchPad::Select);
+    f.svc->pump_for_test(0);
+
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, 0) ==
+          std::numeric_limits<uint32_t>::max());
+  }
 
   SECTION("flash Select at Bright: LED10 white, then off after flash_ms") {
     f.svc->touch_set_intensity(TouchLedIntensity::Bright);
