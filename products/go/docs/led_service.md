@@ -91,14 +91,14 @@ variant.
 
 | Logical LED | LP5036 Channel(s) | Group |
 |---|---|---|
-| LED1 | OUT0/1/2 (B/G/R) | Touch Select |
+| LED1 | OUT0/1/2 (B/G/R) | Touch Right |
 | LED2 | OUT3/4/5 | Touch Left |
 | LED3 | OUT6/7/8 | Back (index 0) |
 | LED5 | OUT12/13/14 | Back (index 1) |
 | LED6 | OUT15/16/17 | Back (index 2) |
 | LED7 | OUT18/19/20 | Back (index 3) |
 | LED9 | OUT24/25/26 | Back (index 4) |
-| LED10 | OUT27/28/29 | Touch Right |
+| LED10 | OUT27/28/29 | Touch Select |
 | LED25 | OUT30 | Front indicator |
 | LED26 | OUT31 | Front indicator |
 
@@ -247,9 +247,9 @@ back_update_aqi(pm25);          // kills sequence immediately, clears saved stat
 
 | `InputSource` | `TouchPad` | Physical LED |
 |---|---|---|
-| `TouchEnter` | `Select` | LED1 (OUT0/1/2) |
+| `TouchEnter` | `Select` | LED10 (OUT27/28/29) |
 | `TouchUp` | `Left` | LED2 (OUT3/4/5) |
-| `TouchDown` | `Right` | LED10 (OUT27/28/29) |
+| `TouchDown` | `Right` | LED1 (OUT0/1/2) |
 
 ## AQI Color Map
 

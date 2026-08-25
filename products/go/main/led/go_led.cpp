@@ -46,9 +46,9 @@ static constexpr uint8_t BACK_SCALE_MID = 128;
 static constexpr uint8_t BACK_SCALE_BRIGHT = 255;
 
 // --- Touch LED groups (blue-channel base per RGB group) ---
-static constexpr uint8_t TOUCH_CH_SELECT = 0; // LED1: OUT0/1/2
-static constexpr uint8_t TOUCH_CH_LEFT = 3;   // LED2: OUT3/4/5
-static constexpr uint8_t TOUCH_CH_RIGHT = 27; // LED10: OUT27/28/29
+static constexpr uint8_t TOUCH_CH_SELECT = 27; // LED10: OUT27/28/29
+static constexpr uint8_t TOUCH_CH_LEFT = 3;    // LED2: OUT3/4/5
+static constexpr uint8_t TOUCH_CH_RIGHT = 0;   // LED1: OUT0/1/2
 
 // --- Touch PWM levels ---
 static constexpr uint8_t TOUCH_PWM_OFF = 0;
