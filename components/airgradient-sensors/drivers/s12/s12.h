@@ -19,7 +19,7 @@
  * @brief SenseAir S12 CO2 sensor driver (I2C variant)
  *
  * Communicates with the sensor using the ESP-IDF I2C master driver.
- * Exposes init(), read(), and background baseline calibration via the
+ * Exposes init(), read(), and manual baseline calibration via the
  * CO2Sensor virtual API (do_baseline_calibration /
  * is_baseline_calibration_done).
  *
@@ -28,10 +28,10 @@
  * (0x06/0x07) is used; a different source register can be provided via
  * the constructor if a product needs the raw or unfiltered variant.
  *
- * Calibration is driven non-blocking: do_baseline_calibration() issues
- * the background calibration command and returns immediately; the caller
- * (e.g. SensorManager::calibrate_co2()) polls is_baseline_calibration_done()
- * on its own cadence.
+ * Calibration is driven non-blocking: do_baseline_calibration() issues the S12
+ * target command for baseline calibration and returns immediately; the caller
+ * (e.g. SensorManager::calibrate_co2()) polls is_baseline_calibration_done() on
+ * its own cadence.
  */
 class S12 : public CO2Sensor {
 public:
@@ -70,11 +70,11 @@ public:
   bool supports_calibration() const override { return true; }
 
   /**
-   * @brief Start a background baseline calibration (non-blocking).
+   * @brief Start a manual baseline calibration (non-blocking).
    *
-   * Writes the calibration target register (0x84/0x85) with the requested
-   * reference concentration, clears the calibration status register, then
-   * issues the S12 background calibration command (0x7C06) to 0x82/0x83.
+   * Clears the calibration status register, writes the calibration target
+   * register (0x84/0x85) with the requested reference concentration, then
+   * issues the S12 target calibration command (0x7C05) to 0x82/0x83.
    * The function returns as soon as the command has been accepted; callers
    * poll is_baseline_calibration_done() to observe completion.
    *
@@ -88,8 +88,8 @@ public:
    * @brief Poll whether a previously started calibration has finished.
    *
    * - Returns true when no calibration is in progress (idle contract).
-   * - Returns true once the sensor reports background-done in the
-   *   calibration status register (0x81 bit 0x20).
+   * - Returns true once the sensor reports target-done in the calibration
+   *   status register (0x81 bit 0x10).
    * - Returns false while the S12 has not yet completed a new measurement
    *   cycle, on transient read errors, or when the sensor flags a
    *   calibration error in the error status register (0x01 bit 0x08).
@@ -128,7 +128,7 @@ private:
   // --- Calibration register map ---------------------------------------------
   // Error status low byte (bit 0x08 == calibration error).
   static constexpr uint8_t REG_ERROR_STATUS_LSB = 0x01;
-  // Calibration status register (bit 0x20 == background calibration done).
+  // Calibration status register (bit 0x10 == target calibration done).
   static constexpr uint8_t REG_CALIBRATION_STATUS = 0x81;
   // Calibration command register (16-bit, MSB at 0x82, LSB at 0x83).
   static constexpr uint8_t REG_CALIBRATION_COMMAND_MSB = 0x82;
@@ -140,15 +140,15 @@ private:
   static constexpr uint8_t REG_METER_CONTROL = 0xA5;
 
   // --- Calibration command / status bits ------------------------------------
-  // 0x7C is the S12 calibration command prefix; 0x06 selects "background".
+  // 0x7C is the S12 calibration command prefix; 0x05 selects "target".
   static constexpr uint8_t CAL_PREFIX = 0x7C;
-  static constexpr uint8_t CAL_BACKGROUND = 0x06;
-  // Bit set in REG_CALIBRATION_STATUS once background calibration finishes.
-  static constexpr uint8_t CAL_STATUS_BACKGROUND_DONE = 0x20;
+  static constexpr uint8_t CAL_TARGET = 0x05;
+  // Bit set in REG_CALIBRATION_STATUS once target calibration finishes.
+  static constexpr uint8_t CAL_STATUS_TARGET_DONE = 0x10;
   // Bit set in REG_ERROR_STATUS_LSB when the sensor flags a calibration error.
   static constexpr uint8_t ERR_STATUS_CALIBRATION = 0x08;
-  // Default reference concentration used when the caller passes <= 0 ppm.
-  static constexpr uint16_t CAL_DEFAULT_TARGET_PPM = 400;
+  // Default baseline concentration used when the caller passes <= 0 ppm.
+  static constexpr uint16_t CAL_DEFAULT_BASELINE_PPM = 400;
   static constexpr uint8_t METER_CONTROL_ABC_DISABLE = 1U << 1;
   static constexpr int ABC_DAYS_DISABLED = -1;
   static constexpr int ABC_DAYS_MIN = 1;

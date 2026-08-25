@@ -46,9 +46,9 @@ static constexpr uint8_t BACK_SCALE_MID = 128;
 static constexpr uint8_t BACK_SCALE_BRIGHT = 255;
 
 // --- Touch LED groups (blue-channel base per RGB group) ---
-static constexpr uint8_t TOUCH_CH_SELECT = 0; // LED1: OUT0/1/2
-static constexpr uint8_t TOUCH_CH_LEFT = 3;   // LED2: OUT3/4/5
-static constexpr uint8_t TOUCH_CH_RIGHT = 27; // LED10: OUT27/28/29
+static constexpr uint8_t TOUCH_CH_SELECT = 27; // LED10: OUT27/28/29
+static constexpr uint8_t TOUCH_CH_LEFT = 3;    // LED2: OUT3/4/5
+static constexpr uint8_t TOUCH_CH_RIGHT = 0;   // LED1: OUT0/1/2
 
 // --- Touch PWM levels ---
 static constexpr uint8_t TOUCH_PWM_OFF = 0;
@@ -520,7 +520,7 @@ void LedService::_process_cmd(const Cmd &cmd, uint32_t now_ms) {
     }
     _touch_active_pad = cmd.pad;
     _touch_active = true;
-    _touch_off_deadline_ms = now_ms + _config.touch_flash_ms;
+    _touch_started_at_ms = now_ms;
     _touch_dirty = true;
     break;
   }
@@ -538,7 +538,7 @@ void LedService::_process_cmd(const Cmd &cmd, uint32_t now_ms) {
     if (cmd.intensity == TouchLedIntensity::Off && _touch_active) {
       // Suppress active flash and cancel off-edge
       _touch_active = false;
-      _touch_off_deadline_ms = 0;
+      _touch_started_at_ms = 0;
       _touch_dirty = true;
     } else if (old != cmd.intensity && (_touch_active || _touch_steady)) {
       // Re-render at the new intensity (covers a steady all-pads test).
@@ -828,11 +828,26 @@ bool LedService::_is_primitive_done(BackEffectState::Type type, uint32_t param_m
 // ===========================================================================
 
 void LedService::_tick_touch(uint32_t now_ms) {
-  if (_touch_active && now_ms >= _touch_off_deadline_ms) {
+  if (_touch_active && (now_ms - _touch_started_at_ms) >= _config.touch_flash_ms) {
     _touch_active = false;
-    _touch_off_deadline_ms = 0;
+    _touch_started_at_ms = 0;
     _touch_dirty = true;
   }
+}
+
+uint32_t LedService::_next_wait_timeout_ms(uint32_t now_ms) const {
+  if (!_is_back_static()) {
+    return _config.frame_interval_ms;
+  }
+  if (!_touch_active) {
+    return UINT32_MAX;
+  }
+
+  const uint32_t elapsed_ms = now_ms - _touch_started_at_ms;
+  if (elapsed_ms >= _config.touch_flash_ms) {
+    return 0;
+  }
+  return _config.touch_flash_ms - elapsed_ms;
 }
 
 // ===========================================================================
@@ -876,7 +891,8 @@ void LedService::_render_back() {
     chase_active = _back_effect.steps[_back_effect.current_step].effect == BackStep::Effect::Chase;
   }
 
-  if (chase_active) {
+  if (_back_brightness != LedBrightness::Off && chase_active) {
+    _uniform_back_output.reset();
     uint32_t elapsed = _now_ms - _back_effect.started_at_ms;
     for (uint8_t i = 0; i < NUM_BACK_LEDS; ++i) {
       uint32_t threshold = static_cast<uint32_t>(i) * _back_effect.param_ms;
@@ -889,10 +905,18 @@ void LedService::_render_back() {
       ok = _config.driver->set_rgb(BACK_B_CHANNELS[i], led_color.r, led_color.g, led_color.b) && ok;
     }
   } else {
-    // Uniform: all 5 LEDs same color
-    Rgb scaled = scale_rgb(_last_rendered_back, scale);
+    const Rgb output = scale_rgb(_last_rendered_back, scale);
+    if (_uniform_back_output.has_value() && rgb_eq(*_uniform_back_output, output)) {
+      return;
+    }
+
     for (uint8_t i = 0; i < NUM_BACK_LEDS; ++i) {
-      ok = _config.driver->set_rgb(BACK_B_CHANNELS[i], scaled.r, scaled.g, scaled.b) && ok;
+      ok = _config.driver->set_rgb(BACK_B_CHANNELS[i], output.r, output.g, output.b) && ok;
+    }
+    if (ok) {
+      _uniform_back_output = output;
+    } else {
+      _uniform_back_output.reset();
     }
   }
 
@@ -945,17 +969,7 @@ void LedService::_task_entry(void *arg) { static_cast<LedService *>(arg)->_run()
 void LedService::_run() {
   while (true) {
     _now_ms = RTOS::get_time_ms();
-
-    // Compute adaptive timeout
-    uint32_t timeout_ms = UINT32_MAX; // WAIT_FOREVER
-
-    bool back_animating = !_is_back_static();
-
-    if (back_animating) {
-      timeout_ms = _config.frame_interval_ms;
-    } else if (_touch_active && _touch_off_deadline_ms > _now_ms) {
-      timeout_ms = _touch_off_deadline_ms - _now_ms;
-    }
+    const uint32_t timeout_ms = _next_wait_timeout_ms(_now_ms);
 
     Cmd cmd{};
     bool got_cmd = RTOS::queue_receive(_queue, &cmd, timeout_ms);

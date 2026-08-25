@@ -314,6 +314,18 @@ bool has_incomplete_slr(const std::optional<CorrectionEntry> &entry) {
          (!entry->slr->intercept.has_value() || !entry->slr->scaling_factor.has_value());
 }
 
+// Emit up to seven significant digits instead of cJSON's widened double representation.
+bool add_float_to_object(cJSON *object, const char *key, float value) {
+  constexpr size_t TEXT_BUFFER_SIZE = 32;
+  char text[TEXT_BUFFER_SIZE] = {};
+  const int written = std::snprintf(text, sizeof(text), "%.7g", static_cast<double>(value));
+  if (written <= 0 || static_cast<size_t>(written) >= sizeof(text)) {
+    return false;
+  }
+
+  return cJSON_AddRawToObject(object, key, text) != nullptr;
+}
+
 // Serialize one correction entry; emits "slr": null when no SLR params apply.
 // `allow_epa` gates the pm25-only "useEpa2021" sub-key.
 bool add_entry(cJSON *parent, const char *key, const std::optional<CorrectionEntry> &entry,
@@ -332,10 +344,8 @@ bool add_entry(cJSON *parent, const char *key, const std::optional<CorrectionEnt
   }
   if (entry->slr.has_value()) {
     cJSON *slr = cJSON_CreateObject();
-    if (slr == nullptr ||
-        cJSON_AddNumberToObject(slr, fields::INTERCEPT, *entry->slr->intercept) == nullptr ||
-        cJSON_AddNumberToObject(slr, fields::SCALING_FACTOR, *entry->slr->scaling_factor) ==
-            nullptr ||
+    if (slr == nullptr || !add_float_to_object(slr, fields::INTERCEPT, *entry->slr->intercept) ||
+        !add_float_to_object(slr, fields::SCALING_FACTOR, *entry->slr->scaling_factor) ||
         (allow_epa && entry->slr->use_epa2021.has_value() &&
          cJSON_AddBoolToObject(slr, fields::USE_EPA2021, *entry->slr->use_epa2021) == nullptr) ||
         !cJSON_AddItemToObject(obj, fields::SLR, slr)) {

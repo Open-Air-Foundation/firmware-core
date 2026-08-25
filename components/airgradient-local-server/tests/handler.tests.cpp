@@ -146,7 +146,7 @@ TEST_CASE("GET config rejects incomplete correction snapshots", "[handler][confi
   CorrectionEntry pm25;
   pm25.algorithm = "custom_via_pm25_raw";
   SlrParams slr;
-  slr.scaling_factor = 1.0;
+  slr.scaling_factor = 1.0f;
   pm25.slr = slr;
   corrections.pm25 = pm25;
   config.config.corrections = corrections;

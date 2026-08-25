@@ -116,6 +116,8 @@ accept it with `202` or reject it with `403`.
 Correction parsing preserves whether `intercept` and `scalingFactor` were
 present. Products perform semantic validation after parsing. GET serialization
 fails rather than emitting a non-null SLR with missing coefficients.
+Correction coefficients are emitted as JSON numbers with up to seven
+significant decimal digits instead of cJSON's widened double representation.
 
 ## Usage
 
@@ -158,7 +160,8 @@ lifecycle (idempotent / transactional `begin`, scoped `end`, RAII teardown)
 using `fake_providers.h`.
 Handler coverage includes asynchronous `202`, retryable `503`, complete-body
 precedence, empty submissions, and config/action busy results. Correction tests
-cover each missing SLR coefficient independently.
+cover each missing SLR coefficient independently and the seven-significant-digit
+wire representation.
 
 ## Notes
 

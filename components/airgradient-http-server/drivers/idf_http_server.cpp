@@ -22,6 +22,7 @@
 namespace {
 
 static constexpr const char *TAG = "IdfHttpServer";
+static constexpr size_t HTTP_SERVER_TASK_STACK_SIZE_BYTES = 6144;
 
 httpd_method_t to_httpd_method(HttpMethod m) {
   switch (m) {
@@ -102,6 +103,7 @@ bool IdfHttpServer::start(uint16_t port) {
   }
 
   httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+  cfg.stack_size = HTTP_SERVER_TASK_STACK_SIZE_BYTES;
   cfg.server_port = port;
   cfg.max_open_sockets = CONFIG_AG_HTTP_MAX_CONNECTIONS;
   cfg.max_uri_handlers = CONFIG_AG_HTTP_MAX_ROUTES;
