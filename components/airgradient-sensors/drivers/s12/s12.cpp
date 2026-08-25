@@ -97,40 +97,40 @@ bool S12::do_baseline_calibration(int baseline_ppm) {
   }
 
   // Clamp invalid / sentinel inputs to the Senseair-recommended default.
-  uint16_t target_ppm =
-      (baseline_ppm <= 0) ? CAL_DEFAULT_TARGET_PPM : static_cast<uint16_t>(baseline_ppm);
+  uint16_t baseline_concentration_ppm =
+      (baseline_ppm <= 0) ? CAL_DEFAULT_BASELINE_PPM : static_cast<uint16_t>(baseline_ppm);
 
   // Clear any lingering calibration-in-progress state before writing registers
   // so a failed start never leaves us "calibrating" forever.
   _is_calibrating = false;
 
-  // 1. Write calibration target concentration (big-endian) to 0x84/0x85.
-  const uint8_t target_frame[] = {
-      REG_CALIBRATION_TARGET_MSB,
-      static_cast<uint8_t>((target_ppm >> 8) & 0xFF),
-      static_cast<uint8_t>(target_ppm & 0xFF),
-  };
-  if (!_write_bytes(target_frame, sizeof(target_frame))) {
-    ESP_LOGE(TAG, "Failed to write calibration target (%u ppm)", target_ppm);
-    return false;
-  }
-
-  // 2. Clear previous calibration status (single-byte write to 0x81).
+  // 1. Clear previous calibration status (single-byte write to 0x81).
   const uint8_t clear_frame[] = {REG_CALIBRATION_STATUS, 0x00};
   if (!_write_bytes(clear_frame, sizeof(clear_frame))) {
     ESP_LOGE(TAG, "Failed to clear calibration status");
     return false;
   }
 
-  // 3. Issue the background calibration command (0x7C06 to 0x82/0x83).
-  const uint8_t cmd_frame[] = {REG_CALIBRATION_COMMAND_MSB, CAL_PREFIX, CAL_BACKGROUND};
+  // 2. Write calibration target concentration (big-endian) to 0x84/0x85.
+  const uint8_t baseline_frame[] = {
+      REG_CALIBRATION_TARGET_MSB,
+      static_cast<uint8_t>((baseline_concentration_ppm >> 8) & 0xFF),
+      static_cast<uint8_t>(baseline_concentration_ppm & 0xFF),
+  };
+  if (!_write_bytes(baseline_frame, sizeof(baseline_frame))) {
+    ESP_LOGE(TAG, "Failed to write baseline concentration (%u ppm)", baseline_concentration_ppm);
+    return false;
+  }
+
+  // 3. Issue the target calibration command (0x7C05 to 0x82/0x83).
+  const uint8_t cmd_frame[] = {REG_CALIBRATION_COMMAND_MSB, CAL_PREFIX, CAL_TARGET};
   if (!_write_bytes(cmd_frame, sizeof(cmd_frame))) {
-    ESP_LOGE(TAG, "Failed to issue background calibration command");
+    ESP_LOGE(TAG, "Failed to issue baseline calibration command");
     return false;
   }
 
   _is_calibrating = true;
-  ESP_LOGI(TAG, "Baseline calibration started (target=%u ppm)", target_ppm);
+  ESP_LOGI(TAG, "Baseline calibration started (baseline=%u ppm)", baseline_concentration_ppm);
   return true;
 }
 
@@ -168,7 +168,7 @@ bool S12::is_baseline_calibration_done() {
     return false;
   }
 
-  if ((cal_status & CAL_STATUS_BACKGROUND_DONE) != 0) {
+  if ((cal_status & CAL_STATUS_TARGET_DONE) != 0) {
     ESP_LOGI(TAG, "Baseline calibration complete (cal_status=0x%02X)", cal_status);
     _is_calibrating = false;
     return true;
