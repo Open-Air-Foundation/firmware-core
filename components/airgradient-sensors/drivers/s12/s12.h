@@ -154,8 +154,9 @@ private:
   static constexpr int ABC_DAYS_MIN = 1;
   static constexpr int ABC_DAYS_MAX = 200;
   static constexpr uint16_t HOURS_PER_DAY = 24;
-  // The S12 may NACK another EEPROM write until its prior write completes.
-  static constexpr uint32_t EEPROM_WRITE_DELAY_MS = 180;
+  // Datasheet maximum is 180 ms. Use 300 ms to include a conservative margin.
+  static constexpr uint32_t EEPROM_WRITE_SETTLE_MS = 300;
+  static constexpr size_t EEPROM_MAX_PAYLOAD_LEN = 2;
 
   /**
    * @brief Read `len` bytes from an S12 register with retry + bus tickle.
@@ -179,6 +180,15 @@ private:
    * @return true on success, false after exhausting retries.
    */
   bool _write_bytes(const uint8_t *buf, size_t len);
+
+  /**
+   * @brief Attempt one EEPROM write, wait for completion, and verify by readback.
+   *
+   * A transport error is ambiguous because the sensor may have accepted the
+   * write. This helper never retries the write and determines success from the
+   * delayed readback.
+   */
+  bool _write_eeprom_and_verify(const uint8_t *buf, size_t len);
 };
 
 #endif // S12_HPP
