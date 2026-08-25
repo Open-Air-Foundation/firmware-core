@@ -19,7 +19,7 @@
  * @brief SenseAir S12 CO2 sensor driver (I2C variant)
  *
  * Communicates with the sensor using the ESP-IDF I2C master driver.
- * Exposes init(), read(), and target baseline calibration via the
+ * Exposes init(), read(), and manual baseline calibration via the
  * CO2Sensor virtual API (do_baseline_calibration /
  * is_baseline_calibration_done).
  *
@@ -28,10 +28,10 @@
  * (0x06/0x07) is used; a different source register can be provided via
  * the constructor if a product needs the raw or unfiltered variant.
  *
- * Calibration is driven non-blocking: do_baseline_calibration() issues
- * the target calibration command and returns immediately; the caller
- * (e.g. SensorManager::calibrate_co2()) polls is_baseline_calibration_done()
- * on its own cadence.
+ * Calibration is driven non-blocking: do_baseline_calibration() issues the S12
+ * target command for baseline calibration and returns immediately; the caller
+ * (e.g. SensorManager::calibrate_co2()) polls is_baseline_calibration_done() on
+ * its own cadence.
  */
 class S12 : public CO2Sensor {
 public:
@@ -70,7 +70,7 @@ public:
   bool supports_calibration() const override { return true; }
 
   /**
-   * @brief Start a target baseline calibration (non-blocking).
+   * @brief Start a manual baseline calibration (non-blocking).
    *
    * Clears the calibration status register, writes the calibration target
    * register (0x84/0x85) with the requested reference concentration, then
@@ -147,8 +147,8 @@ private:
   static constexpr uint8_t CAL_STATUS_TARGET_DONE = 0x10;
   // Bit set in REG_ERROR_STATUS_LSB when the sensor flags a calibration error.
   static constexpr uint8_t ERR_STATUS_CALIBRATION = 0x08;
-  // Default reference concentration used when the caller passes <= 0 ppm.
-  static constexpr uint16_t CAL_DEFAULT_TARGET_PPM = 400;
+  // Default baseline concentration used when the caller passes <= 0 ppm.
+  static constexpr uint16_t CAL_DEFAULT_BASELINE_PPM = 400;
   static constexpr uint8_t METER_CONTROL_ABC_DISABLE = 1U << 1;
   static constexpr int ABC_DAYS_DISABLED = -1;
   static constexpr int ABC_DAYS_MIN = 1;
