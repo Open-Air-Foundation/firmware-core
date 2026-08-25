@@ -11,7 +11,6 @@
 
 #include <cmath>
 #include <cstring>
-#include <limits>
 
 #include "go_events.h"
 #include "measurement_corrections.h"
@@ -51,15 +50,13 @@ void copy_string(char *destination, size_t destination_size, const char *source)
 
 bool finite_float(float value) { return std::isfinite(value); }
 
-bool to_finite_float(const std::optional<double> &source, float &destination) {
-  if (!source.has_value() || !std::isfinite(*source) ||
-      *source > static_cast<double>(std::numeric_limits<float>::max()) ||
-      *source < -static_cast<double>(std::numeric_limits<float>::max())) {
+bool take_finite_float(const std::optional<float> &source, float &destination) {
+  if (!source.has_value() || !std::isfinite(*source)) {
     return false;
   }
 
-  destination = static_cast<float>(*source);
-  return std::isfinite(destination);
+  destination = *source;
+  return true;
 }
 
 CorrectionEntry make_pm25_correction(const Pm25Correction &correction) {
@@ -709,8 +706,8 @@ bool GoLocalApiService::translate_pm25_correction(const CorrectionEntry &entry,
 
   Pm25Correction parsed{};
   parsed.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
-  if (!to_finite_float(entry.slr->intercept, parsed.intercept) ||
-      !to_finite_float(entry.slr->scaling_factor, parsed.scaling_factor)) {
+  if (!take_finite_float(entry.slr->intercept, parsed.intercept) ||
+      !take_finite_float(entry.slr->scaling_factor, parsed.scaling_factor)) {
     return false;
   }
   correction = parsed;
@@ -734,8 +731,8 @@ bool GoLocalApiService::translate_linear_correction(const CorrectionEntry &entry
 
   LinearCorrection parsed{};
   parsed.algorithm = LinearCorrectionAlgorithm::Custom;
-  if (!to_finite_float(entry.slr->intercept, parsed.intercept) ||
-      !to_finite_float(entry.slr->scaling_factor, parsed.scaling_factor)) {
+  if (!take_finite_float(entry.slr->intercept, parsed.intercept) ||
+      !take_finite_float(entry.slr->scaling_factor, parsed.scaling_factor)) {
     return false;
   }
   correction = parsed;
