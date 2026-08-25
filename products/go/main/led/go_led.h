@@ -149,6 +149,7 @@ private:
   void _render_back();
   void _render_touch();
   bool _is_back_static() const;
+  uint32_t _next_wait_timeout_ms(uint32_t now_ms) const;
 
   Rgb _compute_back_frame(uint32_t now_ms);
   Rgb _compute_primitive_frame(BackEffectState::Type type, Rgb color, uint32_t param_ms,
@@ -190,7 +191,7 @@ private:
   TouchPad _touch_active_pad{};
   bool _touch_active = false;
   bool _touch_steady = false; // all pads lit steadily (test), independent of flash
-  uint32_t _touch_off_deadline_ms = 0;
+  uint32_t _touch_started_at_ms = 0;
   Rgb _last_rendered_back;
   BackEffectState _saved_back_effect;
   bool _has_saved_back_effect = false;

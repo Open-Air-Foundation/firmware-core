@@ -520,7 +520,7 @@ void LedService::_process_cmd(const Cmd &cmd, uint32_t now_ms) {
     }
     _touch_active_pad = cmd.pad;
     _touch_active = true;
-    _touch_off_deadline_ms = now_ms + _config.touch_flash_ms;
+    _touch_started_at_ms = now_ms;
     _touch_dirty = true;
     break;
   }
@@ -538,7 +538,7 @@ void LedService::_process_cmd(const Cmd &cmd, uint32_t now_ms) {
     if (cmd.intensity == TouchLedIntensity::Off && _touch_active) {
       // Suppress active flash and cancel off-edge
       _touch_active = false;
-      _touch_off_deadline_ms = 0;
+      _touch_started_at_ms = 0;
       _touch_dirty = true;
     } else if (old != cmd.intensity && (_touch_active || _touch_steady)) {
       // Re-render at the new intensity (covers a steady all-pads test).
@@ -828,11 +828,26 @@ bool LedService::_is_primitive_done(BackEffectState::Type type, uint32_t param_m
 // ===========================================================================
 
 void LedService::_tick_touch(uint32_t now_ms) {
-  if (_touch_active && now_ms >= _touch_off_deadline_ms) {
+  if (_touch_active && (now_ms - _touch_started_at_ms) >= _config.touch_flash_ms) {
     _touch_active = false;
-    _touch_off_deadline_ms = 0;
+    _touch_started_at_ms = 0;
     _touch_dirty = true;
   }
+}
+
+uint32_t LedService::_next_wait_timeout_ms(uint32_t now_ms) const {
+  if (!_is_back_static()) {
+    return _config.frame_interval_ms;
+  }
+  if (!_touch_active) {
+    return UINT32_MAX;
+  }
+
+  const uint32_t elapsed_ms = now_ms - _touch_started_at_ms;
+  if (elapsed_ms >= _config.touch_flash_ms) {
+    return 0;
+  }
+  return _config.touch_flash_ms - elapsed_ms;
 }
 
 // ===========================================================================
@@ -945,17 +960,7 @@ void LedService::_task_entry(void *arg) { static_cast<LedService *>(arg)->_run()
 void LedService::_run() {
   while (true) {
     _now_ms = RTOS::get_time_ms();
-
-    // Compute adaptive timeout
-    uint32_t timeout_ms = UINT32_MAX; // WAIT_FOREVER
-
-    bool back_animating = !_is_back_static();
-
-    if (back_animating) {
-      timeout_ms = _config.frame_interval_ms;
-    } else if (_touch_active && _touch_off_deadline_ms > _now_ms) {
-      timeout_ms = _touch_off_deadline_ms - _now_ms;
-    }
+    const uint32_t timeout_ms = _next_wait_timeout_ms(_now_ms);
 
     Cmd cmd{};
     bool got_cmd = RTOS::queue_receive(_queue, &cmd, timeout_ms);

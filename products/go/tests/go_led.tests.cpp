@@ -44,6 +44,13 @@ public:
   IMPLEMENT_MOCK4(set_rgb);
 };
 
+class LedServiceTestAccess {
+public:
+  static uint32_t next_wait_timeout_ms(const LedService &service, uint32_t now_ms) {
+    return service._next_wait_timeout_ms(now_ms);
+  }
+};
+
 // ============================================================================
 // Test helper: create a configured & started LedService
 // ============================================================================
@@ -713,6 +720,43 @@ TEST_CASE("LedService: back AQI", "[LedService][back][aqi]") {
 // ============================================================================
 // Touch flash
 // ============================================================================
+
+TEST_CASE("LedService: touch flash wait timeout", "[LedService][touch]") {
+  TestFixture f;
+  f.build();
+
+  f.svc->touch_set_intensity(TouchLedIntensity::Bright);
+  ALLOW_CALL(f.driver, set_rgb(trompeloeil::_, trompeloeil::_, trompeloeil::_, trompeloeil::_))
+      .RETURN(true);
+
+  SECTION("overdue flash requests an immediate worker wake") {
+    constexpr uint32_t START_MS = 1000;
+    f.svc->touch_flash(TouchPad::Select);
+    f.svc->pump_for_test(START_MS);
+
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, START_MS) == 120);
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, START_MS + 119) == 1);
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, START_MS + 120) == 0);
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, START_MS + 500) == 0);
+  }
+
+  SECTION("flash expiry remains correct across uint32 wrap") {
+    constexpr uint32_t START_MS = std::numeric_limits<uint32_t>::max() - 59;
+    f.svc->touch_flash(TouchPad::Right);
+    f.svc->pump_for_test(START_MS);
+
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, 40) == 20);
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, 60) == 0);
+
+    REQUIRE_CALL(f.driver, set_rgb(27, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(3, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);
+    f.svc->pump_for_test(60);
+
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, 60) ==
+          std::numeric_limits<uint32_t>::max());
+  }
+}
 
 TEST_CASE("LedService: touch flash", "[LedService][touch]") {
   TestFixture f;
