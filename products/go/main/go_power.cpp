@@ -428,7 +428,7 @@ void PowerService::_log_poll_snapshot(const PowerSnapshot &snap) {
   const auto &t = snap.telemetry;
   AG_LOGI(TAG,
           "poll_bms: ibus=%dmA ibat=%dmA vsys=%umV vpmid=%umV ts=%.1f%% "
-          "tdie=%d°C tbat=%d°C",
+          "tdie=%d°C bms_ntc=%d°C",
           t.input_current_ma, t.battery_current_ma, t.system_voltage_mv, t.pmid_voltage_mv,
           t.ts_percent, t.die_temperature_c, t.battery_temperature_c);
 

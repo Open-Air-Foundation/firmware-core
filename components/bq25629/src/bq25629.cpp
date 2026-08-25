@@ -1045,7 +1045,7 @@ esp_err_t BQ25629::read_ntc_temperature(BQ25629_NTC_Data &data) {
 
   // Calculate NTC resistance using voltage divider equation
   // V_TS = V_BIAS * (RT2 || R_NTC) / (RT1 + (RT2 || R_NTC))
-  // Where RT1 = 5.23kΩ (pull-up), RT2 = 30.1kΩ (pull-down)
+  // Where RT1 = 4.12kΩ (pull-up), RT2 = 17.33kΩ (pull-down)
   //
   // ADC reads: TS% = V_TS / V_BIAS * 100
   // Let ratio = TS% / 100 = V_TS / V_BIAS
@@ -1058,8 +1058,8 @@ esp_err_t BQ25629::read_ntc_temperature(BQ25629_NTC_Data &data) {
   //   R_parallel = (R_NTC * RT2) / (R_NTC + RT2)
   //   R_NTC = (R_parallel * RT2) / (RT2 - R_parallel)
 
-  const float RT1 = 5230.0f;  // 5.23kΩ
-  const float RT2 = 30100.0f; // 30.1kΩ
+  const float RT1 = 4120.0f;  // 4.12kΩ
+  const float RT2 = 17330.0f; // 17.33kΩ
   const float R25 = 10000.0f; // 10kΩ @ 25°C
   const float B = 3950.0f;    // B constant (3950K)
 
