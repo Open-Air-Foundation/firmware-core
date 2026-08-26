@@ -301,7 +301,7 @@ private:
                                     OperatingMode previous_mode);
   void apply_settings_change();
   bool clear_data();
-  bool factory_reset();
+  bool factory_reset(bool preserve_corrections = false);
   void save_tag(uint8_t tag_index, const char *tag_label);
   void shutdown(ShipModeRequest reason = ShipModeRequest::None);
 

@@ -654,6 +654,11 @@ can press the button). `onboarding_done` flips `true` via the idempotent
 BLE pairing/bond, or any `change_mode()`), and the guide auto-shows only
 once. Factory reset clears the flag so refurbished units re-show it.
 
+Full composition also starts `SerialCommandService` before onboarding and parks
+its receive task when onboarding completes. See
+[`docs/serial_command_service.md`](docs/serial_command_service.md) for the
+detailed lifecycle.
+
 **Manufacturing shortcut.** While `onboarding_done` is still `false`, a
 short press on Button 2 (`ButtonBoot`) calls `enter_manufacturing_mode()`,
 which skips the guide and enters Stationary ephemerally via

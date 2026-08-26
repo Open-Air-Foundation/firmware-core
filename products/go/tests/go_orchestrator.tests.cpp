@@ -448,6 +448,13 @@ static const gpio::Hal test_gpio_hal = {
 // OrchestratorTestAccess — friend class for private member access
 // ============================================================================
 
+class SerialCommandServiceTestAccess {
+public:
+  static bool is_receiving(const SerialCommandService &service) {
+    return service._receiving.load();
+  }
+};
+
 class OrchestratorTestAccess {
 public:
   static void dispatch(Orchestrator &o, const Event &evt) { o.dispatch(evt); }
@@ -1494,6 +1501,8 @@ TEST_CASE("factory_reset: settings commit failure retains configuration control"
 TEST_CASE("mark_onboarding_done persists once and is idempotent", "[Orchestrator][onboarding]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  REQUIRE(f.serial_command.start());
+  REQUIRE(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -1505,6 +1514,7 @@ TEST_CASE("mark_onboarding_done persists once and is idempotent", "[Orchestrator
   CHECK_FALSE(A::settings(orch).onboarding_done);
   A::mark_onboarding_done(orch);
   CHECK(A::settings(orch).onboarding_done);
+  CHECK_FALSE(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
   A::mark_onboarding_done(orch); // idempotent — no second commit
   CHECK(A::settings(orch).onboarding_done);
 }
@@ -1513,6 +1523,8 @@ TEST_CASE("mark_onboarding_done keeps onboarding retryable when persistence fail
           "[Orchestrator][onboarding][failure]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  REQUIRE(f.serial_command.start());
+  REQUIRE(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -1524,12 +1536,33 @@ TEST_CASE("mark_onboarding_done keeps onboarding retryable when persistence fail
     CHECK_FALSE(A::mark_onboarding_done(orch));
   }
   CHECK_FALSE(A::settings(orch).onboarding_done);
+  CHECK(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
 
   {
     REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
     CHECK(A::mark_onboarding_done(orch));
   }
   CHECK(A::settings(orch).onboarding_done);
+  CHECK_FALSE(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
+}
+
+TEST_CASE("onboarding completion keeps serial receiving in manufacturing mode",
+          "[Orchestrator][onboarding][manufacturing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  REQUIRE(f.serial_command.start());
+  A::set_manufacturing_mode(orch, true);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  REQUIRE(A::mark_onboarding_done(orch));
+
+  CHECK(A::settings(orch).onboarding_done);
+  CHECK(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
 }
 
 TEST_CASE("BLE auth complete marks onboarding done", "[Orchestrator][onboarding][ble]") {
@@ -1757,6 +1790,79 @@ TEST_CASE("factory_reset clears onboarding_done", "[Orchestrator][onboarding][fa
 
   REQUIRE(A::factory_reset(orch));
   CHECK_FALSE(A::settings(orch).onboarding_done);
+}
+
+TEST_CASE("serial factory reset before onboarding preserves corrections without manufacturing mode",
+          "[Orchestrator][onboarding][serial_command][factory_reset]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  REQUIRE_FALSE(A::settings(orch).onboarding_done);
+  REQUIRE_FALSE(A::manufacturing_mode(orch));
+
+  A::settings(orch).auto_lock_seconds = 60;
+  A::settings(orch).corrections.pm25 = {
+      Pm25CorrectionAlgorithm::CustomViaPm25Raw,
+      1.2f,
+      0.4f,
+      true,
+  };
+  A::settings(orch).corrections.temperature = {
+      LinearCorrectionAlgorithm::Custom,
+      1.1f,
+      -0.3f,
+  };
+  A::settings(orch).corrections.humidity = {
+      LinearCorrectionAlgorithm::Custom,
+      0.9f,
+      2.0f,
+  };
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event event{};
+  event.type = EventType::SerialCommandRequest;
+  event.serial_command_request.kind = SerialCommandKind::FactoryReset;
+  A::dispatch(orch, event);
+
+  CHECK(test_spy::routes_cleared);
+  CHECK(test_spy::wifi_clear_credentials_called);
+  CHECK(test_spy::ble_delete_all_bonds_called);
+  CHECK(A::settings(orch).auto_lock_seconds == 10);
+  CHECK(A::settings(orch).corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  CHECK(A::settings(orch).corrections.pm25.scaling_factor == 1.2f);
+  CHECK(A::settings(orch).corrections.pm25.intercept == 0.4f);
+  CHECK(A::settings(orch).corrections.pm25.use_epa2021);
+  CHECK(A::settings(orch).corrections.temperature.algorithm == LinearCorrectionAlgorithm::Custom);
+  CHECK(A::settings(orch).corrections.temperature.scaling_factor == 1.1f);
+  CHECK(A::settings(orch).corrections.temperature.intercept == -0.3f);
+  CHECK(A::settings(orch).corrections.humidity.algorithm == LinearCorrectionAlgorithm::Custom);
+  CHECK(A::settings(orch).corrections.humidity.scaling_factor == 0.9f);
+  CHECK(A::settings(orch).corrections.humidity.intercept == 2.0f);
+  CHECK_FALSE(A::manufacturing_mode(orch));
+}
+
+TEST_CASE("serial commands after onboarding are rejected outside manufacturing mode",
+          "[Orchestrator][onboarding][serial_command]") {
+  TestFixture f;
+  f.settings.onboarding_done = true;
+  auto orch = f.make_orchestrator();
+
+  FORBID_CALL(f.mock_config, commit());
+
+  Event event{};
+  event.type = EventType::SerialCommandRequest;
+  event.serial_command_request.kind = SerialCommandKind::FactoryReset;
+  A::dispatch(orch, event);
+
+  CHECK_FALSE(test_spy::routes_cleared);
+  CHECK_FALSE(test_spy::wifi_clear_credentials_called);
+  CHECK_FALSE(test_spy::ble_delete_all_bonds_called);
 }
 
 TEST_CASE("BLE FactoryReset command sends progress then reports error and skips shutdown",

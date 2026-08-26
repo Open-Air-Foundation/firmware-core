@@ -90,6 +90,10 @@ SerialCommandService::SerialCommandService(RtosQueueHandle event_queue,
 
 bool SerialCommandService::start() {
   if (_started) {
+    const bool was_receiving = _receiving.exchange(true);
+    if (!was_receiving) {
+      RTOS::task_notify_give(_task_handle);
+    }
     return true;
   }
   if (!_channel.initialize()) {
@@ -101,20 +105,21 @@ bool SerialCommandService::start() {
     return false;
   }
 
-#ifdef TEST_HOST
-  _started = true;
-  return true;
-#else
+  _receiving.store(true);
+#ifndef TEST_HOST
   if (!RTOS::task_create(_task_entry, "serial_cmd", SERIAL_COMMAND_TASK_STACK_BYTES, this,
                          SERIAL_COMMAND_TASK_PRIORITY, &_task_handle)) {
+    _receiving.store(false);
     RTOS::queue_delete(_result_queue);
     _result_queue = nullptr;
     return false;
   }
+#endif
   _started = true;
   return true;
-#endif
 }
+
+void SerialCommandService::stop_receiving() { _receiving.store(false); }
 
 void SerialCommandService::complete(const SerialCommandResult &result) {
   if (_result_queue == nullptr) {
@@ -132,6 +137,17 @@ void SerialCommandService::_task_entry(void *param) {
 
 void SerialCommandService::_command_task() {
   while (true) {
+    if (!_receiving.load()) {
+      if (_awaiting_result) {
+        SerialCommandResult result{};
+        if (RTOS::queue_receive(_result_queue, &result, UINT32_MAX)) {
+          _complete_result(result);
+        }
+        continue;
+      }
+      (void)RTOS::task_notify_take(UINT32_MAX);
+      continue;
+    }
     _poll_once();
   }
 }
@@ -141,10 +157,12 @@ void SerialCommandService::_poll_once() {
   if (_awaiting_result && RTOS::queue_receive(_result_queue, &result, 0)) {
     _complete_result(result);
   }
-
   char buffer[SERIAL_COMMAND_READ_BUFFER_BYTES];
   const int read_size = _channel.read_bytes(buffer, sizeof(buffer), SERIAL_COMMAND_RX_WAIT_MS);
   if (read_size <= 0) {
+    return;
+  }
+  if (!_receiving.load()) {
     return;
   }
 
@@ -360,11 +378,3 @@ void SerialCommandService::_write_response(const char *format, ...) {
     return;
   }
 }
-
-#ifdef TEST_HOST
-bool UsbSerialCommandChannel::initialize() { return false; }
-
-int UsbSerialCommandChannel::read_bytes(char *, size_t, uint32_t) { return -1; }
-
-bool UsbSerialCommandChannel::write_response(const char *, size_t) { return false; }
-#endif

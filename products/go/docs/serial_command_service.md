@@ -1,9 +1,10 @@
 # Serial Command Service
 
-`SerialCommandService` provides the manufacturing-only `#AG` command protocol
-over the native USB Serial/JTAG connection. It owns USB input, line parsing,
-request admission, and response formatting; the orchestrator owns the typed
-operations against Go settings and factory reset.
+`SerialCommandService` provides the production `#AG` command protocol over the
+native USB Serial/JTAG connection. It is available automatically before
+onboarding and remains available in the explicit manufacturing session. It owns
+USB input, line parsing, request admission, and response formatting; the
+orchestrator owns the typed operations against Go settings and factory reset.
 
 ## Files
 
@@ -29,7 +30,8 @@ operations against Go settings and factory reset.
 | Method | Returns | Purpose |
 |---|---|---|
 | `SerialCommandService(event_queue, channel)` | — | Binds the central event queue and serial transport. |
-| `start()` | `bool` | Initializes the transport, creates the one-item result queue, and starts the command task. |
+| `start()` | `bool` | Initializes the transport and command task, or resumes command reception after it was stopped. |
+| `stop_receiving()` | `void` | Stops new USB command reception and parks the task without tearing down USB/VFS. |
 | `complete(result)` | `void` | Delivers the orchestrator result for the accepted command. |
 
 See [`serial_command.h`](../main/serial_command/serial_command.h) for full
@@ -39,20 +41,31 @@ signatures and protocol payload types.
 
 ### Lifecycle
 
-The service is constructed during normal Go composition but remains inactive.
-The orchestrator calls `start()` only when the boot-button manufacturing path
-enters manufacturing mode. The mode and service remain active until reboot or
-power-off, including after `FACTORY_RESET`; factory reset returns the device to
-Portable/Home without rebooting. Because serial commands run only in
-manufacturing mode, `FACTORY_RESET` retains active measurement corrections
-while clearing all other reset state.
+The service is constructed on the full interactive and button-wake composition
+paths. `GoApp` starts it immediately after construction when
+`onboarding_done == false`; onboarded boots leave it inactive. Fast measurement
+and sleep cycles do not construct the service.
+
+Entering the boot-button manufacturing session starts the service idempotently
+and adds the existing ephemeral Stationary and shutdown-cleanup behavior. A
+serial `FACTORY_RESET` retains active measurement corrections while clearing the
+other reset state.
+
+When onboarding changes successfully from incomplete to complete outside the
+explicit manufacturing session, the orchestrator calls `stop_receiving()`. The
+task finishes any already accepted command, discards bytes from the current USB
+read, and then blocks indefinitely. Calling `start()` again resumes it.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Inactive
-    Inactive --> Active: manufacturing mode entry
-    Active --> Active: FACTORY_RESET completes
-    Active --> Inactive: reboot or power off
+    Inactive --> Receiving: un-onboarded full boot
+    Receiving --> Receiving: manufacturing entry or serial reset
+    Receiving --> Parked: onboarding completes
+    Parked --> Receiving: start resumes task
+    Inactive --> [*]: onboarded boot ends
+    Receiving --> [*]: reboot or power off
+    Parked --> [*]: reboot or power off
 ```
 
 On first activation, the USB channel installs the USB Serial/JTAG driver with
@@ -60,12 +73,15 @@ On first activation, the USB channel installs the USB Serial/JTAG driver with
 write-only `/dev/secondary` descriptor. Each response is emitted by one VFS
 `write()` call. It starts with LF and ends with LF, so it terminates a partial
 normal mirrored log line before emitting its `#AG` response line. The channel
-is not installed at normal boot, never uses UART0, and is not uninstalled.
+is not installed on onboarded boots, never uses UART0, and is not uninstalled
+when command reception is parked.
 
 The task uses a 3072-byte stack at priority 3 and waits up to 50 ms per USB RX
 read. This finite wait lets it poll the one-item result queue. A command is
 marked in flight only after central-event admission succeeds; a second valid
-command receives `#AG ERROR BUSY` until the prior result is emitted.
+command receives `#AG ERROR BUSY` until the prior result is emitted. A parked
+task has no periodic wake-up. The USB driver retains its bounded 256-byte RX
+ring, so host data sent while parked may be dropped but cannot grow memory use.
 
 ### Protocol
 

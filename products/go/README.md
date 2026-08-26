@@ -90,6 +90,10 @@ and the BQ25629 `/QON` pin, so the long-press gesture has two outcomes:
 
 ### Manufacturing Mode
 
+The USB `#AG` production command service is available automatically before
+onboarding; entering Manufacturing Mode is not required. See
+[Serial Command Service](docs/serial_command_service.md) for its lifecycle.
+
 While a unit is still un-onboarded (`onboarding_done == false`), a short
 press of Button 2 (`PIN_BUTTON_BOOT`) skips the Getting Started guide and
 enters Stationary operating mode **ephemerally** — nothing is written to

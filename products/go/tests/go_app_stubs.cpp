@@ -121,6 +121,9 @@ ConfigProvider *generic_local_config = nullptr;
 ActionHandler *generic_local_actions = nullptr;
 ConfigAccess generic_local_config_access = ConfigAccess::Disabled;
 
+// --- SerialCommandService ---
+uint32_t serial_command_start_count = 0;
+
 // --- BmsDevice ---
 float bms_battery_pct = -1.0f;
 
@@ -201,6 +204,8 @@ void reset() {
   generic_local_actions = nullptr;
   generic_local_config_access = ConfigAccess::Disabled;
 
+  serial_command_start_count = 0;
+
   bms_battery_pct = -1.0f;
 
   DisplayService::spy_deep_sleep_called = false;
@@ -212,6 +217,34 @@ void reset() {
 }
 
 } // namespace test_spy
+
+// ============================================================================
+// SerialCommandService stubs
+// ============================================================================
+
+SerialCommandService::SerialCommandService(RtosQueueHandle event_queue,
+                                           SerialCommandChannel &channel)
+    : _event_queue(event_queue), _channel(channel) {}
+
+bool SerialCommandService::start() {
+  ++test_spy::serial_command_start_count;
+  return true;
+}
+
+void SerialCommandService::stop_receiving() {}
+
+void SerialCommandService::complete(const SerialCommandResult & /*result*/) {}
+
+bool UsbSerialCommandChannel::initialize() { return true; }
+
+int UsbSerialCommandChannel::read_bytes(char * /*buffer*/, size_t /*buffer_size*/,
+                                        uint32_t /*timeout_ms*/) {
+  return 0;
+}
+
+bool UsbSerialCommandChannel::write_response(const char * /*response*/, size_t /*response_size*/) {
+  return true;
+}
 
 LocalServer::LocalServer(HttpServer &server, const Providers &providers)
     : _server(server), _measures(providers.measures), _config(providers.config),
@@ -845,7 +878,7 @@ void Orchestrator::change_mode(OperatingMode /*new_mode*/, bool /*persist*/) {}
 void Orchestrator::enter_manufacturing_mode() {}
 void Orchestrator::apply_settings_change() {}
 bool Orchestrator::clear_data() { return true; }
-bool Orchestrator::factory_reset() { return true; }
+bool Orchestrator::factory_reset(bool /*preserve_corrections*/) { return true; }
 void Orchestrator::save_tag(uint8_t /*tag_index*/, const char * /*tag_label*/) {}
 void Orchestrator::shutdown(ShipModeRequest /*reason*/) {}
 uint32_t Orchestrator::compute_queue_timeout_ms() const { return UINT32_MAX; }

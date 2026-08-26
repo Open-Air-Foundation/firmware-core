@@ -823,7 +823,7 @@ void Orchestrator::on_local_api_request(uint32_t event_epoch) {
 void Orchestrator::handle_serial_command(const SerialCommandRequest &request) {
   SerialCommandResult result{};
 
-  if (!_manufacturing_mode) {
+  if (_settings.onboarding_done && !_manufacturing_mode) {
     _svc.serial_command.complete(result);
     return;
   }
@@ -905,7 +905,7 @@ void Orchestrator::handle_serial_command(const SerialCommandRequest &request) {
     break;
 
   case SerialCommandKind::FactoryReset:
-    if (factory_reset()) {
+    if (factory_reset(/*preserve_corrections=*/true)) {
       result.kind = SerialCommandResultKind::Reset;
     }
     break;
@@ -1908,6 +1908,11 @@ bool Orchestrator::activate_settings_candidate(const GoSettings &candidate, bool
 void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_settings,
                                                 OperatingMode previous_mode) {
   const bool mode_changing = previous_mode != _settings.operating_mode;
+
+  if (!previous_settings.onboarding_done && _settings.onboarding_done && !_manufacturing_mode) {
+    _svc.serial_command.stop_receiving();
+  }
+
   const bool was_gps_active =
       previous_settings.gps_mode == GpsMode::AlwaysOn ||
       (previous_settings.gps_mode == GpsMode::OnWhenTracking && _tracking_active);
@@ -1992,8 +1997,9 @@ bool Orchestrator::clear_data() {
   return routes_cleared;
 }
 
-bool Orchestrator::factory_reset() {
-  AG_LOGI(TAG, "factory_reset: preserve_corrections=%d", _manufacturing_mode);
+bool Orchestrator::factory_reset(bool preserve_corrections) {
+  const bool should_preserve_corrections = preserve_corrections || _manufacturing_mode;
+  AG_LOGI(TAG, "factory_reset: preserve_corrections=%d", should_preserve_corrections);
 
   const MeasurementCorrections corrections = _settings.corrections;
 
@@ -2014,7 +2020,7 @@ bool Orchestrator::factory_reset() {
   }
 
   GoSettings defaults{};
-  if (_manufacturing_mode) {
+  if (should_preserve_corrections) {
     defaults.corrections = corrections;
   }
   if (!activate_settings_candidate(defaults, /*persist=*/true, /*force_persist=*/true)) {
