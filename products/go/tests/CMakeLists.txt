@@ -566,7 +566,6 @@ catch_discover_tests(go_gps_types_tests)
 
 add_library(go_app_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_app.cpp"
-    "${AIRGRADIENT_REPO_ROOT}/products/go/main/serial_command/serial_command.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/retained_uptime.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_settings.cpp"

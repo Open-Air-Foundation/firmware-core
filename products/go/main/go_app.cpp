@@ -655,6 +655,9 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       new CloudService(event_queue, {_board.ag_client(), *wifi_service}, CloudService::Config{});
   auto *serial_command_channel = new UsbSerialCommandChannel();
   auto *serial_command_service = new SerialCommandService(event_queue, *serial_command_channel);
+  if (!settings.onboarding_done && !serial_command_service->start()) {
+    AG_LOGE(TAG, "failed to start serial command service during onboarding");
+  }
   // LED service — init and start before orchestrator.
   LedService &led = _board.led_service();
   led.init();
@@ -809,6 +812,9 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       new CloudService(event_queue, {_board.ag_client(), *wifi_service}, CloudService::Config{});
   auto *serial_command_channel = new UsbSerialCommandChannel();
   auto *serial_command_service = new SerialCommandService(event_queue, *serial_command_channel);
+  if (!settings.onboarding_done && !serial_command_service->start()) {
+    AG_LOGE(TAG, "failed to start serial command service during onboarding");
+  }
 
   // --- Service construction ---
   auto *sensor_producer = new SensorProducer(sm, event_queue,

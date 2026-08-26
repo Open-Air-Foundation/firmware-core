@@ -100,6 +100,7 @@ extern MeasuresProvider *generic_local_measures;
 extern ConfigProvider *generic_local_config;
 extern ActionHandler *generic_local_actions;
 extern ConfigAccess generic_local_config_access;
+extern uint32_t serial_command_start_count;
 extern float bms_battery_pct;
 extern void reset();
 } // namespace test_spy
@@ -1195,6 +1196,7 @@ TEST_CASE("run_interactive wires a valid local API with shared identity and queu
   CHECK(test_spy::wifi_ap_ssid == "airgradient-test-serial");
   CHECK(test_spy::wifi_hostname == "airgradient_test-serial");
   CHECK(test_spy::wifi_http_port == 80);
+  CHECK(test_spy::serial_command_start_count == 1);
 
   test_spy::orchestrator_local_api->set_access(ConfigAccess::ReadWrite);
   CHECK(test_spy::orchestrator_local_api->trigger(ActionId::CalibrateCo2).status ==
@@ -1250,9 +1252,38 @@ TEST_CASE("button wake path wires a valid local API with shared identity") {
   CHECK(test_spy::wifi_ap_ssid == "airgradient-test-serial");
   CHECK(test_spy::wifi_hostname == "airgradient_test-serial");
   CHECK(test_spy::wifi_http_port == 80);
+  CHECK(test_spy::serial_command_start_count == 1);
   test_spy::orchestrator_local_api->set_access(ConfigAccess::ReadWrite);
   CHECK(test_spy::orchestrator_local_api->trigger(ActionId::CalibrateCo2).status ==
         ActionStatus::Dispatched);
+}
+
+TEST_CASE("interactive paths do not start serial commands after onboarding") {
+  SECTION("power-on interactive path") {
+    test_spy::reset();
+    MockBoard board;
+    board.settings.onboarding_done = true;
+    GoApp app(board);
+    GoAppTestAccess access(app);
+
+    access.run_interactive(WakeCause::PowerOn);
+
+    REQUIRE(test_spy::orchestrator_init_called);
+    CHECK(test_spy::serial_command_start_count == 0);
+  }
+
+  SECTION("button-wake path") {
+    test_spy::reset();
+    MockBoard board;
+    board.settings.onboarding_done = true;
+    GoApp app(board);
+    GoAppTestAccess access(app);
+
+    access.run_button_wake_path(RtcAppState{});
+
+    REQUIRE(test_spy::orchestrator_init_called);
+    CHECK(test_spy::serial_command_start_count == 0);
+  }
 }
 
 TEST_CASE("button wake path: exhausted BMS retries restart before orchestrator") {
