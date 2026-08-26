@@ -3,7 +3,7 @@
 
 The Go serial command protocol shares its transport with normal firmware logs.
 This client ignores ordinary log lines and prints the first ``#AG`` response.
-The device must already be in manufacturing mode.
+The device must be un-onboarded or already in manufacturing mode.
 
 Requirements:
     pip install pyserial

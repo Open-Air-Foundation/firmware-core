@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "local-config-round-trip",
+  "rev": "serial-command-pre-onboarding",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -24,7 +24,7 @@
       "sub_category": "First use",
       "applies_to": ["V1"],
       "description": "Start using completes the first-use Getting Started flow",
-      "expected_result": "A factory-reset cold boot shows the Getting Started QR and \"Start using\", plays the complete welcome Chime with a rear-LED color step for each melody step, logs at least two completed sensor measurements while the page remains open, and remains discoverable in a 30-second BLE scan. Selecting \"Start using\" opens unlocked Home. The next cold boot goes directly to onboarded Home after the boot splash and does not replay Getting Started.",
+      "expected_result": "A factory-reset cold boot shows the Getting Started QR and \"Start using\", plays the complete welcome Chime with a rear-LED color step for each melody step, logs at least two completed sensor measurements while the page remains open, and remains discoverable in a 30-second BLE scan. #AG GET_SERIAL returns the unit's 12-character serial before selecting Start using. Selecting \"Start using\" opens unlocked Home and disables #AG responses. The next cold boot goes directly to onboarded Home after the boot splash and does not replay Getting Started.",
       "notes": "Start with onboarding incomplete and no client connected. Scan for the advertisement for 30 seconds before selecting Start using. Pairing completion is verified separately."
     },
     {
@@ -554,8 +554,8 @@
       "category": "Manufacturing",
       "sub_category": "USB serial commands",
       "applies_to": ["V1"],
-      "description": "Manufacturing mode exposes the framed USB serial command protocol and preserves production corrections",
-      "expected_result": "On an un-onboarded unit, a #AG command before manufacturing entry produces no #AG response. A short press of the BOOT button enters ephemeral Stationary manufacturing mode and logs \"enter_manufacturing_mode: skip onboarding, Stationary (ephemeral)\". HELP returns \"#AG OK COMMANDS HELP GET_SERIAL SET_SLR <PM|TEMP|HUM> <scale> <intercept> GET_SLR <PM|TEMP|HUM> FACTORY_RESET\", and GET_SERIAL returns the unit's 12-character serial. SET_SLR followed by GET_SLR for PM 1.2 0.4, TEMP 1.1 -0.3, and HUM 0.9 2 returns each target and coefficient with six decimal places; SET_SLR TEMP nan 1 returns \"#AG ERROR INVALID_ARGUMENT\" without changing TEMP. Every response starts on a standalone #AG line despite interleaved logs. FACTORY_RESET returns \"#AG OK RESET\", leaves the command service responsive, and GET_SLR returns all three configured corrections unchanged. Disconnect USB, perform a Power-button shutdown and cold start on battery, reconnect USB, and confirm Getting Started appears; re-entering manufacturing mode makes GET_SLR return the same corrections again.",
+      "description": "USB serial commands remain available in Manufacturing Mode and preserve production corrections",
+      "expected_result": "On an un-onboarded unit, HELP returns \"#AG OK COMMANDS HELP GET_SERIAL SET_SLR <PM|TEMP|HUM> <scale> <intercept> GET_SLR <PM|TEMP|HUM> FACTORY_RESET\", and GET_SERIAL returns the unit's 12-character serial before manufacturing entry. A short BOOT press enters ephemeral Stationary manufacturing mode and logs \"enter_manufacturing_mode: skip onboarding, Stationary (ephemeral)\". SET_SLR followed by GET_SLR for PM 1.2 0.4, TEMP 1.1 -0.3, and HUM 0.9 2 returns each target and coefficient with six decimal places; SET_SLR TEMP nan 1 returns \"#AG ERROR INVALID_ARGUMENT\" without changing TEMP. Every response starts on a standalone #AG line despite interleaved logs. FACTORY_RESET returns \"#AG OK RESET\", leaves the command service responsive, and preserves all three corrections. After a battery reboot, Getting Started appears and GET_SLR returns the same corrections without entering manufacturing mode.",
       "notes": "Use a dedicated un-onboarded V1 over native USB Serial/JTAG and scripts/ago_serial_command.py with --show-logs. Record the label serial and complete USB capture. After the case, reboot out of manufacturing mode before using the physical factory-reset gesture to clear the test corrections."
     },
     {

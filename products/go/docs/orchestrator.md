@@ -476,11 +476,11 @@ Calls `clear_data()`, writes default `GoSettings` to NVS (which zeros
 `disable_cloud` and `static_ip`), calls `WifiService::clear_credentials()`
 to erase all saved networks and reset online latches,
 deletes all stored BLE bonds, resets runtime state back to Portable + Idle +
-Locked, updates the display, and returns success/failure. Explicit factory reset
-uses the full default settings, including no measurement corrections. When
-manufacturing mode is active, factory reset instead retains the active
-correction set. Bond deletion is a safe no-op after Stationary has torn down
-the Go BLE service. The caller reboots the ESP on success.
+Locked, updates the display, and returns success/failure. Normal reset callers
+clear measurement corrections; manufacturing-mode and serial-command resets
+retain them. Bond deletion is a safe no-op after Stationary has torn down the Go
+BLE service. Callers reboot on success except the serial command path, which
+returns its result without rebooting.
 
 ### shutdown(reason)
 
