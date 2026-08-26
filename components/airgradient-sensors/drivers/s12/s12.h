@@ -136,6 +136,8 @@ private:
   static constexpr uint8_t REG_CALIBRATION_TARGET_MSB = 0x84;
   // ABC Period (HR14) is an EEPROM-backed 16-bit hour count.
   static constexpr uint8_t REG_ABC_PERIOD_MSB = 0x9A;
+  // System Control Register; writing 0xFF resets the sensor.
+  static constexpr uint8_t REG_SCR = 0xA3;
   // MeterControl (HR19); a set bit disables the corresponding feature.
   static constexpr uint8_t REG_METER_CONTROL = 0xA5;
 
@@ -150,12 +152,15 @@ private:
   // Default baseline concentration used when the caller passes <= 0 ppm.
   static constexpr uint16_t CAL_DEFAULT_BASELINE_PPM = 400;
   static constexpr uint8_t METER_CONTROL_ABC_DISABLE = 1U << 1;
+  static constexpr uint8_t SCR_RESET = 0xFF;
   static constexpr int ABC_DAYS_DISABLED = -1;
   static constexpr int ABC_DAYS_MIN = 1;
   static constexpr int ABC_DAYS_MAX = 200;
   static constexpr uint16_t HOURS_PER_DAY = 24;
   // Datasheet maximum is 180 ms. Use 300 ms to include a conservative margin.
   static constexpr uint32_t EEPROM_WRITE_SETTLE_MS = 300;
+  // Communication resumes 30 ms after SCR. Use twice that time as margin.
+  static constexpr uint32_t SENSOR_RESET_SETTLE_MS = 60;
   static constexpr size_t EEPROM_MAX_PAYLOAD_LEN = 2;
 
   /**
@@ -182,13 +187,14 @@ private:
   bool _write_bytes(const uint8_t *buf, size_t len);
 
   /**
-   * @brief Attempt one EEPROM write, wait for completion, and verify by readback.
-   *
-   * A transport error is ambiguous because the sensor may have accepted the
-   * write. This helper never retries the write and determines success from the
-   * delayed readback.
+   * @brief Attempt one EEPROM write and wait for it to settle.
    */
-  bool _write_eeprom_and_verify(const uint8_t *buf, size_t len);
+  bool _write_eeprom(const uint8_t *buf, size_t len);
+
+  /**
+   * @brief Reset the sensor through SCR and wait for communication to resume.
+   */
+  bool _reset_sensor();
 };
 
 #endif // S12_HPP

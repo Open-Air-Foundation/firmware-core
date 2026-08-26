@@ -196,14 +196,33 @@ bool S12::set_abc_period_days(int days) {
       return false;
     }
 
-    if ((meter_control & METER_CONTROL_ABC_DISABLE) == 0) {
+    const bool abc_disabled = (meter_control & METER_CONTROL_ABC_DISABLE) != 0;
+    ESP_LOGI(TAG, "ABC state read: current=%s, requested=disabled",
+             abc_disabled ? "disabled" : "enabled");
+
+    if (!abc_disabled) {
       const uint8_t meter_control_frame[] = {
           REG_METER_CONTROL,
           static_cast<uint8_t>(meter_control | METER_CONTROL_ABC_DISABLE),
       };
-      if (!_write_eeprom_and_verify(meter_control_frame, sizeof(meter_control_frame))) {
-        ESP_LOGE(TAG, "ABC disable write could not be verified");
+      if (!_write_eeprom(meter_control_frame, sizeof(meter_control_frame))) {
+        ESP_LOGE(TAG, "Failed to disable ABC");
         return false;
+      }
+
+      if (!_reset_sensor()) {
+        ESP_LOGE(TAG, "Failed to reset sensor after disabling ABC");
+        return false;
+      }
+
+      uint8_t meter_control_after_reset = 0;
+      if (_read_register(REG_METER_CONTROL, &meter_control_after_reset,
+                         sizeof(meter_control_after_reset))) {
+        ESP_LOGI(TAG, "ABC state read after reset: current=%s, requested=disabled",
+                 (meter_control_after_reset & METER_CONTROL_ABC_DISABLE) != 0 ? "disabled"
+                                                                              : "enabled");
+      } else {
+        ESP_LOGW(TAG, "Failed to read ABC state after reset");
       }
     }
     ESP_LOGI(TAG, "ABC disabled");
@@ -218,12 +237,10 @@ bool S12::set_abc_period_days(int days) {
   }
   const uint16_t current_hours =
       static_cast<uint16_t>((static_cast<uint16_t>(period_bytes[0]) << 8) | period_bytes[1]);
+  ESP_LOGI(TAG, "ABC period read: current=%u hours, requested=%d days (%u hours)",
+           static_cast<unsigned>(current_hours), days, static_cast<unsigned>(requested_hours));
 
-  uint8_t meter_control = 0;
-  if (!_read_register(REG_METER_CONTROL, &meter_control, sizeof(meter_control))) {
-    ESP_LOGE(TAG, "Failed to read ABC meter control");
-    return false;
-  }
+  bool eeprom_changed = false;
 
   if (current_hours != requested_hours) {
     const uint8_t period_frame[] = {
@@ -231,33 +248,66 @@ bool S12::set_abc_period_days(int days) {
         static_cast<uint8_t>(requested_hours >> 8),
         static_cast<uint8_t>(requested_hours & 0xFF),
     };
-    if (!_write_eeprom_and_verify(period_frame, sizeof(period_frame))) {
-      ESP_LOGE(TAG, "ABC period write could not be verified (%u hours)", requested_hours);
+    if (!_write_eeprom(period_frame, sizeof(period_frame))) {
+      ESP_LOGE(TAG, "Failed to write ABC period (%u hours)",
+               static_cast<unsigned>(requested_hours));
       return false;
+    }
+    eeprom_changed = true;
+  }
+
+  uint8_t meter_control = 0;
+  if (!_read_register(REG_METER_CONTROL, &meter_control, sizeof(meter_control))) {
+    ESP_LOGE(TAG, "Failed to read ABC meter control");
+    return false;
+  }
+
+  const bool abc_disabled = (meter_control & METER_CONTROL_ABC_DISABLE) != 0;
+  ESP_LOGI(TAG, "ABC state read: current=%s, requested=enabled",
+           abc_disabled ? "disabled" : "enabled");
+
+  if (abc_disabled) {
+    const uint8_t meter_control_frame[] = {
+        REG_METER_CONTROL,
+        static_cast<uint8_t>(meter_control & ~METER_CONTROL_ABC_DISABLE),
+    };
+    if (!_write_eeprom(meter_control_frame, sizeof(meter_control_frame))) {
+      ESP_LOGE(TAG, "Failed to enable ABC");
+      return false;
+    }
+    eeprom_changed = true;
+  }
+
+  if (eeprom_changed) {
+    if (!_reset_sensor()) {
+      ESP_LOGE(TAG, "Failed to reset sensor after configuring ABC");
+      return false;
+    }
+
+    uint8_t period_after_reset[2] = {0};
+    if (_read_register(REG_ABC_PERIOD_MSB, period_after_reset, sizeof(period_after_reset))) {
+      const uint16_t hours_after_reset = static_cast<uint16_t>(
+          (static_cast<uint16_t>(period_after_reset[0]) << 8) | period_after_reset[1]);
+      ESP_LOGI(TAG, "ABC period read after reset: current=%u hours, requested=%d days (%u hours)",
+               static_cast<unsigned>(hours_after_reset), days,
+               static_cast<unsigned>(requested_hours));
+    } else {
+      ESP_LOGW(TAG, "Failed to read ABC period after reset");
+    }
+
+    uint8_t meter_control_after_reset = 0;
+    if (_read_register(REG_METER_CONTROL, &meter_control_after_reset,
+                       sizeof(meter_control_after_reset))) {
+      ESP_LOGI(TAG, "ABC state read after reset: current=%s, requested=enabled",
+               (meter_control_after_reset & METER_CONTROL_ABC_DISABLE) != 0 ? "disabled"
+                                                                            : "enabled");
+    } else {
+      ESP_LOGW(TAG, "Failed to read ABC state after reset");
     }
   }
 
-  if ((meter_control & METER_CONTROL_ABC_DISABLE) != 0) {
-    // Re-read immediately before read-modify-write so unrelated bits are not
-    // restored from a value captured before the period operation.
-    if (!_read_register(REG_METER_CONTROL, &meter_control, sizeof(meter_control))) {
-      ESP_LOGE(TAG, "Failed to re-read ABC meter control");
-      return false;
-    }
-
-    if ((meter_control & METER_CONTROL_ABC_DISABLE) != 0) {
-      const uint8_t meter_control_frame[] = {
-          REG_METER_CONTROL,
-          static_cast<uint8_t>(meter_control & ~METER_CONTROL_ABC_DISABLE),
-      };
-      if (!_write_eeprom_and_verify(meter_control_frame, sizeof(meter_control_frame))) {
-        ESP_LOGE(TAG, "ABC enable write could not be verified");
-        return false;
-      }
-    }
-  }
-
-  ESP_LOGI(TAG, "ABC period configured to %d days (%u hours)", days, requested_hours);
+  ESP_LOGI(TAG, "ABC period configured to %d days (%u hours)", days,
+           static_cast<unsigned>(requested_hours));
   return true;
 }
 
@@ -305,36 +355,35 @@ bool S12::_write_bytes(const uint8_t *buf, size_t len) {
   return false;
 }
 
-bool S12::_write_eeprom_and_verify(const uint8_t *buf, size_t len) {
+bool S12::_write_eeprom(const uint8_t *buf, size_t len) {
   if (_dev_handle == nullptr || buf == nullptr || len < 2 || (len - 1) > EEPROM_MAX_PAYLOAD_LEN) {
     return false;
   }
 
   const esp_err_t write_err = i2c_master_transmit(_dev_handle, buf, len, I2C_TIMEOUT_MS);
-
-  // Wait even when transport reports an error: the sensor may have accepted
-  // the EEPROM write before the controller observed the failure.
-  RTOS::delay_ms(EEPROM_WRITE_SETTLE_MS);
-
-  const size_t payload_len = len - 1;
-  uint8_t readback[EEPROM_MAX_PAYLOAD_LEN] = {0};
-  if (!_read_register(buf[0], readback, payload_len)) {
-    ESP_LOGE(TAG, "EEPROM reg 0x%02X readback failed after write result %s", buf[0],
-             esp_err_to_name(write_err));
+  if (write_err != ESP_OK) {
+    ESP_LOGE(TAG, "EEPROM reg 0x%02X write failed: %s", buf[0], esp_err_to_name(write_err));
     return false;
   }
 
-  for (size_t i = 0; i < payload_len; i++) {
-    if (readback[i] != buf[i + 1]) {
-      ESP_LOGE(TAG, "EEPROM reg 0x%02X verification mismatch after write result %s", buf[0],
-               esp_err_to_name(write_err));
-      return false;
-    }
+  RTOS::delay_ms(EEPROM_WRITE_SETTLE_MS);
+  return true;
+}
+
+bool S12::_reset_sensor() {
+  if (_dev_handle == nullptr) {
+    return false;
   }
 
-  if (write_err != ESP_OK) {
-    ESP_LOGW(TAG, "EEPROM reg 0x%02X verified after ambiguous write result %s", buf[0],
-             esp_err_to_name(write_err));
+  const uint8_t reset_frame[] = {REG_SCR, SCR_RESET};
+  const esp_err_t reset_err =
+      i2c_master_transmit(_dev_handle, reset_frame, sizeof(reset_frame), I2C_TIMEOUT_MS);
+  if (reset_err != ESP_OK) {
+    ESP_LOGE(TAG, "S12 reset failed: %s", esp_err_to_name(reset_err));
+    return false;
   }
+
+  RTOS::delay_ms(SENSOR_RESET_SETTLE_MS);
+  ESP_LOGI(TAG, "S12 reset complete");
   return true;
 }
