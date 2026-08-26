@@ -27,6 +27,7 @@ static constexpr uint8_t SOC_PERCENT = 255;     // SOC is 0..100
 static constexpr int16_t POWER_MW = -32768;     // INT16_MIN; signed power
 static constexpr uint16_t CAPACITY_MAH = 65535; // UINT16_MAX
 static constexpr float FG_TEMP_C = -273.16f;    // below absolute zero
+static constexpr float NTC_TEMP_C = -273.16f;   // below absolute zero
 } // namespace BmsInvalid
 
 // ---------------------------------------------------------------------------
@@ -105,6 +106,7 @@ struct BmsTelemetry {
   float ts_percent = BmsInvalid::PERCENT;                    ///< Thermistor ADC reading (%)
   int16_t die_temperature_c = BmsInvalid::TEMPERATURE_C;     ///< IC die temperature (°C)
   int16_t battery_temperature_c = BmsInvalid::TEMPERATURE_C; ///< Battery NTC temperature (°C)
+  float battery_temperature_precise_c = BmsInvalid::NTC_TEMP_C; ///< Battery NTC temperature (°C, unrounded)
 
   // --- Validation helpers ---
   bool is_battery_voltage_valid() const { return battery_voltage >= BmsRange::MIN_VALID_VOLT; }
@@ -113,6 +115,10 @@ struct BmsTelemetry {
 
   bool is_battery_temperature_valid() const {
     return battery_temperature_c != BmsInvalid::TEMPERATURE_C;
+  }
+
+  bool is_battery_temperature_precise_valid() const {
+    return battery_temperature_precise_c > BmsInvalid::NTC_TEMP_C;
   }
 
   bool is_valid() const { return is_battery_voltage_valid() && is_charging_voltage_valid(); }

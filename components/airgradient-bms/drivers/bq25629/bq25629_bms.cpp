@@ -167,10 +167,12 @@ bool BQ25629Bms::read_telemetry(BmsTelemetry &out) {
   // Leave at BmsInvalid::TEMPERATURE_C when the reading is out of range.
   drivers::BQ25629_NTC_Data ntc{};
   out.battery_temperature_c = BmsInvalid::TEMPERATURE_C;
+  out.battery_temperature_precise_c = BmsInvalid::NTC_TEMP_C;
   if (_charger.read_ntc_temperature(ntc) == ESP_OK) {
     const float t = ntc.temperature_c;
     if (!std::isnan(t) && t > BATTERY_TEMP_VALID_MIN_C && t < BATTERY_TEMP_VALID_MAX_C) {
       out.battery_temperature_c = static_cast<int16_t>(std::lroundf(t));
+      out.battery_temperature_precise_c = t;
     }
   }
 
