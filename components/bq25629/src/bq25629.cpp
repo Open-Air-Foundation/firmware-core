@@ -4,6 +4,7 @@
  */
 
 #include "bq25629.h"
+#include "bq25629_ntc_math.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -1038,61 +1039,16 @@ esp_err_t BQ25629::read_ntc_temperature(BQ25629_NTC_Data &data) {
     ESP_LOGE(TAG, "Failed to read TS_ADC: %s", esp_err_to_name(ret));
     return ret;
   }
-  ts_adc_raw &= 0x0FFF; // Mask to 12-bit value (consistent with read_adc)
+  data.ts_percent = ntc_math::ts_raw_to_percent(ts_adc_raw);
 
-  // Convert ADC to percentage (0.0961% per LSB)
-  data.ts_percent = ts_adc_raw * 0.0961f;
-
-  // Calculate NTC resistance using voltage divider equation
-  // V_TS = V_BIAS * (RT2 || R_NTC) / (RT1 + (RT2 || R_NTC))
-  // Where RT1 = 4.12kΩ (pull-up), RT2 = 17.33kΩ (pull-down)
-  //
-  // ADC reads: TS% = V_TS / V_BIAS * 100
-  // Let ratio = TS% / 100 = V_TS / V_BIAS
-  //
-  // Solving for R_NTC:
-  // Step 1: Find parallel resistance R_parallel = R_NTC || RT2
-  //   ratio = R_parallel / (RT1 + R_parallel)
-  //   R_parallel = (ratio * RT1) / (1 - ratio)
-  // Step 2: Solve for R_NTC from parallel equation
-  //   R_parallel = (R_NTC * RT2) / (R_NTC + RT2)
-  //   R_NTC = (R_parallel * RT2) / (RT2 - R_parallel)
-
-  const float RT1 = 4120.0f;  // 4.12kΩ
-  const float RT2 = 17330.0f; // 17.33kΩ
-  const float R25 = 10000.0f; // 10kΩ @ 25°C
-  const float B = 3950.0f;    // B constant (3950K)
-
-  float adc_ratio = data.ts_percent / 100.0f;
-
-  // Handle edge cases
-  if (adc_ratio <= 0.001f || adc_ratio >= 0.999f) {
-    data.resistance_ohm = 0.0f;
-    data.temperature_c = -999.0f;
+  const ntc_math::NtcConversion conversion = ntc_math::convert_ts_percent(data.ts_percent);
+  data.resistance_ohm = conversion.resistance_ohm;
+  data.temperature_c = conversion.temperature_c;
+  if (!conversion.valid) {
     data.zone = TempZone::TS_UNKNOWN;
     ESP_LOGW(TAG, "TS ADC out of range: %.2f%%", data.ts_percent);
     return ESP_OK;
   }
-
-  // Calculate parallel resistance first
-  float r_parallel = (adc_ratio * RT1) / (1.0f - adc_ratio);
-
-  // Check if parallel resistance is valid
-  if (r_parallel >= RT2 || r_parallel < 0.0f) {
-    data.resistance_ohm = 0.0f;
-    data.temperature_c = -999.0f;
-    data.zone = TempZone::TS_UNKNOWN;
-    ESP_LOGW(TAG, "Invalid parallel resistance: %.1fΩ (TS=%.2f%%)", r_parallel, data.ts_percent);
-    return ESP_OK;
-  }
-
-  // Calculate R_NTC from parallel resistance
-  data.resistance_ohm = (r_parallel * RT2) / (RT2 - r_parallel);
-
-  // Steinhart-Hart equation: 1/T = 1/T0 + (1/B) * ln(R/R0)
-  // Where T0 = 298.15K (25°C), R0 = R25 = 10kΩ
-  float t_kelvin = 1.0f / ((1.0f / 298.15f) + (logf(data.resistance_ohm / R25) / B));
-  data.temperature_c = t_kelvin - 273.15f;
 
   // Determine temperature zone
   if (data.temperature_c < 0.0f) {
