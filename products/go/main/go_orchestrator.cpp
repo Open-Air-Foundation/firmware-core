@@ -1908,6 +1908,11 @@ bool Orchestrator::activate_settings_candidate(const GoSettings &candidate, bool
 void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_settings,
                                                 OperatingMode previous_mode) {
   const bool mode_changing = previous_mode != _settings.operating_mode;
+
+  if (!previous_settings.onboarding_done && _settings.onboarding_done && !_manufacturing_mode) {
+    _svc.serial_command.stop_receiving();
+  }
+
   const bool was_gps_active =
       previous_settings.gps_mode == GpsMode::AlwaysOn ||
       (previous_settings.gps_mode == GpsMode::OnWhenTracking && _tracking_active);

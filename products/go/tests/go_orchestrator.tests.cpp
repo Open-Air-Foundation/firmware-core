@@ -448,6 +448,13 @@ static const gpio::Hal test_gpio_hal = {
 // OrchestratorTestAccess — friend class for private member access
 // ============================================================================
 
+class SerialCommandServiceTestAccess {
+public:
+  static bool is_receiving(const SerialCommandService &service) {
+    return service._receiving.load();
+  }
+};
+
 class OrchestratorTestAccess {
 public:
   static void dispatch(Orchestrator &o, const Event &evt) { o.dispatch(evt); }
@@ -1494,6 +1501,8 @@ TEST_CASE("factory_reset: settings commit failure retains configuration control"
 TEST_CASE("mark_onboarding_done persists once and is idempotent", "[Orchestrator][onboarding]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  REQUIRE(f.serial_command.start());
+  REQUIRE(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -1505,6 +1514,7 @@ TEST_CASE("mark_onboarding_done persists once and is idempotent", "[Orchestrator
   CHECK_FALSE(A::settings(orch).onboarding_done);
   A::mark_onboarding_done(orch);
   CHECK(A::settings(orch).onboarding_done);
+  CHECK_FALSE(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
   A::mark_onboarding_done(orch); // idempotent — no second commit
   CHECK(A::settings(orch).onboarding_done);
 }
@@ -1513,6 +1523,8 @@ TEST_CASE("mark_onboarding_done keeps onboarding retryable when persistence fail
           "[Orchestrator][onboarding][failure]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  REQUIRE(f.serial_command.start());
+  REQUIRE(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -1524,12 +1536,33 @@ TEST_CASE("mark_onboarding_done keeps onboarding retryable when persistence fail
     CHECK_FALSE(A::mark_onboarding_done(orch));
   }
   CHECK_FALSE(A::settings(orch).onboarding_done);
+  CHECK(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
 
   {
     REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
     CHECK(A::mark_onboarding_done(orch));
   }
   CHECK(A::settings(orch).onboarding_done);
+  CHECK_FALSE(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
+}
+
+TEST_CASE("onboarding completion keeps serial receiving in manufacturing mode",
+          "[Orchestrator][onboarding][manufacturing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  REQUIRE(f.serial_command.start());
+  A::set_manufacturing_mode(orch, true);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  REQUIRE(A::mark_onboarding_done(orch));
+
+  CHECK(A::settings(orch).onboarding_done);
+  CHECK(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
 }
 
 TEST_CASE("BLE auth complete marks onboarding done", "[Orchestrator][onboarding][ble]") {

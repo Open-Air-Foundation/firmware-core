@@ -231,6 +231,8 @@ bool SerialCommandService::start() {
   return true;
 }
 
+void SerialCommandService::stop_receiving() {}
+
 void SerialCommandService::complete(const SerialCommandResult & /*result*/) {}
 
 bool UsbSerialCommandChannel::initialize() { return true; }
