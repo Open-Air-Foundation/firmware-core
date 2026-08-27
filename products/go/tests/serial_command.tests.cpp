@@ -13,6 +13,9 @@
 class SerialCommandServiceTestAccess {
 public:
   static void poll(SerialCommandService &service) { service._poll_once(); }
+  static bool is_receiving(const SerialCommandService &service) {
+    return service._receiving.load();
+  }
 };
 
 class TestRTOS final : public RTOS {
@@ -214,4 +217,27 @@ TEST_CASE("serial command reports failed event admission", "[serial_command]") {
   fixture.poll();
 
   CHECK(fixture.channel.responses == std::vector<std::string>{"\n#AG ERROR OPERATION_FAILED\n"});
+}
+
+TEST_CASE("serial command stops receiving until restarted", "[serial_command]") {
+  SerialCommandFixture fixture;
+  REQUIRE(SerialCommandServiceTestAccess::is_receiving(*fixture.service));
+
+  fixture.service->stop_receiving();
+  fixture.channel.append_input("#AG GET_SERIAL\n");
+  fixture.poll();
+
+  CHECK_FALSE(SerialCommandServiceTestAccess::is_receiving(*fixture.service));
+  CHECK(fixture.channel.input.empty());
+  Event event{};
+  CHECK_FALSE(RTOS::queue_receive(fixture.event_queue, &event, 0));
+  CHECK(fixture.channel.responses.empty());
+
+  REQUIRE(fixture.service->start());
+  fixture.channel.append_input("#AG GET_SERIAL\n");
+  fixture.poll();
+
+  CHECK(SerialCommandServiceTestAccess::is_receiving(*fixture.service));
+  CHECK(fixture.channel.input.empty());
+  CHECK(fixture.receive_event().serial_command_request.kind == SerialCommandKind::GetSerial);
 }

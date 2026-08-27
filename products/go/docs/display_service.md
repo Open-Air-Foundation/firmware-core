@@ -71,14 +71,14 @@ bool init(const DisplayValues &initial, bool defer_refresh = false);
 
 | `defer_refresh` | Behavior |
 |---|---|
-| `false` (default) | Synchronous: renders frame, performs full SPI refresh (~3 s), then starts worker. Used by `run_interactive()` and `run_fast_path()`. |
-| `true` | Deferred: renders and reserves the framebuffer, marks a full refresh pending, starts the worker, and immediately signals it to run the initial refresh in the background. Returns in ~10 ms. |
+| `false` (default) | Synchronous: renders frame, performs full SPI refresh (~3 s), then starts worker. Used by `run_fast_path()`. |
+| `true` | Deferred: renders and reserves the framebuffer, marks a full refresh pending, starts the worker, and immediately signals it to run the initial refresh in the background. Returns in ~10 ms. Used by button-wake and interactive boots with no painted frame. |
 
 When `defer_refresh=true`, `init()` returns before the SPI refresh begins.
 The worker task acquires the SPI bus and holds it for the duration of the
-refresh (~3 s). Any other SPI device that calls `spi_device_transmit()` during
-this window (e.g. NAND flash) blocks until the worker releases the bus —
-natural serialization without an explicit semaphore.
+refresh (~3 s). Button-wake storage relies on the SPI bus arbitration during
+this window. Interactive boot calls `flush()` before mounting NAND storage, so
+it deterministically waits for the early splash refresh to finish.
 
 `_worker_busy` is set to `true` before the worker starts so that a concurrent
 `update()` call will not corrupt the in-progress refresh.
@@ -101,11 +101,11 @@ struct RtcDisplaySnapshot {
   uint8_t battery_pct;  bool is_battery_charging;  bool is_plugged_in;
   // Status flags & rendering settings
   bool gps_enabled;  bool gps_fix;  bool tracking_active;  bool ble_enabled;
-  bool use_fahrenheit;  bool pm_use_usaqi;
+  bool use_fahrenheit;  bool use_feet;  bool pm_use_usaqi;
 };
 ```
 
-Estimated size: ~40 bytes (well within the ~50 B budget; total RTC usage
+Estimated size: ~44 bytes (well within the ~50 B budget; total RTC usage
 ~1.6 KB of the 8 KB available on ESP32-C5).
 
 ### Free functions
@@ -145,7 +145,8 @@ hardware-dependent and excluded from host builds (stubs provided).
 | `Settings` / `SettingsChoice` / `TagList` / `About` / `Confirm` | Full-screen lists |
 | `ShutdownUser` | Goodbye screen for user long-press shutdown ("Powered off" / "Hold button" / "to turn on") |
 | `ShutdownDischarge` | Safety-trip shutdown for OverDischarge ("Battery critically low" / "Connect charger" / "Charge before use") |
-| `ShutdownTemperature` | Safety-trip shutdown for OverTemperature ("Battery overheated" / "Let device cool" / "Keep out of sun") |
+| `ShutdownTemperature` | High-temperature safety shutdown ("Battery overheated" / "Move device to a" / "cooler location") |
+| `ShutdownTemperatureLow` | Low-temperature safety shutdown ("Battery too cold" / "Move device to a" / "warmer location") |
 | `PairingPasskey` | Title-as-header + 3 px divider + large 6-digit BLE passkey + hint; no status bar, no snackbar |
 | `Info` | Generic single-text presentation surface (cold-boot splash, Stationary bring-up narration); no status bar, no snackbar |
 | `Provisioning` | Stationary Wi-Fi provisioning page (QR + status + action rows); no status bar, no snackbar |
@@ -171,6 +172,8 @@ Key points:
 - `wifi_enabled` (`bool`): show the Wi-Fi status-bar icon (true for the whole Stationary session)
 - `wifi_connected` (`bool`): selects the connected vs disconnected Wi-Fi glyph (`WifiService::is_online()`)
 - Invalid sentinels from `MeasuresInvalid`; `0xFF` for battery
+- `use_feet` (`bool`): convert the pressure-derived meter value to whole feet
+  only while formatting the Home altitude cell
 - `ble_passkey` (`uint32_t`): 6-digit passkey for PairingPasskey screen
 - `info_text` (`const char *`): caller-owned ASCII string for `Screen::Info`; null or empty renders a blank canvas
 - `provisioning_status` (`const char *`): transport-aware status text for `Screen::Provisioning`; auto-wrapped to at most 2 lines so long strings (`Connected! 192.168.x.y`, `Connect failed - try again`) stay inside the canvas
@@ -473,15 +476,17 @@ Screen dispatch:
   6-digit passkey (`logisoso32_tr`, baseline y=145), and "Enter on
   phone" hint (`helvR12_tr`, baseline y=215). No status bar, no
   snackbar.
-- **ShutdownUser / ShutdownDischarge / ShutdownTemperature:** Unified
-  template — `"AirGradient"` brand header (`helvB14_tf`, baseline y=34),
+- **ShutdownUser / ShutdownDischarge / ShutdownTemperature /
+  ShutdownTemperatureLow:** Unified template — `"AirGradient"` brand header
+  (`helvB14_tf`, baseline y=34),
   3 px-thick divider at y=49, reason-specific icon centred at
   (`SCREEN_W / 2`, y=94), and a title/action/detail text block
   (`helvB14_tf` titles at y=151/169, `helvR12_tr` action at y=198,
   `helvR08_tr` detail at y=214). Icons are drawn from u8g2 primitives
   (power circle, battery body, thermometer with heat-wave lines). No
   status bar, no snackbar. The renderer dispatches on the Screen
-  variant.
+  variant. The temperature icons use heat-wave lines for high temperature and
+  a snowflake for low temperature.
 
 ### Fonts
 
@@ -538,5 +543,5 @@ transitions trigger a status bar redraw.
 | Humidity | Integer percent |
 | TVOC/NOx | Integer (index values) |
 | Pressure | Integer hPa; >9999: "9999+ hPa" |
-| Altitude | Integer meters; >9999: "9999+ m" |
+| Altitude | Integer meters by default; `use_feet` converts with `m × 3.28084` and renders the full rounded value with `ft`; meters >9999 render `9999+ m` |
 | Invalid | "-" for any metric |

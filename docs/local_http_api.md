@@ -151,6 +151,7 @@ and cross-field policy.
 | `country` | String | Product-defined | Country or region identifier. |
 | `pmStandard` | String | `ugm3`, `us-aqi` | PM display standard: mass concentration or US AQI. |
 | `temperatureUnit` | String | `c`, `f` | Display temperature unit. Measurements remain Celsius. |
+| `altitudeUnit` | String | `m`, `ft` | Display altitude unit. Raw GPS and stored route altitude remain in meters. |
 | `measurementInterval` | Integer | Seconds; product-defined range | Measurement interval. |
 | `gpsMode` | String | `off`, `tracking`, `always` | GPS operating mode. |
 | `frontLedBrightness` | Integer | Product-defined range | Front LED brightness. |
@@ -312,10 +313,13 @@ Go returns these fields from `GET /api/v1/config` and accepts them in partial
 
 | Field Group | Supported Fields |
 |---|---|
-| Device behavior | `pmStandard`, `temperatureUnit`, `measurementInterval`, `gpsMode` |
+| Device behavior | `pmStandard`, `temperatureUnit`, `altitudeUnit`, `measurementInterval`, `gpsMode` |
 | LEDs and buzzer | `frontLedBrightness`, `backLedBrightness`, `touchLedIntensity`, `buzzerEnabled` |
 | Connectivity policy | `cloudConnection`, `configurationControl` |
 | Sensor configuration | `co2AbcDays`, `tvocLearningOffset`, `noxLearningOffset`, `corrections` |
+
+`altitudeUnit` changes only Go's display presentation. GPS and derived altitude
+remain meters in raw and stored data.
 
 ### Actions
 

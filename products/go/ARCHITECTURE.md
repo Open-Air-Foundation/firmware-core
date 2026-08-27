@@ -602,25 +602,29 @@ GoApp::run():
 | `PowerOn` | -- | `Interactive` |
 
 Hardware initialization is managed by **GoHardwareBoard** through
-idempotent init methods (`init_nvs()`, `init_buses()`, `init_spi()`,
-`init_bms()`) and lazy service accessors (`sensors()`, `storage()`,
-`display()`, `power()`). Each boot path calls these in the order its
-hardware sequencing requires. The convenience gate `init_core()` calls all
-four init methods (skipping any already done).
+fine-grained init methods and lazy service accessors. `init_nvs()`,
+`init_buses()`, and `init_spi()` are idempotent and grouped by `init_core()`.
+Optional BQ27427 initialization remains explicit through
+`init_fuel_gauge()`. BQ25629 initialization remains explicit through the
+retryable `init_bms()` method, and `GoApp` gives transient communication
+failures two attempts separated by 100 ms.
 
-All three boot paths follow a uniform pre-sensor sequence:
+All three normal boot paths follow this pre-sensor sequence:
 
 ```text
-init_core() → release_gpio_holds() → power().set_pm_power(true) → sensors()
+init_core() → init_fuel_gauge() → retry init_bms() → power() → sensors()
 ```
 
-`set_pm_power(true)` drives the EN_PM GPIO to the variant-appropriate level
-(Prototype: SPS30 VDD load switch; V1: SPS30 I2C bus isolation). PMID itself
-(`EN_OTG`) is armed once by `init_bms()` inside `init_core()` and the chip
-handles buck↔boost transitions autonomously thereafter. Both must run before
-`sensors()` because the SPS30 needs the PMID +5 V rail and the I2C bus
-connected. Between measurements the SPS30 is power-managed via its native
-Sleep command, not the GPIO (see [`docs/power_management.md`](docs/power_management.md)).
+After the BMS attempt, `release_gpio_holds()` and `set_pm_power(true)` drive the
+EN_PM GPIO to the variant-appropriate level (Prototype: SPS30 VDD load switch;
+V1: SPS30 I2C bus isolation). A successful `init_bms()` arms PMID (`EN_OTG`)
+once, and the chip handles buck↔boost transitions autonomously thereafter.
+Interactive, button-wake, factory-learning, and promoted fast-path boots
+restart after both BMS attempts fail. A fast path that is returning directly to
+sleep continues without the charger; `PowerService` remains usable with the
+fuel gauge alone, while the unavailable PMID rail can leave SPS30 data invalid.
+Between measurements the SPS30 is power-managed via its native Sleep command,
+not the GPIO (see [`docs/power_management.md`](docs/power_management.md)).
 
 When transitioning from the fast path to the interactive event loop
 (either because sleep is too short or the user pressed a button), the
@@ -631,14 +635,15 @@ done (display painted, measurement completed, lock state) so the
 orchestrator can skip redundant work.
 
 On a fresh interactive power-on with no RTC snapshot and no fast-path
-measurement, `GoApp` paints `Screen::Info` with `Booting...` before
-starting the orchestrator. The orchestrator keeps this splash until the
-first `SensorDataReady` event, then runs the first-boot gate: when the
-durable `onboarding_done` NVS flag is unset it shows the one-time
-`Screen::GettingStarted` guide (setup QR + `Start using`), otherwise it
-resets the UI to Home. A short press on Button 1 is ignored while the
-splash is active so the first boot screen is not replaced by an
-unlock / lock transition.
+measurement, `GoApp` initializes SPI and starts a deferred `Screen::Info`
+`Getting Ready` splash before core initialization. Core and I2C initialization
+run while the display refreshes; `GoApp` flushes that refresh before mounting
+NAND storage. The orchestrator keeps the splash until the first
+`SensorDataReady` event, then runs the first-boot gate: when the durable
+`onboarding_done` NVS flag is unset it shows the one-time
+`Screen::GettingStarted` guide (setup QR + `Start using`), otherwise it resets
+the UI to Home. A short press on Button 1 is ignored while the splash is active
+so the first boot screen is not replaced by an unlock / lock transition.
 
 **First-boot onboarding.** The Getting Started guide is informational and
 non-blocking — the device is already measuring and BLE-discoverable while
@@ -648,6 +653,11 @@ can press the button). `onboarding_done` flips `true` via the idempotent
 `mark_onboarding_done()` on the first real engagement (`Start using`, a
 BLE pairing/bond, or any `change_mode()`), and the guide auto-shows only
 once. Factory reset clears the flag so refurbished units re-show it.
+
+Full composition also starts `SerialCommandService` before onboarding and parks
+its receive task when onboarding completes. See
+[`docs/serial_command_service.md`](docs/serial_command_service.md) for the
+detailed lifecycle.
 
 **Manufacturing shortcut.** While `onboarding_done` is still `false`, a
 short press on Button 2 (`ButtonBoot`) calls `enter_manufacturing_mode()`,
@@ -697,8 +707,9 @@ Button 1 (`PIN_BUTTON_POWER`, GPIO5) is wired to **both** the ESP32 GPIO
   `enter_ship_mode()` is refused and the path falls back to deep sleep, so
   the restart behavior only applies on battery.
 
-Ship mode is also triggered automatically by the EDV and OT safety trips —
-see [Power Management](docs/power_management.md) for details.
+Ship mode is also triggered automatically by the EDV and high- or
+low-battery-temperature safety trips — see
+[Power Management](docs/power_management.md) for details.
 
 ## Services
 
@@ -782,9 +793,12 @@ Two tiers of storage:
   can exceed 1S cell-protection OCP. Between measurements the SPS30 is
   power-managed via its native Sleep command. See
   [`docs/power_management.md`](docs/power_management.md#why-pmid-is-session-armed)
-- **Cell safety trips:** EDV (over-discharge at 2.9 V, 3-poll debounce)
-  and OT (charge cutoff at 50 C / resume at 47 C, ship mode at 60 C)
-  fire `enter_ship_mode()` to protect the battery
+- **Cell safety trips:** EDV uses a 2.9 V, three-poll debounce. Battery charging
+  is permitted from 0 °C through 45 °C and recovers from a temperature or
+  invalid-NTC block only from 2 °C through 43 °C. An invalid NTC disables
+  charging without shutdown. Discharge is permitted from -10 °C through 60 °C;
+  crossing either limit requests the corresponding cold- or hot-temperature
+  ship-mode shutdown
 - **Fuel gauge (V1 only):** `PowerService::set_fuel_gauge()` attaches an
   already-initialised `FuelGaugeDevice` for runtime SOC reads. `poll_bms()`
   prefers FG-derived SOC and tags the log line with `src=FG|BMS`
@@ -810,7 +824,8 @@ Settings fields:
 - PM interval, other sensor interval (independent timers; 0 = off)
 - Display refresh interval (0 = display off while locked; unlocked always
   shows dashboard)
-- Temperature units (C / F), PM display (µg/m³ / USAQI)
+- Temperature units (C / F), altitude units (m / ft), PM display
+  (µg/m³ / USAQI)
 - GPS mode (AlwaysOff / OnWhenTracking / AlwaysOn)
 - Operating mode (Portable / Stationary / Offline; default: Portable)
 - Auto-lock timeout (0 = disabled, 10 s / 30 s / 60 s)
@@ -869,9 +884,9 @@ Settings fields:
   firmware identity returned by the measures endpoint
 - Serves corrected measurement, system-information, and active-config snapshots
   cached by `GoLocalApiService` behind a short-held RTOS mutex
-- Supports `pmStandard`, `temperatureUnit`, `cloudConnection`,
-  `configurationControl`, `co2AbcDays`, and PM2.5, temperature, and humidity corrections;
-  other generic catalog fields are not exposed by Go
+- Supports `pmStandard`, `temperatureUnit`, `altitudeUnit`, `cloudConnection`,
+  `configurationControl`, `co2AbcDays`, and PM2.5, temperature, and humidity
+  corrections; other generic catalog fields are not exposed by Go
 - Accepts validated config updates asynchronously: HTTP `202` means admitted,
   not persisted or applied; clients read config until the cached value converges
 - Uses one four-entry FIFO for config and action requests. Each admitted entry
@@ -1039,8 +1054,9 @@ sequenceDiagram
    - If Promote: wire measures pointer, call run_interactive()
 
 4. execute_fast_path() (testable core):
-    - _board.init_core() (NVS, GPIO/I2C, SPI, BMS — idempotent;
-      `init_bms()` arms PMID `EN_OTG=1` once for the session)
+   - _board.init_core() (NVS, GPIO/I2C, and SPI — idempotent)
+   - _board.init_fuel_gauge() (optional BQ27427, one attempt)
+   - Retry _board.init_bms() twice; continue degraded if unavailable
     - _board.release_gpio_holds() — pad transitions glitch-free
     - _board.power().set_pm_power(true) — drives EN_PM GPIO only;
       `EN_OTG` already armed by `init_bms()`
@@ -1051,7 +1067,9 @@ sequenceDiagram
    - One-shot measurement (skip if button pressed)
    - One-shot GPS via _board.new_gps_driver() if tracking + GPS active
    - Storage: _board.storage().cache_measurement() + route point
-    - Display + sleep decision via _board.power().decide_sleep()
+     - One _board.power().poll_bms() snapshot supplies route SOC, display,
+       and thermal shutdown policy
+     - Display + sleep decision via _board.power().decide_sleep()
     - Before a long deep sleep (not held warm): sm.pm_sleep() stops the fan
     - Returns FastPathResult{Outcome::Sleep, ...} or {Outcome::Promote, ...}
 ```
@@ -1086,28 +1104,29 @@ starting the async worker task.
         → returns immediately
 
    Phase 2 (~300 ms, parallel with display refresh):
-      8. _board.init_core() (NVS, GPIO/I2C, SPI, BMS — idempotent;
-         `init_bms()` arms PMID `EN_OTG=1` once for the session)
-      9. _board.release_gpio_holds()
-      10. _board.power().set_pm_power(true) — drives EN_PM GPIO only
-      11. _board.load_settings(), _board.sensors()
-     12. _board.new_gps_driver(), _board.new_touch_sensor()
-     13. Event queue, SensorProducer, GpsService, InputService
-     14. Start producer tasks → sensors and touch input operational
+      8. _board.init_core() (NVS, GPIO/I2C, and SPI — idempotent)
+      9. _board.init_fuel_gauge(), then retry _board.init_bms() twice
+     10. Restart if BMS remains unavailable
+     11. _board.release_gpio_holds()
+     12. _board.power().set_pm_power(true) — drives EN_PM GPIO only
+     13. _board.load_settings(), _board.sensors()
+     14. _board.new_gps_driver(), _board.new_touch_sensor()
+     15. Event queue, SensorProducer, GpsService, InputService
+     16. Start producer tasks → sensors and touch input operational
 
    Phase 3 (~3 s, blocks on SPI):
-     15. _board.storage() → SpiNandStorage spi_device_transmit() blocks
+     17. _board.storage() → SpiNandStorage spi_device_transmit() blocks
          until display worker releases bus (natural serialization)
-     16. BLE service (requires StorageService from Phase 3)
+     18. BLE service (requires StorageService from Phase 3)
 
    Phase 4 (~10 ms):
-     17. Build BootHandoff: display_painted=true, suppress_wake_press=true,
+     19. Build BootHandoff: display_painted=true, suppress_wake_press=true,
          initial_lock_state=Unlocked, display_snapshot=&snapshot
-     18. Orchestrator::init(Button, handoff)
+     20. Orchestrator::init(Button, handoff)
          → sets lock=Unlocked, pre-arms snackbar + schedules refresh timer,
             seeds cached measurement state from snapshot, requests fresh measurement
          → skips update_display() (screen already correct)
-     19. Orchestrator::run()
+     21. Orchestrator::run()
 ```
 
 First meaningful paint: ~3 s. Single display flash (no empty-frame

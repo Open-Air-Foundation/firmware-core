@@ -139,13 +139,14 @@ public:
   void init_nvs() override {}
   void init_buses() override {}
   void init_spi() override {}
-  void init_bms() override {}
+  void init_fuel_gauge() override {}
+  bool init_bms() override { return true; }
   void init_wifi_subsystem() override { ++init_wifi_subsystem_calls; }
   void init_core() override {}
 
   ConfigStore &config_store() override { return *reinterpret_cast<ConfigStore *>(_buf); }
   GoSettings load_settings() override { return {}; }
-  BmsDevice &bms() override { return *reinterpret_cast<BmsDevice *>(_buf); }
+  BmsDevice *bms() override { return reinterpret_cast<BmsDevice *>(_buf); }
   SensorManager &sensors(bool) override { return *reinterpret_cast<SensorManager *>(_buf); }
   StorageService &storage() override { return *reinterpret_cast<StorageService *>(_buf); }
   DisplayService &display() override { return *reinterpret_cast<DisplayService *>(_buf); }
@@ -167,6 +168,7 @@ public:
   void release_gpio_holds() override {}
   void ulp_stop() override {}
   void ulp_start() override {}
+  void restart() override {}
   void install_button_isr(int, volatile bool *) override {}
   void remove_button_isr(int) override {}
 

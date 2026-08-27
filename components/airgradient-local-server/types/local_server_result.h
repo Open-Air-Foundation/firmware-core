@@ -50,6 +50,7 @@ enum class ConfigFieldId : uint8_t {
   BackLedBrightness,      // "backLedBrightness"
   TouchLedIntensity,      // "touchLedIntensity"
   BuzzerEnabled,          // "buzzerEnabled"
+  AltitudeUnit,           // "altitudeUnit"
 };
 
 enum class ConfigSubmitStatus : uint8_t {

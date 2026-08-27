@@ -840,7 +840,7 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_config produces 16 keys with compact device config") {
+TEST_CASE("BLE: encode_config produces 17 keys with compact device config") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   auto settings = make_default_settings();
@@ -850,13 +850,14 @@ TEST_CASE("BLE: encode_config produces 16 keys with compact device config") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 16);
+  CHECK(entries.size() == 17);
 
   CHECK(find_entry(entries, "meas_int") != nullptr);
   CHECK(find_entry(entries, "pm_int") == nullptr);
   CHECK(find_entry(entries, "other_int") == nullptr);
   CHECK(find_entry(entries, "disp_int") == nullptr);
   CHECK(find_entry(entries, "temp_f") != nullptr);
+  CHECK(find_entry(entries, "alt_ft") != nullptr);
   CHECK(find_entry(entries, "pm_aqi") != nullptr);
   CHECK(find_entry(entries, "gps_mode") != nullptr);
   CHECK(find_entry(entries, "auto_lock") != nullptr);
@@ -880,6 +881,7 @@ TEST_CASE("BLE: encode_config values match settings") {
   GoSettings s{};
   s.measure_interval_seconds = 30;
   s.use_fahrenheit = true;
+  s.use_feet = true;
   s.gps_mode = GpsMode::AlwaysOn;
   s.operating_mode = OperatingMode::Stationary;
   s.buzzer_enabled = true;
@@ -897,6 +899,7 @@ TEST_CASE("BLE: encode_config values match settings") {
   CHECK(find_entry(entries, "other_int") == nullptr);
   CHECK(find_entry(entries, "disp_int") == nullptr);
   CHECK(find_entry(entries, "temp_f")->bool_val == true);
+  CHECK(find_entry(entries, "alt_ft")->bool_val == true);
   CHECK(find_entry(entries, "gps_mode")->text_val == "always");
   CHECK(find_entry(entries, "op_mode")->text_val == "stationary");
   CHECK(find_entry(entries, "buz")->bool_val == true);
@@ -989,19 +992,46 @@ TEST_CASE("BLE: encode_config_delta includes compact device config changes") {
   CHECK(find_entry(entries, "nlo")->uint_val == LEARNING_OFFSET_HOURS_MAX);
 }
 
-TEST_CASE("BLE: encode_config_delta no change yields only type") {
+TEST_CASE("BLE: encode_config_delta skips changes outside the BLE config surface") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
 
   GoSettings s = make_default_settings();
 
   uint8_t buf[256];
-  size_t len = BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), s, s);
-  REQUIRE(len > 0);
+  CHECK(BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), s, s) == 0);
 
-  auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 1);
-  CHECK(find_entry(entries, "type")->text_val == "config");
+  GoSettings local_only = s;
+  local_only.disable_cloud = true;
+  CHECK(BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), s, local_only) == 0);
+}
+
+TEST_CASE("BLE: notify_config sends altitude-unit-only changes") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  GoSettings meters = make_default_settings();
+  GoSettings feet = meters;
+  feet.use_feet = true;
+
+  svc.notify_config(meters, feet);
+
+  CHECK(config_char.set_value_count == 1);
+  REQUIRE(config_char.notify_count == 1);
+
+  const auto read_entries =
+      decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
+  CHECK(read_entries.size() == 17);
+  CHECK(find_entry(read_entries, "alt_ft")->bool_val);
+
+  const auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
+                                              config_char.last_notified_value.size());
+  CHECK(notify_entries.size() == 2);
+  CHECK(find_entry(notify_entries, "type")->text_val == "config");
+  CHECK(find_entry(notify_entries, "alt_ft")->bool_val);
 }
 
 // ---------------------------------------------------------------------------
@@ -1026,7 +1056,7 @@ TEST_CASE("BLE: notify_config sends delta and keeps READ as full snapshot") {
   REQUIRE(config_char.notify_count == 1);
 
   auto read_entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 16); // full snapshot, no "type"
+  CHECK(read_entries.size() == 17); // full snapshot, no "type"
   CHECK(find_entry(read_entries, "type") == nullptr);
 
   auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -1465,6 +1495,14 @@ TEST_CASE("BLE: decode_config_write decodes compact device config fields") {
     const size_t len = encode_set_bool(buf, sizeof(buf), "buz", true);
     const auto result = BleService::decode_config_write(buf, len, settings);
     CHECK(settings.buzzer_enabled);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+  }
+
+  SECTION("altitude unit") {
+    const size_t len = encode_set_bool(buf, sizeof(buf), "alt_ft", true);
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(settings.use_feet);
     CHECK(result.recognized_config_key_count == 1);
     CHECK_FALSE(result.has_invalid_config_values);
   }

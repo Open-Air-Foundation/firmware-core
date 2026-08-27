@@ -203,9 +203,9 @@ Configurable through Kconfig under **AirGradient HTTP Server**:
 | `CONFIG_AG_HTTP_MAX_BODY_SIZE` | `4096` | Maximum complete request body size in bytes; oversized bodies are rejected |
 | `CONFIG_AG_HTTP_MAX_ROUTES` | `24` | Maximum number of registered URI handlers (passed to `esp_http_server` as `max_uri_handlers`); default sized for the provisioning captive portal |
 
-`httpd_config_t` is otherwise left at `HTTPD_DEFAULT_CONFIG()`. Backlog
-queue length, task stack size, etc., can be promoted to Kconfig if a
-product needs to tune them.
+The HTTP server task stack is fixed at 6144 bytes to provide sufficient
+headroom for nested JSON route handlers. Other `httpd_config_t` fields retain
+their `HTTPD_DEFAULT_CONFIG()` values unless listed above.
 
 ## Dependencies
 

@@ -80,6 +80,7 @@ bool append_route_point_result = true;
 
 // --- PowerService ---
 bool bms_polled = false;
+int bms_poll_count = 0;
 bool state_saved = false;
 RtcAppState last_saved_state{};
 PowerSnapshot snapshot_to_return{};
@@ -87,6 +88,7 @@ PowerService::SleepDecision sleep_decision_to_return = {PowerService::SleepType:
 bool enter_sleep_called = false;
 uint32_t enter_sleep_duration_ms = 0;
 bool should_hold_pm_result = false;
+bool shutdown_called = false;
 
 // --- BleService ---
 bool ble_init_called = false;
@@ -118,6 +120,9 @@ MeasuresProvider *generic_local_measures = nullptr;
 ConfigProvider *generic_local_config = nullptr;
 ActionHandler *generic_local_actions = nullptr;
 ConfigAccess generic_local_config_access = ConfigAccess::Disabled;
+
+// --- SerialCommandService ---
+uint32_t serial_command_start_count = 0;
 
 // --- BmsDevice ---
 float bms_battery_pct = -1.0f;
@@ -161,6 +166,7 @@ void reset() {
   append_route_point_result = true;
 
   bms_polled = false;
+  bms_poll_count = 0;
   state_saved = false;
   last_saved_state = RtcAppState{};
   snapshot_to_return = PowerSnapshot{};
@@ -168,6 +174,7 @@ void reset() {
   enter_sleep_called = false;
   enter_sleep_duration_ms = 0;
   should_hold_pm_result = false;
+  shutdown_called = false;
 
   ble_init_called = false;
 
@@ -197,13 +204,47 @@ void reset() {
   generic_local_actions = nullptr;
   generic_local_config_access = ConfigAccess::Disabled;
 
+  serial_command_start_count = 0;
+
   bms_battery_pct = -1.0f;
 
   DisplayService::spy_deep_sleep_called = false;
+  DisplayService::spy_init_count = 0;
   DisplayService::spy_update_count = 0;
+  DisplayService::spy_flush_count = 0;
+  DisplayService::spy_last_screen = Screen::Home;
+  DisplayService::spy_last_init_deferred = false;
 }
 
 } // namespace test_spy
+
+// ============================================================================
+// SerialCommandService stubs
+// ============================================================================
+
+SerialCommandService::SerialCommandService(RtosQueueHandle event_queue,
+                                           SerialCommandChannel &channel)
+    : _event_queue(event_queue), _channel(channel) {}
+
+bool SerialCommandService::start() {
+  ++test_spy::serial_command_start_count;
+  return true;
+}
+
+void SerialCommandService::stop_receiving() {}
+
+void SerialCommandService::complete(const SerialCommandResult & /*result*/) {}
+
+bool UsbSerialCommandChannel::initialize() { return true; }
+
+int UsbSerialCommandChannel::read_bytes(char * /*buffer*/, size_t /*buffer_size*/,
+                                        uint32_t /*timeout_ms*/) {
+  return 0;
+}
+
+bool UsbSerialCommandChannel::write_response(const char * /*response*/, size_t /*response_size*/) {
+  return true;
+}
 
 LocalServer::LocalServer(HttpServer &server, const Providers &providers)
     : _server(server), _measures(providers.measures), _config(providers.config),
@@ -420,13 +461,16 @@ uint32_t StorageService::used_kb() const { return 0; }
 // PowerService stubs
 // ============================================================================
 
-PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config)
+PowerService::PowerService(BmsDevice *bms, const gpio::Hal &gpio, const Config &config)
     : _bms(bms), _gpio(gpio), _config(config) {}
+
+void PowerService::set_bms(BmsDevice *bms) { _bms = bms; }
 
 void PowerService::set_fuel_gauge(FuelGaugeDevice * /*fg*/) {}
 
 PowerSnapshot PowerService::poll_bms(bool /*pm_invalid_hint*/) {
   test_spy::bms_polled = true;
+  ++test_spy::bms_poll_count;
   return test_spy::snapshot_to_return;
 }
 
@@ -450,7 +494,7 @@ void PowerService::recover_pm_sensor() {}
 
 bool PowerService::reset_watchdog() { return true; }
 
-void PowerService::shutdown() {}
+void PowerService::shutdown() { test_spy::shutdown_called = true; }
 
 bool PowerService::set_watchdog_timeout_ms(uint32_t /*timeout_ms*/) { return true; }
 
@@ -834,7 +878,7 @@ void Orchestrator::change_mode(OperatingMode /*new_mode*/, bool /*persist*/) {}
 void Orchestrator::enter_manufacturing_mode() {}
 void Orchestrator::apply_settings_change() {}
 bool Orchestrator::clear_data() { return true; }
-bool Orchestrator::factory_reset() { return true; }
+bool Orchestrator::factory_reset(bool /*preserve_corrections*/) { return true; }
 void Orchestrator::save_tag(uint8_t /*tag_index*/, const char * /*tag_label*/) {}
 void Orchestrator::shutdown(ShipModeRequest /*reason*/) {}
 uint32_t Orchestrator::compute_queue_timeout_ms() const { return UINT32_MAX; }

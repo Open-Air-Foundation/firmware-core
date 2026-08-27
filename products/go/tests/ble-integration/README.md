@@ -110,7 +110,7 @@ still returns the full 9-key snapshot:
 Covers read, write, delta-notify, and command operations:
 
 - **Read** (sync): reads Config once (module-scoped fixture), then validates the
-  19 config keys present with correct types; versioned correction
+  17 config keys present with correct types; versioned correction
   arrays, `gps_mode`, and `op_mode` use valid fields and enum values
 - **Set config** (async): writes a single-field `{"op": "set", ...}`, verifies
   the device sends a Config **delta** notification — `"type": "config"` plus
@@ -126,8 +126,8 @@ Covers read, write, delta-notify, and command operations:
 - **Single-field enforcement** (async): a `set` with more than one config key is
   rejected `single_field_only` and applies nothing; an aiding key (`lat`) under
   `op:"set"` is rejected `unknown_config_key`
-- **Roundtrip** (async): toggles `temp_f`, re-reads to confirm the change,
-  then restores the original value
+- **Presentation units** (async): toggles `temp_f` and `alt_ft`, verifies exact
+  deltas and readback, then restores the original values
 - **Notify field types** (async): triggers a Config delta and type-checks the
   keys present in it
 - **Command** (async): writes `{"op": "cmd", "cmd": "co2_cal"}`, verifies the

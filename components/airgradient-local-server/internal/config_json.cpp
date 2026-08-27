@@ -22,6 +22,7 @@ namespace {
 // Enum value sets. Kept identical to the existing Home Assistant integration.
 constexpr const char *PM_STANDARD_VALUES[] = {"ugm3", "us-aqi"};
 constexpr const char *TEMP_UNIT_VALUES[] = {"c", "f"};
+constexpr const char *ALTITUDE_UNIT_VALUES[] = {"m", "ft"};
 constexpr const char *CONFIG_CONTROL_VALUES[] = {"cloud", "local", "both"};
 constexpr const char *GPS_MODE_VALUES[] = {"off", "tracking", "always"};
 constexpr const char *LED_MODE_VALUES[] = {"co2", "pm", "iaqs", "off"};
@@ -222,6 +223,11 @@ ParseStatus apply_item(const cJSON *item, LocalServerConfig &out, ConfigFieldId 
     return take_enum(item, TEMP_UNIT_VALUES, out.temperature_unit) ? ParseStatus::Ok
                                                                    : ParseStatus::InvalidValue;
   }
+  if (std::strcmp(key, fields::ALTITUDE_UNIT) == 0) {
+    field = ConfigFieldId::AltitudeUnit;
+    return take_enum(item, ALTITUDE_UNIT_VALUES, out.altitude_unit) ? ParseStatus::Ok
+                                                                    : ParseStatus::InvalidValue;
+  }
   if (std::strcmp(key, fields::POST_DATA_TO_CLOUD) == 0) {
     field = ConfigFieldId::PostDataToCloud;
     return take_bool(item, out.post_data_to_cloud) ? ParseStatus::Ok : ParseStatus::InvalidValue;
@@ -308,6 +314,18 @@ bool has_incomplete_slr(const std::optional<CorrectionEntry> &entry) {
          (!entry->slr->intercept.has_value() || !entry->slr->scaling_factor.has_value());
 }
 
+// Emit up to seven significant digits instead of cJSON's widened double representation.
+bool add_float_to_object(cJSON *object, const char *key, float value) {
+  constexpr size_t TEXT_BUFFER_SIZE = 32;
+  char text[TEXT_BUFFER_SIZE] = {};
+  const int written = std::snprintf(text, sizeof(text), "%.7g", static_cast<double>(value));
+  if (written <= 0 || static_cast<size_t>(written) >= sizeof(text)) {
+    return false;
+  }
+
+  return cJSON_AddRawToObject(object, key, text) != nullptr;
+}
+
 // Serialize one correction entry; emits "slr": null when no SLR params apply.
 // `allow_epa` gates the pm25-only "useEpa2021" sub-key.
 bool add_entry(cJSON *parent, const char *key, const std::optional<CorrectionEntry> &entry,
@@ -326,10 +344,8 @@ bool add_entry(cJSON *parent, const char *key, const std::optional<CorrectionEnt
   }
   if (entry->slr.has_value()) {
     cJSON *slr = cJSON_CreateObject();
-    if (slr == nullptr ||
-        cJSON_AddNumberToObject(slr, fields::INTERCEPT, *entry->slr->intercept) == nullptr ||
-        cJSON_AddNumberToObject(slr, fields::SCALING_FACTOR, *entry->slr->scaling_factor) ==
-            nullptr ||
+    if (slr == nullptr || !add_float_to_object(slr, fields::INTERCEPT, *entry->slr->intercept) ||
+        !add_float_to_object(slr, fields::SCALING_FACTOR, *entry->slr->scaling_factor) ||
         (allow_epa && entry->slr->use_epa2021.has_value() &&
          cJSON_AddBoolToObject(slr, fields::USE_EPA2021, *entry->slr->use_epa2021) == nullptr) ||
         !cJSON_AddItemToObject(obj, fields::SLR, slr)) {
@@ -424,6 +440,9 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
   }
   if (cfg.temperature_unit.has_value()) {
     cJSON_AddStringToObject(root, fields::TEMPERATURE_UNIT, cfg.temperature_unit->c_str());
+  }
+  if (cfg.altitude_unit.has_value()) {
+    cJSON_AddStringToObject(root, fields::ALTITUDE_UNIT, cfg.altitude_unit->c_str());
   }
   if (cfg.post_data_to_cloud.has_value()) {
     cJSON_AddBoolToObject(root, fields::POST_DATA_TO_CLOUD, *cfg.post_data_to_cloud);
@@ -556,6 +575,8 @@ const char *config_field_wire_key(ConfigFieldId id) {
     return fields::CORRECTIONS_TEMPERATURE;
   case ConfigFieldId::CorrectionsHumidity:
     return fields::CORRECTIONS_HUMIDITY;
+  case ConfigFieldId::AltitudeUnit:
+    return fields::ALTITUDE_UNIT;
   case ConfigFieldId::None:
     return nullptr;
   }

@@ -114,11 +114,6 @@ void WifiService::_connect_saved_internal(const WifiStaticIpConfig *static_ip,
 }
 
 void WifiService::schedule_reconnect(const WifiStaticIpConfig *static_ip) {
-  // A fallback-only session never saves creds: nothing to reconnect to.
-  if (!_wifi.has_saved_networks()) {
-    AG_LOGW(TAG, "reconnect skipped: no saved networks");
-    return;
-  }
   if (static_ip != nullptr && static_ip->ip != 0) {
     _reconnect_static_ip = *static_ip;
     _reconnect_has_static_ip = true;
@@ -130,9 +125,15 @@ void WifiService::schedule_reconnect(const WifiStaticIpConfig *static_ip) {
 }
 
 void WifiService::try_default_fallback_credentials() {
+  _connect_fallback_internal(/*reset_online_latches=*/true, /*arm_window=*/true);
+}
+
+void WifiService::_connect_fallback_internal(bool reset_online_latches, bool arm_window) {
   _install_wifi_callbacks();
   _reset_deadline();
-  _reset_online_latches();
+  if (reset_online_latches) {
+    _reset_online_latches();
+  }
   _wifi.clear_static_ip();
   _wifi.set_mode(WifiMode::Sta);
   disable_stationary_power_save(_wifi);
@@ -150,7 +151,9 @@ void WifiService::try_default_fallback_credentials() {
     return;
   }
 
-  _arm_deadline(_cfg.fallback_connect_window_ms);
+  if (arm_window) {
+    _arm_deadline(_cfg.fallback_connect_window_ms);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -421,11 +424,16 @@ void WifiService::tick(uint32_t now_ms) {
 
   if (_reconnect_at_ms != 0 && now_ms >= _reconnect_at_ms) {
     _reconnect_at_ms = 0;
-    AG_LOGI(TAG, "runtime reconnect: attempting saved networks");
-    const WifiStaticIpConfig *ip = _reconnect_has_static_ip ? &_reconnect_static_ip : nullptr;
-    // Keep has_been_online() latched (stay "runtime") and skip the window;
-    // the WifiManager terminal disconnect drives the next cycle.
-    _connect_saved_internal(ip, /*reset_online_latches=*/false, /*arm_window=*/false);
+    // Keep has_been_online() latched (stay "runtime") and skip the connect
+    // window; the WifiManager terminal disconnect drives the next cycle.
+    if (_wifi.has_saved_networks()) {
+      AG_LOGI(TAG, "runtime reconnect: attempting saved networks");
+      const WifiStaticIpConfig *ip = _reconnect_has_static_ip ? &_reconnect_static_ip : nullptr;
+      _connect_saved_internal(ip, /*reset_online_latches=*/false, /*arm_window=*/false);
+    } else {
+      AG_LOGI(TAG, "runtime reconnect: attempting default fallback");
+      _connect_fallback_internal(/*reset_online_latches=*/false, /*arm_window=*/false);
+    }
   }
 }
 

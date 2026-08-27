@@ -130,6 +130,12 @@ constexpr uint8_t CHG_STAT_SHIFT = 3;
 constexpr uint8_t VBUS_STAT_MASK = 0x07;
 } // namespace BIT_MASK
 
+namespace NTC_PROFILE {
+constexpr uint8_t CONTROL_0 = 0x31;
+constexpr uint8_t CONTROL_1 = 0x25;
+constexpr uint8_t CONTROL_2 = 0x3F;
+} // namespace NTC_PROFILE
+
 esp_err_t BQ25629::enable_auto_ibat_discharge(bool enable) {
   esp_err_t ret = modify_register(BQ25629_REG::CHARGER_CONTROL_0, BIT_MASK::EN_AUTO_IBATDIS,
                                   enable ? BIT_MASK::EN_AUTO_IBATDIS : 0);
@@ -183,6 +189,20 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
   }
 
   ESP_LOGI(TAG, "%s found, Part Info: 0x%02X", part_name, part_info);
+
+  // EN_CHG defaults to 1 after reset. Hold charging off until the battery
+  // temperature profile and remaining charger settings are established.
+  ret = enable_charging(false);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to disable charging during initialization");
+    return ret;
+  }
+
+  ret = configure_jeita_profile();
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to configure battery temperature profile");
+    return ret;
+  }
 
   // Best-effort: enable EN_AUTO_IBATDIS (CHARGER_CONTROL_0 bit7).
   // Keep init running even if this fails.
@@ -971,45 +991,40 @@ esp_err_t BQ25629::system_power_reset() {
 }
 
 esp_err_t BQ25629::configure_jeita_profile() {
-  ESP_LOGI(TAG, "Configuring JEITA temperature profile");
-  esp_err_t ret;
+  struct RegisterSetting {
+    uint8_t address;
+    uint8_t value;
+    const char *name;
+  };
 
-  // REG0x1A (NTC_Control_0): Set COOL/WARM charge current to 20%
-  // Bits [7:6] TS_ISET_WARM = 01 (20%)
-  // Bits [5:4] TS_ISET_COOL = 01 (20%)
-  // Value: 0x25 = 0b00100101
-  ret = write_register(BQ25629_REG::NTC_CONTROL_0, 0x25);
-  if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to write NTC_CONTROL_0: %s", esp_err_to_name(ret));
-    return ret;
+  static constexpr RegisterSetting PROFILE[] = {
+      {BQ25629_REG::NTC_CONTROL_0, NTC_PROFILE::CONTROL_0, "NTC_CONTROL_0"},
+      {BQ25629_REG::NTC_CONTROL_1, NTC_PROFILE::CONTROL_1, "NTC_CONTROL_1"},
+      {BQ25629_REG::NTC_CONTROL_2, NTC_PROFILE::CONTROL_2, "NTC_CONTROL_2"},
+  };
+
+  ESP_LOGI(TAG, "Configuring battery temperature profile");
+  for (const RegisterSetting &setting : PROFILE) {
+    esp_err_t ret = write_register(setting.address, setting.value);
+    if (ret != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to write %s: %s", setting.name, esp_err_to_name(ret));
+      return ret;
+    }
+
+    uint8_t readback = 0;
+    ret = read_register(setting.address, readback);
+    if (ret != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to verify %s: %s", setting.name, esp_err_to_name(ret));
+      return ret;
+    }
+    if (readback != setting.value) {
+      ESP_LOGE(TAG, "%s verification failed: wrote 0x%02X, read 0x%02X", setting.name,
+               setting.value, readback);
+      return ESP_ERR_INVALID_RESPONSE;
+    }
   }
-  ESP_LOGD(TAG, "NTC_CONTROL_0 = 0x25 (WARM/COOL = 20%%)");
 
-  // REG0x1B (NTC_Control_1): Set temperature thresholds
-  // TS_TH6 [7:6] = 00 (60°C hot threshold)
-  // TS_TH5 [5:4] = 01 (45°C warm threshold)
-  // TS_TH2 [3:2] = 01 (10°C cool threshold)
-  // TS_TH1 [1:0] = 11 (0°C cold threshold)
-  // Value: 0x27 = 0b00100111
-  ret = write_register(BQ25629_REG::NTC_CONTROL_1, 0x27);
-  if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to write NTC_CONTROL_1: %s", esp_err_to_name(ret));
-    return ret;
-  }
-  ESP_LOGD(TAG, "NTC_CONTROL_1 = 0x27 (TH1=0°C, TH2=10°C, TH5=45°C, TH6=60°C)");
-
-  // REG0x1C (NTC_Control_2): Keep default voltage settings
-  // VRECHG_TH_PREWARM/PRECOOL unchanged
-  // Value: 0x3F (default)
-  ret = write_register(BQ25629_REG::NTC_CONTROL_2, 0x3F);
-  if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to write NTC_CONTROL_2: %s", esp_err_to_name(ret));
-    return ret;
-  }
-  ESP_LOGD(TAG, "NTC_CONTROL_2 = 0x3F (default voltage settings)");
-
-  ESP_LOGI(TAG, "JEITA profile OK (0/10/45/60\u00b0C, COOL/WARM=20%%)");
-
+  ESP_LOGI(TAG, "Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)");
   return ESP_OK;
 }
 
@@ -1030,7 +1045,7 @@ esp_err_t BQ25629::read_ntc_temperature(BQ25629_NTC_Data &data) {
 
   // Calculate NTC resistance using voltage divider equation
   // V_TS = V_BIAS * (RT2 || R_NTC) / (RT1 + (RT2 || R_NTC))
-  // Where RT1 = 5.23kΩ (pull-up), RT2 = 30.1kΩ (pull-down)
+  // Where RT1 = 4.12kΩ (pull-up), RT2 = 17.33kΩ (pull-down)
   //
   // ADC reads: TS% = V_TS / V_BIAS * 100
   // Let ratio = TS% / 100 = V_TS / V_BIAS
@@ -1043,8 +1058,8 @@ esp_err_t BQ25629::read_ntc_temperature(BQ25629_NTC_Data &data) {
   //   R_parallel = (R_NTC * RT2) / (R_NTC + RT2)
   //   R_NTC = (R_parallel * RT2) / (RT2 - R_parallel)
 
-  const float RT1 = 5230.0f;  // 5.23kΩ
-  const float RT2 = 30100.0f; // 30.1kΩ
+  const float RT1 = 4120.0f;  // 4.12kΩ
+  const float RT2 = 17330.0f; // 17.33kΩ
   const float R25 = 10000.0f; // 10kΩ @ 25°C
   const float B = 3950.0f;    // B constant (3950K)
 

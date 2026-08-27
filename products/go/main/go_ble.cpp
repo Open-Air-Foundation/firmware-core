@@ -940,7 +940,7 @@ void BleService::notify_config(const GoSettings &prev, const GoSettings &cur) {
   uint8_t buf[CBOR_BUF_SIZE];
   size_t len = encode_config_delta(buf, sizeof(buf), prev, cur);
   if (len == 0) {
-    return; // encoder overflow guard (logged in encode_config_delta)
+    return; // no BLE-visible change, or encoder overflow (logged by the encoder)
   }
   _config_char->notify(buf, len);
 }
@@ -1808,6 +1808,7 @@ static void enc_meas_int(CborEncoder &m, const GoSettings &s) {
 static void enc_temp_f(CborEncoder &m, const GoSettings &s) {
   cbor_encode_boolean(&m, s.use_fahrenheit);
 }
+static void enc_alt_ft(CborEncoder &m, const GoSettings &s) { cbor_encode_boolean(&m, s.use_feet); }
 static void enc_pm_aqi(CborEncoder &m, const GoSettings &s) {
   cbor_encode_boolean(&m, s.pm_use_usaqi);
 }
@@ -1857,6 +1858,9 @@ static bool dif_meas_int(const GoSettings &a, const GoSettings &b) {
 }
 static bool dif_temp_f(const GoSettings &a, const GoSettings &b) {
   return a.use_fahrenheit != b.use_fahrenheit;
+}
+static bool dif_alt_ft(const GoSettings &a, const GoSettings &b) {
+  return a.use_feet != b.use_feet;
 }
 static bool dif_pm_aqi(const GoSettings &a, const GoSettings &b) {
   return a.pm_use_usaqi != b.pm_use_usaqi;
@@ -1910,6 +1914,7 @@ static bool dif_hum_correction(const GoSettings &a, const GoSettings &b) {
 static const ConfigField CONFIG_FIELDS[] = {
     {BLE_KEY_MEAS_INT, enc_meas_int, dif_meas_int},
     {BLE_KEY_TEMP_F, enc_temp_f, dif_temp_f},
+    {BLE_KEY_ALT_FT, enc_alt_ft, dif_alt_ft},
     {BLE_KEY_PM_AQI, enc_pm_aqi, dif_pm_aqi},
     {BLE_KEY_GPS_MODE, enc_gps_mode, dif_gps_mode},
     {BLE_KEY_AUTO_LOCK, enc_auto_lock, dif_auto_lock},
@@ -1958,6 +1963,10 @@ size_t BleService::encode_config_delta(uint8_t *buf, size_t buf_size, const GoSe
     if (f.differs(prev, cur)) {
       changed++;
     }
+  }
+
+  if (changed == 0) {
+    return 0;
   }
 
   CborEncoder encoder;
@@ -2316,6 +2325,14 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       bool v = false;
       if (cbor_value_is_boolean(&it) && cbor_value_get_boolean(&it, &v) == CborNoError) {
         settings.use_fahrenheit = v;
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_ALT_FT)) {
+      cbor_value_advance(&it);
+      result.recognized_config_key_count++;
+      bool v = false;
+      if (cbor_value_is_boolean(&it) && cbor_value_get_boolean(&it, &v) == CborNoError) {
+        settings.use_feet = v;
       }
       handled = true;
     } else if (key_is(BLE_KEY_PM_AQI)) {

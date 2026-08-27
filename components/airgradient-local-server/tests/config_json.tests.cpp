@@ -24,11 +24,14 @@ config_json::ParseResult parse(const std::string &body, LocalServerConfig &out) 
 
 TEST_CASE("config parse: valid partial body sets only present keys", "[config][parse]") {
   LocalServerConfig cfg;
-  const auto res = parse(R"({"temperatureUnit":"f","co2AbcDays":7,"postDataToCloud":true})", cfg);
+  const auto res = parse(
+      R"({"temperatureUnit":"f","altitudeUnit":"ft","co2AbcDays":7,"postDataToCloud":true})", cfg);
 
   REQUIRE(res.status == config_json::ParseStatus::Ok);
   REQUIRE(cfg.temperature_unit.has_value());
   REQUIRE(*cfg.temperature_unit == "f");
+  REQUIRE(cfg.altitude_unit.has_value());
+  REQUIRE(*cfg.altitude_unit == "ft");
   REQUIRE(cfg.co2_abc_days.has_value());
   REQUIRE(*cfg.co2_abc_days == 7);
   REQUIRE(cfg.post_data_to_cloud.has_value());
@@ -41,10 +44,11 @@ TEST_CASE("config parse: valid partial body sets only present keys", "[config][p
 TEST_CASE("config parse: all enum fields accept catalog values", "[config][parse]") {
   LocalServerConfig cfg;
   const auto res = parse(
-      R"({"pmStandard":"us-aqi","temperatureUnit":"c","configurationControl":"both","gpsMode":"tracking","ledMode":"iaqs"})",
+      R"({"pmStandard":"us-aqi","temperatureUnit":"c","altitudeUnit":"m","configurationControl":"both","gpsMode":"tracking","ledMode":"iaqs"})",
       cfg);
   REQUIRE(res.status == config_json::ParseStatus::Ok);
   REQUIRE(*cfg.pm_standard == "us-aqi");
+  REQUIRE(*cfg.altitude_unit == "m");
   REQUIRE(*cfg.configuration_control == "both");
   REQUIRE(*cfg.gps_mode == "tracking");
   REQUIRE(*cfg.led_mode == "iaqs");
@@ -104,6 +108,22 @@ TEST_CASE("config parse: bad enum rejected with field id", "[config][parse]") {
   REQUIRE(res.field == ConfigFieldId::TemperatureUnit);
 }
 
+TEST_CASE("config parse: altitude unit rejects invalid enum and type", "[config][parse]") {
+  SECTION("invalid enum") {
+    LocalServerConfig cfg;
+    const auto res = parse(R"({"altitudeUnit":"meters"})", cfg);
+    REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
+    REQUIRE(res.field == ConfigFieldId::AltitudeUnit);
+  }
+
+  SECTION("invalid type") {
+    LocalServerConfig cfg;
+    const auto res = parse(R"({"altitudeUnit":1})", cfg);
+    REQUIRE(res.status == config_json::ParseStatus::InvalidValue);
+    REQUIRE(res.field == ConfigFieldId::AltitudeUnit);
+  }
+}
+
 TEST_CASE("config parse: non-bool for bool field rejected", "[config][parse]") {
   SECTION("shared field") {
     LocalServerConfig cfg;
@@ -161,9 +181,9 @@ TEST_CASE("config parse: corrections with populated pm25 and null slr", "[config
   REQUIRE(cfg.corrections->pm25->algorithm == "slr_PMS5003_20231030");
   REQUIRE(cfg.corrections->pm25->slr.has_value());
   REQUIRE(cfg.corrections->pm25->slr->intercept.has_value());
-  REQUIRE(*cfg.corrections->pm25->slr->intercept == 0.0);
+  REQUIRE(*cfg.corrections->pm25->slr->intercept == 0.0f);
   REQUIRE(cfg.corrections->pm25->slr->scaling_factor.has_value());
-  REQUIRE(*cfg.corrections->pm25->slr->scaling_factor == 0.02838);
+  REQUIRE(*cfg.corrections->pm25->slr->scaling_factor == 0.02838f);
   REQUIRE(cfg.corrections->pm25->slr->use_epa2021.has_value());
   REQUIRE(*cfg.corrections->pm25->slr->use_epa2021 == true);
   REQUIRE(cfg.corrections->temperature.has_value());
@@ -268,6 +288,7 @@ TEST_CASE("config parse: useEpa2021 rejected outside pm25", "[config][parse]") {
 TEST_CASE("config serialize: emits only present fields", "[config][serialize]") {
   LocalServerConfig cfg;
   cfg.temperature_unit = "f";
+  cfg.altitude_unit = "ft";
   cfg.led_bar_brightness = 80;
   cfg.post_data_to_cloud = false;
   cfg.measurement_interval_seconds = 30;
@@ -284,6 +305,7 @@ TEST_CASE("config serialize: emits only present fields", "[config][serialize]") 
   cJSON *root = cJSON_Parse(buf);
   REQUIRE(root != nullptr);
   REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "temperatureUnit")->valuestring, "f") == 0);
+  REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "altitudeUnit")->valuestring, "ft") == 0);
   REQUIRE(cJSON_GetObjectItem(root, "ledBarBrightness")->valueint == 80);
   REQUIRE(cJSON_IsBool(cJSON_GetObjectItem(root, "postDataToCloud")));
   REQUIRE(cJSON_IsFalse(cJSON_GetObjectItem(root, "postDataToCloud")));
@@ -299,6 +321,19 @@ TEST_CASE("config serialize: emits only present fields", "[config][serialize]") 
   cJSON_Delete(root);
 }
 
+TEST_CASE("config serialize: omits absent altitude unit", "[config][serialize]") {
+  LocalServerConfig cfg;
+  cfg.temperature_unit = "c";
+
+  char buf[64] = {};
+  REQUIRE(config_json::serialize(cfg, buf, sizeof(buf)) > 0);
+
+  cJSON *root = cJSON_Parse(buf);
+  REQUIRE(root != nullptr);
+  REQUIRE(cJSON_GetObjectItem(root, "altitudeUnit") == nullptr);
+  cJSON_Delete(root);
+}
+
 TEST_CASE("config serialize: rejects incomplete correction SLR", "[config][serialize]") {
   LocalServerConfig cfg;
   Corrections corrections;
@@ -306,9 +341,9 @@ TEST_CASE("config serialize: rejects incomplete correction SLR", "[config][seria
   entry.algorithm = "custom";
   SlrParams slr;
 
-  SECTION("missing intercept") { slr.scaling_factor = 1.0; }
+  SECTION("missing intercept") { slr.scaling_factor = 1.0f; }
 
-  SECTION("missing scalingFactor") { slr.intercept = 0.0; }
+  SECTION("missing scalingFactor") { slr.intercept = 0.0f; }
 
   entry.slr = slr;
   corrections.temperature = entry;
@@ -323,8 +358,8 @@ TEST_CASE("config serialize: corrections nest with slr and null slr", "[config][
   CorrectionEntry pm25;
   pm25.algorithm = "slr_PMS5003_20231030";
   SlrParams slr;
-  slr.intercept = 0.0;
-  slr.scaling_factor = 0.02838;
+  slr.intercept = 2.227f;
+  slr.scaling_factor = 0.02838f;
   slr.use_epa2021 = true;
   pm25.slr = slr;
   corr.pm25 = pm25;
@@ -336,6 +371,8 @@ TEST_CASE("config serialize: corrections nest with slr and null slr", "[config][
   char buf[1024] = {};
   const size_t len = config_json::serialize(cfg, buf, sizeof(buf));
   REQUIRE(len > 0);
+  REQUIRE(std::strstr(buf, "\"intercept\":2.227,") != nullptr);
+  REQUIRE(std::strstr(buf, "\"scalingFactor\":0.02838,") != nullptr);
 
   cJSON *root = cJSON_Parse(buf);
   REQUIRE(root != nullptr);
@@ -357,6 +394,8 @@ TEST_CASE("config serialize: corrections nest with slr and null slr", "[config][
 TEST_CASE("config field wire keys map correctly", "[config][parse]") {
   REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::TemperatureUnit),
                       "temperatureUnit") == 0);
+  REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::AltitudeUnit),
+                      "altitudeUnit") == 0);
   REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::DisplayBrightness),
                       "displayBrightness") == 0);
   REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::CorrectionsPm25),

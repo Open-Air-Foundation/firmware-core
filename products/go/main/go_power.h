@@ -55,6 +55,7 @@ enum class ShipModeRequest : uint8_t {
   None,
   OverDischarge,
   OverTemperature,
+  UnderTemperature,
 };
 
 // ---------------------------------------------------------------------------
@@ -194,10 +195,14 @@ public:
   // Construction
   // -------------------------------------------------------------------------
 
-  /// @param bms     BMS device (via BmsDevice HAL).  Must outlive this service.
+  /// @param bms     Optional BMS device. A non-null device must outlive this service.
   /// @param gpio    GPIO HAL function-pointer table.
   /// @param config  Runtime configuration (wake pins, sleep threshold).
-  PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config);
+  PowerService(BmsDevice *bms, const gpio::Hal &gpio, const Config &config);
+
+  /// Attach a BMS that became available after this service was constructed.
+  /// Non-owning: the BMS must outlive PowerService.
+  void set_bms(BmsDevice *bms);
 
   /// Attach an already-initialised fuel gauge for runtime use.
   /// Non-owning: the fuel gauge must outlive PowerService.
@@ -412,16 +417,13 @@ public:
   static constexpr float EDV_SHIP_THRESHOLD_V = 2.9f;
   static constexpr int EDV_SHIP_DEBOUNCE_SAMPLES = 3;
 
-  // --- OT (over-temperature) thresholds ---
-  //
-  // Two-tier policy: CUTOFF disables charging while still allowing the
-  // system to run; SHIP trips ship mode at the higher threshold.
-  // Hysteresis between CUTOFF (50 °C) and RESUME (47 °C) prevents
-  // chattering near the cutoff boundary.  Values validated on hardware
-  // against AGo's single-cell Li-ion pack.
-  static constexpr int16_t OT_CHARGE_HOT_CUTOFF_C = 50;
-  static constexpr int16_t OT_CHARGE_HOT_RESUME_C = 47;
-  static constexpr int16_t OT_SHIP_THRESHOLD_C = 60;
+  // --- Battery temperature thresholds ---
+  static constexpr int16_t CHARGE_MIN_TEMPERATURE_C = 0;
+  static constexpr int16_t CHARGE_MAX_TEMPERATURE_C = 45;
+  static constexpr int16_t CHARGE_RECOVERY_MIN_TEMPERATURE_C = 2;
+  static constexpr int16_t CHARGE_RECOVERY_MAX_TEMPERATURE_C = 43;
+  static constexpr int16_t DISCHARGE_MIN_TEMPERATURE_C = -10;
+  static constexpr int16_t DISCHARGE_MAX_TEMPERATURE_C = 60;
 
   // --- PMID boost recovery ---
   static constexpr uint16_t PMID_HEALTHY_MIN_MV = 4500; ///< Floor below which PMID is collapsed
@@ -439,7 +441,7 @@ public:
   static constexpr uint8_t FULL_CHARGE_RESUME_SOC = 95;
 
 private:
-  BmsDevice &_bms;
+  BmsDevice *_bms;
   const gpio::Hal &_gpio;
   Config _config;
   FuelGaugeDevice *_fg = nullptr;
@@ -447,12 +449,11 @@ private:
   // --- EDV trip-state members ---
   int _edv_low_count = 0;
 
-  // --- OT trip-state members ---
+  // --- Battery temperature state ---
 
-  /// True while charging is held off by the over-temperature guard (cell
-  /// crossed OT_CHARGE_HOT_CUTOFF_C going up).  Cleared when the cell
-  /// cools below OT_CHARGE_HOT_RESUME_C.  Edge-triggered: only issue
-  /// set_charge_enable(false / true) on the transitions, not every poll.
+  /// True while charging is held off because the battery temperature is
+  /// invalid or outside the charging range. Edge-triggered: only issue
+  /// set_charge_enable(false / true) on state transitions, not every poll.
   bool _thermal_charge_disabled = false;
 
   // --- Full-charge pause state ---

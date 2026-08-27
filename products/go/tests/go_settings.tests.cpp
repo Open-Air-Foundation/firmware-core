@@ -128,7 +128,7 @@ private:
   std::size_t _write_attempt_count = 0;
 };
 
-static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 30;
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 31;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -142,6 +142,7 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   REQUIRE(s.gps_mode == GpsMode::OnWhenTracking);
   REQUIRE(s.operating_mode == OperatingMode::Portable);
   REQUIRE(s.use_fahrenheit == false);
+  REQUIRE(s.use_feet == false);
   REQUIRE(s.pm_use_usaqi == false);
   REQUIRE(s.auto_lock_seconds == 10);
   REQUIRE(s.disable_cloud == false);
@@ -206,6 +207,7 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   original.gps_mode = GpsMode::AlwaysOn;
   original.operating_mode = OperatingMode::Offline;
   original.use_fahrenheit = true;
+  original.use_feet = true;
   original.pm_use_usaqi = true;
   original.auto_lock_seconds = 30;
   original.configuration_control = ConfigurationControl::Local;
@@ -222,12 +224,22 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   REQUIRE(loaded.gps_mode == original.gps_mode);
   REQUIRE(loaded.operating_mode == original.operating_mode);
   REQUIRE(loaded.use_fahrenheit == original.use_fahrenheit);
+  REQUIRE(loaded.use_feet == original.use_feet);
   REQUIRE(loaded.pm_use_usaqi == original.pm_use_usaqi);
   REQUIRE(loaded.auto_lock_seconds == original.auto_lock_seconds);
   REQUIRE(loaded.configuration_control == original.configuration_control);
   REQUIRE(loaded.co2_abc_days == original.co2_abc_days);
   REQUIRE(loaded.tvoc_learning_offset == original.tvoc_learning_offset);
   REQUIRE(loaded.nox_learning_offset == original.nox_learning_offset);
+}
+
+TEST_CASE("Go settings equality includes altitude unit", "[settings]") {
+  GoSettings meters;
+  GoSettings feet;
+  feet.use_feet = true;
+
+  REQUIRE_FALSE(meters.equals(feet));
+  REQUIRE_FALSE(feet.equals(meters));
 }
 
 TEST_CASE("shared Go config fields and update model", "[settings][config]") {
@@ -243,6 +255,7 @@ TEST_CASE("shared Go config fields and update model", "[settings][config]") {
   REQUIRE(static_cast<uint32_t>(GoConfigField::TvocLearningOffset) == (1U << 8));
   REQUIRE(static_cast<uint32_t>(GoConfigField::NoxLearningOffset) == (1U << 9));
   REQUIRE(static_cast<uint32_t>(GoConfigField::MeasurementInterval) == (1U << 10));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::AltitudeUnit) == (1U << 11));
   REQUIRE(static_cast<uint32_t>(GoConfigField::GpsMode) == (1U << 12));
   REQUIRE(static_cast<uint32_t>(GoConfigField::FrontLedBrightness) == (1U << 13));
   REQUIRE(static_cast<uint32_t>(GoConfigField::BackLedBrightness) == (1U << 14));
@@ -254,6 +267,9 @@ TEST_CASE("shared Go config fields and update model", "[settings][config]") {
   REQUIRE(has_go_config_field(mask, GoConfigField::CloudConnection));
   REQUIRE(has_go_config_field(mask, GoConfigField::HumidityCorrection));
   REQUIRE_FALSE(has_go_config_field(mask, GoConfigField::TemperatureUnit));
+
+  const GoConfigUpdate update{};
+  REQUIRE_FALSE(update.use_feet);
 }
 
 TEST_CASE("shared Go config validation covers interface-managed fields", "[settings][config]") {
@@ -397,7 +413,7 @@ TEST_CASE("cloud control permits only an exact local recovery update", "[setting
   }
 
   SECTION("Recovery cannot include another field") {
-    update.update_mask = control_mask | static_cast<uint32_t>(GoConfigField::PmStandard);
+    update.update_mask = control_mask | static_cast<uint32_t>(GoConfigField::AltitudeUnit);
     update.configuration_control = ConfigurationControl::Both;
     REQUIRE_FALSE(is_go_config_update_allowed(ConfigurationControl::Cloud,
                                               GoConfigSource::LocalServer, update));

@@ -440,8 +440,10 @@ void reset() {
   recover_pm_sensor_count = 0;
 
   DisplayService::spy_deep_sleep_called = false;
+  DisplayService::spy_init_count = 0;
   DisplayService::spy_update_count = 0;
   DisplayService::spy_flush_count = 0;
+  DisplayService::spy_last_screen = Screen::Home;
 }
 
 } // namespace test_spy
@@ -635,8 +637,10 @@ bool StorageService::clear_routes() {
 // PowerService stubs
 // ============================================================================
 
-PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config)
+PowerService::PowerService(BmsDevice *bms, const gpio::Hal &gpio, const Config &config)
     : _bms(bms), _gpio(gpio), _config(config) {}
+
+void PowerService::set_bms(BmsDevice *bms) { _bms = bms; }
 
 void PowerService::set_fuel_gauge(FuelGaugeDevice * /*fg*/) {}
 

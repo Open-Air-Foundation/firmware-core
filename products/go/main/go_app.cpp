@@ -64,6 +64,14 @@ static constexpr const char *TAG = "app";
 // domain; keep in sync with the Cloud service host.
 static constexpr const char *OTA_HTTP_DOMAIN = "hw.airgradient.com";
 
+// The GPS receiver remains powered and tracking through Offline deep sleep.
+// Allow several NMEA epochs after reconnecting the UART on timer wake.
+static constexpr uint32_t GPS_FAST_PATH_READ_TIMEOUT_MS = 3000;
+
+/// A transient BMS communication failure gets one same-boot retry.
+static constexpr uint8_t BMS_INIT_MAX_ATTEMPTS = 2;
+static constexpr uint32_t BMS_INIT_RETRY_DELAY_MS = 100;
+
 // Strings owned by GoApp that WifiService::Config holds pointers into.
 // Stack-allocated in run_*; lifetime = process (functions never return).
 namespace {
@@ -116,6 +124,24 @@ PortableWifiProvisioner::Config make_portable_prov_config(const char *serial,
 
 GoApp::GoApp(GoBoard &board) : _board(board) {}
 
+bool GoApp::init_bms_with_retry() {
+  for (uint8_t attempt = 1; attempt <= BMS_INIT_MAX_ATTEMPTS; ++attempt) {
+    if (_board.init_bms()) {
+      return true;
+    }
+
+    AG_LOGE(TAG, "BMS initialization attempt %u/%u failed", static_cast<unsigned int>(attempt),
+            static_cast<unsigned int>(BMS_INIT_MAX_ATTEMPTS));
+    if (attempt < BMS_INIT_MAX_ATTEMPTS) {
+      RTOS::delay_ms(BMS_INIT_RETRY_DELAY_MS);
+    }
+  }
+
+  AG_LOGE(TAG, "BMS initialization failed after %u attempts",
+          static_cast<unsigned int>(BMS_INIT_MAX_ATTEMPTS));
+  return false;
+}
+
 // ===========================================================================
 // GoApp::run() — boot path selection
 // ===========================================================================
@@ -127,9 +153,9 @@ void GoApp::run() {
 
   // Factory fuel-gauge learning pre-empts every normal boot path. Only the
   // lightweight, idempotent init_nvs() is needed to read FactorySettings; the
-  // heavy init_core() happens inside the factory path. A timer wake, button
-  // wake, or charger re-plug during an active run always routes here, which is
-  // what makes resume-across-ship-off automatic.
+  // heavy hardware initialization and BMS retry happen inside the factory
+  // path. A timer wake, button wake, or charger re-plug during an active run
+  // always routes here, which makes resume-across-ship-off automatic.
   _board.init_nvs();
   FactorySettings fs{};
   load_factory_settings(_board.config_store(), fs);
@@ -171,7 +197,13 @@ void GoApp::run() {
 void GoApp::run_factory_learning_path(const RtcAppState & /*state*/) {
   AG_LOGI(TAG, "run_factory_learning_path: entering factory fuel-gauge learning");
 #ifndef TEST_HOST
-  _board.init_core(); // full init here (buses, SPI, BMS) — NOT in run()
+  _board.init_core();
+  _board.init_fuel_gauge();
+  if (!init_bms_with_retry()) {
+    AG_LOGE(TAG, "BMS unavailable during factory learning; restarting");
+    _board.restart();
+    return;
+  }
   _board.release_gpio_holds();
 
   FgLearningRunner runner({
@@ -210,6 +242,11 @@ void GoApp::run_fast_path(const RtcAppState &state) {
 
   _board.remove_button_isr(PIN_BUTTON_POWER);
 
+  if (result.outcome == FastPathResult::Outcome::Shutdown) {
+    _board.power().shutdown();
+    return;
+  }
+
   if (result.outcome == FastPathResult::Outcome::Sleep) {
     RtcAppState save = state;
     save.sensors_warm = result.sensors_warm;
@@ -221,6 +258,14 @@ void GoApp::run_fast_path(const RtcAppState &state) {
     log_heap(TAG, "boot:fast-path:before-sleep");
     _board.power().enter_sleep(result.sleep_duration_ms);
     // Never returns — CPU reboots on wake.
+    return;
+  }
+
+  if (result.outcome == FastPathResult::Outcome::Promote && _board.bms() == nullptr &&
+      !init_bms_with_retry()) {
+    AG_LOGE(TAG, "BMS unavailable during fast-path promotion; restarting");
+    _board.restart();
+    return;
   }
 
   // Promotion to interactive — wire fast_path_measures pointer into
@@ -245,6 +290,10 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
 
   // --- Core init (NVS must be ready before load_settings) ---
   _board.init_core();
+  _board.init_fuel_gauge();
+  if (!init_bms_with_retry()) {
+    AG_LOGW(TAG, "fast-path continuing without BMS");
+  }
   _board.release_gpio_holds();
   _board.power().set_pm_power(true);
 
@@ -313,7 +362,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
 
   if (!promote && state.tracking_active && gps_active) {
     auto *gps_driver = _board.new_gps_driver();
-    gps = gps_read_once(*gps_driver, GPS_BAUD, 2000, button_pressed);
+    gps = gps_read_once(*gps_driver, GPS_BAUD, GPS_FAST_PATH_READ_TIMEOUT_MS, button_pressed);
     AG_LOGI(TAG, "fast-path: gps fix_type=%d sat=%d lat=%.6f lon=%.6f alt=%.1f hdop=%.1f",
             static_cast<int>(gps.fix.fix_type), gps.fix.satellite_count, gps.position.latitude,
             gps.position.longitude, gps.altitude_m, gps.fix.hdop);
@@ -328,6 +377,8 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   // painted. tracking_active is left intact in RTC so the orchestrator's
   // init() retries resume_route() and surfaces persistent faults there.
   bool storage_failure_promote = false;
+  bool power_polled = false;
+  PowerSnapshot power_snapshot{};
   if (!promote) {
     StorageService &stor = _board.storage();
     stor.cache_measurement(ago);
@@ -339,13 +390,13 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
         promote = true;
         storage_failure_promote = true;
       } else {
-        float battery_pct = -1.0f;
-        _board.bms().get_battery_percentage(&battery_pct);
+        power_snapshot = _board.power().poll_bms();
+        power_polled = true;
         RoutePoint point{};
         point.timestamp = time(nullptr);
         point.gps = gps;
         point.sensors = ago;
-        point.battery_percentage = battery_pct;
+        point.battery_percentage = power_snapshot.battery_percentage;
         if (!stor.append_route_point(point)) {
           AG_LOGW(TAG, "fast-path: append_route_point failed → promote");
           promote = true;
@@ -360,11 +411,28 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   // --- Display + sleep decision ---
   if (!promote) {
     PowerService &pwr = _board.power();
-    PowerSnapshot bms_snap = pwr.poll_bms();
+    if (!power_polled) {
+      power_snapshot = pwr.poll_bms();
+    }
 
     DisplayService &disp = _board.display();
     DisplayValues values =
-        build_fast_path_display(ago, gps, bms_snap, settings, state.tracking_active);
+        build_fast_path_display(ago, gps, power_snapshot, settings, state.tracking_active);
+    if (power_snapshot.ship_mode_request == ShipModeRequest::OverTemperature ||
+        power_snapshot.ship_mode_request == ShipModeRequest::UnderTemperature) {
+      values.screen = power_snapshot.ship_mode_request == ShipModeRequest::UnderTemperature
+                          ? Screen::ShutdownTemperatureLow
+                          : Screen::ShutdownTemperature;
+      disp.init(values);
+      return {
+          .outcome = FastPathResult::Outcome::Shutdown,
+          .handoff = {},
+          .measures = ago,
+          .has_measures = has_measures,
+          .sleep_duration_ms = 0,
+          .sensors_warm = false,
+      };
+    }
     disp.init(values);
 
     uint32_t awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
@@ -444,12 +512,12 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   AG_LOGI(TAG,
           "button_wake: snapshot_valid=%d co2=%d pm25=%.1f temp=%.1f hum=%.1f "
           "tvoc=%d nox=%d pres=%.1f alt=%.1f batt=%d charging=%d "
-          "gps_en=%d gps_fix=%d tracking=%d ble=%d fahrenheit=%d usaqi=%d",
+          "gps_en=%d gps_fix=%d tracking=%d ble=%d fahrenheit=%d feet=%d usaqi=%d",
           snapshot_valid, snapshot.co2_ppm, snapshot.pm25_ugm3, snapshot.temperature_c,
           snapshot.humidity_pct, snapshot.tvoc_index, snapshot.nox_index, snapshot.pressure_hpa,
           snapshot.altitude_m, snapshot.battery_pct, snapshot.is_battery_charging,
           snapshot.gps_enabled, snapshot.gps_fix, snapshot.tracking_active, snapshot.ble_enabled,
-          snapshot.use_fahrenheit, snapshot.pm_use_usaqi);
+          snapshot.use_fahrenheit, snapshot.use_feet, snapshot.pm_use_usaqi);
 
   DisplayValues wake_values = build_wake_values(snapshot, snapshot_valid);
 
@@ -465,6 +533,12 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // -----------------------------------------------------------------------
 
   _board.init_core();
+  _board.init_fuel_gauge();
+  if (!init_bms_with_retry()) {
+    AG_LOGE(TAG, "BMS unavailable during button wake; restarting");
+    _board.restart();
+    return;
+  }
   _board.release_gpio_holds();
   _board.power().set_pm_power(true);
 
@@ -581,6 +655,9 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       new CloudService(event_queue, {_board.ag_client(), *wifi_service}, CloudService::Config{});
   auto *serial_command_channel = new UsbSerialCommandChannel();
   auto *serial_command_service = new SerialCommandService(event_queue, *serial_command_channel);
+  if (!settings.onboarding_done && !serial_command_service->start()) {
+    AG_LOGE(TAG, "failed to start serial command service during onboarding");
+  }
   // LED service — init and start before orchestrator.
   LedService &led = _board.led_service();
   led.init();
@@ -635,8 +712,35 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
 // ===========================================================================
 
 void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
+  // --- Early display paint ---
+  // Start the e-paper refresh before the slower I2C, BMS, sensor, and NAND
+  // initialization. The display worker owns SPI while it refreshes; NAND
+  // initialization naturally waits for that refresh before using the bus.
+  bool boot_splash_requested = false;
+  if (!handoff.display_painted) {
+    _board.init_spi();
+    DisplayService &early_display = _board.display();
+
+    DisplayValues initial_values{};
+    if (handoff.display_snapshot != nullptr) {
+      initial_values = build_wake_values(*handoff.display_snapshot, true);
+    } else {
+      initial_values = build_boot_splash_values();
+      boot_splash_requested = true;
+    }
+
+    early_display.init(initial_values, /* defer_refresh= */ true);
+    handoff.display_painted = true;
+  }
+
   // --- Complete any missing core init (idempotent) ---
   _board.init_core();
+  _board.init_fuel_gauge();
+  if (!init_bms_with_retry()) {
+    AG_LOGE(TAG, "BMS unavailable during interactive boot; restarting");
+    _board.restart();
+    return;
+  }
   _board.release_gpio_holds();
   _board.power().set_pm_power(true);
 
@@ -662,6 +766,10 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   auto *touch = _board.new_touch_sensor();
 
   // --- Storage ---
+  // NAND shares the display SPI bus. Finish the early splash refresh before
+  // mounting storage so its initialization cannot contend with the EPD.
+  DisplayService &disp = _board.display();
+  disp.flush();
   StorageService &stor = _board.storage();
 
   // --- Event queue ---
@@ -704,6 +812,9 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       new CloudService(event_queue, {_board.ag_client(), *wifi_service}, CloudService::Config{});
   auto *serial_command_channel = new UsbSerialCommandChannel();
   auto *serial_command_service = new SerialCommandService(event_queue, *serial_command_channel);
+  if (!settings.onboarding_done && !serial_command_service->start()) {
+    AG_LOGE(TAG, "failed to start serial command service during onboarding");
+  }
 
   // --- Service construction ---
   auto *sensor_producer = new SensorProducer(sm, event_queue,
@@ -723,13 +834,18 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
                                           .pin_button_boot = PIN_BUTTON_BOOT,
                                           .suppress_button_wake = handoff.suppress_wake_press});
 
-  DisplayService &disp = _board.display();
   PowerService &pwr = _board.power();
 
   auto *ui_manager = new UIManager({
       .firmware_version = firmware_version,
       .serial_number = serial.c_str(),
   });
+
+  // Seed UI state after the early splash paint, so Orchestrator retains the
+  // splash until the first completed measurement.
+  if (boot_splash_requested) {
+    ui_manager->show_info(BOOT_SPLASH_TEXT);
+  }
 
   // --- OtaService (borrows the shared server + PowerService; owns the writer) ---
   auto *ota_service = new OtaService(_board.ble_server(), pwr,
@@ -739,24 +855,8 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
                                          .http_domain = OTA_HTTP_DOMAIN,
                                      });
 
-  // --- Display init (if boot hasn't painted) ---
-  if (!handoff.display_painted) {
-    if (handoff.display_snapshot != nullptr) {
-      DisplayValues wake = build_wake_values(*handoff.display_snapshot, true);
-      disp.init(wake);
-    } else {
-      // Cold-boot: show "Booting..." instead of Home sentinels.
-      // Seed UIManager so subsequent update_display() keeps the splash
-      // until the Orchestrator transitions to Home on first measurement.
-      DisplayValues splash = build_boot_splash_values();
-      ui_manager->show_info(BOOT_SPLASH_TEXT);
-      disp.init(splash);
-    }
-    handoff.display_painted = true;
-  }
-
-  // Boot animation — runs after the splash is painted so the screen is up
-  // before the chime/LED play.
+  // Boot animation — runs after the splash refresh is scheduled so the screen
+  // can update in parallel with the chime/LED.
   if (cause == WakeCause::PowerOn) {
     if (!settings.onboarding_done) {
       // Fresh unit defaults buzzer + back LED off; force a one-time synced
@@ -894,6 +994,7 @@ DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData
   v.tracking_active = tracking_active;
 
   v.use_fahrenheit = settings.use_fahrenheit;
+  v.use_feet = settings.use_feet;
   v.pm_use_usaqi = settings.pm_use_usaqi;
   v.display_off = false;
 
@@ -928,6 +1029,7 @@ DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapsho
     v.tracking_active = snapshot.tracking_active;
     v.ble_enabled = snapshot.ble_enabled;
     v.use_fahrenheit = snapshot.use_fahrenheit;
+    v.use_feet = snapshot.use_feet;
     v.pm_use_usaqi = snapshot.pm_use_usaqi;
   }
 

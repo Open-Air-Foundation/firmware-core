@@ -476,11 +476,11 @@ Calls `clear_data()`, writes default `GoSettings` to NVS (which zeros
 `disable_cloud` and `static_ip`), calls `WifiService::clear_credentials()`
 to erase all saved networks and reset online latches,
 deletes all stored BLE bonds, resets runtime state back to Portable + Idle +
-Locked, updates the display, and returns success/failure. Explicit factory reset
-uses the full default settings, including no measurement corrections. When
-manufacturing mode is active, factory reset instead retains the active
-correction set. Bond deletion is a safe no-op after Stationary has torn down
-the Go BLE service. The caller reboots the ESP on success.
+Locked, updates the display, and returns success/failure. Normal reset callers
+clear measurement corrections; manufacturing-mode and serial-command resets
+retain them. Bond deletion is a safe no-op after Stationary has torn down the Go
+BLE service. Callers reboot on success except the serial command path, which
+returns its result without rebooting.
 
 ### shutdown(reason)
 
@@ -489,11 +489,14 @@ Unified shutdown pipeline for all shutdown paths. Takes an optional
 
 1. If a BLE client is connected, push a `disc` Status notice
    (`notify_disconnect()` — `overheat` / `low_batt` / `user`) so the client knows
-   the link is about to drop. Sent early so it drains before power is cut.
+   the link is about to drop. Both high- and low-temperature shutdowns use the
+   legacy `overheat` value for protocol compatibility. Sent early so it drains
+   before power is cut.
 2. Show the reason-specific shutdown screen — all variants share the
    same unified template (brand header + icon + title/action/detail):
    `Screen::ShutdownDischarge` for `OverDischarge`,
    `Screen::ShutdownTemperature` for `OverTemperature`,
+   `Screen::ShutdownTemperatureLow` for `UnderTemperature`,
    `Screen::ShutdownUser` for user-initiated long-press
 3. Queue the shutdown frame with `update_display(wait=true)` and
    `DisplayService::flush()` so the e-paper paint is complete before continuing
@@ -503,11 +506,12 @@ Unified shutdown pipeline for all shutdown paths. Takes an optional
    painted reason screen remains visible and the `disc` notice can drain
 7. `PowerService::shutdown()` — BMS ship mode → deep sleep fallback
 
-Safety trips (EDV/OT) are detected by `poll_bms()` and signalled via
-`PowerSnapshot::ship_mode_request`. The orchestrator checks this field
-in `on_bms_timer()` and routes to `shutdown(reason)`. The `disc` notice is
-the safety/user-shutdown counterpart of the leave-Portable notice in
-[`change_mode()`](#change_mode).
+EDV and high- or low-battery-temperature safety trips are detected by
+`poll_bms()` and signalled via `PowerSnapshot::ship_mode_request`. Invalid NTC
+disables charging but does not create a ship-mode request. The orchestrator
+checks the request in `on_bms_timer()` and routes to `shutdown(reason)`. The
+`disc` notice is the safety/user-shutdown counterpart of the leave-Portable
+notice in [`change_mode()`](#change_mode).
 
 ## Stationary Networking
 
@@ -655,14 +659,15 @@ The policy splits on `has_been_online()`:
 - **Runtime** (after the first online): the orchestrator never opens
   provisioning and never gives up. Any reason except `requested_by_user`
   schedules a reconnect via `WifiService::schedule_reconnect()`, which
-  retries the saved networks indefinitely (see the Wi-Fi service doc).
+  retries saved networks when present or the transient factory-default
+  network otherwise (see the Wi-Fi service doc).
   `requested_by_user` is the service's own teardown and is left alone.
 
 A runtime reconnect preserves the `has_been_online()` latch, so repeated
 runtime failures keep routing here (reconnect) rather than falling back
-to the bring-up provisioning branch. A fallback-only session (factory-
-default AP, never saved) has nothing to reconnect to, so it stays
-disconnected at runtime.
+to the bring-up provisioning branch. A fallback-only session retries the
+explicit factory-default credentials after each reconnect delay without
+persisting them or applying the saved-network static IP.
 
 Both transitions are logged at INFO: `on_wifi_disconnected()` logs the
 decoded reason (`wifi_disconnect_reason_to_string`) plus the runtime
@@ -832,7 +837,8 @@ a `DisplayValues` snapshot:
    chart cache, extract battery info, status flags, and `is_plugged_in`
    (derived from `bms_power_source_has_external_input()`). The Wi-Fi icon
    is shown for the whole Stationary session (`wifi_enabled`); its glyph
-   reflects link state via `wifi_connected = wifi.is_online()`
+   reflects link state via `wifi_connected = wifi.is_online()`. Temperature,
+   altitude, and PM presentation flags come from the active `GoSettings`
 3. `UIManager::build_values(ctx)` — produce `DisplayValues`
 4. `DisplayService::update(values)` — non-blocking render submission
 5. If a snackbar is active and no refresh timer is pending, schedule a

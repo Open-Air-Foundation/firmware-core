@@ -65,8 +65,13 @@ exceed 1S cell-protection OCP, opening the protection FET and causing a
 POWERON reset. Holding `EN_OTG=1` trades ~220 µA quiescent for indefinite
 uptime on battery.
 
-All three boot paths call `init_core()` (which runs `init_bms()` →
-arms PMID) before `power().set_pm_power(true)` and `sensors()`.
+All three normal boot paths call `init_core()` for NVS, GPIO/I2C buses, and
+SPI, then initialize the optional fuel gauge and try BQ25629 initialization
+twice, 100 ms apart. A successful BQ25629 initialization arms PMID before
+`power().set_pm_power(true)` and `sensors()`. Interactive, button-wake,
+factory-learning, and fast-path promotion boots restart if both BQ25629
+attempts fail. A fast path that can return directly to sleep continues in
+degraded mode so fuel-gauge SOC and non-PM measurements remain available.
 
 ### Power Button and Restart
 
@@ -85,6 +90,10 @@ and the BQ25629 `/QON` pin, so the long-press gesture has two outcomes:
 
 ### Manufacturing Mode
 
+The USB `#AG` production command service is available automatically before
+onboarding; entering Manufacturing Mode is not required. See
+[Serial Command Service](docs/serial_command_service.md) for its lifecycle.
+
 While a unit is still un-onboarded (`onboarding_done == false`), a short
 press of Button 2 (`PIN_BUTTON_BOOT`) skips the Getting Started guide and
 enters Stationary operating mode **ephemerally** — nothing is written to
@@ -102,8 +111,12 @@ onboarding. Button 2 long press remains factory reset.
 - **EDV (over-discharge):** ship mode requested when cell voltage stays
   below 2.9 V for 3 consecutive polls while on battery. The orchestrator
   shows a warning on `Screen::Info` before entering ship mode.
-- **OT (over-temperature):** charge cutoff at 50 C (resume at 47 C);
-  ship mode requested at 60 C with a warning display before shutdown.
+- **Battery-temperature protection:** charging is allowed from 0 °C through
+  45 °C. After a temperature or invalid-NTC block, charging resumes only from
+  2 °C through 43 °C. Discharging is allowed from -10 °C through 60 °C;
+  temperatures outside that range cause distinct cold- or hot-temperature
+  shutdowns. An invalid NTC reading disables charging only and does not request
+  shutdown.
 - **Full-charge pause:** when the battery is full and USB is present,
   charging is disabled to reduce cell stress. Resumes when SOC drops
   to 95 %. V1 uses the BQ27427 FC flag; Prototype falls back to
@@ -113,12 +126,13 @@ onboarding. Button 2 long press remains factory reset.
 
 ### Fuel Gauge (V1 Only)
 
-On V1, `init_bms()` initialises the BQ27427 with a two-pass corruption
-recovery sequence and idempotent cell-config write. At runtime,
-`poll_bms()` prefers FG-derived SOC and surfaces FG telemetry in
-`PowerSnapshot`. Three log lines are emitted per poll: charger status,
-BQ25629 ADC telemetry, and FG telemetry with decoded flags
-(`FgFlags::FC`, `CHG`, `DSG`, etc.).
+On V1, `init_fuel_gauge()` initializes the BQ27427 independently from the
+BQ25629, using a two-pass corruption-recovery sequence and idempotent
+cell-config write. At runtime, `poll_bms()` prefers FG-derived SOC and surfaces
+FG telemetry in `PowerSnapshot`, even when the charger is unavailable. Fast-path
+route points and display rendering use the same snapshot. Three log lines are
+emitted per poll: charger status, BQ25629 ADC telemetry, and FG telemetry with
+decoded flags (`FgFlags::FC`, `CHG`, `DSG`, etc.).
 
 ## Build
 

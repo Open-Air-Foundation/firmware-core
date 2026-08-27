@@ -111,8 +111,10 @@ RTC_DATA_ATTR static bool s_rtc_state_valid = false;
 // Construction
 // ---------------------------------------------------------------------------
 
-PowerService::PowerService(BmsDevice &bms, const gpio::Hal &gpio, const Config &config)
+PowerService::PowerService(BmsDevice *bms, const gpio::Hal &gpio, const Config &config)
     : _bms(bms), _gpio(gpio), _config(config) {}
+
+void PowerService::set_bms(BmsDevice *bms) { _bms = bms; }
 
 void PowerService::set_fuel_gauge(FuelGaugeDevice *fg) { _fg = fg; }
 
@@ -125,7 +127,7 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
 
   bool telemetry_ok = false;
   BmsTelemetry telemetry{};
-  if (_bms.read_telemetry(telemetry)) {
+  if (_bms != nullptr && _bms->read_telemetry(telemetry)) {
     telemetry_ok = true;
     if (telemetry.is_battery_voltage_valid()) {
       status.battery_voltage = telemetry.battery_voltage;
@@ -191,7 +193,7 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
     status.battery_percent_source = BatteryPercentSource::FuelGauge;
   } else {
     float pct = -1.0f;
-    if (_bms.get_battery_percentage(&pct)) {
+    if (_bms != nullptr && _bms->get_battery_percentage(&pct)) {
       status.battery_percentage = pct;
       status.battery_percent_source = BatteryPercentSource::BatteryCharger;
     }
@@ -201,7 +203,7 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
 
   bool status_ok = false;
   BmsStatus bms_status{};
-  if (_bms.read_status(bms_status)) {
+  if (_bms != nullptr && _bms->read_status(bms_status)) {
     status_ok = true;
     status.charging_status = bms_status.charging_state;
     status.charger_status = bms_status;
@@ -236,40 +238,48 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
   }
 
   // -------------------------------------------------------------------------
-  // OT (over-temperature) trip — two-tier policy
+  // Battery temperature protection
   // -------------------------------------------------------------------------
-  if (telemetry_ok && telemetry.is_battery_temperature_valid()) {
-    const int16_t bat_temp = telemetry.battery_temperature_c;
-
-    // Tier 2: request ship mode at SHIP_THRESHOLD.  Charging is disabled
-    // immediately; the orchestrator shows a warning then calls shutdown().
-    if (bat_temp >= OT_SHIP_THRESHOLD_C) {
-      AG_LOGW(TAG, "OT trip: cell hot %d°C >= %d°C -> requesting ship mode", bat_temp,
-              OT_SHIP_THRESHOLD_C);
-      if (!_thermal_charge_disabled) {
-        if (_bms.set_charge_enable(false)) {
-          _thermal_charge_disabled = true;
-        }
-      }
-      status.ship_mode_request = ShipModeRequest::OverTemperature;
-    }
-    // Tier 1: charge cutoff at HOT_CUTOFF (edge-triggered going up).
-    else if (bat_temp >= OT_CHARGE_HOT_CUTOFF_C && !_thermal_charge_disabled) {
-      AG_LOGW(TAG, "OT warn: cell warm %d°C >= %d°C -> disable charging", bat_temp,
-              OT_CHARGE_HOT_CUTOFF_C);
-      if (_bms.set_charge_enable(false)) {
+  const bool battery_temperature_valid = telemetry_ok && telemetry.is_battery_temperature_valid();
+  if (!battery_temperature_valid) {
+    if (!_thermal_charge_disabled) {
+      AG_LOGW(TAG, "battery temperature invalid -> disable charging");
+      if (_bms != nullptr && _bms->set_charge_enable(false)) {
         _thermal_charge_disabled = true;
       }
     }
-    // Tier 1: charge resume at HOT_RESUME (edge-triggered going down).
-    // Only issue the I2C write when full-charge pause is also inactive;
-    // otherwise the thermal flag clears but charging stays off.
-    else if (bat_temp <= OT_CHARGE_HOT_RESUME_C && _thermal_charge_disabled) {
-      AG_LOGI(TAG, "OT clear: cell cooled %d°C <= %d°C -> re-enable charging", bat_temp,
-              OT_CHARGE_HOT_RESUME_C);
-      _thermal_charge_disabled = false;
-      if (!_full_charge_paused) {
-        _bms.set_charge_enable(true);
+  } else {
+    const int16_t batt_temp = telemetry.battery_temperature_c;
+    const bool discharge_allowed =
+        batt_temp >= DISCHARGE_MIN_TEMPERATURE_C && batt_temp <= DISCHARGE_MAX_TEMPERATURE_C;
+    const bool charge_allowed =
+        batt_temp >= CHARGE_MIN_TEMPERATURE_C && batt_temp <= CHARGE_MAX_TEMPERATURE_C;
+    const bool charge_recovery_allowed = batt_temp >= CHARGE_RECOVERY_MIN_TEMPERATURE_C &&
+                                         batt_temp <= CHARGE_RECOVERY_MAX_TEMPERATURE_C;
+
+    if (!discharge_allowed) {
+      AG_LOGW(TAG,
+              "battery temperature %d°C outside discharge range %d-%d°C -> requesting "
+              "ship mode",
+              batt_temp, DISCHARGE_MIN_TEMPERATURE_C, DISCHARGE_MAX_TEMPERATURE_C);
+      if (!_thermal_charge_disabled) {
+        if (_bms != nullptr && _bms->set_charge_enable(false)) {
+          _thermal_charge_disabled = true;
+        }
+      }
+      status.ship_mode_request = batt_temp < DISCHARGE_MIN_TEMPERATURE_C
+                                     ? ShipModeRequest::UnderTemperature
+                                     : ShipModeRequest::OverTemperature;
+    } else if (!charge_allowed && !_thermal_charge_disabled) {
+      AG_LOGW(TAG, "battery temperature %d°C outside charge range %d-%d°C -> disable charging",
+              batt_temp, CHARGE_MIN_TEMPERATURE_C, CHARGE_MAX_TEMPERATURE_C);
+      if (_bms != nullptr && _bms->set_charge_enable(false)) {
+        _thermal_charge_disabled = true;
+      }
+    } else if (charge_recovery_allowed && _thermal_charge_disabled) {
+      AG_LOGI(TAG, "battery temperature recovered to %d°C", batt_temp);
+      if (_full_charge_paused || (_bms != nullptr && _bms->set_charge_enable(true))) {
+        _thermal_charge_disabled = false;
       }
     }
   }
@@ -289,14 +299,18 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
   if (plugged && full && !_full_charge_paused) {
     _full_charge_paused = true;
     if (!_thermal_charge_disabled) {
-      _bms.set_charge_enable(false);
+      if (_bms != nullptr) {
+        _bms->set_charge_enable(false);
+      }
     }
     AG_LOGI(TAG, "full-charge pause: battery full while plugged, charging disabled");
   } else if (_full_charge_paused && status.battery_percentage >= 0.0f &&
              status.battery_percentage <= static_cast<float>(FULL_CHARGE_RESUME_SOC)) {
     _full_charge_paused = false;
     if (!_thermal_charge_disabled) {
-      _bms.set_charge_enable(true);
+      if (_bms != nullptr) {
+        _bms->set_charge_enable(true);
+      }
     }
     AG_LOGI(TAG, "full-charge resume: SOC dropped to %.0f%%", status.battery_percentage);
   }
@@ -380,10 +394,14 @@ FgLearningVerifyReadout PowerService::read_fg_learning_verify() {
 }
 
 bool PowerService::set_charge_current_ma(uint16_t current_ma) {
-  return _bms.set_charge_current_ma(current_ma);
+  return _bms != nullptr && _bms->set_charge_current_ma(current_ma);
 }
 
-void PowerService::set_manual_charge_disabled(bool disabled) { _bms.set_charge_enable(!disabled); }
+void PowerService::set_manual_charge_disabled(bool disabled) {
+  if (_bms != nullptr) {
+    _bms->set_charge_enable(!disabled);
+  }
+}
 
 bool PowerService::set_chemistry_4v2() {
   return _fg != nullptr && _fg->ready() && _fg->select_chemistry_4v2();
@@ -410,7 +428,7 @@ void PowerService::_log_poll_snapshot(const PowerSnapshot &snap) {
   const auto &t = snap.telemetry;
   AG_LOGI(TAG,
           "poll_bms: ibus=%dmA ibat=%dmA vsys=%umV vpmid=%umV ts=%.1f%% "
-          "tdie=%d°C tbat=%d°C",
+          "tdie=%d°C bms_ntc=%d°C",
           t.input_current_ma, t.battery_current_ma, t.system_voltage_mv, t.pmid_voltage_mv,
           t.ts_percent, t.die_temperature_c, t.battery_temperature_c);
 
@@ -433,7 +451,7 @@ void PowerService::_log_poll_snapshot(const PowerSnapshot &snap) {
 }
 
 bool PowerService::poll_charging_status(BmsChargingState &state) {
-  if (!_bms.get_charging_state(state)) {
+  if (_bms == nullptr || !_bms->get_charging_state(state)) {
     AG_LOGW(TAG, "poll_charging_status: get_charging_state() failed");
     return false;
   }
@@ -442,7 +460,7 @@ bool PowerService::poll_charging_status(BmsChargingState &state) {
 
 bool PowerService::poll_status(BmsStatus &status) {
   status = BmsStatus{};
-  if (!_bms.read_status(status)) {
+  if (_bms == nullptr || !_bms->read_status(status)) {
     AG_LOGW(TAG, "poll_status: read_status() failed");
     return false;
   }
@@ -454,42 +472,54 @@ bool PowerService::poll_status(BmsStatus &status) {
 // ---------------------------------------------------------------------------
 
 bool PowerService::rekick_pmid_if_collapsed(const BmsTelemetry &t, BmsPowerSource src) {
+  if (_bms == nullptr) {
+    return false;
+  }
+
   const bool on_battery = (src == BmsPowerSource::None || src == BmsPowerSource::OtgMode);
   const bool pmid_valid = (t.pmid_voltage_mv != BmsInvalid::VOLTAGE_MV);
   if (!(on_battery && pmid_valid && t.pmid_voltage_mv < PMID_HEALTHY_MIN_MV)) {
     return false;
   }
   AG_LOGW(TAG, "PMID collapsed (vpmid=%u mV) -> re-kick boost", t.pmid_voltage_mv);
-  _bms.set_pmid_enabled(false);
+  _bms->set_pmid_enabled(false);
   RTOS::delay_ms(PMID_REKICK_OFF_MS);
-  _bms.set_pmid_enabled(true);
+  _bms->set_pmid_enabled(true);
   return true;
 }
 
 bool PowerService::ensure_pmid_healthy() {
+  if (_bms == nullptr) {
+    return false;
+  }
+
   BmsStatus s{};
   BmsTelemetry t{};
-  if (!_bms.read_status(s) || !_bms.read_telemetry(t)) {
+  if (!_bms->read_status(s) || !_bms->read_telemetry(t)) {
     return false;
   }
   return rekick_pmid_if_collapsed(t, s.power_source);
 }
 
 void PowerService::recover_pm_sensor() {
-  if (_config.pin_pm_power < 0) {
+  if (_config.pin_pm_power < 0 || _bms == nullptr) {
     return;
   }
   AG_LOGW(TAG, "PM sensor recovery: power-cycling via boost kill");
   set_pm_power(false);
-  _bms.set_pmid_enabled(false);
+  _bms->set_pmid_enabled(false);
   RTOS::delay_ms(PM_RECOVER_OFF_MS);
-  _bms.set_pmid_enabled(true);
+  _bms->set_pmid_enabled(true);
   RTOS::delay_ms(PM_RECOVER_SETTLE_MS);
   set_pm_power(true);
 }
 
 bool PowerService::reset_watchdog() {
-  const bool ok = _bms.update_watchdog();
+  if (_bms == nullptr) {
+    return false;
+  }
+
+  const bool ok = _bms->update_watchdog();
   if (!ok) {
     AG_LOGW(TAG, "reset_watchdog: update_watchdog() failed");
   }
@@ -497,13 +527,13 @@ bool PowerService::reset_watchdog() {
 }
 
 bool PowerService::set_watchdog_timeout_ms(uint32_t timeout_ms) {
-  return _bms.set_watchdog_timeout_ms(timeout_ms);
+  return _bms != nullptr && _bms->set_watchdog_timeout_ms(timeout_ms);
 }
 
 void PowerService::shutdown() {
 #ifndef TEST_HOST
   AG_LOGI(TAG, "shutdown: entering BMS ship mode (QoN)");
-  if (!_bms.enter_ship_mode()) {
+  if (_bms == nullptr || !_bms->enter_ship_mode()) {
     AG_LOGE(TAG, "shutdown: enter_ship_mode failed — falling back to deep sleep");
   }
   // enter_ship_mode() cuts system power and should not return.

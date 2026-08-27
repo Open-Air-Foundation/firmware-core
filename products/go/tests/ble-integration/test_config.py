@@ -36,7 +36,7 @@ async def config_payload(ago_client: BleakClient) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestConfigRead:
-    """Verify reading the Config characteristic returns a valid 16-key map."""
+    """Verify reading the Config characteristic returns a valid 17-key map."""
 
     def test_read_config(self, config_payload: dict):
         """Reading Config must return valid CBOR map."""
@@ -45,7 +45,7 @@ class TestConfigRead:
         )
 
     def test_all_keys_present(self, config_payload: dict):
-        """Config read must contain exactly the 16 expected keys."""
+        """Config read must contain exactly the 17 expected keys."""
         missing = proto.CONFIG_READ_KEYS - set(config_payload.keys())
         extra = set(config_payload.keys()) - proto.CONFIG_READ_KEYS
         assert not missing, f"Missing Config keys: {missing}"
@@ -133,59 +133,63 @@ class TestConfigRead:
 class TestConfigWrite:
     """Verify writing config changes and receiving notifications."""
 
-    async def test_set_config_notification(
+    @pytest.mark.parametrize("key", ["temp_f", "alt_ft"])
+    async def test_set_presentation_config_notification(
         self,
+        key: str,
         ago_client: BleakClient,
         config_notifications: NotificationCollector,
         ago_notify_timeout: float,
     ):
         """Writing a 'set' op must trigger a Config DELTA notification.
 
-        We toggle temp_f and then restore it. The notification is a delta:
-        the 'type' discriminator plus only the single changed key.
+        We toggle one display unit and then restore it. The notification is a
+        delta: the 'type' discriminator plus only the single changed key.
         """
         # Read current config to know original value
         raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
         original = proto.decode_cbor(bytes(raw))
-        original_temp_f = original["temp_f"]
+        original_value = original[key]
+        new_value = not original_value
 
-        # Write the opposite value
-        write_data = proto.encode_config_set(temp_f=not original_temp_f)
-        await ago_client.write_gatt_char(
-            proto.CHAR_CONFIG_UUID, write_data, response=True,
-        )
+        try:
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID,
+                proto.encode_config_set(**{key: new_value}),
+                response=True,
+            )
 
-        # Wait for the config-changed notification
-        notif_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
-        payload = proto.decode_cbor(notif_data)
+            notif_data = await config_notifications.wait_for(timeout=ago_notify_timeout)
+            payload = proto.decode_cbor(notif_data)
 
-        assert payload.get("type") == proto.CONFIG_NOTIFY_TYPE, (
-            f"Expected type='config', got '{payload.get('type')}'"
-        )
+            assert payload.get("type") == proto.CONFIG_NOTIFY_TYPE, (
+                f"Expected type='config', got '{payload.get('type')}'"
+            )
+            assert set(payload.keys()) == {"type", key}, (
+                f"Config delta keys mismatch.\n"
+                f"  Expected: {{'type', '{key}'}}\n"
+                f"  Got:      {set(payload.keys())}"
+            )
+            assert payload[key] == new_value, (
+                f"{key} not updated in notification: "
+                f"expected {new_value}, got {payload[key]}"
+            )
+        finally:
+            current = proto.decode_cbor(
+                bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+            )
+            if current[key] != original_value:
+                await ago_client.write_gatt_char(
+                    proto.CHAR_CONFIG_UUID,
+                    proto.encode_config_set(**{key: original_value}),
+                    response=True,
+                )
+                await config_notifications.wait_for(timeout=ago_notify_timeout)
 
-        # Delta: only "type" + the single changed key.
-        assert set(payload.keys()) == {"type", "temp_f"}, (
-            f"Config delta keys mismatch.\n"
-            f"  Expected: {{'type', 'temp_f'}}\n"
-            f"  Got:      {set(payload.keys())}"
-        )
-
-        # The changed value should be reflected
-        assert payload["temp_f"] == (not original_temp_f), (
-            f"temp_f not updated in notification: "
-            f"expected {not original_temp_f}, got {payload['temp_f']}"
-        )
-
-        # Restore original value
-        restore_data = proto.encode_config_set(temp_f=original_temp_f)
-        await ago_client.write_gatt_char(
-            proto.CHAR_CONFIG_UUID, restore_data, response=True,
-        )
-        # Wait for the restore notification to clear the queue
-        await config_notifications.wait_for(timeout=ago_notify_timeout)
-
-    async def test_set_config_roundtrip(
+    @pytest.mark.parametrize("key", ["temp_f", "alt_ft"])
+    async def test_set_presentation_config_roundtrip(
         self,
+        key: str,
         ago_client: BleakClient,
         config_notifications: NotificationCollector,
         ago_notify_timeout: float,
@@ -194,32 +198,36 @@ class TestConfigWrite:
         # Read current config
         raw = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
         original = proto.decode_cbor(bytes(raw))
-        original_temp_f = original["temp_f"]
-        new_value = not original_temp_f
+        original_value = original[key]
+        new_value = not original_value
 
-        # Write new value
-        write_data = proto.encode_config_set(temp_f=new_value)
-        await ago_client.write_gatt_char(
-            proto.CHAR_CONFIG_UUID, write_data, response=True,
-        )
+        try:
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID,
+                proto.encode_config_set(**{key: new_value}),
+                response=True,
+            )
 
-        # Consume the notification before re-reading
-        await config_notifications.wait_for(timeout=ago_notify_timeout)
+            await config_notifications.wait_for(timeout=ago_notify_timeout)
 
-        # Re-read and verify
-        raw2 = await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID)
-        updated = proto.decode_cbor(bytes(raw2))
-        assert updated["temp_f"] == new_value, (
-            f"Config roundtrip failed: wrote temp_f={new_value}, "
-            f"read back {updated['temp_f']}"
-        )
-
-        # Restore
-        restore_data = proto.encode_config_set(temp_f=original_temp_f)
-        await ago_client.write_gatt_char(
-            proto.CHAR_CONFIG_UUID, restore_data, response=True,
-        )
-        await config_notifications.wait_for(timeout=ago_notify_timeout)
+            updated = proto.decode_cbor(
+                bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+            )
+            assert updated[key] == new_value, (
+                f"Config roundtrip failed: wrote {key}={new_value}, "
+                f"read back {updated[key]}"
+            )
+        finally:
+            current = proto.decode_cbor(
+                bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+            )
+            if current[key] != original_value:
+                await ago_client.write_gatt_char(
+                    proto.CHAR_CONFIG_UUID,
+                    proto.encode_config_set(**{key: original_value}),
+                    response=True,
+                )
+                await config_notifications.wait_for(timeout=ago_notify_timeout)
 
     @pytest.mark.parametrize("key", ["buz", "abc", "tlo", "nlo"])
     async def test_set_compact_device_field_roundtrip(

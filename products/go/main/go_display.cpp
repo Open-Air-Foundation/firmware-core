@@ -51,6 +51,7 @@ void save_rtc_display_snapshot(const DisplayValues &values) {
   s_rtc_display_snapshot.tracking_active = values.tracking_active;
   s_rtc_display_snapshot.ble_enabled = values.ble_enabled;
   s_rtc_display_snapshot.use_fahrenheit = values.use_fahrenheit;
+  s_rtc_display_snapshot.use_feet = values.use_feet;
   s_rtc_display_snapshot.pm_use_usaqi = values.pm_use_usaqi;
   s_rtc_display_snapshot_valid = true;
 }
@@ -664,10 +665,10 @@ bool is_list_screen(Screen screen) {
          screen == Screen::GpsTest || screen == Screen::AccelTest;
 }
 
-// Any of the three reason-specific shutdown screens.
+// Any reason-specific shutdown screen.
 bool is_shutdown_screen(Screen screen) {
   return screen == Screen::ShutdownUser || screen == Screen::ShutdownDischarge ||
-         screen == Screen::ShutdownTemperature;
+         screen == Screen::ShutdownTemperature || screen == Screen::ShutdownTemperatureLow;
 }
 
 // A "navigable" screen is one the user reaches through normal menu interaction.
@@ -687,7 +688,7 @@ bool is_float_non_negative(float value) { return value >= 0.0f; }
 
 bool is_temperature_valid(float celsius) { return celsius > MeasuresInvalid::TEMPERATURE; }
 
-bool is_altitude_valid(float altitude_m) { return altitude_m > -10000.0f; }
+bool is_altitude_valid(float altitude_m) { return altitude_m > MeasuresInvalid::ALTITUDE; }
 
 float temp_for_display(float celsius, bool use_fahrenheit) {
   if (!is_temperature_valid(celsius))
@@ -819,16 +820,28 @@ void format_pressure_value(char *out, size_t out_size, float pressure_hpa) {
   snprintf(out, out_size, "%.0f hPa", pressure_hpa);
 }
 
-void format_altitude_value(char *out, size_t out_size, float altitude_m) {
+void format_altitude_value(char *out, size_t out_size, float altitude_m, bool use_feet) {
+  constexpr float METERS_TO_FEET = 3.28084f;
+  constexpr float MAX_DISPLAY_ALTITUDE_METERS = 9999.0f;
+
   if (!is_altitude_valid(altitude_m)) {
     snprintf(out, out_size, "-");
     return;
   }
-  if (altitude_m > 9999.0f) {
+
+  if (use_feet) {
+    const long altitude_ft = lroundf(altitude_m * METERS_TO_FEET);
+    snprintf(out, out_size, "%ld ft", altitude_ft);
+    return;
+  }
+
+  if (altitude_m > MAX_DISPLAY_ALTITUDE_METERS) {
     snprintf(out, out_size, "9999+ m");
     return;
   }
-  snprintf(out, out_size, "%.0f m", altitude_m);
+
+  const long rounded_altitude_m = lroundf(altitude_m);
+  snprintf(out, out_size, "%ld m", rounded_altitude_m);
 }
 
 void format_chart_stat(char *out, size_t out_size, Metric metric, float value, bool use_fahrenheit,
@@ -961,17 +974,15 @@ void draw_shutdown_battery_low_icon(u8g2_t *u, int center_x, int center_y) {
   u8g2_DrawBox(u, center_x - 1, center_y + 7, 3, 3);
 }
 
-void draw_shutdown_battery_hot_icon(u8g2_t *u, int center_x, int center_y) {
+void draw_shutdown_battery_temperature_icon(u8g2_t *u, int center_x, int center_y) {
   constexpr int BULB_R = 8;
   constexpr int TUBE_H = 34;
   constexpr int TUBE_W = 8;
-  constexpr int ICON_W = 56;
   constexpr int ICON_H = 54;
   constexpr int STROKE_W = 2;
 
-  const int icon_x = center_x - ICON_W / 2;
   const int icon_y = center_y - ICON_H / 2;
-  const int tube_x = icon_x + 10;
+  const int tube_x = center_x - TUBE_W / 2;
   const int tube_top_y = icon_y + 3;
   const int bulb_y = tube_top_y + TUBE_H;
 
@@ -980,11 +991,34 @@ void draw_shutdown_battery_hot_icon(u8g2_t *u, int center_x, int center_y) {
   u8g2_DrawBox(u, tube_x + TUBE_W - STROKE_W, tube_top_y, STROKE_W, TUBE_H);
   u8g2_DrawFilledEllipse(u, tube_x + TUBE_W / 2, bulb_y, BULB_R, BULB_R, U8G2_DRAW_ALL);
   u8g2_DrawBox(u, tube_x + 2, tube_top_y + 17, 4, 17);
+}
 
+void draw_shutdown_battery_hot_icon(u8g2_t *u, int center_x, int center_y) {
+  constexpr int ICON_W = 56;
+  constexpr int ICON_H = 54;
+  const int icon_x = center_x - ICON_W / 2;
+  const int icon_y = center_y - ICON_H / 2;
+
+  draw_shutdown_battery_temperature_icon(u, icon_x + 14, center_y);
   draw_shutdown_line_2px(u, icon_x + 41, icon_y + 5, icon_x + 33, icon_y + 15);
   draw_shutdown_line_2px(u, icon_x + 33, icon_y + 15, icon_x + 43, icon_y + 24);
   draw_shutdown_line_2px(u, icon_x + 47, icon_y + 5, icon_x + 39, icon_y + 15);
   draw_shutdown_line_2px(u, icon_x + 39, icon_y + 15, icon_x + 49, icon_y + 24);
+}
+
+void draw_shutdown_battery_cold_icon(u8g2_t *u, int center_x, int center_y) {
+  constexpr int ICON_W = 56;
+  constexpr int ICON_H = 54;
+  const int icon_x = center_x - ICON_W / 2;
+  const int icon_y = center_y - ICON_H / 2;
+  const int snowflake_x = icon_x + 41;
+  const int snowflake_y = icon_y + 16;
+
+  draw_shutdown_battery_temperature_icon(u, icon_x + 14, center_y);
+  draw_shutdown_line_2px(u, snowflake_x - 10, snowflake_y, snowflake_x + 10, snowflake_y);
+  draw_shutdown_line_2px(u, snowflake_x, snowflake_y - 10, snowflake_x, snowflake_y + 10);
+  draw_shutdown_line_2px(u, snowflake_x - 7, snowflake_y - 7, snowflake_x + 7, snowflake_y + 7);
+  draw_shutdown_line_2px(u, snowflake_x + 7, snowflake_y - 7, snowflake_x - 7, snowflake_y + 7);
 }
 
 // When title_l2 is empty, lift action/detail by the L1->L2 line-height
@@ -1415,6 +1449,7 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::ShutdownUser:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
+  case Screen::ShutdownTemperatureLow:
   case Screen::PairingPasskey:
   case Screen::Info:
   case Screen::Provisioning:
@@ -1687,7 +1722,7 @@ void DisplayService::_draw_home(const DisplayValues &v) {
     char pressure_buf[24];
     char altitude_buf[24];
     format_pressure_value(pressure_buf, sizeof(pressure_buf), v.pressure_hpa);
-    format_altitude_value(altitude_buf, sizeof(altitude_buf), v.altitude_m);
+    format_altitude_value(altitude_buf, sizeof(altitude_buf), v.altitude_m, v.use_feet);
     draw_cell(&_u8g2, 4, "Pressure", pressure_buf, false);
     draw_cell(&_u8g2, 5, "Altitude", altitude_buf, false);
   }
@@ -1752,7 +1787,11 @@ void DisplayService::_draw_shutdown(Screen s) {
     break;
   case Screen::ShutdownTemperature:
     draw_shutdown_battery_hot_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y);
-    draw_shutdown_text(&_u8g2, "Battery", "overheated", "Let device cool", "Keep out of sun");
+    draw_shutdown_text(&_u8g2, "Battery", "Overheated", "Move device to a", "cooler location");
+    break;
+  case Screen::ShutdownTemperatureLow:
+    draw_shutdown_battery_cold_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y);
+    draw_shutdown_text(&_u8g2, "Battery", "Too Cold", "Move device to a", "warmer location");
     break;
   case Screen::ShutdownUser:
   default:

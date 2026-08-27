@@ -11,7 +11,6 @@
 
 #include <cmath>
 #include <cstring>
-#include <limits>
 
 #include "go_events.h"
 #include "measurement_corrections.h"
@@ -23,6 +22,8 @@ constexpr const char *PM_STANDARD_MASS = "ugm3";
 constexpr const char *PM_STANDARD_US_AQI = "us-aqi";
 constexpr const char *TEMPERATURE_UNIT_CELSIUS = "c";
 constexpr const char *TEMPERATURE_UNIT_FAHRENHEIT = "f";
+constexpr const char *ALTITUDE_UNIT_METERS = "m";
+constexpr const char *ALTITUDE_UNIT_FEET = "ft";
 constexpr const char *CONFIG_CONTROL_CLOUD = "cloud";
 constexpr const char *CONFIG_CONTROL_LOCAL = "local";
 constexpr const char *CONFIG_CONTROL_BOTH = "both";
@@ -49,15 +50,13 @@ void copy_string(char *destination, size_t destination_size, const char *source)
 
 bool finite_float(float value) { return std::isfinite(value); }
 
-bool to_finite_float(const std::optional<double> &source, float &destination) {
-  if (!source.has_value() || !std::isfinite(*source) ||
-      *source > static_cast<double>(std::numeric_limits<float>::max()) ||
-      *source < -static_cast<double>(std::numeric_limits<float>::max())) {
+bool take_finite_float(const std::optional<float> &source, float &destination) {
+  if (!source.has_value() || !std::isfinite(*source)) {
     return false;
   }
 
-  destination = static_cast<float>(*source);
-  return std::isfinite(destination);
+  destination = *source;
+  return true;
 }
 
 CorrectionEntry make_pm25_correction(const Pm25Correction &correction) {
@@ -385,6 +384,7 @@ GoLocalApiService::make_active_config(const GoSettings &settings) {
   ActiveConfigSnapshot active{};
   active.pm_use_usaqi = settings.pm_use_usaqi;
   active.use_fahrenheit = settings.use_fahrenheit;
+  active.use_feet = settings.use_feet;
   active.disable_cloud = settings.disable_cloud;
   active.configuration_control = settings.configuration_control;
   active.measure_interval_seconds = settings.measure_interval_seconds;
@@ -405,6 +405,7 @@ LocalServerConfig GoLocalApiService::map_config(const ActiveConfigSnapshot &acti
   config.pm_standard = active.pm_use_usaqi ? PM_STANDARD_US_AQI : PM_STANDARD_MASS;
   config.temperature_unit =
       active.use_fahrenheit ? TEMPERATURE_UNIT_FAHRENHEIT : TEMPERATURE_UNIT_CELSIUS;
+  config.altitude_unit = active.use_feet ? ALTITUDE_UNIT_FEET : ALTITUDE_UNIT_METERS;
   config.cloud_connection = !active.disable_cloud;
   config.measurement_interval_seconds = active.measure_interval_seconds;
   config.front_led_brightness = static_cast<int>(active.front_led_brightness);
@@ -482,8 +483,8 @@ bool GoLocalApiService::is_exact_control_recovery(const LocalServerConfig &parti
   }
 
   return !partial.country.has_value() && !partial.pm_standard.has_value() &&
-         !partial.temperature_unit.has_value() && !partial.post_data_to_cloud.has_value() &&
-         !partial.cloud_connection.has_value() &&
+         !partial.temperature_unit.has_value() && !partial.altitude_unit.has_value() &&
+         !partial.post_data_to_cloud.has_value() && !partial.cloud_connection.has_value() &&
          !partial.measurement_interval_seconds.has_value() && !partial.gps_mode.has_value() &&
          !partial.front_led_brightness.has_value() && !partial.back_led_brightness.has_value() &&
          !partial.touch_led_intensity.has_value() && !partial.buzzer_enabled.has_value() &&
@@ -519,6 +520,17 @@ ConfigSubmitResult GoLocalApiService::translate_config(const LocalServerConfig &
       return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::TemperatureUnit};
     }
     update.update_mask |= static_cast<uint32_t>(GoConfigField::TemperatureUnit);
+  }
+
+  if (partial.altitude_unit.has_value()) {
+    if (*partial.altitude_unit == ALTITUDE_UNIT_METERS) {
+      update.use_feet = false;
+    } else if (*partial.altitude_unit == ALTITUDE_UNIT_FEET) {
+      update.use_feet = true;
+    } else {
+      return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::AltitudeUnit};
+    }
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::AltitudeUnit);
   }
 
   if (partial.measurement_interval_seconds.has_value()) {
@@ -694,8 +706,8 @@ bool GoLocalApiService::translate_pm25_correction(const CorrectionEntry &entry,
 
   Pm25Correction parsed{};
   parsed.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
-  if (!to_finite_float(entry.slr->intercept, parsed.intercept) ||
-      !to_finite_float(entry.slr->scaling_factor, parsed.scaling_factor)) {
+  if (!take_finite_float(entry.slr->intercept, parsed.intercept) ||
+      !take_finite_float(entry.slr->scaling_factor, parsed.scaling_factor)) {
     return false;
   }
   correction = parsed;
@@ -719,8 +731,8 @@ bool GoLocalApiService::translate_linear_correction(const CorrectionEntry &entry
 
   LinearCorrection parsed{};
   parsed.algorithm = LinearCorrectionAlgorithm::Custom;
-  if (!to_finite_float(entry.slr->intercept, parsed.intercept) ||
-      !to_finite_float(entry.slr->scaling_factor, parsed.scaling_factor)) {
+  if (!take_finite_float(entry.slr->intercept, parsed.intercept) ||
+      !take_finite_float(entry.slr->scaling_factor, parsed.scaling_factor)) {
     return false;
   }
   correction = parsed;

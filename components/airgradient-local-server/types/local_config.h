@@ -16,9 +16,9 @@
 // semantically. GET serialization requires both coefficients for every
 // non-null SLR. `use_epa2021` is valid only for pm25.
 struct SlrParams {
-  std::optional<double> intercept;      // "intercept"
-  std::optional<double> scaling_factor; // "scalingFactor"
-  std::optional<bool> use_epa2021;      // "useEpa2021" (pm25 only)
+  std::optional<float> intercept;      // "intercept"
+  std::optional<float> scaling_factor; // "scalingFactor"
+  std::optional<bool> use_epa2021;     // "useEpa2021" (pm25 only)
 };
 
 struct CorrectionEntry {
@@ -48,6 +48,7 @@ struct LocalServerConfig {
   std::optional<std::string> country;               // "country"
   std::optional<std::string> pm_standard;           // "pmStandard"
   std::optional<std::string> temperature_unit;      // "temperatureUnit"
+  std::optional<std::string> altitude_unit;         // "altitudeUnit"
   std::optional<bool> post_data_to_cloud;           // "postDataToCloud"
   std::optional<bool> cloud_connection;             // "cloudConnection"
   std::optional<std::string> configuration_control; // "configurationControl"

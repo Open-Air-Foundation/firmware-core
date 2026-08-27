@@ -1,6 +1,7 @@
 #ifndef SERIAL_COMMAND_H
 #define SERIAL_COMMAND_H
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -75,6 +76,9 @@ public:
   /// Initialize the transport and start the command task. Idempotent after success.
   bool start();
 
+  /// Stop receiving commands without tearing down the USB transport.
+  void stop_receiving();
+
   /// Deliver the completed result for the single accepted command.
   void complete(const SerialCommandResult &result);
 
@@ -102,6 +106,7 @@ private:
   bool _discarding_line = false;
   bool _awaiting_result = false;
   bool _started = false;
+  std::atomic<bool> _receiving{false};
 };
 
 class UsbSerialCommandChannel final : public SerialCommandChannel {

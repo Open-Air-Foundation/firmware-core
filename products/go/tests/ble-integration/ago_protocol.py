@@ -117,7 +117,7 @@ CHARGING_STATES = {"none", "trickle", "pre", "fast", "taper", "topoff", "done", 
 
 CONFIG_READ_KEYS = {
     "meas_int",
-    "temp_f", "pm_aqi",
+    "temp_f", "alt_ft", "pm_aqi",
     "gps_mode",
     "auto_lock",
     "op_mode",
@@ -141,6 +141,7 @@ LEARNING_OFFSET_HOURS_MAX = 1000
 CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "meas_int": (int,),
     "temp_f": (bool,),
+    "alt_ft": (bool,),
     "pm_aqi": (bool,),
     "gps_mode": (str,),
     "auto_lock": (int,),

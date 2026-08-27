@@ -44,6 +44,13 @@ public:
   IMPLEMENT_MOCK4(set_rgb);
 };
 
+class LedServiceTestAccess {
+public:
+  static uint32_t next_wait_timeout_ms(const LedService &service, uint32_t now_ms) {
+    return service._next_wait_timeout_ms(now_ms);
+  }
+};
+
 // ============================================================================
 // Test helper: create a configured & started LedService
 // ============================================================================
@@ -197,6 +204,48 @@ TEST_CASE("LedService: back solid", "[LedService][back][solid]") {
   }
 }
 
+TEST_CASE("LedService: uniform back output cache", "[LedService][back]") {
+  TestFixture f;
+  f.build();
+
+  SECTION("Off preserves latest AQI without repeated zero writes") {
+    f.svc->back_update_aqi(9.0f);
+    REQUIRE_CALL(f.driver, set_rgb(6, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(12, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(15, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(18, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(24, 0, 0, 0)).RETURN(true);
+    f.svc->pump_for_test(0);
+
+    // Update logical AQI while the physical output remains off.
+    f.svc->back_update_aqi(35.4f);
+    f.svc->pump_for_test(10);
+
+    // Enabling brightness renders the latest cached category (Moderate).
+    f.svc->back_set_brightness(LedBrightness::Bright);
+    REQUIRE_CALL(f.driver, set_rgb(6, 255, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(12, 255, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(15, 255, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(18, 255, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(24, 255, 255, 0)).RETURN(true);
+    f.svc->pump_for_test(20);
+  }
+
+  SECTION("repeated AQI category skips unchanged physical output") {
+    f.svc->back_set_brightness(LedBrightness::Bright);
+    f.svc->back_update_aqi(9.0f);
+    REQUIRE_CALL(f.driver, set_rgb(6, 0, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(12, 0, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(15, 0, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(18, 0, 255, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(24, 0, 255, 0)).RETURN(true);
+    f.svc->pump_for_test(0);
+
+    f.svc->back_update_aqi(8.0f);
+    f.svc->pump_for_test(10);
+  }
+}
+
 // ============================================================================
 // Back -- Blink
 // ============================================================================
@@ -314,12 +363,7 @@ TEST_CASE("LedService: back fade", "[LedService][back][fade]") {
 
     f.svc->back_fade_to({0, 255, 0}, 500);
 
-    // t=0: fade starts from red (captured from solid)
-    REQUIRE_CALL(f.driver, set_rgb(6, 255, 0, 0)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_rgb(12, 255, 0, 0)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_rgb(15, 255, 0, 0)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_rgb(18, 255, 0, 0)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_rgb(24, 255, 0, 0)).RETURN(true);
+    // t=0: fade starts from the already-rendered red, so no writes are needed.
     f.svc->pump_for_test(100); // cmd processed at t=100, started_at=100
 
     // t=350: halfway (elapsed=250 of 500)
@@ -714,9 +758,76 @@ TEST_CASE("LedService: back AQI", "[LedService][back][aqi]") {
 // Touch flash
 // ============================================================================
 
+TEST_CASE("LedService: touch flash wait timeout", "[LedService][touch]") {
+  TestFixture f;
+  f.build();
+
+  f.svc->touch_set_intensity(TouchLedIntensity::Bright);
+  ALLOW_CALL(f.driver, set_rgb(trompeloeil::_, trompeloeil::_, trompeloeil::_, trompeloeil::_))
+      .RETURN(true);
+
+  SECTION("overdue flash requests an immediate worker wake") {
+    constexpr uint32_t START_MS = 1000;
+    f.svc->touch_flash(TouchPad::Select);
+    f.svc->pump_for_test(START_MS);
+
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, START_MS) == 120);
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, START_MS + 119) == 1);
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, START_MS + 120) == 0);
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, START_MS + 500) == 0);
+  }
+
+  SECTION("flash expiry remains correct across uint32 wrap") {
+    constexpr uint32_t START_MS = std::numeric_limits<uint32_t>::max() - 59;
+    f.svc->touch_flash(TouchPad::Right);
+    f.svc->pump_for_test(START_MS);
+
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, 40) == 20);
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, 60) == 0);
+
+    REQUIRE_CALL(f.driver, set_rgb(27, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(3, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);
+    f.svc->pump_for_test(60);
+
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, 60) ==
+          std::numeric_limits<uint32_t>::max());
+  }
+}
+
 TEST_CASE("LedService: touch flash", "[LedService][touch]") {
   TestFixture f;
   f.build();
+
+  SECTION("flash while Off performs no driver writes or timeout wake") {
+    f.svc->touch_flash(TouchPad::Select);
+    f.svc->pump_for_test(0);
+
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, 0) ==
+          std::numeric_limits<uint32_t>::max());
+  }
+
+  SECTION("flash Select at Bright: LED10 white, then off after flash_ms") {
+    f.svc->touch_set_intensity(TouchLedIntensity::Bright);
+
+    ALLOW_CALL(f.driver, set_rgb(trompeloeil::_, trompeloeil::_, trompeloeil::_, trompeloeil::_))
+        .RETURN(true);
+    f.svc->pump_for_test(0);
+
+    f.svc->touch_flash(TouchPad::Select);
+
+    // Flash on: LED10 (OUT27) gets white at 255
+    REQUIRE_CALL(f.driver, set_rgb(27, 255, 255, 255)).RETURN(true); // Select on
+    REQUIRE_CALL(f.driver, set_rgb(3, 0, 0, 0)).RETURN(true);        // Left off
+    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);        // Right off
+    f.svc->pump_for_test(10);
+
+    // After flash_ms: off
+    REQUIRE_CALL(f.driver, set_rgb(27, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(3, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);
+    f.svc->pump_for_test(10 + 120); // 10 + touch_flash_ms
+  }
 
   SECTION("flash Left at Bright: LED2 white, then off after flash_ms") {
     f.svc->touch_set_intensity(TouchLedIntensity::Bright);
@@ -728,15 +839,15 @@ TEST_CASE("LedService: touch flash", "[LedService][touch]") {
     f.svc->touch_flash(TouchPad::Left);
 
     // Flash on: LED2 (OUT3) gets white at 255
-    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);       // Select off
+    REQUIRE_CALL(f.driver, set_rgb(27, 0, 0, 0)).RETURN(true);      // Select off
     REQUIRE_CALL(f.driver, set_rgb(3, 255, 255, 255)).RETURN(true); // Left on
-    REQUIRE_CALL(f.driver, set_rgb(27, 0, 0, 0)).RETURN(true);      // Right off
+    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);       // Right off
     f.svc->pump_for_test(10);
 
     // After flash_ms: off
-    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_rgb(3, 0, 0, 0)).RETURN(true);
     REQUIRE_CALL(f.driver, set_rgb(27, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(3, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);
     f.svc->pump_for_test(10 + 120); // 10 + touch_flash_ms
   }
 
@@ -752,9 +863,9 @@ TEST_CASE("LedService: touch flash", "[LedService][touch]") {
     f.svc->touch_flash(TouchPad::Right);
 
     // Right should be on now, Left off
-    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);        // Select off
-    REQUIRE_CALL(f.driver, set_rgb(3, 0, 0, 0)).RETURN(true);        // Left off
-    REQUIRE_CALL(f.driver, set_rgb(27, 255, 255, 255)).RETURN(true); // Right on
+    REQUIRE_CALL(f.driver, set_rgb(27, 0, 0, 0)).RETURN(true);      // Select off
+    REQUIRE_CALL(f.driver, set_rgb(3, 0, 0, 0)).RETURN(true);       // Left off
+    REQUIRE_CALL(f.driver, set_rgb(0, 255, 255, 255)).RETURN(true); // Right on
     f.svc->pump_for_test(50);
   }
 
@@ -769,9 +880,9 @@ TEST_CASE("LedService: touch flash", "[LedService][touch]") {
 
     f.svc->touch_set_intensity(TouchLedIntensity::Off);
 
-    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_rgb(3, 0, 0, 0)).RETURN(true);
     REQUIRE_CALL(f.driver, set_rgb(27, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(3, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);
     f.svc->pump_for_test(20);
   }
 }
@@ -793,23 +904,23 @@ TEST_CASE("LedService: touch_set_all steady on/off", "[LedService][touch]") {
     f.svc->touch_set_all(true);
 
     // All three pads white at 255, held with no auto-off.
-    REQUIRE_CALL(f.driver, set_rgb(0, 255, 255, 255)).RETURN(true);  // Select
+    REQUIRE_CALL(f.driver, set_rgb(27, 255, 255, 255)).RETURN(true); // Select
     REQUIRE_CALL(f.driver, set_rgb(3, 255, 255, 255)).RETURN(true);  // Left
-    REQUIRE_CALL(f.driver, set_rgb(27, 255, 255, 255)).RETURN(true); // Right
+    REQUIRE_CALL(f.driver, set_rgb(0, 255, 255, 255)).RETURN(true);  // Right
     f.svc->pump_for_test(10);
 
     // Still lit far past the flash window (steady, not a flash).
-    REQUIRE_CALL(f.driver, set_rgb(0, 255, 255, 255)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_rgb(3, 255, 255, 255)).RETURN(true);
     REQUIRE_CALL(f.driver, set_rgb(27, 255, 255, 255)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(3, 255, 255, 255)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(0, 255, 255, 255)).RETURN(true);
     f.svc->touch_set_all(true); // re-issue to force a fresh render
     f.svc->pump_for_test(10 + 500);
 
     // Clear: all three off.
     f.svc->touch_set_all(false);
-    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_rgb(3, 0, 0, 0)).RETURN(true);
     REQUIRE_CALL(f.driver, set_rgb(27, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(3, 0, 0, 0)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(0, 0, 0, 0)).RETURN(true);
     f.svc->pump_for_test(10 + 600);
   }
 }

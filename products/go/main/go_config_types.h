@@ -35,6 +35,7 @@ enum class GoConfigField : uint32_t {
   TvocLearningOffset = 1U << 8,
   NoxLearningOffset = 1U << 9,
   MeasurementInterval = 1U << 10,
+  AltitudeUnit = 1U << 11,
   GpsMode = 1U << 12,
   FrontLedBrightness = 1U << 13,
   BackLedBrightness = 1U << 14,
@@ -90,6 +91,7 @@ struct GoConfigUpdate {
   uint32_t update_mask = 0;
   bool pm_use_usaqi = false;
   bool use_fahrenheit = false;
+  bool use_feet = false;
   bool disable_cloud = false;
   ConfigurationControl configuration_control = ConfigurationControl::Both;
   int measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;

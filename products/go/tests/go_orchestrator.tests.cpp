@@ -354,13 +354,14 @@ public:
   void init_nvs() override {}
   void init_buses() override {}
   void init_spi() override {}
-  void init_bms() override {}
+  void init_fuel_gauge() override {}
+  bool init_bms() override { return true; }
   void init_wifi_subsystem() override { ++init_wifi_subsystem_calls; }
   void init_core() override {}
 
   ConfigStore &config_store() override { return *reinterpret_cast<ConfigStore *>(_buf); }
   GoSettings load_settings() override { return {}; }
-  BmsDevice &bms() override { return *reinterpret_cast<BmsDevice *>(_buf); }
+  BmsDevice *bms() override { return reinterpret_cast<BmsDevice *>(_buf); }
   SensorManager &sensors(bool) override { return *reinterpret_cast<SensorManager *>(_buf); }
   StorageService &storage() override { return *reinterpret_cast<StorageService *>(_buf); }
   DisplayService &display() override { return *reinterpret_cast<DisplayService *>(_buf); }
@@ -388,6 +389,7 @@ public:
   void release_gpio_holds() override {}
   void ulp_stop() override {}
   void ulp_start() override {}
+  void restart() override {}
   void install_button_isr(int, volatile bool *) override {}
   void remove_button_isr(int) override {}
 
@@ -445,6 +447,13 @@ static const gpio::Hal test_gpio_hal = {
 // ============================================================================
 // OrchestratorTestAccess — friend class for private member access
 // ============================================================================
+
+class SerialCommandServiceTestAccess {
+public:
+  static bool is_receiving(const SerialCommandService &service) {
+    return service._receiving.load();
+  }
+};
 
 class OrchestratorTestAccess {
 public:
@@ -640,7 +649,7 @@ struct TestFixture {
         gps_service(stub_gps, nullptr, GpsService::Config{}),
         input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config{}),
         display_service(DisplayService::Config{}), storage_service(payload_cache, stub_nand),
-        power_service(stub_bms, test_gpio_hal, PowerService::Config{}),
+        power_service(&stub_bms, test_gpio_hal, PowerService::Config{}),
         ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service, stub_ble_server),
         wifi_service(nullptr,
                      {*reinterpret_cast<WifiManager *>(_stub_buf),
@@ -771,6 +780,33 @@ TEST_CASE("init(PowerOn): default state with first measurement and BMS poll",
 
   // Verify initial BMS poll
   REQUIRE(test_spy::bms_polled);
+}
+
+TEST_CASE("init: temperature trip shuts down before interactive operation",
+          "[Orchestrator][init][temperature]") {
+  SECTION("over-temperature uses the overheated page") {
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverTemperature;
+
+    orch.init(WakeCause::PowerOn);
+
+    CHECK(test_spy::shutdown_called);
+    CHECK(f.ui_manager.current_screen() == Screen::ShutdownTemperature);
+    CHECK_FALSE(test_spy::ble_init_called);
+  }
+
+  SECTION("under-temperature uses the low-temperature page") {
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::UnderTemperature;
+
+    orch.init(WakeCause::PowerOn);
+
+    CHECK(test_spy::shutdown_called);
+    CHECK(f.ui_manager.current_screen() == Screen::ShutdownTemperatureLow);
+    CHECK_FALSE(test_spy::ble_init_called);
+  }
 }
 
 TEST_CASE("init(PowerOn): cold-boot splash flag set when UIManager is on Screen::Info",
@@ -1465,6 +1501,8 @@ TEST_CASE("factory_reset: settings commit failure retains configuration control"
 TEST_CASE("mark_onboarding_done persists once and is idempotent", "[Orchestrator][onboarding]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  REQUIRE(f.serial_command.start());
+  REQUIRE(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -1476,6 +1514,7 @@ TEST_CASE("mark_onboarding_done persists once and is idempotent", "[Orchestrator
   CHECK_FALSE(A::settings(orch).onboarding_done);
   A::mark_onboarding_done(orch);
   CHECK(A::settings(orch).onboarding_done);
+  CHECK_FALSE(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
   A::mark_onboarding_done(orch); // idempotent — no second commit
   CHECK(A::settings(orch).onboarding_done);
 }
@@ -1484,6 +1523,8 @@ TEST_CASE("mark_onboarding_done keeps onboarding retryable when persistence fail
           "[Orchestrator][onboarding][failure]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  REQUIRE(f.serial_command.start());
+  REQUIRE(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -1495,12 +1536,33 @@ TEST_CASE("mark_onboarding_done keeps onboarding retryable when persistence fail
     CHECK_FALSE(A::mark_onboarding_done(orch));
   }
   CHECK_FALSE(A::settings(orch).onboarding_done);
+  CHECK(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
 
   {
     REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
     CHECK(A::mark_onboarding_done(orch));
   }
   CHECK(A::settings(orch).onboarding_done);
+  CHECK_FALSE(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
+}
+
+TEST_CASE("onboarding completion keeps serial receiving in manufacturing mode",
+          "[Orchestrator][onboarding][manufacturing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  REQUIRE(f.serial_command.start());
+  A::set_manufacturing_mode(orch, true);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  REQUIRE(A::mark_onboarding_done(orch));
+
+  CHECK(A::settings(orch).onboarding_done);
+  CHECK(SerialCommandServiceTestAccess::is_receiving(f.serial_command));
 }
 
 TEST_CASE("BLE auth complete marks onboarding done", "[Orchestrator][onboarding][ble]") {
@@ -1728,6 +1790,79 @@ TEST_CASE("factory_reset clears onboarding_done", "[Orchestrator][onboarding][fa
 
   REQUIRE(A::factory_reset(orch));
   CHECK_FALSE(A::settings(orch).onboarding_done);
+}
+
+TEST_CASE("serial factory reset before onboarding preserves corrections without manufacturing mode",
+          "[Orchestrator][onboarding][serial_command][factory_reset]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  REQUIRE_FALSE(A::settings(orch).onboarding_done);
+  REQUIRE_FALSE(A::manufacturing_mode(orch));
+
+  A::settings(orch).auto_lock_seconds = 60;
+  A::settings(orch).corrections.pm25 = {
+      Pm25CorrectionAlgorithm::CustomViaPm25Raw,
+      1.2f,
+      0.4f,
+      true,
+  };
+  A::settings(orch).corrections.temperature = {
+      LinearCorrectionAlgorithm::Custom,
+      1.1f,
+      -0.3f,
+  };
+  A::settings(orch).corrections.humidity = {
+      LinearCorrectionAlgorithm::Custom,
+      0.9f,
+      2.0f,
+  };
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event event{};
+  event.type = EventType::SerialCommandRequest;
+  event.serial_command_request.kind = SerialCommandKind::FactoryReset;
+  A::dispatch(orch, event);
+
+  CHECK(test_spy::routes_cleared);
+  CHECK(test_spy::wifi_clear_credentials_called);
+  CHECK(test_spy::ble_delete_all_bonds_called);
+  CHECK(A::settings(orch).auto_lock_seconds == 10);
+  CHECK(A::settings(orch).corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  CHECK(A::settings(orch).corrections.pm25.scaling_factor == 1.2f);
+  CHECK(A::settings(orch).corrections.pm25.intercept == 0.4f);
+  CHECK(A::settings(orch).corrections.pm25.use_epa2021);
+  CHECK(A::settings(orch).corrections.temperature.algorithm == LinearCorrectionAlgorithm::Custom);
+  CHECK(A::settings(orch).corrections.temperature.scaling_factor == 1.1f);
+  CHECK(A::settings(orch).corrections.temperature.intercept == -0.3f);
+  CHECK(A::settings(orch).corrections.humidity.algorithm == LinearCorrectionAlgorithm::Custom);
+  CHECK(A::settings(orch).corrections.humidity.scaling_factor == 0.9f);
+  CHECK(A::settings(orch).corrections.humidity.intercept == 2.0f);
+  CHECK_FALSE(A::manufacturing_mode(orch));
+}
+
+TEST_CASE("serial commands after onboarding are rejected outside manufacturing mode",
+          "[Orchestrator][onboarding][serial_command]") {
+  TestFixture f;
+  f.settings.onboarding_done = true;
+  auto orch = f.make_orchestrator();
+
+  FORBID_CALL(f.mock_config, commit());
+
+  Event event{};
+  event.type = EventType::SerialCommandRequest;
+  event.serial_command_request.kind = SerialCommandKind::FactoryReset;
+  A::dispatch(orch, event);
+
+  CHECK_FALSE(test_spy::routes_cleared);
+  CHECK_FALSE(test_spy::wifi_clear_credentials_called);
+  CHECK_FALSE(test_spy::ble_delete_all_bonds_called);
 }
 
 TEST_CASE("BLE FactoryReset command sends progress then reports error and skips shutdown",
@@ -2421,6 +2556,26 @@ TEST_CASE("apply_settings_change: leaves GPS service cadence alone", "[Orchestra
   REQUIRE(test_spy::gps_posting_interval_ms == 0);
 }
 
+TEST_CASE("apply_settings_change: persists altitude unit", "[Orchestrator][settings]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  GoSettings updated = f.settings;
+  updated.use_feet = true;
+  f.ui_manager.sync_settings(updated);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::apply_settings_change(orch);
+
+  CHECK(A::settings(orch).use_feet);
+  CHECK(A::build_context(orch).use_feet);
+}
+
 TEST_CASE("apply_settings_change: reschedules timer when interval changes",
           "[Orchestrator][settings]") {
   TestFixture f;
@@ -2529,6 +2684,36 @@ TEST_CASE("BLE config set: reschedules timer when interval changes",
 
   CHECK(A::settings(orch).measure_interval_seconds == 30);
   CHECK(A::last_measurement_ms(orch) == 9000);
+}
+
+TEST_CASE("BLE config set: applies altitude display unit", "[Orchestrator][settings][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_connected = true;
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.use_feet = true;
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+
+  CHECK(A::settings(orch).use_feet);
+  CHECK(A::build_context(orch).use_feet);
+  CHECK(test_spy::ble_notify_config_called);
+
+  GoSettings ui_settings{};
+  f.ui_manager.apply_to_settings(ui_settings);
+  CHECK(ui_settings.use_feet);
 }
 
 TEST_CASE("BLE config set: commit failure retains settings and reports save failure",
@@ -2759,6 +2944,7 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   TestFixture f;
   f.settings.gps_mode = GpsMode::AlwaysOn;
   f.settings.use_fahrenheit = true;
+  f.settings.use_feet = true;
   f.settings.pm_use_usaqi = true;
   auto orch = f.make_orchestrator();
 
@@ -2775,6 +2961,7 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   REQUIRE(ctx.locked == true); // still locked by default
   REQUIRE(ctx.gps_enabled == true);
   REQUIRE(ctx.use_fahrenheit == true);
+  REQUIRE(ctx.use_feet == true);
   REQUIRE(ctx.pm_use_usaqi == true);
 }
 
@@ -2850,6 +3037,11 @@ TEST_CASE("shutdown: pushes a disc notice to a connected client", "[Orchestrator
 
   SECTION("over-temperature maps to overheat") {
     A::shutdown(orch, ShipModeRequest::OverTemperature);
+    CHECK(test_spy::ble_notify_disconnect_called);
+    CHECK(test_spy::ble_last_disc_reason == BleDiscReason::Overheat);
+  }
+  SECTION("under-temperature maps to overheat for protocol compatibility") {
+    A::shutdown(orch, ShipModeRequest::UnderTemperature);
     CHECK(test_spy::ble_notify_disconnect_called);
     CHECK(test_spy::ble_last_disc_reason == BleDiscReason::Overheat);
   }
@@ -3662,8 +3854,8 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
 
-  // Navigate to CO2: Calibrate (index 14) — 13 down presses from Back (1)
-  for (int i = 0; i < 13; ++i)
+  // Navigate to CO2: Calibrate (index 15) — 14 down presses from Back (1)
+  for (int i = 0; i < 14; ++i)
     A::on_input(orch, touch_down);
 
   A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
@@ -3698,8 +3890,8 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
 
-  // Hardware Test is the last content row (index 16): 15 downs from Back (1).
-  for (int i = 0; i < 15; ++i)
+  // Hardware Test is the last content row (index 17): 16 downs from Back (1).
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
@@ -3824,7 +4016,7 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   A::on_input(orch, touch_down);  // 0→1
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -3870,7 +4062,7 @@ TEST_CASE("Peripheral Test: double-press back mid-flow restores and exits",
   A::on_input(orch, touch_down);
   A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Settings
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -3892,7 +4084,7 @@ static void enter_gps_test(TestFixture &f, Orchestrator &orch) {
   A::on_input(orch, touch_down);  // 0→1
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -3979,7 +4171,7 @@ static void enter_accel_test(TestFixture &f, Orchestrator &orch) {
   A::on_input(orch, touch_down);  // 0→1
   A::on_input(orch, touch_down);  // 1→2
   A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 15; ++i)
+  for (int i = 0; i < 16; ++i)
     A::on_input(orch, touch_down);
   A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
   A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
@@ -4949,7 +5141,7 @@ struct PmSleepFixture {
         gps_service(stub_gps, nullptr, GpsService::Config{}),
         input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config{}),
         display_service(DisplayService::Config{}), storage_service(payload_cache, stub_nand),
-        power_service(stub_bms, test_gpio_hal,
+        power_service(&stub_bms, test_gpio_hal,
                       PowerService::Config{
                           .pin_wake_button_power = 0,
                           .pin_wake_button_boot = 1,
@@ -7029,6 +7221,7 @@ TEST_CASE("local snapshots publish initial settings and measurement handoff",
     TestFixture f;
     f.settings.pm_use_usaqi = true;
     f.settings.use_fahrenheit = true;
+    f.settings.use_feet = true;
     f.settings.disable_cloud = true;
     f.settings.configuration_control = ConfigurationControl::Local;
     auto orch = f.make_orchestrator();
@@ -7038,6 +7231,7 @@ TEST_CASE("local snapshots publish initial settings and measurement handoff",
     const LocalServerConfig config = f.local_api.get_config();
     CHECK(*config.pm_standard == "us-aqi");
     CHECK(*config.temperature_unit == "f");
+    CHECK(*config.altitude_unit == "ft");
     CHECK_FALSE(*config.cloud_connection);
     CHECK(*config.configuration_control == "local");
     CHECK_FALSE(f.local_api.get_system_info().wifi_rssi.has_value());
@@ -7101,6 +7295,44 @@ TEST_CASE("local config event persists activates and publishes one request",
   CHECK(*f.local_api.get_config().temperature_unit == "f");
   A::dispatch(orch, event);
   CHECK(A::settings(orch).use_fahrenheit);
+}
+
+TEST_CASE("local altitude activation persists syncs redraws publishes and converges",
+          "[Orchestrator][local-api][config][altitude]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+
+  LocalServerConfig partial{};
+  partial.altitude_unit = "ft";
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  DisplayService::spy_update_count = 0;
+  {
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+    dispatch_next_local_request(f, orch);
+  }
+
+  CHECK(A::settings(orch).use_feet);
+  CHECK(A::build_context(orch).use_feet);
+  CHECK(*f.local_api.get_config().altitude_unit == "ft");
+  CHECK(DisplayService::spy_update_count == 1);
+  GoSettings ui_settings{};
+  f.ui_manager.apply_to_settings(ui_settings);
+  CHECK(ui_settings.use_feet);
+
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  DisplayService::spy_update_count = 0;
+  {
+    FORBID_CALL(f.mock_config, commit());
+    dispatch_next_local_request(f, orch);
+  }
+  CHECK(A::settings(orch).use_feet);
+  CHECK(*f.local_api.get_config().altitude_unit == "ft");
+  CHECK(DisplayService::spy_update_count == 0);
 }
 
 TEST_CASE("four local requests merge sequentially with last processed value winning",

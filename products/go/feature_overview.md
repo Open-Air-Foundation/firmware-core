@@ -167,6 +167,7 @@ Local clients can change this selected configuration:
 
 - PM display standard: mass concentration or US AQI.
 - Temperature unit: Celsius or Fahrenheit.
+- Altitude unit: meters or feet for the device display.
 - Cloud connection enabled or disabled.
 - Configuration source: cloud, local, or both.
 - PM2.5, temperature, and humidity measurement corrections.
@@ -229,7 +230,8 @@ User-visible battery features:
 - USB plugged-in indication.
 - Low-battery warnings.
 - Automatic protective shutdown when the battery is critically low.
-- Over-temperature protection.
+- Battery-temperature protection, including charge inhibition, invalid-NTC
+  handling, and distinct hot/cold protective shutdowns.
 - Charging pause when the battery is full to reduce battery stress.
 
 The firmware also manages sensor power to reduce drain. For example, the PM
@@ -284,6 +286,7 @@ Common configurable settings include:
 
 - Measurement interval from 3 seconds up to 1 hour.
 - Temperature unit: Celsius or Fahrenheit.
+- Altitude unit: meters or feet.
 - PM display: micrograms per cubic meter or US AQI.
 - GPS mode: always off, on when tracking, or always on.
 - Operating mode: Portable, Stationary, or Offline.

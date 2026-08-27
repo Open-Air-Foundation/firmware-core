@@ -96,15 +96,22 @@ struct GoBoard {
   // -----------------------------------------------------------------
   // Init methods (fine-grained, idempotent)
   //
-  // Each initialises one subsystem.  Safe to call multiple times —
-  // subsequent calls are no-ops.  Boot paths call these in the order
-  // their hardware sequencing requires.
+  // Each initialises one subsystem. Successful initialization is idempotent;
+  // init_bms() remains retryable after failure. Boot paths call these in the
+  // order their hardware sequencing requires.
   // -----------------------------------------------------------------
 
   virtual void init_nvs() = 0;   ///< NVS flash
   virtual void init_buses() = 0; ///< GPIO power enables + I2C bus + settling
   virtual void init_spi() = 0;   ///< SPI bus
-  virtual void init_bms() = 0;   ///< BMS driver (requires buses)
+
+  /// Initialize the optional fuel gauge (requires buses). Independent from
+  /// charger initialization and idempotent after the first attempt.
+  virtual void init_fuel_gauge() = 0;
+
+  /// Initialize the BMS driver (requires buses). Returns true when the
+  /// charger is available. A failed call may be retried.
+  virtual bool init_bms() = 0;
 
   /// Initialise the Wi-Fi subsystem (NVS, netif, event loop, esp_wifi_init,
   /// event handlers, single-shot timers).  Idempotent.  **Not** called by
@@ -113,7 +120,8 @@ struct GoBoard {
   virtual void init_wifi_subsystem() = 0;
 
   // -----------------------------------------------------------------
-  // Convenience gate — calls all init methods above (skips what's done)
+  // Convenience gate — initializes NVS, I2C, and SPI (skips what's done).
+  // Fuel-gauge and BMS initialization remain explicit and independent.
   // -----------------------------------------------------------------
 
   virtual void init_core() = 0;
@@ -128,7 +136,8 @@ struct GoBoard {
 
   virtual ConfigStore &config_store() = 0;
   virtual GoSettings load_settings() = 0;
-  virtual BmsDevice &bms() = 0;
+  /// Return the initialized charger, or nullptr when BMS initialization failed.
+  virtual BmsDevice *bms() = 0;
   virtual SensorManager &sensors(bool warm = false) = 0;
   virtual StorageService &storage() = 0;
   virtual DisplayService &display() = 0;
@@ -185,6 +194,7 @@ struct GoBoard {
   virtual void release_gpio_holds() = 0;
   virtual void ulp_stop() = 0;
   virtual void ulp_start() = 0;
+  virtual void restart() = 0;
 
   // Factory learning: drive the SPS30 fan as a deliberate discharge load.
   // EN_PM (PowerService::set_pm_power) only powers the sensor; the fan spins

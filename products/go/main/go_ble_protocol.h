@@ -71,6 +71,7 @@ inline constexpr const char *BLE_KEY_PM_INT = "pm_int";
 inline constexpr const char *BLE_KEY_OTHER_INT = "other_int";
 inline constexpr const char *BLE_KEY_DISP_INT = "disp_int";
 inline constexpr const char *BLE_KEY_TEMP_F = "temp_f";
+inline constexpr const char *BLE_KEY_ALT_FT = "alt_ft";
 inline constexpr const char *BLE_KEY_PM_AQI = "pm_aqi";
 inline constexpr const char *BLE_KEY_GPS_MODE = "gps_mode";
 inline constexpr const char *BLE_KEY_AUTO_LOCK = "auto_lock";
