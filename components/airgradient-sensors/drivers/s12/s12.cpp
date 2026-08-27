@@ -179,6 +179,10 @@ bool S12::is_baseline_calibration_done() {
 }
 
 bool S12::set_abc_period_days(int days) {
+  ESP_LOGW(TAG,
+           "ABC configuration temporarily ignored. By default its enabled with period 180 hours.");
+  return true;
+
   if (!_initialized || _dev_handle == nullptr) {
     ESP_LOGW(TAG, "Sensor not initialized, cannot configure ABC period");
     return false;
