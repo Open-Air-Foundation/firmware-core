@@ -87,7 +87,7 @@ sensor type is as simple as leaving its pointer null.
 | `drivers/sps30` | Sensirion SPS30 | I2C | PM mass + number concentrations. Standard-particle, `pm_03_pc`, and `pm_5_pc` left as invalid sentinels. `sleep()`/`wake()` use native Sleep (`0x1001`)/Wake-up (`0x1103`); `init()` recovers a sensor left asleep |
 | `drivers/s8` | SenseAir S8 | Modbus RTU over serial | CO2 |
 | `drivers/sunlight` | SenseAir Sunlight | Modbus RTU over serial | CO2 |
-| `drivers/s12` | SenseAir S12 | I2C | CO2; reads a single big-endian 16-bit register (default 0x06/0x07 = filtered, pressure-compensated). Supports background calibration and an EEPROM-backed automatic-background-calibration period; no integrated temp/hum |
+| `drivers/s12` | SenseAir S12 | I2C | CO2; reads a single big-endian 16-bit register (default 0x06/0x07 = filtered, pressure-compensated). Supports background calibration. Automatic-background-calibration requests are temporarily acknowledged without sensor I/O to avoid unsafe ABC and MeterControl writes; no integrated temp/hum |
 | `drivers/stcc4` | Sensirion STCC4 | I2C | CO2 with integrated temp/hum (`supports_temp_hum() = true`) |
 | `drivers/scd4x` | Sensirion SCD41 | I2C | CO2 with integrated temp/hum, configurable automatic self-calibration period, and opt-in retained periodic-measurement reattachment after deep sleep. Thin adapter around the shared `embedded-i2c-scd4x` driver. Singleton — only one instance on the bus, since the underlying driver keeps the I2C handle and address in file-scope globals |
 | `drivers/sgp41` | Sensirion SGP41 | I2C | TVOC + NOx |

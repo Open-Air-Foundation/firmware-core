@@ -99,6 +99,14 @@ public:
   bool is_baseline_calibration_done() override;
 
   bool supports_abc_period_configuration() const override { return true; }
+
+  /**
+   * @brief Acknowledge an ABC period request without changing the sensor.
+   *
+   * S12 ABC and MeterControl writes are temporarily disabled because they may
+   * damage some sensors. Requests return true so application configuration can
+   * continue to be stored while the sensor-side issue is investigated.
+   */
   bool set_abc_period_days(int days) override;
 
 private:
