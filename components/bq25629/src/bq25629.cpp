@@ -5,6 +5,7 @@
 
 #include "bq25629.h"
 #include "bq25629_ntc_math.h"
+#include "bq25629_ntc_profile.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -130,12 +131,6 @@ constexpr uint8_t CHG_STAT_MASK = 0x18;
 constexpr uint8_t CHG_STAT_SHIFT = 3;
 constexpr uint8_t VBUS_STAT_MASK = 0x07;
 } // namespace BIT_MASK
-
-namespace NTC_PROFILE {
-constexpr uint8_t CONTROL_0 = 0x31;
-constexpr uint8_t CONTROL_1 = 0x25;
-constexpr uint8_t CONTROL_2 = 0x3F;
-} // namespace NTC_PROFILE
 
 esp_err_t BQ25629::enable_auto_ibat_discharge(bool enable) {
   esp_err_t ret = modify_register(BQ25629_REG::CHARGER_CONTROL_0, BIT_MASK::EN_AUTO_IBATDIS,
@@ -998,10 +993,11 @@ esp_err_t BQ25629::configure_jeita_profile() {
     const char *name;
   };
 
+  static constexpr ntc_profile::NtcProfileBytes BYTES = ntc_profile::GO_PROFILE.encode();
   static constexpr RegisterSetting PROFILE[] = {
-      {BQ25629_REG::NTC_CONTROL_0, NTC_PROFILE::CONTROL_0, "NTC_CONTROL_0"},
-      {BQ25629_REG::NTC_CONTROL_1, NTC_PROFILE::CONTROL_1, "NTC_CONTROL_1"},
-      {BQ25629_REG::NTC_CONTROL_2, NTC_PROFILE::CONTROL_2, "NTC_CONTROL_2"},
+      {BQ25629_REG::NTC_CONTROL_0, BYTES.control0, "NTC_CONTROL_0"},
+      {BQ25629_REG::NTC_CONTROL_1, BYTES.control1, "NTC_CONTROL_1"},
+      {BQ25629_REG::NTC_CONTROL_2, BYTES.control2, "NTC_CONTROL_2"},
   };
 
   ESP_LOGI(TAG, "Configuring battery temperature profile");
