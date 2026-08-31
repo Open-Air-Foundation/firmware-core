@@ -916,3 +916,17 @@ target_link_libraries(go_display_geometry_tests PRIVATE
 )
 
 catch_discover_tests(go_display_geometry_tests)
+
+add_executable(go_airflow_detect_tests
+    go_airflow_detect.tests.cpp
+)
+
+target_include_directories(go_airflow_detect_tests PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+)
+
+target_link_libraries(go_airflow_detect_tests PRIVATE
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_airflow_detect_tests)

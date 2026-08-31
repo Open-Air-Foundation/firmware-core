@@ -16,6 +16,7 @@
 #include "accel/accel_sanity.h"
 #include "accel/accel_sensor.h"
 #include "config_store.h"
+#include "go_airflow_detect.h"
 #include "go_ble.h"
 #include "buzzer/go_buzzer.h"
 #include "go_cloud.h"
@@ -115,6 +116,7 @@ private:
   MeasuresAGo _corrected_measures{}; ///< Derived user-facing measurement view
   GpsData _latest_gps{};
   PowerSnapshot _latest_power{};
+  airflow_detect::Detector _airflow{}; ///< External-airflow flag from SHT jitter
 
   // --- Timer tracking (millisecond timestamps) ---
   uint32_t _last_measurement_ms = 0;

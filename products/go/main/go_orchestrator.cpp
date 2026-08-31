@@ -948,6 +948,13 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   _raw_measures.pm_a = data.pm_a;
   _raw_measures.co2 = data.co2;
   _raw_measures.temp_hum_a = data.temp_hum_a;
+  // The airflow detector consumes the RAW reading: its jitter statistic is
+  // calibrated on uncompensated samples, and it must keep observing while
+  // compensation is unavailable or later regime-switched.
+  if (_raw_measures.temp_hum_a.is_temp_valid()) {
+    _airflow.add_sample(_raw_measures.temp_hum_a.temperature,
+                        static_cast<float>(RTOS::get_time_ms()) / 1000.0f);
+  }
   _raw_measures.tvoc_nox = data.tvoc_nox;
   _raw_measures.pressure = data.pressure;
   _raw_measures.power.battery_voltage = _latest_power.battery_voltage;
