@@ -171,8 +171,14 @@ struct MeasuresPower {
 };
 
 struct PressureData {
-  float pressure = MeasuresInvalid::PRESSURE; // hPa
-  float altitude = MeasuresInvalid::ALTITUDE; // meters
+  float pressure = MeasuresInvalid::PRESSURE;       // hPa
+  float altitude = MeasuresInvalid::ALTITUDE;       // meters
+  float temperature = MeasuresInvalid::TEMPERATURE; // degC, sensor die
+
+  bool is_temp_valid() const {
+    return temperature >= MeasuresRange::MIN_VALID_TEMP &&
+           temperature <= MeasuresRange::MAX_VALID_TEMP;
+  }
 
   bool is_pressure_valid() const {
     return pressure >= MeasuresRange::MIN_VALID_PRESSURE &&
