@@ -2576,6 +2576,33 @@ TEST_CASE("apply_settings_change: persists altitude unit", "[Orchestrator][setti
   CHECK(A::build_context(orch).use_feet);
 }
 
+TEST_CASE("apply_settings_change: unrelated update preserves custom measurement interval",
+          "[Orchestrator][settings]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 17;
+  auto orch = f.make_orchestrator();
+
+  GoSettings updated = f.settings;
+  updated.use_feet = true;
+  f.ui_manager.sync_settings(updated);
+  A::set_last_measurement_ms(orch, 1000);
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  A::apply_settings_change(orch);
+
+  CHECK(A::settings(orch).use_feet);
+  CHECK(A::settings(orch).measure_interval_seconds == 17);
+  CHECK(A::last_measurement_ms(orch) == 1000);
+  const LocalServerConfig config = f.local_api.get_config();
+  REQUIRE(config.measurement_interval_seconds.has_value());
+  CHECK(*config.measurement_interval_seconds == 17);
+}
+
 TEST_CASE("apply_settings_change: reschedules timer when interval changes",
           "[Orchestrator][settings]") {
   TestFixture f;
@@ -7295,6 +7322,32 @@ TEST_CASE("local config event persists activates and publishes one request",
   CHECK(*f.local_api.get_config().temperature_unit == "f");
   A::dispatch(orch, event);
   CHECK(A::settings(orch).use_fahrenheit);
+}
+
+TEST_CASE("local custom measurement interval activates exactly and synchronizes UI",
+          "[Orchestrator][local-api][config][interval]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  A::set_last_measurement_ms(orch, 1000);
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
+
+  LocalServerConfig partial{};
+  partial.measurement_interval_seconds = 17;
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+
+  dispatch_next_local_request(f, orch);
+
+  CHECK(A::settings(orch).measure_interval_seconds == 17);
+  CHECK(A::last_measurement_ms(orch) == 9000);
+  const LocalServerConfig config = f.local_api.get_config();
+  REQUIRE(config.measurement_interval_seconds.has_value());
+  CHECK(*config.measurement_interval_seconds == 17);
+
+  GoSettings ui_settings{};
+  f.ui_manager.apply_to_settings(ui_settings);
+  CHECK(ui_settings.measure_interval_seconds == 17);
 }
 
 TEST_CASE("local altitude activation persists syncs redraws publishes and converges",
