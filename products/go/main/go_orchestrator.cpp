@@ -960,16 +960,21 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   // Compensate board-heat leakage into the SHT before user corrections and
   // payload caching, so every downstream consumer sees the corrected value.
   // Falls back to the uncompensated reading when the DPS temperature is
-  // invalid.
+  // invalid — and while external airflow is detected, since moving air
+  // strips the coupling the model assumes and the raw reading is then the
+  // better estimate (measured: raw errs ~+1, corrected ~-3 under a fan).
   if (_raw_measures.temp_hum_a.is_temp_valid() &&
       _raw_measures.pressure.is_temp_valid()) {
     const float raw_temp = _raw_measures.temp_hum_a.temperature;
-    const float corrected_temp = thermal_comp::correct_temperature(
-        raw_temp, _raw_measures.pressure.temperature);
-    _raw_measures.temp_hum_a.temperature = corrected_temp;
-    if (_raw_measures.temp_hum_a.is_hum_valid()) {
-      _raw_measures.temp_hum_a.humidity = thermal_comp::correct_humidity(
-          _raw_measures.temp_hum_a.humidity, raw_temp, corrected_temp);
+    const float raw_hum = _raw_measures.temp_hum_a.humidity;
+    if (!_airflow.airflow()) {
+      const float corrected_temp = thermal_comp::correct_temperature(
+          raw_temp, _raw_measures.pressure.temperature);
+      _raw_measures.temp_hum_a.temperature = corrected_temp;
+      if (_raw_measures.temp_hum_a.is_hum_valid()) {
+        _raw_measures.temp_hum_a.humidity = thermal_comp::correct_humidity(
+            raw_hum, raw_temp, corrected_temp);
+      }
     }
   }
   _raw_measures.tvoc_nox = data.tvoc_nox;
