@@ -103,6 +103,45 @@ TEST_CASE("sustained fluctuation raises the flag, sustained quiet clears it") {
   CHECK_FALSE(det.airflow());
 }
 
+TEST_CASE("ambiguous windows hold the exit streak, loud windows reset it") {
+  auto raise_flag = [](airflow_detect::Detector &det, float &t) {
+    const int n = 1 + airflow_detect::WINDOW_DIFFS * airflow_detect::ENTER_WINDOWS;
+    for (int i = 0; i < n; ++i) {
+      det.add_sample(25.0f + ((i % 2 != 0) ? 0.05f : -0.05f), t);
+      t += CADENCE_S;
+    }
+    REQUIRE(det.airflow());
+  };
+  auto feed_windows = [](airflow_detect::Detector &det, float &t, int windows,
+                         float half_step) {
+    for (int i = 0; i < airflow_detect::WINDOW_DIFFS * windows; ++i) {
+      det.add_sample(25.0f + ((i % 2 != 0) ? half_step : -half_step), t);
+      t += CADENCE_S;
+    }
+  };
+
+  SECTION("a mid-band window between quiet ones does not restart the dwell") {
+    airflow_detect::Detector det;
+    float t = START_S;
+    raise_flag(det, t);
+    feed_windows(det, t, 3, 0.0f);    // 3 quiet windows (~0 mK)
+    feed_windows(det, t, 1, 0.013f);  // ~26 mK: ambiguous, holds
+    CHECK(det.airflow());
+    feed_windows(det, t, 2, 0.0f);    // 2 more quiet -> 5 total
+    CHECK_FALSE(det.airflow());
+  }
+
+  SECTION("a loud window restarts the dwell") {
+    airflow_detect::Detector det;
+    float t = START_S;
+    raise_flag(det, t);
+    feed_windows(det, t, 4, 0.0f);
+    feed_windows(det, t, 1, 0.05f);   // ~100 mK: wind is back, reset
+    feed_windows(det, t, 4, 0.0f);    // only 4 quiet since the reset
+    CHECK(det.airflow());
+  }
+}
+
 TEST_CASE("a single loud window between quiet ones never raises the flag") {
   airflow_detect::Detector det;
   float t = START_S;

@@ -74,9 +74,19 @@ private:
     _sum_sq = 0.0f;
     _count = 0;
     if (_airflow) {
-      _quiet_streak = (_last_jitter_mk <= EXIT_JITTER_MK) ? _quiet_streak + 1 : 0;
-      if (_quiet_streak >= EXIT_WINDOWS) {
-        _airflow = false;
+      // Windows between EXIT and ENTER are ambiguous and hold the streak
+      // instead of resetting it: right after a fan stops, the re-warming
+      // board stirs its own micro-convection and jitter hovers at the exit
+      // boundary (field data 2026-08-31: two units pinned at ~22 mK for
+      // several windows, stretching recovery from ~12 to ~18 min). Only a
+      // window loud enough to raise the flag is evidence the wind continues.
+      if (_last_jitter_mk <= EXIT_JITTER_MK) {
+        ++_quiet_streak;
+        if (_quiet_streak >= EXIT_WINDOWS) {
+          _airflow = false;
+          _quiet_streak = 0;
+        }
+      } else if (_last_jitter_mk >= ENTER_JITTER_MK) {
         _quiet_streak = 0;
       }
     } else {
