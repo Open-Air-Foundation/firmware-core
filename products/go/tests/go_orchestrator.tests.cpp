@@ -15,6 +15,7 @@
  */
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <trompeloeil.hpp>
 #include <trompeloeil/mock.hpp>
 
@@ -27,6 +28,7 @@
 #include "go_board.h"
 #include "go_local_api.h"
 #include "go_orchestrator.h"
+#include "go_thermal_comp.h"
 #include "services/ag_client.h"
 
 static constexpr uint32_t TEST_OTA_WIFI_CHECK_INTERVAL_MS = 3'600'000;
@@ -2786,6 +2788,42 @@ TEST_CASE("BLE config set: correction updates derived view without notifying raw
   CHECK_FALSE(test_spy::ble_notify_measures_called);
   CHECK(test_spy::ble_last_measures.pm_a.pm_25 == 10.0f);
   CHECK(test_spy::ble_notify_config_called);
+}
+
+TEST_CASE("on_sensor_data: SHT temperature is compensated from the DPS die temperature",
+          "[Orchestrator][thermal]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  MeasuresAGo raw{};
+  raw.temp_hum_a.temperature = 30.0f;
+  raw.temp_hum_a.humidity = 50.0f;
+  raw.pressure.temperature = 35.0f;
+  A::on_sensor_data(orch, raw);
+
+  const float expected_t = thermal_comp::correct_temperature(30.0f, 35.0f);
+  const float expected_rh = thermal_comp::correct_humidity(50.0f, 30.0f, expected_t);
+  CHECK(expected_t < 26.0f);
+  CHECK_THAT(A::corrected_measures(orch).temp_hum_a.temperature,
+             Catch::Matchers::WithinAbs(expected_t, 0.01f));
+  CHECK_THAT(A::corrected_measures(orch).temp_hum_a.humidity,
+             Catch::Matchers::WithinAbs(expected_rh, 0.1f));
+  CHECK_THAT(test_spy::ble_last_measures.temp_hum_a.temperature,
+             Catch::Matchers::WithinAbs(expected_t, 0.01f));
+}
+
+TEST_CASE("on_sensor_data: SHT reading passes through when the DPS temperature is invalid",
+          "[Orchestrator][thermal]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  MeasuresAGo raw{};
+  raw.temp_hum_a.temperature = 30.0f;
+  raw.temp_hum_a.humidity = 50.0f;
+  A::on_sensor_data(orch, raw);
+
+  CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 30.0f);
+  CHECK(A::corrected_measures(orch).temp_hum_a.humidity == 50.0f);
 }
 
 TEST_CASE("BLE config set: rejected when unknown config key present",
