@@ -117,6 +117,7 @@ private:
   GpsData _latest_gps{};
   PowerSnapshot _latest_power{};
   airflow_detect::Detector _airflow{}; ///< External-airflow flag from SHT jitter
+  bool _airflow_interval_warned = false; ///< One-shot log when the detector cannot run
 
   // --- Timer tracking (millisecond timestamps) ---
   uint32_t _last_measurement_ms = 0;
