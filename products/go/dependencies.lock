@@ -43,7 +43,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.4
+    version: 5.5.2
 direct_dependencies:
 - espressif/cbor
 - espressif/mdns

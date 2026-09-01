@@ -2,7 +2,7 @@
  * @file go_thermal_comp.h
  * @brief SHT thermal-offset compensation for the Go enclosure
  *
- * Board heat (battery/charger plus a constant electronics floor) conducts
+ * Board heat (charger/battery plus a constant electronics floor) conducts
  * along the PCB into the SHT tab and inflates its reading. The DPS368
  * barometer's die temperature is the observable of that internal heat:
  *
@@ -13,17 +13,28 @@
  * by up to 1.1 degC between units with pack seating and charger-heat
  * coupling, and that spread would reach the corrected value amplified by
  * 1/(1-ALPHA). The factory-trimmed DPS is on the PCB and needs no per-unit
- * calibration. Fit from a 10.8 h continuous-reference dataset, quasi-steady
- * filtered: R^2 = 0.898, residual RMS = 75 mK; a 10-min-bucket fit
- * reproduces ALPHA within 3%, and a charge-step experiment reproduces it
- * independently within 3%. Constants are enclosure properties of the
- * assembled Go and assume the dedicated SHT is the temp/hum source (not a
- * fallback sensor).
+ * calibration.
  *
- * Both ALPHA and the intercept are properties of natural convection around
- * the running device: readings in the first ~10 min after a cold boot are
- * mis-corrected until the thermal floor establishes, and forced airflow
- * invalidates the correction entirely (see go_airflow_detect.h).
+ * ALPHA is the SHT's share of the board excess and depends on where the heat
+ * is generated: with external power the charger dissipates next to the SHT
+ * tab, on battery the ESP/PM floor dominates. Measured on four units against
+ * a continuous ambient reference:
+ *   battery   0.522 / 0.493 / 0.477 / 0.485  -> ALPHA_BATTERY 0.49
+ *   external  0.545 / 0.514 / 0.531 / 0.544  -> ALPHA_EXTERNAL_POWER 0.53
+ * The intercept comes from the 10.8 h single-unit fit (quasi-steady
+ * filtered, R^2 = 0.898, residual RMS = 75 mK); a 10-min-bucket fit and a
+ * charge-step experiment reproduce the still-air ALPHA within 3%.
+ * Unit-to-unit spread within a regime is ~0.02, i.e. about +-0.3 degC of
+ * residual at a typical 7 degC board excess. Constants are enclosure
+ * properties of the assembled Go and assume the dedicated SHT is the
+ * temp/hum source (not a fallback sensor).
+ *
+ * ALPHA and the intercept describe natural convection around the running
+ * device in thermal equilibrium: readings in the first ~10 min after a cold
+ * boot are mis-corrected until the thermal floor establishes, a power-source
+ * change over-reads by up to ~0.7 degC for ~30 min while the DPS catches up
+ * with the SHT, and forced airflow invalidates the correction entirely (see
+ * go_airflow_detect.h).
  *
  * Host-testable: no ESP-IDF dependencies.
  */
@@ -34,11 +45,16 @@
 
 namespace thermal_comp {
 
-constexpr float ALPHA = 0.522f;
+constexpr float ALPHA_BATTERY = 0.49f;
+constexpr float ALPHA_EXTERNAL_POWER = 0.53f;
 constexpr float INTERCEPT_C = -0.13f;
 
-inline float correct_temperature(float sht_c, float board_c) {
-  return (sht_c - ALPHA * board_c - INTERCEPT_C) / (1.0f - ALPHA);
+inline float alpha_for_power_source(bool external_power) {
+  return external_power ? ALPHA_EXTERNAL_POWER : ALPHA_BATTERY;
+}
+
+inline float correct_temperature(float sht_c, float board_c, float alpha) {
+  return (sht_c - alpha * board_c - INTERCEPT_C) / (1.0f - alpha);
 }
 
 /// Magnus-form saturation vapour pressure (hPa).

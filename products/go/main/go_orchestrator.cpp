@@ -982,8 +982,10 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     const float raw_temp = _raw_measures.temp_hum_a.temperature;
     const float raw_hum = _raw_measures.temp_hum_a.humidity;
     if (!_airflow.airflow()) {
+      const float alpha = thermal_comp::alpha_for_power_source(
+          bms_power_source_has_external_input(_latest_power.charger_status.power_source));
       const float corrected_temp =
-          thermal_comp::correct_temperature(raw_temp, _raw_measures.pressure.temperature);
+          thermal_comp::correct_temperature(raw_temp, _raw_measures.pressure.temperature, alpha);
       _raw_measures.temp_hum_a.temperature = corrected_temp;
       if (_raw_measures.temp_hum_a.is_hum_valid()) {
         _raw_measures.temp_hum_a.humidity =
