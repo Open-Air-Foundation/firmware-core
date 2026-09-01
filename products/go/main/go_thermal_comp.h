@@ -8,17 +8,17 @@
  *
  *   T_sht = T_amb + ALPHA * (T_board - T_amb) + INTERCEPT_C
  *
- * The DPS368 replaced the battery NTC as the observable on 2026-08-31. The
- * NTC sits on the battery pack, so its offset against the board differs by
- * up to 1.1 degC between units (pack seating / charger-heat coupling, not a
- * thermistor-part difference: the spread collapsed to <0.4 degC under
- * external heating in an oven run to 60 degC board temperature), and that
- * spread would reach the corrected value amplified by 1/(1-ALPHA). The
- * factory-trimmed DPS is on the PCB and needs no per-unit calibration. Fit
- * from the same 10.8 h continuous-reference dataset, quasi-steady filtered:
- * R^2 = 0.898, residual RMS = 75 mK; a 10-min-bucket fit reproduces ALPHA
- * within 3%. Constants are enclosure properties of the assembled Go and
- * assume the dedicated SHT is the temp/hum source (not a fallback sensor).
+ * The DPS368 die temperature is the observable rather than the battery NTC:
+ * the NTC sits on the battery pack, so its offset against the board varies
+ * by up to 1.1 degC between units with pack seating and charger-heat
+ * coupling, and that spread would reach the corrected value amplified by
+ * 1/(1-ALPHA). The factory-trimmed DPS is on the PCB and needs no per-unit
+ * calibration. Fit from a 10.8 h continuous-reference dataset, quasi-steady
+ * filtered: R^2 = 0.898, residual RMS = 75 mK; a 10-min-bucket fit
+ * reproduces ALPHA within 3%, and a charge-step experiment reproduces it
+ * independently within 3%. Constants are enclosure properties of the
+ * assembled Go and assume the dedicated SHT is the temp/hum source (not a
+ * fallback sensor).
  *
  * Both ALPHA and the intercept are properties of natural convection around
  * the running device: readings in the first ~10 min after a cold boot are
