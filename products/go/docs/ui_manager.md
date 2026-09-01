@@ -18,7 +18,7 @@ and chart data extraction.
 | `Screen`, `Metric`, `DisplayValues`, `ListRow`, `MAX_LIST_ROWS` | product (`go_display.h`) | Display data types and row structs returned by `build_values()` |
 | `InputSource`, `InputType`, `OperatingMode` | product (`go_types.h`) | Input classification and mode enum |
 | `MeasuresAGo`, `MeasuresInvalid` | `airgradient-common` (`measures_types.h`) | Measurement struct + sentinels read from `BuildContext` |
-| `GoSettings` | product (`go_settings.h`) | Initial option-index sync via `sync_settings()` and reverse mapping via `apply_to_settings()` |
+| `GoSettings` | product (`go_settings.h`) | Initial settings-state sync via `sync_settings()` and reverse mapping via `apply_to_settings()` |
 | `ProvisioningTransport` | `airgradient-provisioning` (`types/provisioning_types.h`) | Selected provisioning transport on `Screen::Provisioning` |
 | `QrCode`, `encode_go_to_app_qr`, `encode_wifi_qr`, `encode_url_qr`, `WifiAuth` | `airgradient-provisioning` (`services/provisioning_qr.h`) | QR encoding for the Provisioning page (per transport) and the Getting Started page (`encode_url_qr` for the setup URL). One shared ~212 B `QrCode` member; re-encoded on screen entry / transport switch. |
 | `format_ipv4_be` | `airgradient-common` (`common.h`) | Format the network-byte-order IP for the Provisioning `Connected! a.b.c.d` status line |
@@ -63,8 +63,8 @@ on-screen password line agree.
 | `is_on_menu_screen()` | True when the current screen is a menu-navigation screen (MainMenu, Settings, SettingsChoice, TagList, Confirm, About) or `GettingStarted`. Used by the orchestrator to suppress background display updates. |
 | `show_snackbar(text)` | Show a 3-second snackbar message. Pass `nullptr` to clear (used by the session-entry preamble). Snackbars never render on `Info` / `Provisioning` / `ProvisioningConfirm`. |
 | `clear_expired_snackbar(now_ms)` | Expire stale snackbar. Call before `build_values`. |
-| `sync_settings(settings)` | Synchronise the internal option indices from a persisted `GoSettings`. Called by the orchestrator on boot and after any `change_mode()` so the Settings menu reflects the new mode. |
-| `apply_to_settings(settings)` | Convert internal option indices back to `GoSettings` field values. Reverse of `sync_settings`. |
+| `sync_settings(settings)` | Synchronise internal state from persisted `GoSettings`, retaining exact measurement-interval seconds. Called by the orchestrator on boot and after settings activation. |
+| `apply_to_settings(settings)` | Convert internal state back to `GoSettings` field values without normalizing a custom measurement interval. Reverse of `sync_settings`. |
 | `reset_to_home()` | Reset to Home with no metric. Used on auto-lock and by the session-leave helpers. |
 | `show_pairing_passkey(passkey)` | Show 6-digit BLE passkey on dedicated screen. |
 | `dismiss_pairing_passkey()` | Dismiss passkey screen, return to Home. |
@@ -217,8 +217,10 @@ to the Settings screen with the cursor on the source row.
 
 ## Internal Settings State
 
-The UI Manager stores settings as option indices internally. These drive
-the settings row labels and pre-select the current value when opening a
+The UI Manager stores most settings as option indices internally. It stores the
+measurement interval as exact seconds so values supplied through firmware
+interfaces are not normalized to a display choice. This state drives the
+settings row labels and pre-selects the current value when opening a
 SettingsChoice screen.
 
 | Setting ID | Label | Options |
@@ -227,7 +229,7 @@ SettingsChoice screen.
 | Temperature Unit | `Temperature Unit: C / F` | C, F |
 | Altitude Unit | `Altitude Unit: m / ft` | m, ft |
 | PM Display | `PM Display: ug/m3 / USAQI` | ug/m3, USAQI |
-| Measure Interval | `Measure Int.: 3s..1h` | 3s, 10s, 30s, 60s, 5m, 15m, 1h |
+| Measure Interval | `Measure Int.: <value>` | Conditional `Custom (<seconds>s)`, then 3s, 10s, 30s, 60s, 5m, 15m, 1h |
 | GPS Mode | `GPS Mode: ...` | Always Off, On When Tracking, Always On |
 | Mode | `Mode: ...` | Stationary, Portable, Offline / Airplane Mode |
 | Auto Lock | `Auto Lock: ...` | Off, 10 Seconds, 30 Seconds, 60 Seconds |
@@ -237,11 +239,16 @@ SettingsChoice screen.
 | CO2: Calibrate | Action row | Opens confirm dialog |
 | Data: Clear Data | Action row | Opens confirm dialog |
 
-The orchestrator calls `sync_settings(const GoSettings &)` after loading
-persisted settings from NVS to synchronize the internal option indices.
-`apply_to_settings()` maps option indices back to `GoSettings` field
-values, including `use_feet` and the three LED fields
-(`front_led_brightness`, `back_led_brightness`, `touch_led_intensity`).
+The orchestrator calls `sync_settings(const GoSettings &)` after loading or
+activating settings. A measurement interval that exactly matches a fixed choice
+uses its compact label. A different valid value, such as 17 seconds, renders as
+`Measure Int.: 17s`; its choice screen prepends and selects `Custom (17s)`.
+Selecting a fixed choice replaces the custom value and removes the custom row.
+
+`apply_to_settings()` maps the internal state back to `GoSettings`, including
+the exact interval, `use_feet`, and the three LED fields
+(`front_led_brightness`, `back_led_brightness`, `touch_led_intensity`). Changing
+an unrelated UI setting therefore preserves an active custom interval.
 
 ## Snackbar Lifecycle
 

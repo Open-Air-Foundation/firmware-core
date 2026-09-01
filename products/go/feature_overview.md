@@ -168,6 +168,7 @@ Local clients can change this selected configuration:
 - PM display standard: mass concentration or US AQI.
 - Temperature unit: Celsius or Fahrenheit.
 - Altitude unit: meters or feet for the device display.
+- Measurement interval: any whole second from 1 through 3600.
 - Cloud connection enabled or disabled.
 - Configuration source: cloud, local, or both.
 - PM2.5, temperature, and humidity measurement corrections.
@@ -284,7 +285,9 @@ The Go stores user settings on the device, so they survive power cycles.
 
 Common configurable settings include:
 
-- Measurement interval from 3 seconds up to 1 hour.
+- Measurement interval choices of 3s, 10s, 30s, 60s, 5m, 15m, and 1h. A
+  different valid value supplied through a firmware interface appears as an
+  exact custom interval until the user selects a fixed choice.
 - Temperature unit: Celsius or Fahrenheit.
 - Altitude unit: meters or feet.
 - PM display: micrograms per cubic meter or US AQI.

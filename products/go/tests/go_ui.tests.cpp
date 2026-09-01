@@ -14,7 +14,7 @@
  *
  * Snackbar        — show, arm deadline, expire.
  *
- * sync_settings   — GoSettings → internal option indices round-trip.
+ * sync_settings   — GoSettings → internal settings state round-trip.
  *
  * Chart extraction — populate_chart with MeasuresAGo cache.
  *
@@ -86,6 +86,19 @@ static void go_to_settings(UIManager &ui) {
   press(ui, InputSource::TouchDown);  // 0→1
   press(ui, InputSource::TouchDown);  // 1→2 (Settings)
   press(ui, InputSource::TouchEnter); // → Settings
+}
+
+/// Navigate to the Measurement Interval row without opening its choice screen.
+static void go_to_measure_interval(UIManager &ui) {
+  go_to_settings(ui);
+  for (int i = 0; i < 5; ++i)
+    press(ui, InputSource::TouchDown); // Back → Measurement Interval
+}
+
+/// Navigate to and open the Measurement Interval choice screen.
+static void open_measure_interval_choice(UIManager &ui) {
+  go_to_measure_interval(ui);
+  press(ui, InputSource::TouchEnter);
 }
 
 // ============================================================================
@@ -476,6 +489,143 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
   }
 }
 
+TEST_CASE("UIManager: custom measurement interval presentation",
+          "[UIManager][settings][interval]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  GoSettings settings{};
+  settings.measure_interval_seconds = 17;
+  ui.sync_settings(settings);
+
+  go_to_measure_interval(ui);
+  auto ctx = make_default_ctx();
+  DisplayValues values = ui.build_values(ctx);
+  CHECK(std::string(values.rows[values.selected_row].text) == "Measure Int.: 17s");
+
+  press(ui, InputSource::TouchEnter);
+  values = ui.build_values(ctx);
+
+  REQUIRE(values.row_count == 10);
+  CHECK(values.selected_row == 2);
+  CHECK(std::string(values.rows[2].text) == "Custom (17s)");
+  CHECK(std::string(values.rows[3].text) == "3s");
+  CHECK(std::string(values.rows[4].text) == "10s");
+  CHECK(std::string(values.rows[5].text) == "30s");
+  CHECK(std::string(values.rows[6].text) == "60s");
+  CHECK(std::string(values.rows[7].text) == "5m");
+  CHECK(std::string(values.rows[8].text) == "15m");
+  CHECK(std::string(values.rows[9].text) == "1h");
+
+  const auto result = press(ui, InputSource::TouchEnter);
+  REQUIRE(result.action == UIAction::SettingsChanged);
+  GoSettings output{};
+  ui.apply_to_settings(output);
+  CHECK(output.measure_interval_seconds == 17);
+}
+
+TEST_CASE("UIManager: unrelated setting preserves custom measurement interval",
+          "[UIManager][settings][interval]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  GoSettings settings{};
+  settings.measure_interval_seconds = 17;
+  ui.sync_settings(settings);
+
+  go_to_settings(ui);
+  press(ui, InputSource::TouchDown);  // Back → Setup Guide
+  press(ui, InputSource::TouchDown);  // Setup Guide → Temperature Unit
+  press(ui, InputSource::TouchEnter); // Open Temperature Unit
+  press(ui, InputSource::TouchDown);  // C → F
+  const auto result = press(ui, InputSource::TouchEnter);
+
+  REQUIRE(result.action == UIAction::SettingsChanged);
+  GoSettings output{};
+  ui.apply_to_settings(output);
+  CHECK(output.use_fahrenheit);
+  CHECK(output.measure_interval_seconds == 17);
+}
+
+TEST_CASE("UIManager: fixed choice replaces custom measurement interval",
+          "[UIManager][settings][interval]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  GoSettings settings{};
+  settings.measure_interval_seconds = 17;
+  ui.sync_settings(settings);
+  open_measure_interval_choice(ui);
+
+  press(ui, InputSource::TouchDown); // Custom → 3s
+  press(ui, InputSource::TouchDown); // 3s → 10s
+  press(ui, InputSource::TouchDown); // 10s → 30s
+  const auto result = press(ui, InputSource::TouchEnter);
+
+  REQUIRE(result.action == UIAction::SettingsChanged);
+  GoSettings output{};
+  ui.apply_to_settings(output);
+  CHECK(output.measure_interval_seconds == 30);
+
+  auto ctx = make_default_ctx();
+  DisplayValues values = ui.build_values(ctx);
+  CHECK(std::string(values.rows[values.selected_row].text) == "Measure Int.: 30s");
+
+  press(ui, InputSource::TouchEnter);
+  values = ui.build_values(ctx);
+  REQUIRE(values.row_count == 9);
+  CHECK(values.selected_row == 4);
+  CHECK(std::string(values.rows[values.selected_row].text) == "30s");
+}
+
+TEST_CASE("UIManager: fixed measurement intervals keep existing choices",
+          "[UIManager][settings][interval]") {
+  struct FixedIntervalCase {
+    int seconds;
+    const char *label;
+    uint8_t selected_row;
+  };
+
+  static constexpr FixedIntervalCase CASES[] = {
+      {3, "3s", 2},   {10, "10s", 3},  {30, "30s", 4},  {60, "60s", 5},
+      {300, "5m", 6}, {900, "15m", 7}, {3600, "1h", 8},
+  };
+
+  for (const auto &test_case : CASES) {
+    UIManager ui(DEFAULT_UI_CONFIG);
+    GoSettings settings{};
+    settings.measure_interval_seconds = test_case.seconds;
+    ui.sync_settings(settings);
+    open_measure_interval_choice(ui);
+
+    const DisplayValues values = ui.build_values(make_default_ctx());
+    REQUIRE(values.row_count == 9);
+    CHECK(values.selected_row == test_case.selected_row);
+    CHECK(std::string(values.rows[values.selected_row].text) == test_case.label);
+
+    GoSettings output{};
+    ui.apply_to_settings(output);
+    CHECK(output.measure_interval_seconds == test_case.seconds);
+  }
+}
+
+TEST_CASE("UIManager: open interval choice resynchronizes fixed and custom values",
+          "[UIManager][settings][interval]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  GoSettings settings{};
+  settings.measure_interval_seconds = 17;
+  ui.sync_settings(settings);
+  open_measure_interval_choice(ui);
+
+  settings.measure_interval_seconds = 30;
+  ui.sync_settings(settings);
+  DisplayValues values = ui.build_values(make_default_ctx());
+  REQUIRE(values.row_count == 9);
+  CHECK(values.selected_row == 4);
+  CHECK(std::string(values.rows[values.selected_row].text) == "30s");
+
+  settings.measure_interval_seconds = 19;
+  ui.sync_settings(settings);
+  values = ui.build_values(make_default_ctx());
+  REQUIRE(values.row_count == 10);
+  CHECK(values.selected_row == 2);
+  CHECK(std::string(values.rows[values.selected_row].text) == "Custom (19s)");
+}
+
 // ============================================================================
 // LED settings choice
 // ============================================================================
@@ -688,21 +838,18 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     CHECK(out.measure_interval_seconds == 3);
   }
 
-  SECTION("sync_settings clamps sub-minimum interval up to 3s (index 0)") {
-    // Values below the UI minimum (e.g. legacy or BLE-set 1s/2s) resolve to the
-    // lowest enum option and round-trip out as 3s.
-    GoSettings s{};
-    s.measure_interval_seconds = 1;
-    ui.sync_settings(s);
+  SECTION("sync_settings preserves valid custom intervals") {
+    static constexpr int CUSTOM_INTERVALS[] = {1, 2, 17, 120, 3599};
 
-    GoSettings out{};
-    ui.apply_to_settings(out);
-    CHECK(out.measure_interval_seconds == 3);
+    for (const int interval : CUSTOM_INTERVALS) {
+      GoSettings input{};
+      input.measure_interval_seconds = interval;
+      ui.sync_settings(input);
 
-    s.measure_interval_seconds = 2;
-    ui.sync_settings(s);
-    ui.apply_to_settings(out);
-    CHECK(out.measure_interval_seconds == 3);
+      GoSettings output{};
+      ui.apply_to_settings(output);
+      CHECK(output.measure_interval_seconds == interval);
+    }
   }
 
   SECTION("GPS mode mapping") {

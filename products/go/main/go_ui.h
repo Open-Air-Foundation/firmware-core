@@ -210,11 +210,11 @@ public:
   /// Clear snackbar if expired. Called by orchestrator before build_values.
   void clear_expired_snackbar(uint32_t now_ms);
 
-  /// Synchronize internal option indices from persisted GoSettings.
+  /// Synchronize internal setting state from persisted GoSettings.
   /// Called by the orchestrator once after loading settings from NVS.
   void sync_settings(const GoSettings &settings);
 
-  /// Convert internal option indices back to GoSettings field values.
+  /// Convert internal setting state back to GoSettings field values.
   /// Reverse of sync_settings().  Called by the orchestrator when a
   /// setting is changed through the UI.
   void apply_to_settings(GoSettings &settings) const;
@@ -317,20 +317,20 @@ private:
   // Active confirm context (which setting opened the confirm dialog)
   uint8_t _confirm_source_setting = 0;
 
-  // Internal settings state (option indices).
+  // Internal settings state.
   // Synced from GoSettings via sync_settings() at startup.
-  uint8_t _setting_units = 0;            // 0=C, 1=F
-  uint8_t _setting_altitude_unit = 0;    // 0=m, 1=ft
-  uint8_t _setting_pm_display = 0;       // 0=ug/m3, 1=USAQI
-  uint8_t _setting_measure_interval = 1; // default index 1 = "10s"
-  uint8_t _setting_gps_mode = 1;         // 1="On When Tracking"
-  uint8_t _setting_mode = 1;             // 1="Portable"
-  uint8_t _setting_auto_lock = 0;        // 0="Off"
-  uint8_t _setting_display_led = 0;      // 0="Off"
-  uint8_t _setting_aqi_led = 0;          // 0="Off"
-  uint8_t _setting_touch_led = 0;        // 0="Off"
-  uint8_t _setting_buzzer_volume = 0;    // 0="Off"
-  uint8_t _setting_melody = 0;           // 0="Off"
+  uint8_t _setting_units = 0;         // 0=C, 1=F
+  uint8_t _setting_altitude_unit = 0; // 0=m, 1=ft
+  uint8_t _setting_pm_display = 0;    // 0=ug/m3, 1=USAQI
+  int _setting_measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
+  uint8_t _setting_gps_mode = 1;      // 1="On When Tracking"
+  uint8_t _setting_mode = 1;          // 1="Portable"
+  uint8_t _setting_auto_lock = 0;     // 0="Off"
+  uint8_t _setting_display_led = 0;   // 0="Off"
+  uint8_t _setting_aqi_led = 0;       // 0="Off"
+  uint8_t _setting_touch_led = 0;     // 0="Off"
+  uint8_t _setting_buzzer_volume = 0; // 0="Off"
+  uint8_t _setting_melody = 0;        // 0="Off"
 
   // Snackbar
   char _snackbar_text[48] = {};
@@ -427,6 +427,7 @@ private:
   void populate_menu_rows(DisplayValues &v) const;
   void populate_settings_rows(DisplayValues &v) const;
   void populate_settings_choice_rows(DisplayValues &v) const;
+  void populate_measure_interval_choice_rows(DisplayValues &v) const;
   void populate_about_rows(DisplayValues &v) const;
   void populate_confirm_rows(DisplayValues &v) const;
   void populate_tag_list_rows(DisplayValues &v) const;
