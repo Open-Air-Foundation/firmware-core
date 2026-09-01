@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "serial-command-pre-onboarding",
+  "rev": "90c9dc9",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -86,9 +86,9 @@
       "category": "User Interface",
       "sub_category": "Timing and GPS",
       "applies_to": ["V1"],
-      "description": "Measurement interval, GPS mode, and auto-lock settings enforce supported values",
-      "expected_result": "The UI lists exactly 3s, 10s, 30s, 60s, 5m, 15m, and 1h; GPS Always Off, On When Tracking, and Always On; and auto-lock Off, 10, 30, and 60 seconds. Select 3s, Always Off, and 10-second auto-lock, reboot, and confirm the same labels. With 10-second auto-lock selected, lock and unlock using short Power presses, then provide no further input; the device locks 10 through 12 seconds after the accepted unlock input. Select Auto Lock Off, lock and unlock again, and provide no input for 70 seconds; the device remains unlocked throughout the observation window.",
-      "notes": "The 3-second floor belongs to the UI/client release choices; firmware interfaces accept 1 through 3600 seconds. Record the starting measurement interval, GPS mode, and auto-lock value, then restore those exact values after the case. GPS data gating and measurement cadence are separate cases."
+      "description": "Measurement interval, GPS mode, and auto-lock settings represent fixed and custom values accurately",
+      "expected_result": "With a fixed interval active, the UI lists exactly 3s, 10s, 30s, 60s, 5m, 15m, and 1h without a Custom row. Set measurementInterval to 17 through Local Server Config and wait for GET convergence; Settings shows exactly Measure Int.: 17s, and the interval submenu shows selected Custom (17s) first followed by all seven fixed choices. Change GPS Mode to Always Off and confirm GET still reports measurementInterval 17. Cold reboot preserves the exact summary and selected custom row. Select fixed 3s and confirm Custom disappears, 3s is selected, and GET reports 3. The GPS menu lists Always Off, On When Tracking, and Always On; auto-lock lists Off, 10, 30, and 60 seconds. With 10-second auto-lock selected, lock and unlock using short Power presses, then provide no further input; the device locks 10 through 12 seconds after the accepted unlock input. Select Auto Lock Off, lock and unlock again, and provide no input for 70 seconds; the device remains unlocked throughout the observation window.",
+      "notes": "Run in Stationary mode with Local Server writes permitted by local or both configuration control. Record the complete starting Local Server Config, including an exact custom interval if present, then restore it after the case. The fixed UI choices start at 3 seconds, while firmware interfaces accept 1 through 3600 seconds. GPS data gating and measurement cadence are separate cases."
     },
     {
       "id": "ui.settings.indicator-brightness",

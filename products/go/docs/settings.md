@@ -35,7 +35,7 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 
 | Field | NVS Key | Type | Default | Valid Range | Notes |
 |---|---|---|---|---|---|
-| `measure_interval_seconds` | `"mi"` | `int` | `10` | 1 .. 3600 | All sensors measured together at this cadence; no per-group on/off |
+| `measure_interval_seconds` | `"mi"` | `int` | `10` | 1 .. 3600 | Exact cadence for all sensors; no per-group on/off |
 | `use_fahrenheit` | `"uf"` | `bool` | `false` | — | Temperature display unit (false=C, true=F) |
 | `use_feet` | `"auf"` | `bool` | `false` | — | Altitude display unit (false=m, true=ft); stored altitude remains meters |
 | `pm_use_usaqi` | `"pmu"` | `bool` | `false` | — | PM display format (false=µg/m³, true=USAQI) |
@@ -56,6 +56,17 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | `back_led_brightness` | `"blb"` | `int` (stored) / `LedBrightness` (in struct) | `Off` (0) | 0 .. 3 | Back AQI LED brightness: Off / Dim / Mid / Bright |
 | `touch_led_intensity` | `"tlb"` | `int` (stored) / `TouchLedIntensity` (in struct) | `Off` (0) | 0 .. 2 | Touch feedback LED intensity: Off / Dim / Bright |
 | `onboarding_done` | `"obd"` | `bool` | `false` | — | First-boot guide latch. `false` shows the one-time Getting Started screen after the boot splash; flips `true` on first real engagement (`Start using`, BLE pair/bond, or any operating-mode change). Cleared by factory reset. |
+
+### Measurement Interval Presentation
+
+The firmware persists every valid measurement interval from 1 through 3600
+seconds exactly. The on-device menu offers fixed choices of 3, 10, 30, 60, 300,
+900, and 3600 seconds. When an interface activates another valid value, the
+Settings summary shows the exact seconds and the interval submenu prepends a
+selected `Custom (<seconds>s)` row.
+
+Changing an unrelated UI setting preserves the custom interval. Selecting one
+of the fixed interval choices explicitly replaces it.
 
 ### Measurement Corrections
 

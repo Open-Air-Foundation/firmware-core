@@ -23,9 +23,16 @@ static constexpr uint8_t ALTITUDE_UNIT_COUNT = 2;
 static const char *const PM_DISPLAY_OPTIONS[] = {"ug/m3", "USAQI"};
 static constexpr uint8_t PM_DISPLAY_COUNT = 2;
 
-static const char *const MEASURE_INTERVAL_OPTIONS[] = {"3s", "10s", "30s", "60s",
-                                                       "5m", "15m", "1h"};
-static constexpr uint8_t MEASURE_INTERVAL_COUNT = 7;
+struct MeasureIntervalOption {
+  int seconds;
+  const char *label;
+};
+
+static constexpr MeasureIntervalOption MEASURE_INTERVAL_OPTIONS[] = {
+    {3, "3s"}, {10, "10s"}, {30, "30s"}, {60, "60s"}, {300, "5m"}, {900, "15m"}, {3600, "1h"},
+};
+static constexpr uint8_t MEASURE_INTERVAL_COUNT =
+    sizeof(MEASURE_INTERVAL_OPTIONS) / sizeof(MEASURE_INTERVAL_OPTIONS[0]);
 
 static const char *const GPS_MODE_OPTIONS[] = {"Always Off", "On When Tracking", "Always On"};
 static constexpr uint8_t GPS_MODE_COUNT = 3;
@@ -143,6 +150,19 @@ static uint8_t display_row(uint8_t index, uint8_t scroll) {
   if (index <= 1)
     return index;
   return (uint8_t)(2 + (index - 2 - scroll));
+}
+
+/// Return the fixed option index for an exact interval match, or -1 for custom.
+static int measure_interval_option_index(int seconds) {
+  for (uint8_t i = 0; i < MEASURE_INTERVAL_COUNT; ++i) {
+    if (MEASURE_INTERVAL_OPTIONS[i].seconds == seconds)
+      return i;
+  }
+  return -1;
+}
+
+static bool is_custom_measure_interval(int seconds) {
+  return measure_interval_option_index(seconds) < 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -448,24 +468,12 @@ void UIManager::sync_settings(const GoSettings &s) {
   _setting_altitude_unit = s.use_feet ? 1 : 0;
   _setting_pm_display = s.pm_use_usaqi ? 1 : 0;
 
-  // Map interval seconds to option index.
-  // Options: "3s"=0, "10s"=1, "30s"=2, "60s"=3, "5m"=4, "15m"=5, "1h"=6
-  // Display interval also has "Display Off"=7 (seconds == 0).
-  // PM/other sensor intervals use "Off"=7 (seconds == 0).
-  static constexpr int INTERVAL_SECONDS[] = {3, 10, 30, 60, 300, 900, 3600};
-  static constexpr uint8_t INTERVAL_COUNT = 7;
+  _setting_measure_interval_seconds = s.measure_interval_seconds;
 
-  auto seconds_to_index = [](int seconds, bool has_off) -> uint8_t {
-    if (seconds <= 0)
-      return has_off ? 7 : 0;
-    for (uint8_t i = 0; i < INTERVAL_COUNT; ++i) {
-      if (seconds <= INTERVAL_SECONDS[i])
-        return i;
-    }
-    return 6; // >= 1h → clamp to "1h"
-  };
-
-  _setting_measure_interval = seconds_to_index(s.measure_interval_seconds, false);
+  if (_screen == Screen::SettingsChoice && _editing_setting_id == SETTING_MEASURE_INTERVAL) {
+    _settings_choice_index = (uint8_t)(2 + setting_current_option(SETTING_MEASURE_INTERVAL));
+    sync_choice_scroll();
+  }
 
   // GPS mode
   switch (s.gps_mode) {
@@ -516,18 +524,7 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
   settings.use_feet = (_setting_altitude_unit == 1);
   settings.pm_use_usaqi = (_setting_pm_display == 1);
 
-  // Map interval option index back to seconds.
-  // Indices 0-6 map to {3, 10, 30, 60, 300, 900, 3600}; index 7 = 0 (Off).
-  static constexpr int INTERVAL_SECONDS[] = {3, 10, 30, 60, 300, 900, 3600};
-  static constexpr uint8_t INTERVAL_COUNT = 7;
-
-  auto index_to_seconds = [](uint8_t index) -> int {
-    if (index < INTERVAL_COUNT)
-      return INTERVAL_SECONDS[index];
-    return 0; // index 7 = Off / Display Off
-  };
-
-  settings.measure_interval_seconds = index_to_seconds(_setting_measure_interval);
+  settings.measure_interval_seconds = _setting_measure_interval_seconds;
 
   // GPS mode
   switch (_setting_gps_mode) {
@@ -930,8 +927,12 @@ uint8_t UIManager::setting_option_count(uint8_t setting_id) const {
     return ALTITUDE_UNIT_COUNT;
   case SETTING_PM_DISPLAY:
     return PM_DISPLAY_COUNT;
-  case SETTING_MEASURE_INTERVAL:
-    return MEASURE_INTERVAL_COUNT;
+  case SETTING_MEASURE_INTERVAL: {
+    uint8_t option_count = MEASURE_INTERVAL_COUNT;
+    if (is_custom_measure_interval(_setting_measure_interval_seconds))
+      ++option_count;
+    return option_count;
+  }
   case SETTING_GPS_MODE:
     return GPS_MODE_COUNT;
   case SETTING_MODE:
@@ -961,7 +962,9 @@ uint8_t UIManager::setting_current_option(uint8_t setting_id) const {
   case SETTING_PM_DISPLAY:
     return _setting_pm_display;
   case SETTING_MEASURE_INTERVAL:
-    return _setting_measure_interval;
+    if (is_custom_measure_interval(_setting_measure_interval_seconds))
+      return 0;
+    return (uint8_t)measure_interval_option_index(_setting_measure_interval_seconds);
   case SETTING_GPS_MODE:
     return _setting_gps_mode;
   case SETTING_MODE:
@@ -999,7 +1002,13 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
     _setting_pm_display = option_index;
     break;
   case SETTING_MEASURE_INTERVAL:
-    _setting_measure_interval = option_index;
+    if (is_custom_measure_interval(_setting_measure_interval_seconds)) {
+      if (option_index == 0)
+        break;
+      --option_index;
+    }
+    if (option_index < MEASURE_INTERVAL_COUNT)
+      _setting_measure_interval_seconds = MEASURE_INTERVAL_OPTIONS[option_index].seconds;
     break;
   case SETTING_GPS_MODE:
     _setting_gps_mode = option_index;
@@ -1551,10 +1560,16 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
       (void)snprintf(label, sizeof(label), "PM Display: %s",
                      PM_DISPLAY_OPTIONS[_setting_pm_display]);
       break;
-    case SETTING_MEASURE_INTERVAL:
-      (void)snprintf(label, sizeof(label), "Measure Int.: %s",
-                     MEASURE_INTERVAL_OPTIONS[_setting_measure_interval]);
-      break;
+    case SETTING_MEASURE_INTERVAL: {
+      const int option_index = measure_interval_option_index(_setting_measure_interval_seconds);
+      if (option_index >= 0) {
+        (void)snprintf(label, sizeof(label), "Measure Int.: %s",
+                       MEASURE_INTERVAL_OPTIONS[option_index].label);
+      } else {
+        (void)snprintf(label, sizeof(label), "Measure Int.: %ds",
+                       _setting_measure_interval_seconds);
+      }
+    } break;
     case SETTING_GPS_MODE:
       (void)snprintf(label, sizeof(label), "GPS Mode: %s", GPS_MODE_OPTIONS[_setting_gps_mode]);
       break;
@@ -1607,7 +1622,12 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   copy_row(v, 1, "Back", false);
   v.show_separator_after_back = true;
 
-  uint8_t option_count = setting_option_count(_editing_setting_id);
+  if (_editing_setting_id == SETTING_MEASURE_INTERVAL) {
+    populate_measure_interval_choice_rows(v);
+    return;
+  }
+
+  const uint8_t option_count = setting_option_count(_editing_setting_id);
   const char *const *options = nullptr;
 
   switch (_editing_setting_id) {
@@ -1619,9 +1639,6 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
     break;
   case SETTING_PM_DISPLAY:
     options = PM_DISPLAY_OPTIONS;
-    break;
-  case SETTING_MEASURE_INTERVAL:
-    options = MEASURE_INTERVAL_OPTIONS;
     break;
   case SETTING_GPS_MODE:
     options = GPS_MODE_OPTIONS;
@@ -1655,6 +1672,30 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
       copy_row(v, (uint8_t)(2 + visible), options[_settings_choice_scroll_start + i], false);
       ++visible;
     }
+  }
+
+  v.row_count = (uint8_t)(2 + visible);
+  v.selected_row = display_row(_settings_choice_index, _settings_choice_scroll_start);
+}
+
+void UIManager::populate_measure_interval_choice_rows(DisplayValues &v) const {
+  const bool has_custom = is_custom_measure_interval(_setting_measure_interval_seconds);
+  const uint8_t option_count = setting_option_count(SETTING_MEASURE_INTERVAL);
+  uint8_t visible = 0;
+
+  for (uint8_t i = 0; i < PAGE_SIZE && (_settings_choice_scroll_start + i) < option_count; ++i) {
+    const uint8_t option_index = (uint8_t)(_settings_choice_scroll_start + i);
+    if (has_custom && option_index == 0) {
+      char label[48];
+      (void)snprintf(label, sizeof(label), "Custom (%ds)", _setting_measure_interval_seconds);
+      copy_row(v, (uint8_t)(2 + visible), label, false);
+    } else {
+      uint8_t fixed_index = option_index;
+      if (has_custom)
+        --fixed_index;
+      copy_row(v, (uint8_t)(2 + visible), MEASURE_INTERVAL_OPTIONS[fixed_index].label, false);
+    }
+    ++visible;
   }
 
   v.row_count = (uint8_t)(2 + visible);
