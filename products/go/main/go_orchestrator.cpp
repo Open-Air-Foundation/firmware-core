@@ -28,6 +28,7 @@
 #include "go_melody.h"
 #include "go_melody_sync.h"
 #include "go_power.h"
+#include "go_thermal_comp.h"
 #include "rtos.h"
 #include "services/ag_client.h"
 
@@ -955,8 +956,23 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     _airflow.add_sample(_raw_measures.temp_hum_a.temperature,
                         static_cast<float>(RTOS::get_time_ms()) / 1000.0f);
   }
-  _raw_measures.tvoc_nox = data.tvoc_nox;
   _raw_measures.pressure = data.pressure;
+  // Compensate board-heat leakage into the SHT before user corrections and
+  // payload caching, so every downstream consumer sees the corrected value.
+  // Falls back to the uncompensated reading when the DPS temperature is
+  // invalid.
+  if (_raw_measures.temp_hum_a.is_temp_valid() &&
+      _raw_measures.pressure.is_temp_valid()) {
+    const float raw_temp = _raw_measures.temp_hum_a.temperature;
+    const float corrected_temp = thermal_comp::correct_temperature(
+        raw_temp, _raw_measures.pressure.temperature);
+    _raw_measures.temp_hum_a.temperature = corrected_temp;
+    if (_raw_measures.temp_hum_a.is_hum_valid()) {
+      _raw_measures.temp_hum_a.humidity = thermal_comp::correct_humidity(
+          _raw_measures.temp_hum_a.humidity, raw_temp, corrected_temp);
+    }
+  }
+  _raw_measures.tvoc_nox = data.tvoc_nox;
   _raw_measures.power.battery_voltage = _latest_power.battery_voltage;
   _raw_measures.power.charging_voltage = _latest_power.charging_voltage;
   _raw_measures.power.battery_percentage = _latest_power.battery_percentage;
