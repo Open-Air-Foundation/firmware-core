@@ -655,9 +655,8 @@ PressureData SensorManager::_calculate_pressure_average(const PressureData &sum,
                                               : MeasuresInvalid::PRESSURE,
           .altitude = (counters.altitude > 0) ? sum.altitude / counters.altitude
                                               : MeasuresInvalid::ALTITUDE,
-          .temperature = (counters.pressure_temp > 0)
-                             ? sum.temperature / counters.pressure_temp
-                             : MeasuresInvalid::TEMPERATURE};
+          .temperature = (counters.pressure_temp > 0) ? sum.temperature / counters.pressure_temp
+                                                      : MeasuresInvalid::TEMPERATURE};
 }
 
 TempHumSource SensorManager::_resolve_temp_hum_a_source() {

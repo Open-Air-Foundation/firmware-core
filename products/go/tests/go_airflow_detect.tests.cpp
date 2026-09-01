@@ -23,8 +23,7 @@ namespace {
 constexpr float START_S = 100.0f;
 constexpr float CADENCE_S = 10.0f;
 
-float feed(airflow_detect::Detector &det, const float *vals, size_t n,
-           float t0 = START_S) {
+float feed(airflow_detect::Detector &det, const float *vals, size_t n, float t0 = START_S) {
   float t = t0;
   for (size_t i = 0; i < n; ++i) {
     det.add_sample(vals[i], t);
@@ -35,21 +34,19 @@ float feed(airflow_detect::Detector &det, const float *vals, size_t n,
 
 // Still air, idle, minutes 170–176 of the validation log.
 // Window jitters (reference analysis): 13 / 20 / 9 mK.
-constexpr float STILL_AIR[] = {
-    29.44f, 29.48f, 29.48f, 29.48f, 29.49f, 29.51f, 29.51f, 29.51f, 29.51f,
-    29.53f, 29.53f, 29.55f, 29.52f, 29.55f, 29.55f, 29.56f, 29.56f, 29.57f,
-    29.60f, 29.57f, 29.58f, 29.56f, 29.57f, 29.57f, 29.58f, 29.57f, 29.56f,
-    29.56f, 29.57f, 29.57f, 29.57f, 29.56f, 29.56f, 29.58f, 29.57f, 29.55f,
-    29.56f, 29.57f};
+constexpr float STILL_AIR[] = {29.44f, 29.48f, 29.48f, 29.48f, 29.49f, 29.51f, 29.51f, 29.51f,
+                               29.51f, 29.53f, 29.53f, 29.55f, 29.52f, 29.55f, 29.55f, 29.56f,
+                               29.56f, 29.57f, 29.60f, 29.57f, 29.58f, 29.56f, 29.57f, 29.57f,
+                               29.58f, 29.57f, 29.56f, 29.56f, 29.57f, 29.57f, 29.57f, 29.56f,
+                               29.56f, 29.58f, 29.57f, 29.55f, 29.56f, 29.57f};
 
 // Direct desk fan, charging, minutes 116–122 of the validation log.
 // Window jitters (reference analysis): 42 / 61 / 47 mK.
-constexpr float FAN[] = {
-    26.93f, 26.91f, 26.96f, 26.94f, 26.94f, 26.95f, 26.93f, 26.96f, 27.03f,
-    27.03f, 27.03f, 26.93f, 26.91f, 26.98f, 26.91f, 26.86f, 26.84f, 26.77f,
-    26.79f, 26.81f, 26.68f, 26.56f, 26.59f, 26.52f, 26.58f, 26.52f, 26.48f,
-    26.53f, 26.56f, 26.62f, 26.64f, 26.68f, 26.73f, 26.77f, 26.81f, 26.82f,
-    26.83f, 26.83f};
+constexpr float FAN[] = {26.93f, 26.91f, 26.96f, 26.94f, 26.94f, 26.95f, 26.93f, 26.96f,
+                         27.03f, 27.03f, 27.03f, 26.93f, 26.91f, 26.98f, 26.91f, 26.86f,
+                         26.84f, 26.77f, 26.79f, 26.81f, 26.68f, 26.56f, 26.59f, 26.52f,
+                         26.58f, 26.52f, 26.48f, 26.53f, 26.56f, 26.62f, 26.64f, 26.68f,
+                         26.73f, 26.77f, 26.81f, 26.82f, 26.83f, 26.83f};
 
 } // namespace
 
@@ -77,8 +74,7 @@ TEST_CASE("sustained fluctuation raises the flag, sustained quiet clears it") {
   airflow_detect::Detector det;
   float t = START_S;
   // Alternating +/-0.05 °C -> diffs of +/-0.1 °C -> jitter ~100 mK.
-  const int loud_samples =
-      1 + airflow_detect::WINDOW_DIFFS * airflow_detect::ENTER_WINDOWS;
+  const int loud_samples = 1 + airflow_detect::WINDOW_DIFFS * airflow_detect::ENTER_WINDOWS;
   for (int i = 0; i < loud_samples; ++i) {
     det.add_sample(25.0f + ((i % 2 != 0) ? 0.05f : -0.05f), t);
     t += CADENCE_S;
@@ -94,9 +90,7 @@ TEST_CASE("sustained fluctuation raises the flag, sustained quiet clears it") {
   CHECK(det.airflow());
 
   // ...but the full exit dwell is.
-  for (int i = 0;
-       i < airflow_detect::WINDOW_DIFFS * (airflow_detect::EXIT_WINDOWS - 1);
-       ++i) {
+  for (int i = 0; i < airflow_detect::WINDOW_DIFFS * (airflow_detect::EXIT_WINDOWS - 1); ++i) {
     det.add_sample(25.0f, t);
     t += CADENCE_S;
   }
@@ -112,8 +106,7 @@ TEST_CASE("ambiguous windows hold the exit streak, loud windows reset it") {
     }
     REQUIRE(det.airflow());
   };
-  auto feed_windows = [](airflow_detect::Detector &det, float &t, int windows,
-                         float half_step) {
+  auto feed_windows = [](airflow_detect::Detector &det, float &t, int windows, float half_step) {
     for (int i = 0; i < airflow_detect::WINDOW_DIFFS * windows; ++i) {
       det.add_sample(25.0f + ((i % 2 != 0) ? half_step : -half_step), t);
       t += CADENCE_S;
@@ -124,10 +117,10 @@ TEST_CASE("ambiguous windows hold the exit streak, loud windows reset it") {
     airflow_detect::Detector det;
     float t = START_S;
     raise_flag(det, t);
-    feed_windows(det, t, 3, 0.0f);    // 3 quiet windows (~0 mK)
-    feed_windows(det, t, 1, 0.013f);  // ~26 mK: ambiguous, holds
+    feed_windows(det, t, 3, 0.0f);   // 3 quiet windows (~0 mK)
+    feed_windows(det, t, 1, 0.013f); // ~26 mK: ambiguous, holds
     CHECK(det.airflow());
-    feed_windows(det, t, 2, 0.0f);    // 2 more quiet -> 5 total
+    feed_windows(det, t, 2, 0.0f); // 2 more quiet -> 5 total
     CHECK_FALSE(det.airflow());
   }
 
@@ -136,8 +129,8 @@ TEST_CASE("ambiguous windows hold the exit streak, loud windows reset it") {
     float t = START_S;
     raise_flag(det, t);
     feed_windows(det, t, 4, 0.0f);
-    feed_windows(det, t, 1, 0.05f);   // ~100 mK: wind is back, reset
-    feed_windows(det, t, 4, 0.0f);    // only 4 quiet since the reset
+    feed_windows(det, t, 1, 0.05f); // ~100 mK: wind is back, reset
+    feed_windows(det, t, 4, 0.0f);  // only 4 quiet since the reset
     CHECK(det.airflow());
   }
 }
