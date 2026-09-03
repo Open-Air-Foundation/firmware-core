@@ -81,6 +81,8 @@ private:
   static constexpr uint8_t REG_RESET = 0x0C;
   static constexpr uint8_t REG_ID = 0x0D;
   static constexpr uint8_t REG_COEF_START = 0x10;
+  static constexpr uint8_t REG_TMP_COEF_SRCE =
+      0x28; // bit 7: sensor the coefficients were calibrated with
 
   // Expected product ID
   static constexpr uint8_t PRODUCT_ID = 0x10;
@@ -95,8 +97,10 @@ private:
   static constexpr uint8_t MODE_CONTINUOUS = 0x07;
 
   // Configuration values
-  static constexpr uint8_t PRS_CFG_16X = 0x04;      // 1 meas/sec, 16x oversampling
-  static constexpr uint8_t TMP_CFG_EXT_16X = 0x84;  // External MEMS, 1 meas/sec, 16x
+  static constexpr uint8_t PRS_CFG_16X = 0x04; // 1 meas/sec, 16x oversampling
+  static constexpr uint8_t TMP_COEF_SRCE_EXT = (1 << 7);
+  static constexpr uint8_t TMP_CFG_INT_16X = 0x04;  // Internal ASIC sensor, 1 meas/sec, 16x
+  static constexpr uint8_t TMP_CFG_EXT_16X = 0x84;  // External MEMS sensor, 1 meas/sec, 16x
   static constexpr uint8_t CFG_SHIFT_ENABLE = 0x0C; // P_SHIFT + T_SHIFT for >8x oversampling
   static constexpr uint8_t SOFT_RESET_CMD = 0x89;
 

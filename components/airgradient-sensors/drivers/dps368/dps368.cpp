@@ -93,8 +93,22 @@ bool DPS368::init() {
     return false;
   }
 
-  // Configure temperature: external MEMS sensor, 1 meas/sec, 16x oversampling
-  if (!_write_register(REG_TMP_CFG, TMP_CFG_EXT_16X)) {
+  // The factory coefficients were calibrated against one of the two
+  // temperature sensors (datasheet 8.11, TMP_COEF_SRCE); TMP_EXT must select
+  // that same sensor or the compensated temperature carries a constant
+  // offset of several degC. A unit calibrated for the ASIC sensor read
+  // 7.9 degC low when driven on the MEMS sensor.
+  uint8_t coef_srce = 0;
+  if (!_read_register(REG_TMP_COEF_SRCE, &coef_srce, 1)) {
+    ESP_LOGE(TAG, "Failed to read temperature coefficient source");
+    return false;
+  }
+  const bool external_sensor = (coef_srce & TMP_COEF_SRCE_EXT) != 0;
+  ESP_LOGI(TAG, "Temperature sensor: %s (coefficient source)",
+           external_sensor ? "external MEMS" : "internal ASIC");
+
+  // Configure temperature: matching sensor, 1 meas/sec, 16x oversampling
+  if (!_write_register(REG_TMP_CFG, external_sensor ? TMP_CFG_EXT_16X : TMP_CFG_INT_16X)) {
     ESP_LOGE(TAG, "Failed to configure temperature measurement");
     return false;
   }
