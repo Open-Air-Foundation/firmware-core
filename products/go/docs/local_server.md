@@ -146,12 +146,19 @@ objects from the same subset. Device behavior fields are:
 | `pmStandard` | `ugm3`, `us-aqi` | Select mass concentration or US AQI presentation |
 | `temperatureUnit` | `c`, `f` | Select product display temperature unit |
 | `altitudeUnit` | `m`, `ft` | Select product display altitude unit; raw GPS and stored route altitude remain in meters |
-| `measurementInterval` | Integer 1 .. 3600 | Set the measurement interval in seconds |
+| `measurementInterval` | Integer 1 .. 3600 | Set the exact measurement interval in seconds; non-fixed UI values appear as custom |
 | `gpsMode` | `off`, `tracking`, `always` | Disable GPS, run it only while tracking, or keep it active |
 | `frontLedBrightness` | Integer 0 .. 3 | Set front LED brightness: off, dim, mid, or bright |
 | `backLedBrightness` | Integer 0 .. 3 | Set AQI LED brightness: off, dim, mid, or bright |
 | `touchLedIntensity` | Integer 0 .. 2 | Set touch LED intensity: off, dim, or bright |
 | `buzzerEnabled` | Boolean | Enable or disable buzzer playback |
+
+Accepted measurement intervals are persisted and scheduled exactly. The device
+menu offers fixed choices of 3s, 10s, 30s, 60s, 5m, 15m, and 1h. For another
+valid value such as 17, the Settings summary shows `Measure Int.: 17s` and the
+interval submenu prepends and selects `Custom (17s)`. Changing another UI
+setting preserves 17 seconds; explicitly selecting a fixed interval replaces
+it.
 
 Connectivity, sensor, and correction fields are:
 
