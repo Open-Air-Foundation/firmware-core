@@ -90,8 +90,10 @@ static uint16_t estimate_ocv_mv(uint16_t vbat_mv, int16_t ibat_ma) {
   return ocv_mv;
 }
 
-// I2C timeout
+// I2C timing
+constexpr uint32_t I2C_SCL_SPEED_HZ = 100000;
 constexpr int I2C_TIMEOUT_MS = 1000;
+constexpr uint32_t I2C_SCL_WAIT_US = 20000;
 
 // Register bit masks
 namespace BIT_MASK {
@@ -159,7 +161,9 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
   i2c_device_config_t dev_cfg = {
       .dev_addr_length = I2C_ADDR_BIT_LEN_7,
       .device_address = device_address_,
-      .scl_speed_hz = 400000, // 400kHz I2C
+      .scl_speed_hz = I2C_SCL_SPEED_HZ,
+      .scl_wait_us = I2C_SCL_WAIT_US,
+      .flags = {},
   };
 
   ret = i2c_master_bus_add_device(i2c_bus_, &dev_cfg, &dev_handle_);
