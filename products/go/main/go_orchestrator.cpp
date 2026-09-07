@@ -28,6 +28,7 @@
 #include "go_melody.h"
 #include "go_melody_sync.h"
 #include "go_power.h"
+#include "go_thermal_comp.h"
 #include "rtos.h"
 #include "services/ag_client.h"
 
@@ -631,6 +632,7 @@ void Orchestrator::on_bms_status_timer() {
 void Orchestrator::on_inactivity_timeout() { lock(); }
 
 void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) {
+  _airflow_interval_warned = false;
   if (previous_settings.measure_interval_seconds == _settings.measure_interval_seconds) {
     return;
   }
@@ -948,8 +950,48 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   _raw_measures.pm_a = data.pm_a;
   _raw_measures.co2 = data.co2;
   _raw_measures.temp_hum_a = data.temp_hum_a;
-  _raw_measures.tvoc_nox = data.tvoc_nox;
+  // The airflow detector consumes the RAW reading: its jitter statistic is
+  // calibrated on uncompensated samples, and it must keep observing while
+  // compensation is unavailable or later regime-switched. The statistic is
+  // defined at a 5-25 s sample cadence; outside that band no window ever
+  // closes and compensation runs unguarded against forced airflow.
+  const float interval_s = static_cast<float>(_settings.measure_interval_seconds);
+  if ((interval_s < airflow_detect::MIN_GAP_S || interval_s > airflow_detect::MAX_GAP_S) &&
+      !_airflow_interval_warned) {
+    AG_LOGW(TAG,
+            "airflow detector inactive at %d s measure interval (needs %g-%g s); "
+            "SHT compensation runs unguarded against forced airflow",
+            _settings.measure_interval_seconds, static_cast<double>(airflow_detect::MIN_GAP_S),
+            static_cast<double>(airflow_detect::MAX_GAP_S));
+    _airflow_interval_warned = true;
+  }
+  if (_raw_measures.temp_hum_a.is_temp_valid()) {
+    _airflow.add_sample(_raw_measures.temp_hum_a.temperature,
+                        static_cast<float>(RTOS::get_time_ms()) / 1000.0f);
+  }
   _raw_measures.pressure = data.pressure;
+  // Compensate board-heat leakage into the SHT before user corrections and
+  // payload caching, so every consumer fed from this path sees the corrected
+  // value. The deep-sleep fast path (go_app.cpp) does not run this hook: its
+  // route points and the measures it hands over at promotion are raw.
+  // Falls back to the uncompensated reading when the DPS temperature is
+  // invalid — and while external airflow is detected, since moving air
+  // strips the coupling the model assumes and the raw reading is then the
+  // better estimate (measured: raw errs ~+1, corrected ~-3 under a fan).
+  if (_raw_measures.temp_hum_a.is_temp_valid() && _raw_measures.pressure.is_temp_valid()) {
+    const float raw_temp = _raw_measures.temp_hum_a.temperature;
+    const float raw_hum = _raw_measures.temp_hum_a.humidity;
+    if (!_airflow.airflow()) {
+      const float corrected_temp =
+          thermal_comp::correct_temperature(raw_temp, _raw_measures.pressure.temperature);
+      _raw_measures.temp_hum_a.temperature = corrected_temp;
+      if (_raw_measures.temp_hum_a.is_hum_valid()) {
+        _raw_measures.temp_hum_a.humidity =
+            thermal_comp::correct_humidity(raw_hum, raw_temp, corrected_temp);
+      }
+    }
+  }
+  _raw_measures.tvoc_nox = data.tvoc_nox;
   _raw_measures.power.battery_voltage = _latest_power.battery_voltage;
   _raw_measures.power.charging_voltage = _latest_power.charging_voltage;
   _raw_measures.power.battery_percentage = _latest_power.battery_percentage;
@@ -1031,7 +1073,8 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   }
 
   // Update BLE measures characteristic (always for READ; notifies when connected)
-  // BLE transports raw measurements; clients decide whether and how to apply
+  // BLE transports measurements before user corrections (board-heat
+  // compensation already applied); clients decide whether and how to apply
   // the correction settings from Config.
   _svc.ble_service.notify_measures(_raw_measures, _latest_gps, time(nullptr));
 

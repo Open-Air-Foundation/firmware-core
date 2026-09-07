@@ -223,6 +223,7 @@ private:
     // Pressure counters
     int pressure = 0;
     int altitude = 0;
+    int pressure_temp = 0;
   };
 
   // Temp/hum fallback resolution

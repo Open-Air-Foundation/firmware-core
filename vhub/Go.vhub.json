@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "90c9dc9",
+  "rev": "sht-thermal-compensation",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -125,6 +125,15 @@
       "description": "Measurement cadence and V1 SPS30 sleep/wake follow the selected release settings",
       "expected_result": "At 3 seconds, five consecutive completed-measurement timestamps are each 2 through 4 seconds apart, and BLE Measures plus Home update once per completed cycle. At 30 seconds, two consecutive cycles show the SPS30 fan stop after measurement and serial PM power OFF, followed before the next result by PM power ON, \"PM prepare: waking and warming up after power-on\", and \"PM prepare: complete\". PM1/PM2.5/PM10 are present in that next result, no reboot occurs, and the serial capture contains zero \"PMID collapsed\" or \"PMID wait timed out\" warnings.",
       "notes": "Use an onboarded V1 in a quiet room with serial and bonded BLE Measures capture. Record five 3-second cycles, then two 30-second cycles. Restore the recorded interval."
+    },
+    {
+      "id": "sensors.temp.thermal-compensation",
+      "category": "Sensor Presentation",
+      "sub_category": "Temperature & humidity",
+      "applies_to": ["V1"],
+      "description": "Displayed temperature is compensated for board heat and tracks room air",
+      "expected_result": "After 30 minutes powered in still room air, the Home temperature reads within ±1 °C of an independent reference thermometer beside the device. Plugging in USB power and waiting 45 minutes raises the displayed temperature by no more than 1 °C while the room stays stable, even though the board (DPS368 die temperature, `dps_temp` in the serial log) warms by 2-3 °C. Humidity stays plausible and moves opposite to the temperature correction.",
+      "notes": "Requires a valid DPS368 die temperature; when the pressure sensor reports no temperature the reading falls back to the uncompensated value (reads a few °C high). Use a real reference thermometer, not another AirGradient unit. Readings in the first ~10 minutes after a cold boot may sit up to ~1 °C low while the board's self-heating floor establishes. While the SHT jitter detector reports forced airflow (fan, AC vent, convection oven) the raw reading passes through instead, so under a fan the value reads 1-2 °C high rather than ~3 °C low; it returns to compensated within ~10-15 minutes of still air. The detector only runs at measure intervals of 5-25 s; outside that band the firmware logs a warning once and compensation runs unguarded. The deep-sleep fast path does not compensate."
     },
     {
       "id": "diagnostics.peripheral.success",
