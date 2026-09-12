@@ -369,7 +369,7 @@ TEST_CASE("connect_with_saved_credentials sets STA mode, calls connect, arms 30s
 
   CHECK(f.hal.last_mode_set == WifiMode::Sta);
   CHECK(f.hal.set_power_save_calls == 1);
-  CHECK(f.hal.last_power_save == WifiPowerSave::None);
+  CHECK(f.hal.last_power_save == WifiPowerSave::MinModem);
   CHECK(f.hal.connect_calls == 1);
   CHECK(f.hal.last_ssid == "saved"); // single saved network resolved directly
   CHECK(WifiServiceTestAccess::deadline(f.svc) == 1000 + 30000);
@@ -430,7 +430,7 @@ TEST_CASE("try_default_fallback_credentials connects with airgradient/cleanair t
 
   CHECK(f.hal.last_mode_set == WifiMode::Sta);
   CHECK(f.hal.set_power_save_calls == 1);
-  CHECK(f.hal.last_power_save == WifiPowerSave::None);
+  CHECK(f.hal.last_power_save == WifiPowerSave::MinModem);
   REQUIRE(f.hal.connect_calls == 1);
   CHECK(f.hal.last_ssid == "airgradient");
   CHECK(f.hal.last_password == "cleanair");
