@@ -2518,6 +2518,12 @@ CONFIG_AG_HTTP_MAX_ROUTES=24
 # end of AirGradient HTTP Server
 
 #
+# AirGradient Local Server
+#
+CONFIG_AG_LOCAL_SERVER_JSON_BUF=3072
+# end of AirGradient Local Server
+
+#
 # AirGradient OTA
 #
 CONFIG_AG_OTA_HTTP_TIMEOUT_MS=15000
