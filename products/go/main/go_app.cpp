@@ -521,7 +521,8 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   DisplayValues wake_values = build_wake_values(snapshot, snapshot_valid);
 
   // Returns in ~10 ms.  Worker task handles the SPI full refresh (~3 s).
-  _board.report_chip(Chip::Display, disp.init(wake_values, /* defer_refresh= */ true));
+  const bool disp_ok = disp.init(wake_values, /* defer_refresh= */ true);
+  _board.report_chip(Chip::Display, disp_ok && disp.panel_detected());
 
   // Stop LP Core after SPI/display init, before I2C init.
   _board.ulp_stop();
@@ -729,8 +730,8 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       boot_splash_requested = true;
     }
 
-    _board.report_chip(Chip::Display,
-                       early_display.init(initial_values, /* defer_refresh= */ true));
+    const bool disp_ok = early_display.init(initial_values, /* defer_refresh= */ true);
+    _board.report_chip(Chip::Display, disp_ok && early_display.panel_detected());
     handoff.display_painted = true;
   }
 

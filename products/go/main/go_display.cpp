@@ -92,6 +92,7 @@ constexpr size_t TX_BOUNCE_BYTES = 4096;
 struct DriverState {
   bool inited = false;
   bool bus_acquired = false;
+  bool panel_seen = false; // BUSY observed high after reset: a controller is answering
 
   spi_host_device_t spi_host = SPI2_HOST;
   int spi_clock_hz = 4000000;
@@ -264,18 +265,41 @@ void driver_bus_release() {
   g_driver.bus_acquired = false;
 }
 
+// The SSD1680 raises BUSY while it processes a reset.  Seeing that edge is
+// the only cheap proof that a controller is on the FPC and D/C is wired:
+// with no panel (or D/C stuck) BUSY just stays low and every wait passes.
+static constexpr uint32_t PANEL_BUSY_PROBE_MS = 20;
+
+void probe_busy_high() {
+  if (g_driver.panel_seen) {
+    return;
+  }
+  for (uint32_t waited = 0; waited < PANEL_BUSY_PROBE_MS; waited += 1) {
+    if (gpio_get_level(g_driver.pin_busy) != 0) {
+      g_driver.panel_seen = true;
+      return;
+    }
+    RTOS::delay_ms(1);
+  }
+}
+
 // Full SSD1680 initialization sequence
 esp_err_t driver_hw_init_full() {
   // Hardware reset
   set_rst(0);
   delay_ms(10);
   set_rst(1);
+  probe_busy_high();
   delay_ms(10);
   wait_busy_low();
 
   // Software reset
   DISP_RETURN_ON_ERR(write_cmd(0x12));
+  probe_busy_high();
   wait_busy_low();
+  if (!g_driver.panel_seen) {
+    ESP_LOGW(TAG, "BUSY never rose after reset — no panel, or D/C not reaching it");
+  }
 
   // Driver output control: gate lines = HEIGHT_PX - 1
   DISP_RETURN_ON_ERR(write_cmd(0x01));
@@ -1160,6 +1184,8 @@ DisplayService::DisplayService(const Config &config)
     : _config(config), _u8g2{}, _render_buf{}, _prev_values{}, _diff_count(0),
       _pending_mode(RefreshMode::Full), _task_handle(nullptr), _running(false),
       _worker_busy(false) {}
+
+bool DisplayService::panel_detected() const { return g_driver.panel_seen; }
 
 bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
   esp_err_t err = driver_init(_config);

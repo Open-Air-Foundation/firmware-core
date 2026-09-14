@@ -90,6 +90,13 @@ private:
   // Cold-boot PMID gate — bounded wait + re-kick for SPS30 probe
   void _ensure_pmid_ready();
 
+  // I2C bus + variant detection (+ expander on v2).  Split out of
+  // init_buses() because the early-paint boot paths construct the display
+  // before init_buses(), and on v2 the display's D/C line lives on the
+  // expander.  Idempotent, no settle delays.
+  void _init_i2c_and_variant();
+  bool _i2c_ready = false;
+
   // v2.0: bring up the TCA6408A and bind it to gpio::expander::hal.
   bool _init_expander();
   void _log_i2c_census();

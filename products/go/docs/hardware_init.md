@@ -336,6 +336,19 @@ polling when `add_interrupt_handler()` returns false.
 `GoBoard::touch_int_pin()` returns the ALERT pin for the detected variant so
 `GoApp` never hard-codes it.
 
+The interactive and button-wake paths construct the display before
+`init_buses()` (early paint). On v2 the D/C pin is on the expander, so
+`display()` first runs `_init_i2c_and_variant()` — the no-delay subset of
+`init_buses()` (I2C bus, variant probes, census, expander bring-up) — and
+`init_buses()` later skips what is already done. The early paint therefore
+costs a few milliseconds of I2C on v2 instead of the 200 ms of settle delays
+`init_buses()` keeps around the same steps.
+
+The chip report marks the display `PASS` only when the SSD1680 raised BUSY
+after the hardware or software reset (`DisplayService::panel_detected()`);
+a missing panel or a D/C line that does not reach it leaves BUSY low, so
+every wait would otherwise pass silently.
+
 ## Boot Chip Report
 
 `GoHardwareBoard` keeps a `ChipReport` (`go_chip_report.h`, host-testable)

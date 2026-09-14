@@ -156,9 +156,38 @@ void GoHardwareBoard::init_buses() {
   gpio_set_drive_capability(PIN_PM_POWER, GPIO_DRIVE_CAP_3);
   hal.set_level(PIN_PM_POWER, 1);
 
-  RTOS::delay_ms(100);
+  if (!_i2c_ready) {
+    RTOS::delay_ms(100);
+    _init_i2c_and_variant();
+    RTOS::delay_ms(100);
+  }
 
-  // I2C bus
+  // Drive PM power to the variant-appropriate "ON" level.
+  //   Prototype: IO26 already at 1 (safe-default above), no write needed.
+  //   v1:        IO26 level 0 (active-low PM ON).
+  //   v2:        EN_PM1 lives on the expander; IO26 is unconnected.
+  switch (_variant) {
+  case BoardVariant::V2:
+    if (_expander != nullptr && _expander->ready()) {
+      gpio::expander::hal.set_level(PIN_V2_PM_POWER, pm_power_on_level(_variant));
+    }
+    break;
+  case BoardVariant::V1:
+    hal.set_level(PIN_PM_POWER, pm_power_on_level(_variant));
+    break;
+  case BoardVariant::Prototype:
+    break;
+  }
+
+  RTOS::delay_ms(100);
+  _buses_ready = true;
+}
+
+void GoHardwareBoard::_init_i2c_and_variant() {
+  if (_i2c_ready) {
+    return;
+  }
+
   i2c_master_bus_config_t config = {
       .i2c_port = I2C_MASTER_PORT,
       .sda_io_num = PIN_I2C_SDA,
@@ -176,8 +205,6 @@ void GoHardwareBoard::init_buses() {
   ESP_ERROR_CHECK(i2c_new_master_bus(&config, &_i2c_bus));
   AG_LOGI(TAG, "I2C bus ready");
 
-  RTOS::delay_ms(100);
-
   // Board variant detection.  The TCA6408A expander exists only on v2.0; the
   // fuel gauge address 0x55 is shared by BQ27427 (v1.0) and BQ27742 (v2.0).
   constexpr int PROBE_TIMEOUT_MS = 100;
@@ -192,25 +219,10 @@ void GoHardwareBoard::init_buses() {
   // variant (about 100 ms of probing).
   _log_i2c_census();
 
-  // Drive PM power to the variant-appropriate "ON" level.
-  //   Prototype: IO26 already at 1 (safe-default above), no write needed.
-  //   v1:        IO26 level 0 (active-low PM ON).
-  //   v2:        EN_PM1 lives on the expander; IO26 is unconnected.
-  switch (_variant) {
-  case BoardVariant::V2:
-    if (_init_expander()) {
-      gpio::expander::hal.set_level(PIN_V2_PM_POWER, pm_power_on_level(_variant));
-    }
-    break;
-  case BoardVariant::V1:
-    hal.set_level(PIN_PM_POWER, pm_power_on_level(_variant));
-    break;
-  case BoardVariant::Prototype:
-    break;
+  if (_variant == BoardVariant::V2) {
+    _init_expander();
   }
-
-  RTOS::delay_ms(100);
-  _buses_ready = true;
+  _i2c_ready = true;
 }
 
 bool GoHardwareBoard::_init_expander() {
@@ -730,6 +742,10 @@ StorageService &GoHardwareBoard::storage() {
 DisplayService &GoHardwareBoard::display() {
   assert(_spi_ready && "display() requires init_spi()");
   if (!_display) {
+    // The early-paint paths reach here before init_buses().  The D/C pin is
+    // variant-dependent (expander on v2), so detect the variant first; this
+    // is the no-delay subset of init_buses() and costs a few milliseconds.
+    _init_i2c_and_variant();
     _display = new DisplayService({
         .spi_host = SPI_HOST,
         .pin_cs = PIN_DISPLAY_CS,

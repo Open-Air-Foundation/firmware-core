@@ -308,6 +308,11 @@ public:
   /// orchestrator task — the only caller in this product.
   void flush();
 
+  /// True once the controller has raised BUSY after a reset — proof that a
+  /// panel is attached and D/C reaches it.  init() succeeding only proves
+  /// the SPI device and pins were set up.
+  bool panel_detected() const;
+
   /// Clear display to white (full refresh). Blocking.
   void clear();
 
@@ -398,6 +403,8 @@ public:
     spy_last_init_deferred = defer_refresh;
     return true;
   }
+
+  bool panel_detected() const { return true; }
 
   bool update(const DisplayValues &values, bool = false) {
     ++spy_update_count;
