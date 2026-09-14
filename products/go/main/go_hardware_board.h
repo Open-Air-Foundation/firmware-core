@@ -8,7 +8,9 @@
 class AgClient;
 class BQ25629Bms;
 class BQ27427;
+class BQ27742;
 class SPS30;
+class TCA6408A;
 class EspWifiHal;
 class IdfHttpServer;
 class LedcBuzzer;
@@ -57,6 +59,7 @@ public:
 
   // --- Platform ---
   BoardVariant variant() const override;
+  int touch_int_pin() const override;
   std::string serial_number() override;
   const char *firmware_version() override;
   const gpio::Hal &gpio_hal() override;
@@ -85,15 +88,24 @@ private:
   // Cold-boot PMID gate — bounded wait + re-kick for SPS30 probe
   void _ensure_pmid_ready();
 
+  // v2.0: bring up the TCA6408A and bind it to gpio::expander::hal.
+  bool _init_expander();
+  void _log_i2c_census();
+  int _pm_power_pin() const;
+  void _init_fuel_gauge_v1();
+  void _init_fuel_gauge_v2();
+
   // Bus handles
   i2c_master_bus_handle_t _i2c_bus = nullptr;
+  TCA6408A *_expander = nullptr;
 
   // Owned objects (heap-allocated, never freed)
   NvsConfigStore *_config_store = nullptr;
   GoSettings _settings{};
   bool _settings_loaded = false;
   BQ25629Bms *_bms_driver = nullptr;
-  BQ27427 *_fuel_gauge = nullptr;
+  BQ27427 *_fuel_gauge = nullptr;    // v1.0
+  BQ27742 *_fuel_gauge_v2 = nullptr; // v2.0
   SPS30 *_pm_fan = nullptr; // dedicated PM-fan load for factory learning discharge
   bool _pm_fan_inited = false;
   SensorManager *_sensor_manager = nullptr;

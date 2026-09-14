@@ -37,7 +37,12 @@ components/airgradient-gpio/
 ```
 
 - `hal/` — public GPIO types and the `gpio::Hal` function-pointer table
-- `drivers/` — native platform implementation (`gpio::native::hal`)
+- `drivers/` — native platform implementation (`gpio::native::hal`), the
+  TCA6408A I2C expander driver, and `gpio::expander::hal`, a `gpio::Hal` that
+  forwards native pins to the native table and virtual pins
+  (`gpio::expander::pin(n)`, numbered from 100) to the attached TCA6408A.
+  Expander pins support direction and level only; interrupt registration
+  returns `false` so callers fall back to polling.
 
 ## Public Includes
 

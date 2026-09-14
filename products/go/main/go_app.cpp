@@ -22,7 +22,6 @@
 // Minimal pin/bus constants for host test compilation.
 inline constexpr int PIN_BUTTON_POWER = 5;
 inline constexpr int PIN_BUTTON_BOOT = 28;
-inline constexpr int PIN_CAP_INT = 1;
 inline constexpr int GPS_BAUD = 115200;
 // Stub esp_reset_reason for host builds.
 enum esp_reset_reason_t { ESP_RST_UNKNOWN = 0 };
@@ -576,7 +575,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // InputService: suppress the first ButtonPower event (the wake press)
   auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue,
                                          {
-                                             .pin_cap_int = PIN_CAP_INT,
+                                             .pin_cap_int = _board.touch_int_pin(),
                                              .pin_button_power = PIN_BUTTON_POWER,
                                              .pin_button_boot = PIN_BUTTON_BOOT,
                                              .suppress_button_wake = true,
@@ -829,7 +828,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
                      {.baud_rate = GPS_BAUD, .task_stack_size = 4096, .task_priority = 3});
 
   auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue,
-                                         {.pin_cap_int = PIN_CAP_INT,
+                                         {.pin_cap_int = _board.touch_int_pin(),
                                           .pin_button_power = PIN_BUTTON_POWER,
                                           .pin_button_boot = PIN_BUTTON_BOOT,
                                           .suppress_button_wake = handoff.suppress_wake_press});

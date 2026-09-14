@@ -19,6 +19,8 @@
 #include <driver/spi_master.h>
 #include <driver/uart.h>
 
+#include "expander_gpio.h"
+
 // ---------------------------------------------------------------------------
 // SPI bus (shared by display and NAND flash)
 //
@@ -122,6 +124,39 @@ inline constexpr uint8_t TOUCH_DELTA_SENSE = 0;       // 0-7, 0 = 128x max sensi
 // ---------------------------------------------------------------------------
 
 inline constexpr gpio_num_t PIN_ACCEL_INT = GPIO_NUM_3;
+
+// ---------------------------------------------------------------------------
+// v2.0 board — TCA6408A I/O expander (I2C 0x20, ADDR = GND)
+//
+// On v2.0 the slow control lines left the ESP32: EN_PM1, NAND CS, e-paper
+// D/C, SD_CS, GPS PRTRG, touch ALERT and ACC_INT all sit on the expander.
+// ESP32 IO1/IO3/IO4/IO15/IO26 are unconnected on that board.  These virtual
+// pin numbers route through gpio::expander::hal; the native constants above
+// keep serving Prototype and v1.
+// ---------------------------------------------------------------------------
+
+inline constexpr uint8_t I2C_ADDR_TCA6408A = 0x20;
+
+inline constexpr int PIN_V2_GPS_PRTRG = gpio::expander::pin(0);  // left as input (not driven)
+inline constexpr int PIN_V2_PM_POWER = gpio::expander::pin(1);   // EN_PM1 -> TMUX121 ~EN, low = PM on
+inline constexpr int PIN_V2_NAND_CS = gpio::expander::pin(2);    // active-low
+inline constexpr int PIN_V2_DISPLAY_DC = gpio::expander::pin(3); // 0 = command, 1 = data
+inline constexpr int PIN_V2_CAP_INT = gpio::expander::pin(4);    // input, active-low
+inline constexpr int PIN_V2_ACCEL_INT = gpio::expander::pin(5);  // input
+inline constexpr int PIN_V2_SD_CS = gpio::expander::pin(6);      // active-low, unused for now
+
+// Boot-time register images.  Outputs are written before the direction so a
+// pin never drives a stale level: NAND/SD deselected, D/C = data, PM off.
+// P0/P4/P5/P7 stay inputs (bit = 1).
+inline constexpr uint8_t V2_EXPANDER_OUTPUT_IDLE = 0xFF;
+inline constexpr uint8_t V2_EXPANDER_CONFIG = 0xB1; // P1, P2, P3, P6 outputs
+
+// ---------------------------------------------------------------------------
+// v2.0 board — parts that changed address-compatibly
+// ---------------------------------------------------------------------------
+
+inline constexpr uint8_t I2C_ADDR_BQ27742 = 0x55;  // shares the BQ27427 address
+inline constexpr uint8_t I2C_ADDR_SPL07_003 = 0x77; // SDO floating -> 0x77 (see bring-up plan R4)
 
 // ---------------------------------------------------------------------------
 // External watchdog (GPIO pulse)

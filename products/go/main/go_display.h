@@ -239,6 +239,8 @@ struct RtcDisplaySnapshot {
 
 #include <driver/spi_master.h>
 
+#include "airgradient_gpio.h"
+
 extern "C" {
 #include "u8g2.h"
 }
@@ -256,9 +258,12 @@ public:
     // SPI
     spi_host_device_t spi_host;
     int pin_cs;
-    int pin_dc;
+    int pin_dc; ///< native GPIO or a gpio::expander virtual pin (v2.0)
     int pin_rst;
     int pin_busy;
+    /// HAL used for D/C only; CS, RST and BUSY are timing-critical and stay
+    /// on native GPIO.  nullptr = gpio::native::hal.
+    const gpio::Hal *gpio = nullptr;
     int clock_hz = 4000000;
 
     // Worker task

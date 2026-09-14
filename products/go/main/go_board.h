@@ -17,19 +17,38 @@
 
 enum class BoardVariant : uint8_t {
   Prototype, ///< Legacy board: no BQ27427, PM enable active-high
-  V1,        ///< New board: BQ27427 at 0x55, PM enable active-low
+  V1,        ///< v1.0 board: BQ27427 at 0x55, PM enable active-low on IO26
+  V2,        ///< v2.0 board: TCA6408A at 0x20 owns EN_PM1/NAND CS/D-C, BQ27742 at 0x55
 };
 
 inline const char *board_variant_str(BoardVariant v) {
-  return v == BoardVariant::V1 ? "V1" : "Prototype";
+  switch (v) {
+  case BoardVariant::V2:
+    return "V2";
+  case BoardVariant::V1:
+    return "V1";
+  case BoardVariant::Prototype:
+    break;
+  }
+  return "Prototype";
+}
+
+/// Map the two boot-time I2C probes to a board variant.  The expander only
+/// exists on v2.0, so it wins; the fuel gauge address (0x55) is shared by the
+/// BQ27427 (v1.0) and BQ27742 (v2.0) and cannot distinguish them on its own.
+inline constexpr BoardVariant detect_board_variant(bool expander_ack, bool fuel_gauge_ack) {
+  if (expander_ack) {
+    return BoardVariant::V2;
+  }
+  return fuel_gauge_ack ? BoardVariant::V1 : BoardVariant::Prototype;
 }
 
 /// GPIO level interpreted as "PM ON" for the given variant.
-/// Prototype is active-high (level 1); v1 is active-low (level 0).
-/// Literals duplicated from board_config.h on purpose — board_config.h
-/// is target-only and cannot be included here.
+/// Prototype is active-high (level 1); v1/v2 drive the TMUX121 ~EN, so
+/// active-low (level 0).  Literals duplicated from board_config.h on
+/// purpose — board_config.h is target-only and cannot be included here.
 inline constexpr uint8_t pm_power_on_level(BoardVariant v) {
-  return (v == BoardVariant::V1) ? 0 : 1;
+  return (v == BoardVariant::Prototype) ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +201,11 @@ struct GoBoard {
   /// Return the board variant detected during init_buses().
   /// Must not be called before init_buses() has completed.
   virtual BoardVariant variant() const = 0;
+
+  /// Pin carrying the CAP1203 ALERT line: a native GPIO on Prototype/v1, an
+  /// expander virtual pin on v2.  Literal duplicated from board_config.h
+  /// (target-only header) so host builds keep the v1 default.
+  virtual int touch_int_pin() const { return 1; }
 
   virtual std::string serial_number() = 0;
   virtual const char *firmware_version() = 0;

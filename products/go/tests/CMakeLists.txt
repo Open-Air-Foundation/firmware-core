@@ -897,6 +897,24 @@ target_link_libraries(go_accel_sanity_tests PRIVATE
     Catch2::Catch2WithMain
 )
 
+add_executable(go_board_variant_tests
+    go_board_variant.tests.cpp
+)
+
+target_include_directories(go_board_variant_tests PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
+)
+
+target_compile_definitions(go_board_variant_tests PRIVATE TEST_HOST)
+
+target_link_libraries(go_board_variant_tests PRIVATE
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_board_variant_tests)
+
 catch_discover_tests(go_accel_sanity_tests)
 
 # ---------------------------------------------------------------------------

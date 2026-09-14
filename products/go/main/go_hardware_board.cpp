@@ -29,6 +29,7 @@
 #include "common.h"
 #include "drivers/bq25629/bq25629_bms.h"
 #include "drivers/bq27427/bq27427.h"
+#include "drivers/bq27742/bq27742.h"
 #include "drivers/dps368/dps368.h"
 #include "drivers/s12/s12.h"
 #include "drivers/scd4x/scd4x.h"
@@ -37,8 +38,10 @@
 #include "drivers/sps30/sps30.h"
 #include "drivers/stcc4/stcc4.h"
 #include "accel/lis2dh12.h"
+#include "expander_gpio.h"
 #include "gps/gps_driver.h"
 #include "native_gpio.h"
+#include "tca6408a.h"
 #include "nvs_config_store.h"
 #include "rtos.h"
 #include "services/payload_cache.h"
@@ -169,26 +172,79 @@ void GoHardwareBoard::init_buses() {
 
   RTOS::delay_ms(100);
 
-  // Board variant detection — probe BQ27427 fuel gauge at 0x55.
-  // ACK = v1 board; NACK / transport error = prototype (fail-safe).
-  constexpr uint8_t BQ27427_PROBE_ADDR = 0x55;
-  constexpr int BQ27427_PROBE_TIMEOUT_MS = 100;
-
-  const bool fg_present =
-      i2c_device_present(_i2c_bus, BQ27427_PROBE_ADDR, BQ27427_PROBE_TIMEOUT_MS);
-  _variant = fg_present ? BoardVariant::V1 : BoardVariant::Prototype;
-  AG_LOGI(TAG, "board variant: %s (BQ27427 @ 0x55 %s)", board_variant_str(_variant),
+  // Board variant detection.  The TCA6408A expander exists only on v2.0; the
+  // fuel gauge address 0x55 is shared by BQ27427 (v1.0) and BQ27742 (v2.0).
+  constexpr int PROBE_TIMEOUT_MS = 100;
+  const bool expander_present = i2c_device_present(_i2c_bus, I2C_ADDR_TCA6408A, PROBE_TIMEOUT_MS);
+  const bool fg_present = i2c_device_present(_i2c_bus, I2C_ADDR_BQ27742, PROBE_TIMEOUT_MS);
+  _variant = detect_board_variant(expander_present, fg_present);
+  AG_LOGI(TAG, "board variant: %s (TCA6408A @ 0x20 %s, FG @ 0x55 %s)",
+          board_variant_str(_variant), expander_present ? "ACK" : "NACK",
           fg_present ? "ACK" : "NACK");
 
-  // Drive PM_POWER to the variant-appropriate "ON" level.
-  // Prototype: already at 1 (safe-default above), no write needed.
-  // v1: write level 0 (active-low PM ON).
-  if (_variant == BoardVariant::V1) {
+  // Drive PM power to the variant-appropriate "ON" level.
+  //   Prototype: IO26 already at 1 (safe-default above), no write needed.
+  //   v1:        IO26 level 0 (active-low PM ON).
+  //   v2:        EN_PM1 lives on the expander; IO26 is unconnected.
+  switch (_variant) {
+  case BoardVariant::V2:
+    if (_init_expander()) {
+      gpio::expander::hal.set_level(PIN_V2_PM_POWER, pm_power_on_level(_variant));
+    }
+    _log_i2c_census();
+    break;
+  case BoardVariant::V1:
     hal.set_level(PIN_PM_POWER, pm_power_on_level(_variant));
+    break;
+  case BoardVariant::Prototype:
+    break;
   }
 
   RTOS::delay_ms(100);
   _buses_ready = true;
+}
+
+bool GoHardwareBoard::_init_expander() {
+  if (_expander == nullptr) {
+    _expander = new TCA6408A(_i2c_bus, {.address = I2C_ADDR_TCA6408A});
+  }
+  if (!_expander->init()) {
+    AG_LOGE(TAG, "TCA6408A init failed — v2 control lines unavailable");
+    return false;
+  }
+  // Warm boots find the registers as we left them; a cold boot finds POR
+  // values.  apply() writes outputs first, so no line glitches either way.
+  if (!_expander->apply(V2_EXPANDER_OUTPUT_IDLE, V2_EXPANDER_CONFIG)) {
+    AG_LOGE(TAG, "TCA6408A apply failed");
+    return false;
+  }
+  gpio::expander::attach(_expander);
+  AG_LOGI(TAG, "TCA6408A ready (output=0x%02X config=0x%02X)", _expander->cached_output(),
+          _expander->cached_config());
+  return true;
+}
+
+// Bring-up aid: one line listing every ACKing 7-bit address.  Runs once at
+// boot on v2 so the serial log doubles as the I2C census (plan P3-03).
+void GoHardwareBoard::_log_i2c_census() {
+  constexpr int CENSUS_TIMEOUT_MS = 20;
+  char line[160];
+  size_t used = 0;
+  for (uint8_t addr = 0x08; addr <= 0x77; ++addr) {
+    if (!i2c_device_present(_i2c_bus, addr, CENSUS_TIMEOUT_MS)) {
+      continue;
+    }
+    const int n = snprintf(line + used, sizeof(line) - used, " 0x%02X", addr);
+    if (n < 0 || static_cast<size_t>(n) >= sizeof(line) - used) {
+      break;
+    }
+    used += static_cast<size_t>(n);
+  }
+  AG_LOGI(TAG, "I2C census:%s", used ? line : " (none)");
+}
+
+int GoHardwareBoard::_pm_power_pin() const {
+  return _variant == BoardVariant::V2 ? PIN_V2_PM_POWER : static_cast<int>(PIN_PM_POWER);
 }
 
 void GoHardwareBoard::init_spi() {
@@ -245,8 +301,84 @@ void GoHardwareBoard::init_fuel_gauge() {
   }
   _fuel_gauge_init_attempted = true;
 
-  // --- V1 fuel-gauge bring-up ---
-  if (_variant == BoardVariant::V1) {
+  switch (_variant) {
+  case BoardVariant::V1:
+    _init_fuel_gauge_v1();
+    break;
+  case BoardVariant::V2:
+    _init_fuel_gauge_v2();
+    break;
+  case BoardVariant::Prototype:
+    break;
+  }
+}
+
+// v2.0: bq27742-G1.  Same sanity/config-write decision as v1, but never a
+// factory RESET — on this part a reset opens both protection FETs for a
+// moment, which drops Pack+ and reboots the system when on battery.
+void GoHardwareBoard::_init_fuel_gauge_v2() {
+  _fuel_gauge_v2 = new BQ27742(_i2c_bus, {.address = I2C_ADDR_BQ27742});
+  if (!_fuel_gauge_v2->init()) {
+    AG_LOGE(TAG, "BQ27742 init failed — FG offline");
+    return;
+  }
+
+  uint16_t dc = 0;
+  uint16_t fcc = 0;
+  FgCellConfig current{};
+  const bool dc_ok = _fuel_gauge_v2->read_design_capacity_mah(dc);
+  const bool fcc_ok = _fuel_gauge_v2->read_full_charge_capacity_mah(fcc);
+  const bool cfg_ok = _fuel_gauge_v2->read_cell_config(current);
+
+  const FgRecoveryDecision decision =
+      evaluate_fg_state(dc, dc_ok, fcc, fcc_ok, current, cfg_ok, AGO_CELL_CONFIG,
+                        FG_DC_SANITY_MIN_MAH, FG_DC_SANITY_MAX_MAH, FG_FCC_SANITY_MAX_MAH);
+  if (decision.needs_factory_reset) {
+    AG_LOGW(TAG, "BQ27742 state out of range (dc=%u fcc=%u) — reset skipped on v2, "
+                 "program data flash with bqStudio",
+            dc, fcc);
+  }
+  if (decision.needs_config_write) {
+    AG_LOGI(TAG, "BQ27742 applying cell config (had DC=%u DE=%u TermV=%u SleepI=%u)",
+            current.design_capacity_mah, current.design_energy_mwh,
+            current.terminate_voltage_mv, current.sleep_current_ma);
+    if (!_fuel_gauge_v2->write_cell_config(AGO_CELL_CONFIG)) {
+      AG_LOGW(TAG, "BQ27742 write_cell_config() failed — cell parameters not updated");
+    }
+  } else if (cfg_ok) {
+    AG_LOGI(TAG, "BQ27742 cell config already correct — preserved");
+  } else {
+    AG_LOGW(TAG, "BQ27742 cell config unreadable — left as-is");
+  }
+
+  uint8_t soc = 0;
+  uint16_t mv = 0;
+  int16_t ma = 0;
+  float tc = 0.0f;
+  float tpack = 0.0f;
+  uint16_t flags = 0;
+  uint16_t safety = 0;
+  uint8_t prot = 0;
+  uint8_t state = 0;
+  _fuel_gauge_v2->read_soc_percent(soc);
+  _fuel_gauge_v2->read_voltage_mv(mv);
+  _fuel_gauge_v2->read_average_current_ma(ma);
+  _fuel_gauge_v2->read_internal_temperature_c(tc);
+  _fuel_gauge_v2->read_temperature_c(tpack);
+  _fuel_gauge_v2->read_flags_raw(flags);
+  _fuel_gauge_v2->read_safety_status(safety);
+  _fuel_gauge_v2->read_protector_status(prot);
+  _fuel_gauge_v2->read_protector_state(state);
+  AG_LOGI(TAG, "BQ27742 boot: soc=%u%% v=%umV i=%dmA tint=%.1fC tpack=%.1fC", soc, mv, ma, tc,
+          tpack);
+  AG_LOGI(TAG, "BQ27742 boot: flags=0x%04X safety=0x%04X protector=0x%02X (CHG %s, DSG %s) state=0x%02X",
+          flags, safety, prot, (prot & BQ27742::ProtectorStatus::CHG_OFF) ? "OFF" : "on",
+          (prot & BQ27742::ProtectorStatus::DSG_OFF) ? "OFF" : "on", state);
+}
+
+// v1.0: BQ27427.
+void GoHardwareBoard::_init_fuel_gauge_v1() {
+  {
     _fuel_gauge = new BQ27427(_i2c_bus);
     if (!_fuel_gauge->init()) {
       AG_LOGE(TAG, "BQ27427 init failed — FG offline");
@@ -430,7 +562,7 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
 
     s->co2 = init_co2_sensor(_i2c_bus, warm);
 
-    if (_variant == BoardVariant::V1) {
+    if (_variant != BoardVariant::Prototype) {
       auto *sht40 = new SHT40(_i2c_bus, I2C_ADDR_SHT40);
       if (sht40->init()) {
         s->temp_hum = sht40;
@@ -472,7 +604,13 @@ StorageService &GoHardwareBoard::storage() {
 
     SpiNandStorage::Config nand_config{};
     nand_config.spi_host = SPI_HOST;
-    nand_config.cs_pin = PIN_NAND_CS;
+    if (_variant == BoardVariant::V2) {
+      // NAND CS sits on the I2C expander: software chip-select per transaction.
+      nand_config.cs_hal = &gpio::expander::hal;
+      nand_config.cs_hal_pin = PIN_V2_NAND_CS;
+    } else {
+      nand_config.cs_pin = PIN_NAND_CS;
+    }
     auto *nand = new SpiNandStorage(nand_config);
 
     _storage = new StorageService(*cache, *nand);
@@ -490,9 +628,11 @@ DisplayService &GoHardwareBoard::display() {
     _display = new DisplayService({
         .spi_host = SPI_HOST,
         .pin_cs = PIN_DISPLAY_CS,
-        .pin_dc = PIN_DISPLAY_DC,
+        .pin_dc = _variant == BoardVariant::V2 ? PIN_V2_DISPLAY_DC
+                                               : static_cast<int>(PIN_DISPLAY_DC),
         .pin_rst = PIN_DISPLAY_RST,
         .pin_busy = PIN_DISPLAY_BUSY,
+        .gpio = &gpio_hal(),
     });
   }
   return *_display;
@@ -502,9 +642,10 @@ LedService &GoHardwareBoard::led_service() {
   assert(_buses_ready && "led_service() requires init_buses()");
   if (!_led_service) {
     LedService::Config cfg{};
-    if (_variant == BoardVariant::V1) {
+    if (_variant != BoardVariant::Prototype) {
       _lp5036 = new LP5036(_i2c_bus, {});
       cfg.driver = _lp5036;
+      cfg.map = _variant == BoardVariant::V2 ? LedMap::v2() : LedMap::v1();
     }
     // Prototype: cfg.driver stays nullptr → inert mode
     _led_service = new LedService(cfg);
@@ -516,7 +657,7 @@ BuzzerService &GoHardwareBoard::buzzer_service() {
   assert(_buses_ready && "buzzer_service() requires init_buses()");
   if (!_buzzer_service) {
     BuzzerService::Config cfg{};
-    if (_variant == BoardVariant::V1) {
+    if (_variant != BoardVariant::Prototype) {
       _ledc_buzzer = new LedcBuzzer({
           .pin = static_cast<int>(PIN_BUZZER),
           .default_freq_hz = BUZZER_FREQ_HZ,
@@ -590,13 +731,13 @@ PowerService &GoHardwareBoard::power() {
   assert(_fuel_gauge_init_attempted && "power() requires init_fuel_gauge()");
   assert(_bms_init_attempted && "power() requires init_bms()");
   if (!_power) {
-    _power = new PowerService(_bms_driver, gpio::native::hal,
+    _power = new PowerService(_bms_driver, gpio_hal(),
                               {
                                   .pin_wake_button_power = PIN_BUTTON_POWER,
                                   .pin_wake_button_boot = -1,
                                   .pin_ext_wdt = PIN_EXT_WDT,
                                   .deep_sleep_threshold_ms = 5000,
-                                  .pin_pm_power = PIN_PM_POWER,
+                                  .pin_pm_power = _pm_power_pin(),
                                   .pm_power_on_level = pm_power_on_level(_variant),
                                   .sensor_hold_max_sleep_ms = 20000,
                               });
@@ -604,6 +745,8 @@ PowerService &GoHardwareBoard::power() {
     _power->reset_ext_watchdog();
     if (_fuel_gauge != nullptr && _fuel_gauge->ready()) {
       _power->set_fuel_gauge(_fuel_gauge);
+    } else if (_fuel_gauge_v2 != nullptr && _fuel_gauge_v2->ready()) {
+      _power->set_fuel_gauge(_fuel_gauge_v2);
     }
     _power_ready = true;
   }
@@ -655,17 +798,29 @@ BoardVariant GoHardwareBoard::variant() const {
   return _variant;
 }
 
+int GoHardwareBoard::touch_int_pin() const {
+  return _variant == BoardVariant::V2 ? PIN_V2_CAP_INT : static_cast<int>(PIN_CAP_INT);
+}
+
 std::string GoHardwareBoard::serial_number() { return build_serial_number(); }
 
 const char *GoHardwareBoard::firmware_version() { return esp_app_get_description()->version; }
 
-const gpio::Hal &GoHardwareBoard::gpio_hal() { return gpio::native::hal; }
+const gpio::Hal &GoHardwareBoard::gpio_hal() {
+  return _variant == BoardVariant::V2 ? gpio::expander::hal : gpio::native::hal;
+}
 
 // ===========================================================================
 // Hardware operations
 // ===========================================================================
 
-void GoHardwareBoard::release_gpio_holds() { PowerService::release_sleep_gpio_holds(PIN_PM_POWER); }
+void GoHardwareBoard::release_gpio_holds() {
+  // v2 keeps EN_PM1 on the expander, which holds its own state through deep
+  // sleep; there is no native hold to release.
+  if (_variant != BoardVariant::V2) {
+    PowerService::release_sleep_gpio_holds(PIN_PM_POWER);
+  }
+}
 
 void GoHardwareBoard::ulp_stop() { ulp_wdt_stop(); }
 

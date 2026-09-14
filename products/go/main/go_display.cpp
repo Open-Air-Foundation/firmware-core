@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "go_text_wrap.h"
+#include "native_gpio.h"
 
 #include <driver/gpio.h>
 #include <esp_attr.h>
@@ -96,9 +97,10 @@ struct DriverState {
   int spi_clock_hz = 4000000;
 
   gpio_num_t pin_cs = GPIO_NUM_NC;
-  gpio_num_t pin_dc = GPIO_NUM_NC;
+  int pin_dc = gpio::INVALID_PIN;
   gpio_num_t pin_rst = GPIO_NUM_NC;
   gpio_num_t pin_busy = GPIO_NUM_NC;
+  const gpio::Hal *dc_hal = nullptr;
 
   spi_device_handle_t spi = nullptr;
   uint8_t *tx_bounce = nullptr;
@@ -109,7 +111,7 @@ DriverState g_driver;
 // --- Low-level GPIO helpers ---
 
 inline void set_cs(int level) { gpio_set_level(g_driver.pin_cs, level); }
-inline void set_dc(int level) { gpio_set_level(g_driver.pin_dc, level); }
+inline void set_dc(int level) { g_driver.dc_hal->set_level(g_driver.pin_dc, level); }
 inline void set_rst(int level) { gpio_set_level(g_driver.pin_rst, level); }
 
 void delay_ms(uint32_t ms) {
@@ -188,18 +190,24 @@ esp_err_t driver_init(const DisplayService::Config &cfg) {
   g_driver.spi_host = cfg.spi_host;
   g_driver.spi_clock_hz = cfg.clock_hz;
   g_driver.pin_cs = static_cast<gpio_num_t>(cfg.pin_cs);
-  g_driver.pin_dc = static_cast<gpio_num_t>(cfg.pin_dc);
+  g_driver.pin_dc = cfg.pin_dc;
   g_driver.pin_rst = static_cast<gpio_num_t>(cfg.pin_rst);
   g_driver.pin_busy = static_cast<gpio_num_t>(cfg.pin_busy);
+  g_driver.dc_hal = cfg.gpio != nullptr ? cfg.gpio : &gpio::native::hal;
 
-  // Configure output GPIOs (CS, DC, RST)
+  // Configure output GPIOs (CS, RST); D/C goes through the HAL so it can live
+  // on the v2.0 I2C expander.
   gpio_config_t out_cfg = {};
-  out_cfg.pin_bit_mask = (1ULL << cfg.pin_cs) | (1ULL << cfg.pin_dc) | (1ULL << cfg.pin_rst);
+  out_cfg.pin_bit_mask = (1ULL << cfg.pin_cs) | (1ULL << cfg.pin_rst);
   out_cfg.mode = GPIO_MODE_OUTPUT;
   out_cfg.pull_up_en = GPIO_PULLUP_DISABLE;
   out_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
   out_cfg.intr_type = GPIO_INTR_DISABLE;
   DISP_RETURN_ON_ERR(gpio_config(&out_cfg));
+  if (!g_driver.dc_hal->configure(cfg.pin_dc, gpio::Mode::Output, gpio::PullMode::Floating,
+                                  gpio::InterruptType::Disabled)) {
+    return ESP_ERR_INVALID_STATE;
+  }
 
   // Configure BUSY input
   gpio_config_t in_cfg = {};

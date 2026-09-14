@@ -55,7 +55,14 @@ components/airgradient-bms/
 #include "types/bms_types.h"
 #include "drivers/bq25629/bq25629_bms.h"
 #include "drivers/bq27427/bq27427.h"
+#include "drivers/bq27742/bq27742.h"
 ```
+
+Fuel gauges: `BQ27427` (GO v1.0) and `BQ27742` (GO v2.0, bq27742-G1 with
+integrated hardware protection). Both implement `FuelGaugeDevice`; the
+BQ27742 normalises its `Flags()` to the `FgFlags` layout, reads data flash
+through the unsealed block interface (no CFGUPDATE mode on that part), and
+additionally exposes `SafetyStatus`, `ProtectorStatus` and `ProtectorState`.
 
 Guideline:
 

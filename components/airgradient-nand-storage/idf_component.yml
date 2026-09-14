@@ -1,5 +1,5 @@
 ## IDF Component Manager Manifest File
 dependencies:
   idf: ">=5.3"
-  espressif/spi_nand_flash:
-    version: "==0.16.0"
+  # spi_nand_flash is vendored in components/spi_nand_flash (0.16.0 + software
+  # chip-select hook for the GO v2.0 expander-driven NAND CS).

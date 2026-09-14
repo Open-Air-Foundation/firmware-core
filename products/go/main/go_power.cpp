@@ -655,7 +655,9 @@ void PowerService::enter_sleep(uint32_t sleep_duration_ms) {
 #ifndef TEST_HOST
   // Hold PM sensor power GPIO during short sleeps so the sensor stays warm
   // and the next fast-path boot can skip the 10 s warmup.
-  if (should_hold_pm_sensor(sleep_duration_ms)) {
+  // v2.0 keeps EN_PM1 on the I2C expander (virtual pin, not a GPIO); the
+  // expander holds its own output state through deep sleep.
+  if (should_hold_pm_sensor(sleep_duration_ms) && GPIO_IS_VALID_OUTPUT_GPIO(_config.pin_pm_power)) {
     auto pin = static_cast<gpio_num_t>(_config.pin_pm_power);
     gpio_hold_en(pin);
     AG_LOGI(TAG, "enter_sleep: holding PM power GPIO %d for warm wake", _config.pin_pm_power);
@@ -726,7 +728,7 @@ bool PowerService::is_fast_path_wake(WakeCause cause, const RtcAppState &state) 
 // static
 void PowerService::release_sleep_gpio_holds(int pin_pm_power) {
 #ifndef TEST_HOST
-  if (pin_pm_power >= 0) {
+  if (pin_pm_power >= 0 && GPIO_IS_VALID_OUTPUT_GPIO(pin_pm_power)) {
     gpio_hold_dis(static_cast<gpio_num_t>(pin_pm_power));
   }
 #else

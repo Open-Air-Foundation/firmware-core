@@ -26,9 +26,19 @@ bool SpiNandStorage::init() {
     return true;
   }
 
-  if (_config.cs_pin == GPIO_NUM_MAX) {
+  const bool software_cs = _config.cs_hal != nullptr;
+  if (!software_cs && _config.cs_pin == GPIO_NUM_MAX) {
     ESP_LOGE(TAG, "cs_pin not configured");
     return false;
+  }
+  if (software_cs) {
+    if (_config.cs_hal_pin == gpio::INVALID_PIN ||
+        !_config.cs_hal->configure(_config.cs_hal_pin, gpio::Mode::Output, gpio::PullMode::Floating,
+                                   gpio::InterruptType::Disabled) ||
+        !_config.cs_hal->set_level(_config.cs_hal_pin, 1)) {
+      ESP_LOGE(TAG, "software CS pin %d not configurable", _config.cs_hal_pin);
+      return false;
+    }
   }
 
   // Register SPI device on the pre-initialised bus.
@@ -37,7 +47,7 @@ bool SpiNandStorage::init() {
   dev_cfg.clock_source = SPI_CLK_SRC_DEFAULT;
   dev_cfg.duty_cycle_pos = 128;
   dev_cfg.clock_speed_hz = _config.clock_speed_hz;
-  dev_cfg.spics_io_num = static_cast<int>(_config.cs_pin);
+  dev_cfg.spics_io_num = software_cs ? -1 : static_cast<int>(_config.cs_pin);
   dev_cfg.flags = _config.spi_device_flags;
   dev_cfg.queue_size = 10;
 
@@ -53,6 +63,11 @@ bool SpiNandStorage::init() {
   nand_cfg.gc_factor = 4;
   nand_cfg.io_mode = SPI_NAND_IO_MODE_SIO;
   nand_cfg.flags = _config.spi_device_flags;
+  if (software_cs) {
+    nand_cfg.cs_hook = &SpiNandStorage::_cs_hook;
+    nand_cfg.cs_hook_ctx = this;
+    ESP_LOGI(TAG, "software chip-select on HAL pin %d", _config.cs_hal_pin);
+  }
 
   err = spi_nand_flash_init_device(&nand_cfg, &_nand_device);
   if (err != ESP_OK) {
@@ -145,6 +160,12 @@ void SpiNandStorage::deinit() {
     spi_bus_remove_device(_spi_device);
     _spi_device = nullptr;
   }
+}
+
+// static
+void SpiNandStorage::_cs_hook(void *ctx, bool assert_cs) {
+  auto *self = static_cast<SpiNandStorage *>(ctx);
+  self->_config.cs_hal->set_level(self->_config.cs_hal_pin, assert_cs ? 0 : 1);
 }
 
 bool SpiNandStorage::is_mounted() const { return _mounted; }

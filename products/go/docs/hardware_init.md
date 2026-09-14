@@ -272,33 +272,82 @@ for the full sequence.
 
 `init_buses()` detects the board variant after the I2C bus is up by calling
 `i2c_device_present()` (from `components/airgradient-common/include/ag_i2c.h`)
-to probe the BQ27427 fuel gauge at address `0x55`:
+twice, then mapping the result through the pure helper `detect_board_variant()`
+in `go_board.h`:
 
-| Probe Outcome | Variant | Reasoning |
-|---|---|---|
-| ACK | `V1` | BQ27427 only exists on v1 silicon |
-| NACK or transport error | `Prototype` | Fail-safe — prototype is the shipping default |
+| TCA6408A @ `0x20` | Fuel gauge @ `0x55` | Variant | Reasoning |
+|---|---|---|---|
+| ACK | any | `V2` | The I/O expander only exists on the v2.0 board |
+| NACK | ACK | `V1` | BQ27427 present, no expander |
+| NACK | NACK | `Prototype` | Fail-safe — prototype is the shipping default |
+
+The fuel-gauge address alone cannot separate v1 from v2: the BQ27427 (v1.0)
+and the BQ27742-G1 (v2.0) both answer at `0x55`.
 
 Before probing, `init_buses()` writes a safe-default `level = 1` on the
-PM enable GPIO (ON for Prototype, OFF for V1 — safe for both). After
-variant detection, V1 writes `level = 0` (V1 "PM ON"); Prototype skips
-the second write since `level = 1` is already correct.
+native PM enable GPIO (ON for Prototype, OFF for V1 — safe for both; the pin
+is unconnected on V2). After detection:
 
-Detection emits exactly one INFO log line:
+- **V1** writes `level = 0` on IO26 (V1 "PM ON").
+- **V2** brings up the expander (`_init_expander()`: output register first,
+  then direction, so no line glitches), binds it to `gpio::expander::hal`,
+  drives EN_PM1 low on expander P1, and logs one I2C census line listing
+  every ACKing address (bring-up aid).
+- **Prototype** skips the second write since `level = 1` is already correct.
+
+Detection emits one INFO log line:
 
 ```text
-GoHardwareBoard: board variant: V1 (BQ27427 @ 0x55 ACK)
-GoHardwareBoard: board variant: Prototype (BQ27427 @ 0x55 NACK)
+GoHardwareBoard: board variant: V2 (TCA6408A @ 0x20 ACK, FG @ 0x55 ACK)
+GoHardwareBoard: board variant: V1 (TCA6408A @ 0x20 NACK, FG @ 0x55 ACK)
+GoHardwareBoard: board variant: Prototype (TCA6408A @ 0x20 NACK, FG @ 0x55 NACK)
 ```
 
-## Fuel Gauge Bring-Up (V1 Only)
+### v2.0 control lines on the expander
 
-`init_fuel_gauge()` has a V1 branch gated on
-`_variant == BoardVariant::V1` that constructs the BQ27427 driver and runs the
-`evaluate_fg_state` pure helper (inline in `go_board.h`). The helper examines
-the chip's persistent Data Memory and decides whether a factory reset and/or
-cell-config write is needed. Fuel-gauge bring-up is independent from the
+On v2.0 the slow control lines moved from ESP32 GPIOs to the TCA6408A. The
+virtual pin numbers (`gpio::expander::pin(n)`, `board_config.h`
+`PIN_V2_*`) route through `gpio::expander::hal`, which forwards native pins to
+`gpio::native::hal`:
+
+| Expander port | Net | Direction | Consumer |
+|---|---|---|---|
+| P0 | PRTRG (GPS) | input (not driven) | — |
+| P1 | EN_PM1 → TMUX121 ~EN | output, low = PM on | `PowerService::set_pm_power` |
+| P2 | NAND CS | output | `SpiNandStorage` software chip-select (`cs_hal`) |
+| P3 | e-paper D/C | output | `DisplayService` (`Config::gpio`) |
+| P4 | CAP1203 ALERT | input | `InputService` polls every `touch_poll_ms` |
+| P5 | LIS2DH12 INT1 | input | unused (accel is poll-only) |
+| P6 | SD_CS | output, idle high | microSD not supported yet |
+
+Consequences: NAND traffic pays two I2C writes per SPI transaction (the
+vendored `components/spi_nand_flash` bracket each transaction with
+`spi_device_acquire_bus()` and the `cs_hook`), the expander keeps its own
+output state across deep sleep so `gpio_hold_en()` is skipped for the PM pin,
+and the touch pad has no interrupt path so `InputService` falls back to level
+polling when `add_interrupt_handler()` returns false.
+
+`GoBoard::touch_int_pin()` returns the ALERT pin for the detected variant so
+`GoApp` never hard-codes it.
+
+## Fuel Gauge Bring-Up (V1 and V2)
+
+`init_fuel_gauge()` dispatches on the variant: V1 constructs the BQ27427
+driver, V2 the BQ27742 driver (`components/airgradient-bms/drivers/bq27742`).
+Both run the `evaluate_fg_state` pure helper (inline in `go_board.h`), which
+examines the chip's persistent data memory and decides whether a factory reset
+and/or cell-config write is needed. Fuel-gauge bring-up is independent from the
 retryable BQ25629 initialization.
+
+V2 differences: the bq27742-G1 has no CFGUPDATE mode (data flash is written
+directly after unsealing with the default key), its `Flags()` are normalised to
+the `FgFlags` layout by the driver (`DSG`/`CHG`/`FC`, `BAT_DET` always set), a
+factory `RESET` is never issued because it opens both protection FETs and
+would drop Pack+ while on battery, and the boot snapshot additionally logs
+`SafetyStatus`, `ProtectorStatus` (CHG/DSG FET state) and `ProtectorState`.
+The Impedance Track learning verify (`QMAX_UP`/`RES_UP`) still reads the
+BQ27427 bit layout and is not meaningful on V2 — the learned state lives in the
+data-flash `Update Status` byte on that part.
 
 The two-pass recovery sequence:
 
@@ -339,15 +388,19 @@ All pin assignments in `board_config.h`. Known I2C addresses:
 
 | Device | Address | Board |
 |---|---|---|
-| S12 CO2 | 0x68 | Both |
-| SCD4x CO2 | 0x62 | Both |
-| STCC4 CO2 | 0x64 | Both |
-| SHT40 | 0x44 | V1 only |
-| SGP41 | 0x59 | Both |
-| DPS368 | 0x77 | Both |
-| BQ25629 | 0x6A | Both |
-| CAP1203 | 0x28 | Both |
-| BQ27427 | 0x55 | V1 only (variant detection probe) |
+| S12 CO2 | 0x68 | All |
+| SCD4x CO2 | 0x62 | All |
+| STCC4 CO2 | 0x64 | All |
+| SHT40 | 0x44 | V1, V2 |
+| SGP41 | 0x59 | All |
+| DPS368 / SPL07-003 | 0x77 | All (SPL07-003 on V2, same driver, ID 0x11) |
+| BQ25629 | 0x6A | All |
+| CAP1203 | 0x28 | All (on the touch pad board on V2) |
+| LIS2DH12 | 0x18 | V1, V2 |
+| LP5036 | 0x33 | V1 (LED board), V2 (main board) |
+| BQ27427 | 0x55 | V1 (variant detection probe) |
+| BQ27742-G1 | 0x55 | V2 |
+| TCA6408A | 0x20 | V2 only (variant detection probe) |
 
 ## Serial Number
 

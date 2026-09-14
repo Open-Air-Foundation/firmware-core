@@ -36,6 +36,8 @@ public:
     uint32_t touch_long_press_ms = 1000;       // CH1 (TouchEnter) long-press threshold
     uint32_t touch_double_tap_window_ms = 100; // max gap between CH1 taps for double-press
     uint32_t touch_watchdog_ms = 5000;         // periodic touch health check interval
+    uint32_t touch_poll_ms = 20;               // ALERT poll period when the pin has no
+                                               // interrupt (v2: expander input)
     uint16_t task_stack_size = 3072;           // RTOS task stack words
     uint8_t task_priority = 6;                 // RTOS task priority
     bool suppress_button_wake = false;         // when true, discard the first
@@ -101,6 +103,10 @@ private:
 
   // Touch watchdog: timestamp of the last periodic health check.
   uint64_t _last_touch_check_ms = 0;
+
+  // Set when the ALERT pin cannot raise a GPIO interrupt (v2.0 routes it to
+  // the I2C expander): the task polls the level every touch_poll_ms instead.
+  bool _poll_touch = false;
 
   // Wake-press suppression: when true, the next ButtonPower press-down event
   // is discarded (the press that woke the device from deep sleep).  Expires

@@ -14,6 +14,7 @@
 #include "rtos.h"
 
 #include <algorithm>
+#include <cinttypes>
 
 static constexpr const char *TAG = "InputService";
 
@@ -180,11 +181,17 @@ void InputService::run() {
   _gpio.configure(_config.pin_button_boot, gpio::Mode::Input, gpio::PullMode::PullUp,
                   gpio::InterruptType::AnyEdge);
 
-  // Register and enable ISR handlers.
-  _gpio.add_interrupt_handler(_config.pin_cap_int, cap_int_isr, this);
+  // Register and enable ISR handlers.  A pin that cannot interrupt (expander
+  // input on v2.0) degrades to level polling.
+  _poll_touch = !_gpio.add_interrupt_handler(_config.pin_cap_int, cap_int_isr, this);
   _gpio.add_interrupt_handler(_config.pin_button_power, button_power_isr, this);
   _gpio.add_interrupt_handler(_config.pin_button_boot, button_boot_isr, this);
-  _gpio.enable_interrupt(_config.pin_cap_int);
+  if (!_poll_touch) {
+    _gpio.enable_interrupt(_config.pin_cap_int);
+  } else {
+    AG_LOGI(TAG, "touch ALERT pin %d has no interrupt — polling every %" PRIu32 " ms",
+            _config.pin_cap_int, _config.touch_poll_ms);
+  }
   _gpio.enable_interrupt(_config.pin_button_power);
   _gpio.enable_interrupt(_config.pin_button_boot);
 
@@ -204,7 +211,13 @@ void InputService::run() {
   while (_running) {
     // Block with a dynamic timeout so we wake up when a long-press timer
     // expires even without a new event arriving.
-    const uint32_t timeout_ms = compute_queue_timeout_ms();
+    uint32_t timeout_ms = compute_queue_timeout_ms();
+    if (_poll_touch) {
+      timeout_ms = std::min(timeout_ms, _config.touch_poll_ms);
+    }
+    if (_poll_touch && _gpio.get_level(_config.pin_cap_int) == 0) {
+      process_touch_interrupt();
+    }
     if (RTOS::queue_receive(_raw_queue, &raw, timeout_ms)) {
       // Timestamp is recorded here (task context) rather than in ISR to avoid
       // direct hardware-timer reads from interrupt context.

@@ -40,6 +40,12 @@ components/airgradient-nand-storage/
 - `hal/` — `NandStorage` abstract interface
 - `drivers/` — `SpiNandStorage` concrete driver with `Config` struct
 
+Chip-select: `Config::cs_pin` uses the SPI driver's hardware CS. When the
+board routes NAND CS through an I/O expander (GO v2.0), set `Config::cs_hal`
+and `Config::cs_hal_pin` instead; every NAND transaction is then bracketed by
+a bus acquire and two HAL writes through the `cs_hook` of the vendored
+`components/spi_nand_flash` (see its `AIRGRADIENT_PATCH.md`).
+
 ## Public Includes
 
 ```cpp

@@ -25,6 +25,7 @@ class LedService {
 public:
   struct Config {
     LedDriver *driver = nullptr;
+    LedMap map = LedMap::v1();
     uint16_t task_stack_size = 2048;
     uint8_t task_priority = 3;
     uint8_t queue_depth = 8;
