@@ -188,6 +188,9 @@ void GoHardwareBoard::init_buses() {
           board_variant_str(_variant), expander_present ? "ACK" : "NACK",
           fg_present ? "ACK" : "NACK");
   _label_chips();
+  // The census matters most when detection went wrong, so it runs on every
+  // variant (about 100 ms of probing).
+  _log_i2c_census();
 
   // Drive PM power to the variant-appropriate "ON" level.
   //   Prototype: IO26 already at 1 (safe-default above), no write needed.
@@ -198,7 +201,6 @@ void GoHardwareBoard::init_buses() {
     if (_init_expander()) {
       gpio::expander::hal.set_level(PIN_V2_PM_POWER, pm_power_on_level(_variant));
     }
-    _log_i2c_census();
     break;
   case BoardVariant::V1:
     hal.set_level(PIN_PM_POWER, pm_power_on_level(_variant));
@@ -301,8 +303,8 @@ void GoHardwareBoard::log_chip_report() {
   AG_LOGI(TAG, "  %s", line);
 }
 
-// Bring-up aid: one line listing every ACKing 7-bit address.  Runs once at
-// boot on v2 so the serial log doubles as the I2C census (plan P3-03).
+// Bring-up aid: one line listing every ACKing 7-bit address, so the serial
+// log doubles as the I2C census (plan P3-03).
 void GoHardwareBoard::_log_i2c_census() {
   constexpr int CENSUS_TIMEOUT_MS = 20;
   char line[160];
@@ -641,6 +643,15 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
       const bool spl07 = dps368->variant() == DPS368::Variant::SPL07003;
       _chips.label(Chip::Pressure, spl07 ? "SPL07-003" : "DPS368", "I2C 0x77");
       _chips.set(Chip::Pressure, true, spl07 ? "ID 0x11" : "ID 0x10");
+      // The SPL07-003 only exists on v2.0 boards: seeing it without the
+      // expander means the TCA6408A never ACKed, and every verdict that
+      // depends on the expander (PM, NAND, touch, LED, SHT4x) is void.
+      if (spl07 && _variant != BoardVariant::V2) {
+        AG_LOGW(TAG, "SPL07-003 (v2.0 part) found but board detected as %s: TCA6408A @0x20 "
+                     "did not ACK — check U17 ~RESET pull-up (R2), VCCP/VCCI, ADDR",
+                board_variant_str(_variant));
+        _chips.set(Chip::Expander, ChipState::Fail, "no ACK, check R2");
+      }
     } else {
       AG_LOGE(TAG, "DPS368 init failed");
       _chips.set(Chip::Pressure, false);

@@ -291,9 +291,15 @@ is unconnected on V2). After detection:
 - **V1** writes `level = 0` on IO26 (V1 "PM ON").
 - **V2** brings up the expander (`_init_expander()`: output register first,
   then direction, so no line glitches), binds it to `gpio::expander::hal`,
-  drives EN_PM1 low on expander P1, and logs one I2C census line listing
-  every ACKing address (bring-up aid).
+  and drives EN_PM1 low on expander P1.
 - **Prototype** skips the second write since `level = 1` is already correct.
+
+Every variant then logs one `I2C census:` line listing each ACKing address
+(bring-up aid, about 100 ms). If the pressure sensor later identifies as an
+SPL07-003 on a board that did not detect as V2, `sensors()` logs a warning
+naming the TCA6408A as the missing part (its floating ~RESET is the usual
+cause) and marks the expander `FAIL` in the chip report, because every
+expander-dependent verdict is void in that state.
 
 Detection emits one INFO log line:
 
