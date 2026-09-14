@@ -88,11 +88,15 @@ static constexpr uint16_t FG_FCC_SANITY_MAX_MAH = 8500;
 // Private helper: CO2 sensor detection
 // ===========================================================================
 
-static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus, bool sensors_warm) {
+static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus, bool sensors_warm,
+                                  const char **selected_name) {
+  *selected_name = "none";
+
   // 1. SenseAir S12 (no integrated T/RH)
   auto *s12 = new S12(i2c_bus, I2C_ADDR_S12);
   if (s12->init()) {
     AG_LOGI(TAG, "CO2 sensor: S12 selected");
+    *selected_name = "S12 0x68";
     return s12;
   }
   AG_LOGW(TAG, "CO2 sensor: S12 not detected");
@@ -102,6 +106,7 @@ static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus, bool sensors_
   auto *scd4x = new SCD4x(i2c_bus, I2C_ADDR_SCD4X);
   if (scd4x->init(sensors_warm)) {
     AG_LOGI(TAG, "CO2 sensor: SCD4x selected");
+    *selected_name = "SCD4x 0x62";
     return scd4x;
   }
   AG_LOGW(TAG, "CO2 sensor: SCD4x not detected");
@@ -111,6 +116,7 @@ static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus, bool sensors_
   auto *stcc4 = new STCC4(i2c_bus, I2C_ADDR_STCC4);
   if (stcc4->init()) {
     AG_LOGI(TAG, "CO2 sensor: STCC4 selected");
+    *selected_name = "STCC4 0x64";
     return stcc4;
   }
   AG_LOGW(TAG, "CO2 sensor: STCC4 not detected");
@@ -181,6 +187,7 @@ void GoHardwareBoard::init_buses() {
   AG_LOGI(TAG, "board variant: %s (TCA6408A @ 0x20 %s, FG @ 0x55 %s)",
           board_variant_str(_variant), expander_present ? "ACK" : "NACK",
           fg_present ? "ACK" : "NACK");
+  _label_chips();
 
   // Drive PM power to the variant-appropriate "ON" level.
   //   Prototype: IO26 already at 1 (safe-default above), no write needed.
@@ -210,18 +217,88 @@ bool GoHardwareBoard::_init_expander() {
   }
   if (!_expander->init()) {
     AG_LOGE(TAG, "TCA6408A init failed — v2 control lines unavailable");
+    _chips.set(Chip::Expander, false, "no ACK / readback");
     return false;
   }
   // Warm boots find the registers as we left them; a cold boot finds POR
   // values.  apply() writes outputs first, so no line glitches either way.
   if (!_expander->apply(V2_EXPANDER_OUTPUT_IDLE, V2_EXPANDER_CONFIG)) {
     AG_LOGE(TAG, "TCA6408A apply failed");
+    _chips.set(Chip::Expander, false, "register write");
     return false;
   }
   gpio::expander::attach(_expander);
   AG_LOGI(TAG, "TCA6408A ready (output=0x%02X config=0x%02X)", _expander->cached_output(),
           _expander->cached_config());
+  _chips.set(Chip::Expander, true);
   return true;
+}
+
+// Names and bus labels depend on the variant; verdicts arrive as each init
+// runs.  Parts that are not fitted on this variant are marked Absent up
+// front so the table never shows them as forgotten.
+void GoHardwareBoard::_label_chips() {
+  const bool proto = _variant == BoardVariant::Prototype;
+  const bool v2 = _variant == BoardVariant::V2;
+
+  _chips.label(Chip::Expander, "TCA6408A", "I2C 0x20");
+  _chips.label(Chip::FuelGauge, v2 ? "BQ27742" : "BQ27427", "I2C 0x55");
+  _chips.label(Chip::Charger, "BQ25628", "I2C 0x6A");
+  _chips.label(Chip::TempHum, "SHT4x", "I2C 0x44");
+  _chips.label(Chip::Voc, "SGP41", "I2C 0x59");
+  _chips.label(Chip::Co2, "CO2", "I2C");
+  _chips.label(Chip::Pressure, v2 ? "SPL07-003" : "DPS368", "I2C 0x77");
+  _chips.label(Chip::Accel, "LIS2DH12", "I2C 0x18");
+  _chips.label(Chip::Pm, "SPS30", "I2C 0x69");
+  _chips.label(Chip::LedDriver, "LP5036", "I2C 0x33");
+  _chips.label(Chip::Touch, "CAP1203", "I2C 0x28");
+  _chips.label(Chip::Nand, "W25N512", v2 ? "SPI exp.P2" : "SPI IO4");
+  _chips.label(Chip::Display, "SSD1680", "SPI IO0");
+  _chips.label(Chip::Gps, "TAU1113", "UART1");
+
+  if (!v2) {
+    _chips.set(Chip::Expander, ChipState::Absent);
+  }
+  if (proto) {
+    _chips.set(Chip::FuelGauge, ChipState::Absent);
+    _chips.set(Chip::TempHum, ChipState::Absent);
+    _chips.set(Chip::LedDriver, ChipState::Absent);
+  }
+}
+
+void GoHardwareBoard::report_chip(Chip chip, bool ok) {
+  // An inert service (e.g. LedService without a driver on Prototype) reports
+  // success; keep the Absent verdict for parts this variant does not carry.
+  if (_chips.entry(chip).state == ChipState::Absent) {
+    return;
+  }
+  _chips.set(chip, ok);
+}
+
+// The accelerometer is only created on demand (Hardware Test), so give it a
+// WHO_AM_I probe here if nothing has touched it yet.
+void GoHardwareBoard::_probe_accel_for_report() {
+  if (_chips.entry(Chip::Accel).state != ChipState::Untested || !_buses_ready) {
+    return;
+  }
+  LIS2DH12::Config cfg;
+  cfg.address = I2C_ADDR_LIS2DH12;
+  LIS2DH12 accel(_i2c_bus, cfg);
+  const bool ok = accel.init();
+  _chips.set(Chip::Accel, ok, ok ? "WHO_AM_I 0x33" : "no WHO_AM_I");
+}
+
+void GoHardwareBoard::log_chip_report() {
+  _probe_accel_for_report();
+
+  char line[96];
+  AG_LOGI(TAG, "chip report (%s):", board_variant_str(_variant));
+  for (size_t i = 0; i < ChipReport::COUNT; ++i) {
+    _chips.format_line(static_cast<Chip>(i), line, sizeof(line));
+    AG_LOGI(TAG, "  %s", line);
+  }
+  _chips.format_summary(line, sizeof(line));
+  AG_LOGI(TAG, "  %s", line);
 }
 
 // Bring-up aid: one line listing every ACKing 7-bit address.  Runs once at
@@ -286,8 +363,10 @@ bool GoHardwareBoard::init_bms() {
     AG_LOGE(TAG, "BMS init failed");
     delete _bms_driver;
     _bms_driver = nullptr;
+    _chips.set(Chip::Charger, false);
     return false;
   }
+  _chips.set(Chip::Charger, true);
 
   if (_power != nullptr) {
     _power->set_bms(_bms_driver);
@@ -320,8 +399,10 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
   _fuel_gauge_v2 = new BQ27742(_i2c_bus, {.address = I2C_ADDR_BQ27742});
   if (!_fuel_gauge_v2->init()) {
     AG_LOGE(TAG, "BQ27742 init failed — FG offline");
+    _chips.set(Chip::FuelGauge, false, "DEVICE_TYPE");
     return;
   }
+  _chips.set(Chip::FuelGauge, true, "DEVICE_TYPE 0x0742");
 
   uint16_t dc = 0;
   uint16_t fcc = 0;
@@ -380,7 +461,8 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
 void GoHardwareBoard::_init_fuel_gauge_v1() {
   {
     _fuel_gauge = new BQ27427(_i2c_bus);
-    if (!_fuel_gauge->init()) {
+    _chips.set(Chip::FuelGauge, _fuel_gauge->init(), "DEVICE_TYPE 0x0427");
+    if (!_fuel_gauge->ready()) {
       AG_LOGE(TAG, "BQ27427 init failed — FG offline");
       // Continue: _fuel_gauge stays non-null but ready() == false.
     } else {
@@ -556,11 +638,17 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
     // pressure sensor time to produce its first measurement (~120 ms)
     if (dps368->init()) {
       s->pressure = dps368;
+      const bool spl07 = dps368->variant() == DPS368::Variant::SPL07003;
+      _chips.label(Chip::Pressure, spl07 ? "SPL07-003" : "DPS368", "I2C 0x77");
+      _chips.set(Chip::Pressure, true, spl07 ? "ID 0x11" : "ID 0x10");
     } else {
       AG_LOGE(TAG, "DPS368 init failed");
+      _chips.set(Chip::Pressure, false);
     }
 
-    s->co2 = init_co2_sensor(_i2c_bus, warm);
+    const char *co2_name = nullptr;
+    s->co2 = init_co2_sensor(_i2c_bus, warm, &co2_name);
+    _chips.set(Chip::Co2, s->co2 != nullptr, co2_name);
 
     if (_variant != BoardVariant::Prototype) {
       auto *sht40 = new SHT40(_i2c_bus, I2C_ADDR_SHT40);
@@ -569,6 +657,7 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
       } else {
         AG_LOGE(TAG, "SHT40 init failed");
       }
+      _chips.set(Chip::TempHum, s->temp_hum != nullptr);
     }
 
     if (sgp41->init()) {
@@ -576,6 +665,7 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
     } else {
       AG_LOGE(TAG, "SGP41 init failed");
     }
+    _chips.set(Chip::Voc, s->tvoc_nox != nullptr);
 
     // Wait for PMID to reach healthy voltage before probing SPS30.
     _ensure_pmid_ready();
@@ -585,6 +675,8 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
     } else {
       AG_LOGE(TAG, "SPS30 init failed");
     }
+    _chips.set(Chip::Pm, s->pms_a != nullptr,
+               _variant == BoardVariant::Prototype ? nullptr : "via TMUX121");
 
     s->temp_hum_a_fallback.priority[0] = TempHumSource::DEDICATED;
     s->temp_hum_a_fallback.priority[1] = TempHumSource::CO2;
@@ -615,9 +707,11 @@ StorageService &GoHardwareBoard::storage() {
 
     _storage = new StorageService(*cache, *nand);
     _storage->restore_cache();
-    if (!_storage->init()) {
+    const bool mounted = _storage->init();
+    if (!mounted) {
       AG_LOGE(TAG, "NAND storage init failed");
     }
+    _chips.set(Chip::Nand, mounted, mounted ? "mounted" : "mount failed");
   }
   return *_storage;
 }
@@ -759,6 +853,9 @@ PowerService &GoHardwareBoard::power() {
 
 GpsDriver *GoHardwareBoard::new_gps_driver() {
   auto *serial = new AirgradientUART(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
+  // A UART has no identity to verify at init; NMEA arrival is the runtime
+  // check (GPS Test screen / gps_service log), so the report only notes it.
+  _chips.set(Chip::Gps, ChipState::Untested, "runtime: NMEA");
   return new GpsDriver(*serial);
 }
 
@@ -768,9 +865,11 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
   cfg.delta_sense = TOUCH_DELTA_SENSE;
   cfg.repeat_rate_channels = TouchChannel::CH2 | TouchChannel::CH3;
   auto *touch = new CAP1203(_i2c_bus, I2C_ADDR_CAP1203, cfg);
-  if (!touch->init()) {
+  const bool ok = touch->init();
+  if (!ok) {
     AG_LOGE(TAG, "CAP1203 touch init failed");
   }
+  _chips.set(Chip::Touch, ok, ok ? nullptr : "check CN4 cable");
   return touch;
 }
 
@@ -783,9 +882,11 @@ AccelSensor *GoHardwareBoard::new_accel_sensor() {
   // treat it as "no accelerometer" (matches the GoBoard contract).
   if (!accel->init()) {
     AG_LOGE(TAG, "LIS2DH12 accel init failed / absent");
+    _chips.set(Chip::Accel, false, "no WHO_AM_I");
     delete accel;
     return nullptr;
   }
+  _chips.set(Chip::Accel, true, "WHO_AM_I 0x33");
   return accel;
 }
 

@@ -2,6 +2,7 @@ idf_component_register(
     SRCS "main.cpp"
          "go_app.cpp"
          "go_hardware_board.cpp"
+         "go_chip_report.cpp"
          "go_ble.cpp"
          "go_cloud.cpp"
          "go_types.cpp"

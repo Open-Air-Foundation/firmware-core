@@ -60,6 +60,8 @@ public:
   // --- Platform ---
   BoardVariant variant() const override;
   int touch_int_pin() const override;
+  void report_chip(Chip chip, bool ok) override;
+  void log_chip_report() override;
   std::string serial_number() override;
   const char *firmware_version() override;
   const gpio::Hal &gpio_hal() override;
@@ -98,6 +100,11 @@ private:
   // Bus handles
   i2c_master_bus_handle_t _i2c_bus = nullptr;
   TCA6408A *_expander = nullptr;
+
+  // Boot chip report (labels set once the variant is known)
+  ChipReport _chips;
+  void _label_chips();
+  void _probe_accel_for_report();
 
   // Owned objects (heap-allocated, never freed)
   NvsConfigStore *_config_store = nullptr;

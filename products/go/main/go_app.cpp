@@ -521,7 +521,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   DisplayValues wake_values = build_wake_values(snapshot, snapshot_valid);
 
   // Returns in ~10 ms.  Worker task handles the SPI full refresh (~3 s).
-  disp.init(wake_values, /* defer_refresh= */ true);
+  _board.report_chip(Chip::Display, disp.init(wake_values, /* defer_refresh= */ true));
 
   // Stop LP Core after SPI/display init, before I2C init.
   _board.ulp_stop();
@@ -659,7 +659,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   }
   // LED service — init and start before orchestrator.
   LedService &led = _board.led_service();
-  led.init();
+  _board.report_chip(Chip::LedDriver, led.init());
   led.start();
 
   // Buzzer service — init and start before orchestrator.
@@ -703,6 +703,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   handoff.initial_lock_state = LockState::Unlocked;
   handoff.display_snapshot = snapshot_valid ? &snapshot : nullptr;
   orchestrator->init(WakeCause::Button, handoff);
+  _board.log_chip_report();
   orchestrator->run(); // Never returns.
 }
 
@@ -728,7 +729,8 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       boot_splash_requested = true;
     }
 
-    early_display.init(initial_values, /* defer_refresh= */ true);
+    _board.report_chip(Chip::Display,
+                       early_display.init(initial_values, /* defer_refresh= */ true));
     handoff.display_painted = true;
   }
 
@@ -747,7 +749,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
 
   // --- LED boot animation (fire early so it feels immediate) ---
   LedService &led = _board.led_service();
-  led.init();
+  _board.report_chip(Chip::LedDriver, led.init());
   led.start();
 
   // --- Buzzer service ---
@@ -913,6 +915,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
   auto *orchestrator =
       new Orchestrator(event_queue, services, settings, _board.config_store(), serial.c_str());
   orchestrator->init(cause, handoff);
+  _board.log_chip_report();
   log_heap(TAG, "boot:interactive:before-run");
   orchestrator->run(); // Never returns.
 }

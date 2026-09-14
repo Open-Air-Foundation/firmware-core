@@ -1,6 +1,7 @@
 #pragma once
 
 #include "airgradient_gpio.h"
+#include "go_chip_report.h"
 #include "go_types.h"
 #include "types/bms_types.h"
 
@@ -244,4 +245,16 @@ struct GoBoard {
 
   /// Remove the ISR and disable the interrupt on the given pin.
   virtual void remove_button_isr(int pin) = 0;
+
+  // -----------------------------------------------------------------
+  // Boot chip report
+  //
+  // The board records the verdict of every driver init it performs.
+  // Services the app initialises itself (display, LEDs) hand their result
+  // in through report_chip(); log_chip_report() prints the table once the
+  // boot path has brought everything up.  No-ops on test boards.
+  // -----------------------------------------------------------------
+
+  virtual void report_chip(Chip chip, bool ok) { (void)chip, (void)ok; }
+  virtual void log_chip_report() {}
 };

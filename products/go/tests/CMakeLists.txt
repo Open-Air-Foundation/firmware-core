@@ -915,6 +915,23 @@ target_link_libraries(go_board_variant_tests PRIVATE
 
 catch_discover_tests(go_board_variant_tests)
 
+add_executable(go_chip_report_tests
+    go_chip_report.tests.cpp
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_chip_report.cpp"
+)
+
+target_include_directories(go_chip_report_tests PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+)
+
+target_compile_definitions(go_chip_report_tests PRIVATE TEST_HOST)
+
+target_link_libraries(go_chip_report_tests PRIVATE
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_chip_report_tests)
+
 catch_discover_tests(go_accel_sanity_tests)
 
 # ---------------------------------------------------------------------------

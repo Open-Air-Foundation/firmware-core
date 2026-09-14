@@ -330,6 +330,44 @@ polling when `add_interrupt_handler()` returns false.
 `GoBoard::touch_int_pin()` returns the ALERT pin for the detected variant so
 `GoApp` never hard-codes it.
 
+## Boot Chip Report
+
+`GoHardwareBoard` keeps a `ChipReport` (`go_chip_report.h`, host-testable)
+with one verdict per chip. Drivers the board initialises itself record their
+result inline (expander, fuel gauge, charger, sensors, touch, accelerometer,
+NAND); services `GoApp` initialises hand theirs in through
+`GoBoard::report_chip()` (display, LED driver). Parts a variant does not carry
+are marked `n/a` when the variant is detected and never overwritten. The
+accelerometer is only created on demand, so the report probes its `WHO_AM_I`
+if nothing touched it during boot. GPS has no identity to verify at init and
+stays `----` with the note `runtime: NMEA`.
+
+`GoApp` calls `GoBoard::log_chip_report()` right before `Orchestrator::run()`
+on the interactive and button-wake paths (not on the fast path):
+
+```text
+board: chip report (V2):
+board:   TCA6408A   I2C 0x20    PASS
+board:   BQ27742    I2C 0x55    PASS  DEVICE_TYPE 0x0742
+board:   BQ25628    I2C 0x6A    PASS
+board:   SHT4x      I2C 0x44    PASS
+board:   SGP41      I2C 0x59    PASS
+board:   CO2        I2C         PASS  S12 0x68
+board:   SPL07-003  I2C 0x77    PASS  ID 0x11
+board:   LIS2DH12   I2C 0x18    PASS  WHO_AM_I 0x33
+board:   SPS30      I2C 0x69    FAIL  via TMUX121
+board:   LP5036     I2C 0x33    PASS
+board:   CAP1203    I2C 0x28    FAIL  check CN4 cable
+board:   W25N512    SPI exp.P2  PASS  mounted
+board:   SSD1680    SPI IO0     PASS
+board:   TAU1113    UART1       ----  runtime: NMEA
+board:   pass 11  fail 2  untested 1  absent 0
+```
+
+Verdict meanings: `PASS` = driver init succeeded (identity verified where the
+driver checks one), `FAIL` = init failed, `----` = not reached on this boot
+path, `n/a` = not fitted on this variant.
+
 ## Fuel Gauge Bring-Up (V1 and V2)
 
 `init_fuel_gauge()` dispatches on the variant: V1 constructs the BQ27427
