@@ -27,9 +27,13 @@ to the orchestrator event queue.
 
 | Input | Source | Mapping |
 |---|---|---|
-| Touch Enter | CAP1203 CH1 | `InputSource::TouchEnter`, short / long / double press |
-| Touch Up | CAP1203 CH2 | `InputSource::TouchUp`, short press only |
-| Touch Down | CAP1203 CH3 | `InputSource::TouchDown`, short press only |
+| Touch Enter | CAP1203 `Config::touch_map.enter` (v1: CH1, v2: CH3 = pad T3) | `InputSource::TouchEnter`, short / long / double press |
+| Touch Up | CAP1203 `Config::touch_map.up` (v1: CH2, v2: CH1 = pad T1) | `InputSource::TouchUp`, short press only |
+| Touch Down | CAP1203 `Config::touch_map.down` (v1: CH3, v2: CH2 = pad T2) | `InputSource::TouchDown`, short press only |
+
+The channel-to-role map comes from `GoBoard::touch_channel_map()`; the Enter
+channel is also the one `GoHardwareBoard::new_touch_sensor()` excludes from
+the CAP1203 repeat rate so the gesture FSM sees clean press/release edges.
 | Button Power | Physical GPIO | `InputSource::ButtonPower`, short or long press |
 | Button Boot | Physical GPIO | `InputSource::ButtonBoot`, short or long press |
 

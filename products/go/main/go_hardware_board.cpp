@@ -890,7 +890,10 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
   assert(_buses_ready && "new_touch_sensor() requires init_buses()");
   CAP1203::Config cfg;
   cfg.delta_sense = TOUCH_DELTA_SENSE;
-  cfg.repeat_rate_channels = TouchChannel::CH2 | TouchChannel::CH3;
+  // The Enter pad needs clean press/release edges for its gesture FSM, so
+  // it is the one channel without the repeat rate.
+  cfg.repeat_rate_channels =
+      static_cast<uint8_t>(TouchChannel::ALL & ~touch_channel_map().enter);
   auto *touch = new CAP1203(_i2c_bus, I2C_ADDR_CAP1203, cfg);
   const bool ok = touch->init();
   if (!ok) {
@@ -928,6 +931,13 @@ BoardVariant GoHardwareBoard::variant() const {
 
 int GoHardwareBoard::touch_int_pin() const {
   return _variant == BoardVariant::V2 ? PIN_V2_CAP_INT : static_cast<int>(PIN_CAP_INT);
+}
+
+TouchChannelMap GoHardwareBoard::touch_channel_map() const {
+  if (_variant == BoardVariant::V2) {
+    return {.enter = TOUCH_V2_CH_ENTER, .up = TOUCH_V2_CH_UP, .down = TOUCH_V2_CH_DOWN};
+  }
+  return {};
 }
 
 std::string GoHardwareBoard::serial_number() { return build_serial_number(); }

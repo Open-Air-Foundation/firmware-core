@@ -29,6 +29,7 @@ public:
     int pin_cap_int;                           // CAP1203 INT pin (GPIO)
     int pin_button_power;                      // physical button 1 (Power/lock)
     int pin_button_boot;                       // physical button 2 (Boot/factory-reset)
+    TouchChannelMap touch_map{};               // which CAP1203 channel is Enter/Up/Down
     uint32_t debounce_ms = 500;                // debounce window (must exceed CAP1203
                                                // re-assertion time to prevent duplicate
                                                // events while finger is held on pad)

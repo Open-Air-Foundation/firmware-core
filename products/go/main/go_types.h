@@ -102,4 +102,13 @@ struct BootHandoff {
   const MeasuresAGo *fast_path_measures = nullptr;
 };
 
+/// Which CAP1203 sensor input plays each pad role.  Values are the
+/// TouchChannel bitmasks (0x01 = CS1/CH1, 0x02 = CS2/CH2, 0x04 = CS3/CH3).
+/// Defaults are the v1.0 wiring; the board reports its own map.
+struct TouchChannelMap {
+  uint8_t enter = 0x01; ///< gesture pad: short / long / double press
+  uint8_t up = 0x02;
+  uint8_t down = 0x04;
+};
+
 #endif // GO_TYPES_H

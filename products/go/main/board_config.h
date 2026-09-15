@@ -142,6 +142,11 @@ inline constexpr int PIN_V2_PM_POWER = gpio::expander::pin(1);   // EN_PM1 -> TM
 inline constexpr int PIN_V2_NAND_CS = gpio::expander::pin(2);    // active-low
 inline constexpr int PIN_V2_DISPLAY_DC = gpio::expander::pin(3); // 0 = command, 1 = data
 inline constexpr int PIN_V2_CAP_INT = gpio::expander::pin(4);    // input, active-low
+
+// Touch pad v2.0 wiring: T1 -> CS1, T2 -> CS2, T3 -> CS3 (TouchChannel bits).
+inline constexpr uint8_t TOUCH_V2_CH_UP = 0x01;    // T1
+inline constexpr uint8_t TOUCH_V2_CH_DOWN = 0x02;  // T2
+inline constexpr uint8_t TOUCH_V2_CH_ENTER = 0x04; // T3
 inline constexpr int PIN_V2_ACCEL_INT = gpio::expander::pin(5);  // input
 inline constexpr int PIN_V2_SD_CS = gpio::expander::pin(6);      // active-low, unused for now
 

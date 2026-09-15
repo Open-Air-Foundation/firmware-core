@@ -1008,3 +1008,57 @@ TEST_CASE("CH1 gesture queue timeout", "[InputService][touch][gesture][timeout]"
     CHECK(svc.compute_queue_timeout_ms() == 301);
   }
 }
+
+// ============================================================================
+// TEST CASE — Board-specific channel map (v2.0 touch pad: T1 Up, T2 Down, T3 Enter)
+// ============================================================================
+
+TEST_CASE("Touch channel map follows the board", "[InputService][touch][map]") {
+  MockCapTouchSensor mock_touch;
+  MockRTOS mock_rtos;
+  RTOS::set_instance(&mock_rtos);
+  ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(10000);
+
+  InputService::Config cfg = make_config();
+  cfg.touch_map = {.enter = TouchChannel::CH3, .up = TouchChannel::CH1, .down = TouchChannel::CH2};
+  TestableInputService svc(mock_touch, cfg);
+
+  SECTION("CH1 is Up on the v2 map") {
+    REQUIRE_CALL(mock_touch, read(trompeloeil::_))
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
+        .RETURN(true);
+    REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
+
+    svc.process_touch_interrupt();
+
+    REQUIRE(svc.events.size() == 1);
+    CHECK(svc.events[0].source == InputSource::TouchUp);
+    CHECK(svc.events[0].type == InputType::ShortPress);
+  }
+
+  SECTION("CH2 is Down on the v2 map") {
+    REQUIRE_CALL(mock_touch, read(trompeloeil::_))
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH2, 0})
+        .RETURN(true);
+    REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
+
+    svc.process_touch_interrupt();
+
+    REQUIRE(svc.events.size() == 1);
+    CHECK(svc.events[0].source == InputSource::TouchDown);
+  }
+
+  SECTION("CH3 drives the Enter gesture FSM on the v2 map") {
+    // Press-down only arms the FSM (two reads: latched then settled); the
+    // ShortPress comes later from check_pending_touch_gesture().
+    REQUIRE_CALL(mock_touch, read(trompeloeil::_))
+        .TIMES(2)
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH3, 0})
+        .RETURN(true);
+    REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true);
+
+    svc.process_touch_interrupt();
+
+    CHECK(svc.events.empty());
+  }
+}

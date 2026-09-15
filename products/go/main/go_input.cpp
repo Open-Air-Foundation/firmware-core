@@ -287,29 +287,30 @@ void InputService::process_touch_interrupt() {
 
   const uint64_t now = RTOS::get_time_ms();
 
-  // CH1 = TouchEnter: edge-driven gesture FSM (long-press + double-press), not
+  // Enter pad: edge-driven gesture FSM (long-press + double-press), not
   // time-debounced so a quick double tap survives.  The first read() is the
-  // latched status, which stays CH1 from press through release; a second read()
+  // latched status, which stays set from press through release; a second read()
   // after clear gives the settled state so the release edge is seen instead of
-  // stale CH1.  Only re-read when CH1 is involved (or a press is in flight).
+  // the stale latch.  Only re-read when Enter is involved (or a press is in flight).
+  const uint8_t ch_enter = _config.touch_map.enter;
   uint8_t ch1_valid = valid_touches; // fall back to latched read
-  if ((valid_touches & TouchChannel::CH1) || _ch1_down) {
+  if ((valid_touches & ch_enter) || _ch1_down) {
     TouchData settled{};
     if (_touch.read(settled)) {
       ch1_valid = settled.touched & static_cast<uint8_t>(~settled.noise);
     }
   }
-  update_ch1_gesture((ch1_valid & TouchChannel::CH1) != 0, now);
+  update_ch1_gesture((ch1_valid & ch_enter) != 0, now);
 
-  // CH2 = TouchUp, CH3 = TouchDown: immediate short press.  Time debounce
+  // Up / Down pads: immediate short press.  Time debounce
   // rejects the CAP1203 INT re-assertion while the finger is held on the pad.
   if ((now - _last_touch_time_ms) >= static_cast<uint64_t>(_config.debounce_ms)) {
     bool posted = false;
-    if (valid_touches & TouchChannel::CH2) {
+    if (valid_touches & _config.touch_map.up) {
       post_input_event(InputSource::TouchUp, InputType::ShortPress);
       posted = true;
     }
-    if (valid_touches & TouchChannel::CH3) {
+    if (valid_touches & _config.touch_map.down) {
       post_input_event(InputSource::TouchDown, InputType::ShortPress);
       posted = true;
     }
@@ -367,7 +368,7 @@ void InputService::check_pending_touch_gesture() {
       (now_ms - _ch1_press_start_ms) >= static_cast<uint64_t>(_config.touch_long_press_ms)) {
     TouchData data{};
     const bool held = _touch.read(data) &&
-                      (data.touched & static_cast<uint8_t>(~data.noise) & TouchChannel::CH1) != 0;
+                      (data.touched & static_cast<uint8_t>(~data.noise) & _config.touch_map.enter) != 0;
     if (held) {
       post_input_event(InputSource::TouchEnter, InputType::LongPress);
       _ch1_long_fired = true;
@@ -388,7 +389,7 @@ void InputService::check_pending_touch_gesture() {
     // Detect the lifted finger via read() so the FSM cannot stay stuck.
     TouchData data{};
     if (_touch.read(data) &&
-        (data.touched & static_cast<uint8_t>(~data.noise) & TouchChannel::CH1) == 0) {
+        (data.touched & static_cast<uint8_t>(~data.noise) & _config.touch_map.enter) == 0) {
       _ch1_down = false;
       _ch1_long_fired = false;
     }

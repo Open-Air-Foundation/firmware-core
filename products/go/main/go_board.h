@@ -208,6 +208,10 @@ struct GoBoard {
   /// (target-only header) so host builds keep the v1 default.
   virtual int touch_int_pin() const { return 1; }
 
+  /// Which CAP1203 channel plays Enter / Up / Down on this board.  v1.0 wires
+  /// CS1 = Enter; the v2.0 touch pad reads T1 = Up, T2 = Down, T3 = Enter.
+  virtual TouchChannelMap touch_channel_map() const { return {}; }
+
   virtual std::string serial_number() = 0;
   virtual const char *firmware_version() = 0;
   virtual const gpio::Hal &gpio_hal() = 0;

@@ -579,6 +579,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
                                              .pin_cap_int = _board.touch_int_pin(),
                                              .pin_button_power = PIN_BUTTON_POWER,
                                              .pin_button_boot = PIN_BUTTON_BOOT,
+                                             .touch_map = _board.touch_channel_map(),
                                              .suppress_button_wake = true,
                                          });
 
@@ -834,6 +835,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
                                          {.pin_cap_int = _board.touch_int_pin(),
                                           .pin_button_power = PIN_BUTTON_POWER,
                                           .pin_button_boot = PIN_BUTTON_BOOT,
+                                          .touch_map = _board.touch_channel_map(),
                                           .suppress_button_wake = handoff.suppress_wake_press});
 
   PowerService &pwr = _board.power();

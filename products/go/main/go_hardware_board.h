@@ -60,6 +60,7 @@ public:
   // --- Platform ---
   BoardVariant variant() const override;
   int touch_int_pin() const override;
+  TouchChannelMap touch_channel_map() const override;
   void report_chip(Chip chip, bool ok) override;
   void log_chip_report() override;
   std::string serial_number() override;

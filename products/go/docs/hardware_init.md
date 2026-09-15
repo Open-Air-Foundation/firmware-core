@@ -322,7 +322,7 @@ virtual pin numbers (`gpio::expander::pin(n)`, `board_config.h`
 | P1 | EN_PM1 → TMUX121 ~EN | output, low = PM on | `PowerService::set_pm_power` |
 | P2 | NAND CS | output | `SpiNandStorage` software chip-select (`cs_hal`) |
 | P3 | e-paper D/C | output | `DisplayService` (`Config::gpio`) |
-| P4 | CAP1203 ALERT | input | `InputService` polls every `touch_poll_ms` |
+| P4 | CAP1203 ALERT | input | `InputService` polls every `touch_poll_ms`; pad roles from `GoBoard::touch_channel_map()` (v2: T1/CS1 = Up, T2/CS2 = Down, T3/CS3 = Enter) |
 | P5 | LIS2DH12 INT1 | input | unused (accel is poll-only) |
 | P6 | SD_CS | output, idle high | microSD not supported yet |
 
