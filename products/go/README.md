@@ -189,6 +189,9 @@ partition table, and merged factory-flash binary.
   boot path (`FgLearningRunner` / `FgLearningController` split, dashboard)
 - [`docs/hardware_test.md`](docs/hardware_test.md) — on-device Hardware Test
   surface (Peripheral, GPS, Accelerometer, FG Learning arm)
+- [`docs/bq27742_capability.md`](docs/bq27742_capability.md) — BQ27742-G1
+  gauge and protector reference for board rev 2.0 (I²C timing, data-flash
+  map, protector checksum, status registers)
 - [`go_ble_client.md`](go_ble_client.md) — client-side BLE integration spec
   for mobile app developers (discovery, pairing, GATT, payloads, history)
 - [`specs/`](specs) — design specs and refactor plans (temporary; deleted
