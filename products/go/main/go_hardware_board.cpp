@@ -77,6 +77,17 @@ static constexpr FgCellConfig AGO_CELL_CONFIG = {
     .sleep_current_ma = 50,
 };
 
+// v2.0 ships a different cell: Cowon INR18490NP, 2600 mAh min at 0.2C,
+// 3.7 V nominal.  Terminate Voltage stays at 3.0 V on purpose — the cell allows
+// 2.5 V, but 3.0 V keeps the gauge out of the knee where SOC gets noisy and
+// leaves headroom above the protector's 2.7 V undervoltage trip.
+static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
+    .design_capacity_mah = 2600,
+    .design_energy_mwh = 9620,
+    .terminate_voltage_mv = 3000,
+    .sleep_current_ma = 50,
+};
+
 // Firmware-layer protection thresholds for the same cell.  TI's factory
 // defaults suit a generic cell that tolerates 4.35 V and 55 °C charging; the
 // Cowon INR18490NP is a 4.20 ± 0.05 V part rated 0–45 °C charge, −20–60 °C
@@ -433,7 +444,12 @@ void GoHardwareBoard::init_fuel_gauge() {
 // factory RESET — on this part a reset opens both protection FETs for a
 // moment, which drops Pack+ and reboots the system when on battery.
 void GoHardwareBoard::_init_fuel_gauge_v2() {
-  _fuel_gauge_v2 = new BQ27742(_i2c_bus, {.address = I2C_ADDR_BQ27742});
+  // 100 kHz, not the bus's 400 kHz: the gauge clock-stretches while it serves a
+  // Control() result, and at 400 kHz the incremental 2-byte read of that
+  // register comes back corrupted (DEVICE_TYPE read 0x??72 across boots while
+  // Voltage() and even AtRate() writes were fine).  At 100 kHz it reads 0x0742.
+  // Only this device is slowed; the other I2C devices keep their own speed.
+  _fuel_gauge_v2 = new BQ27742(_i2c_bus, {.address = I2C_ADDR_BQ27742, .scl_speed_hz = 100000});
   if (!_fuel_gauge_v2->init()) {
     AG_LOGE(TAG, "BQ27742 init failed — FG offline");
     _chips.set(Chip::FuelGauge, false, "DEVICE_TYPE");
@@ -449,7 +465,7 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
   const bool cfg_ok = _fuel_gauge_v2->read_cell_config(current);
 
   const FgRecoveryDecision decision =
-      evaluate_fg_state(dc, dc_ok, fcc, fcc_ok, current, cfg_ok, AGO_CELL_CONFIG,
+      evaluate_fg_state(dc, dc_ok, fcc, fcc_ok, current, cfg_ok, AGO_CELL_CONFIG_V2,
                         FG_DC_SANITY_MIN_MAH, FG_DC_SANITY_MAX_MAH, FG_FCC_SANITY_MAX_MAH);
   if (decision.needs_factory_reset) {
     AG_LOGW(TAG, "BQ27742 state out of range (dc=%u fcc=%u) — reset skipped on v2, "
@@ -460,7 +476,7 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
     AG_LOGI(TAG, "BQ27742 applying cell config (had DC=%u DE=%u TermV=%u SleepI=%u)",
             current.design_capacity_mah, current.design_energy_mwh,
             current.terminate_voltage_mv, current.sleep_current_ma);
-    if (!_fuel_gauge_v2->write_cell_config(AGO_CELL_CONFIG)) {
+    if (!_fuel_gauge_v2->write_cell_config(AGO_CELL_CONFIG_V2)) {
       AG_LOGW(TAG, "BQ27742 write_cell_config() failed — cell parameters not updated");
     }
   } else if (cfg_ok) {

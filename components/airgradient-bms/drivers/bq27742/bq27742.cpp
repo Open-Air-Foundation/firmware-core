@@ -570,6 +570,22 @@ bool BQ27742::write_protection_config(const FgProtectionConfig &cfg) {
   if (!_read_df_block(SUBCLASS_SAFETY, 0, block)) {
     return false;
   }
+  // The block is written back whole, so the bytes we keep must be trustworthy.
+  // A corrupted read (seen on this bus at 400 kHz) would otherwise be committed
+  // along with the new thresholds — and a zero in UV Prot Delay turns
+  // undervoltage protection off.  These four U1 fields have documented ranges
+  // (TRM Table 5-3): OV/UV Prot Delay 0-5 s, OT Chg/Dsg Time 0-60 s.
+  const uint8_t ov_delay = block[2];
+  const uint8_t uv_delay = block[7];
+  const uint8_t otc_time = block[14];
+  const uint8_t otd_time = block[19];
+  if (ov_delay > 5 || uv_delay == 0 || uv_delay > 5 || otc_time > 60 || otd_time > 60) {
+    ESP_LOGE(TAG,
+             "Safety block read looks corrupt (OV delay %u, UV delay %u, OTC time %u, OTD time "
+             "%u) - refusing to write protection config",
+             ov_delay, uv_delay, otc_time, otd_time);
+    return false;
+  }
   // Only the eight threshold words are replaced.  The U1 delay/time fields at
   // offsets 2, 7, 14 and 19 keep whatever the gauge shipped with: a zero in UV
   // Prot Delay disables undervoltage protection entirely (TRM §5.3.1.2).
