@@ -117,17 +117,6 @@ static constexpr FgProtectionConfig AGO_PROTECTION_CONFIG = {
 static constexpr uint8_t AGO_PROTECTOR_PACK_CONFIG_D = 0xB3; // TI default 0x83
 static constexpr uint8_t AGO_PROTECTOR_OV_CONFIG = 0x00;     // TI default 0x07 (4.450 V)
 
-// The protector write leaves a window in which the gauge may open both FETs;
-// on battery that would cut the system mid-sequence.
-static bool adapter_present(BmsDevice *bms) {
-  BmsStatus status{};
-  if (bms == nullptr || !bms->read_status(status) || !status.is_power_source_valid()) {
-    return false;
-  }
-  return status.power_source != BmsPowerSource::None &&
-         status.power_source != BmsPowerSource::OtgMode;
-}
-
 // FG DM corruption sanity ranges.  A reading outside any of these
 // ranges is treated as evidence of a corrupted persistent block
 // (most commonly a prior aborted CFGUPDATE).
@@ -439,6 +428,12 @@ bool GoHardwareBoard::init_bms() {
   if (_power != nullptr) {
     _power->set_bms(_bms_driver);
   }
+
+  // Every boot path brings the gauge up before the charger, so this is the
+  // first point where the adapter state the protector write needs is known.
+  if (_variant == BoardVariant::V2) {
+    _apply_fuel_gauge_protector();
+  }
   return true;
 }
 
@@ -527,31 +522,6 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
     }
   }
 
-  FgProtectorConfig hw{};
-  if (!_fuel_gauge_v2->read_protector_config(hw)) {
-    AG_LOGW(TAG, "BQ27742 protector config unreadable — left as-is");
-  } else {
-    const uint16_t expected = fg_protector_checksum(hw.prot_oc_config, hw.prot_ov_config);
-    AG_LOGI(TAG,
-            "BQ27742 protector config: PackCfgD=0x%02X ProtOC=0x%02X ProtOV=0x%02X "
-            "ProtChk=0x%04X%s",
-            hw.pack_config_d, hw.prot_oc_config, hw.prot_ov_config, hw.prot_checksum,
-            hw.prot_checksum == expected ? "" : " (MISMATCH — gauge holds both FETs open)");
-    if (hw.pack_config_d == AGO_PROTECTOR_PACK_CONFIG_D &&
-        hw.prot_ov_config == AGO_PROTECTOR_OV_CONFIG && hw.prot_checksum == expected) {
-      AG_LOGI(TAG, "BQ27742 protector config already correct — preserved");
-    } else if (!adapter_present(_bms_driver)) {
-      AG_LOGW(TAG,
-              "BQ27742 protector config differs — write deferred until an adapter is attached");
-    } else {
-      AG_LOGI(TAG, "BQ27742 applying protector config");
-      if (!_fuel_gauge_v2->write_protector_config(AGO_PROTECTOR_PACK_CONFIG_D,
-                                                  AGO_PROTECTOR_OV_CONFIG)) {
-        AG_LOGE(TAG, "BQ27742 write_protector_config() failed — see safety/protector below");
-      }
-    }
-  }
-
   uint8_t soc = 0;
   uint16_t mv = 0;
   int16_t ma = 0;
@@ -576,6 +546,62 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
           "BQ27742 boot: flags=0x%04X safety=0x%04X protector=0x%02X (CHG %s, DSG %s) state=0x%02X",
           flags, safety, prot, (prot & BQ27742::ProtectorStatus::CHG_OFF) ? "OFF" : "on",
           (prot & BQ27742::ProtectorStatus::DSG_OFF) ? "OFF" : "on", state);
+}
+
+// Hardware protector.  Separate from _init_fuel_gauge_v2() because the write
+// needs the charger: between the subclass 64 commit and the Prot Checksum the
+// gauge can open both FETs, which on battery cuts the system mid-sequence.
+void GoHardwareBoard::_apply_fuel_gauge_protector() {
+  if (_fuel_gauge_v2 == nullptr || !_fuel_gauge_v2->ready()) {
+    return;
+  }
+
+  FgProtectorConfig hw{};
+  if (!_fuel_gauge_v2->read_protector_config(hw)) {
+    AG_LOGW(TAG, "BQ27742 protector config unreadable — left as-is");
+    return;
+  }
+  const uint16_t expected = fg_protector_checksum(hw.prot_oc_config, hw.prot_ov_config);
+  AG_LOGI(TAG,
+          "BQ27742 protector config: PackCfgD=0x%02X ProtOC=0x%02X ProtOV=0x%02X ProtChk=0x%04X%s",
+          hw.pack_config_d, hw.prot_oc_config, hw.prot_ov_config, hw.prot_checksum,
+          hw.prot_checksum == expected ? "" : " (MISMATCH — gauge holds both FETs open)");
+
+  if (hw.pack_config_d == AGO_PROTECTOR_PACK_CONFIG_D &&
+      hw.prot_ov_config == AGO_PROTECTOR_OV_CONFIG && hw.prot_checksum == expected) {
+    AG_LOGI(TAG, "BQ27742 protector config already correct — preserved");
+    return;
+  }
+
+  BmsStatus status{};
+  const bool status_ok = _bms_driver != nullptr && _bms_driver->read_status(status);
+  if (!status_ok || !status.is_power_source_valid()) {
+    AG_LOGW(TAG, "BQ27742 protector config differs — charger status unavailable, write deferred");
+    return;
+  }
+  if (status.power_source == BmsPowerSource::None ||
+      status.power_source == BmsPowerSource::OtgMode) {
+    AG_LOGW(TAG, "BQ27742 protector config differs — on battery, write deferred until USB");
+    return;
+  }
+
+  AG_LOGI(TAG, "BQ27742 applying protector config");
+  if (!_fuel_gauge_v2->write_protector_config(AGO_PROTECTOR_PACK_CONFIG_D,
+                                              AGO_PROTECTOR_OV_CONFIG)) {
+    AG_LOGE(TAG, "BQ27742 write_protector_config() failed — retried at next boot on USB");
+  }
+
+  uint16_t safety = 0;
+  uint8_t prot = 0;
+  uint8_t state = 0;
+  _fuel_gauge_v2->read_safety_status(safety);
+  _fuel_gauge_v2->read_protector_status(prot);
+  _fuel_gauge_v2->read_protector_state(state);
+  AG_LOGI(
+      TAG,
+      "BQ27742 after protector write: safety=0x%04X protector=0x%02X (CHG %s, DSG %s) state=0x%02X",
+      safety, prot, (prot & BQ27742::ProtectorStatus::CHG_OFF) ? "OFF" : "on",
+      (prot & BQ27742::ProtectorStatus::DSG_OFF) ? "OFF" : "on", state);
 }
 
 // v1.0: BQ27427.

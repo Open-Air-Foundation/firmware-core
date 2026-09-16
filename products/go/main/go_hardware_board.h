@@ -104,6 +104,10 @@ private:
   int _pm_power_pin() const;
   void _init_fuel_gauge_v1();
   void _init_fuel_gauge_v2();
+  /// Programs the v2 gauge's hardware protector.  Runs from init_bms(),
+  /// not init_fuel_gauge(), because it must know whether an adapter is
+  /// attached and every boot path brings the gauge up before the charger.
+  void _apply_fuel_gauge_protector();
 
   // Bus handles
   i2c_master_bus_handle_t _i2c_bus = nullptr;
@@ -121,7 +125,7 @@ private:
   BQ25629Bms *_bms_driver = nullptr;
   BQ27427 *_fuel_gauge = nullptr;    // v1.0
   BQ27742 *_fuel_gauge_v2 = nullptr; // v2.0
-  SPS30 *_pm_fan = nullptr; // dedicated PM-fan load for factory learning discharge
+  SPS30 *_pm_fan = nullptr;          // dedicated PM-fan load for factory learning discharge
   bool _pm_fan_inited = false;
   SensorManager *_sensor_manager = nullptr;
   StorageService *_storage = nullptr;
