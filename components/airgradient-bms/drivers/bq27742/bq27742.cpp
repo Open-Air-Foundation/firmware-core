@@ -47,6 +47,7 @@ constexpr uint16_t CTRL_CONTROL_STATUS = 0x0000;
 constexpr uint16_t CTRL_DEVICE_TYPE = 0x0001;
 constexpr uint16_t CTRL_FW_VERSION = 0x0002;
 constexpr uint16_t CTRL_HW_VERSION = 0x0003;
+constexpr uint16_t CTRL_PREV_MACWRITE = 0x0007;
 constexpr uint16_t CTRL_IT_ENABLE = 0x0021;
 
 // Default unseal key 0x36720414 (TRM §5.9.1): Control(0x0414) then Control(0x3672).
@@ -297,6 +298,16 @@ void BQ27742::_log_identity_diagnostics(uint16_t first_device_type) {
              HW_VERSION_B, (hw == HW_VERSION_A || hw == HW_VERSION_B) ? "MATCH" : "mismatch");
   } else {
     ESP_LOGW(TAG, "  HW_VERSION read failed");
+  }
+
+  // PREV_MACWRITE returns the previous Control() subcommand code, so it shows
+  // directly whether the subcommand latch is working.
+  uint16_t prev = 0;
+  if (control_subcommand(CTRL_PREV_MACWRITE, prev)) {
+    ESP_LOGW(TAG, "  PREV_MACWRITE=0x%04X (expect 0x%04X, the HW_VERSION just issued) %s", prev,
+             CTRL_HW_VERSION, prev == CTRL_HW_VERSION ? "MATCH — latch works" : "mismatch");
+  } else {
+    ESP_LOGW(TAG, "  PREV_MACWRITE read failed");
   }
 
   // Voltage() is a standard command: it does not go through Control() at all,
@@ -630,17 +641,15 @@ bool BQ27742::_read_word(uint8_t cmd, uint16_t &out) {
 }
 
 bool BQ27742::_write_word(uint8_t cmd, uint16_t value) {
-  if (_dev == nullptr) {
-    return false;
-  }
-  uint8_t buf[3] = {cmd, static_cast<uint8_t>(value & 0xFF),
-                    static_cast<uint8_t>((value >> 8) & 0xFF)};
-  esp_err_t err = i2c_master_transmit(_dev, buf, sizeof(buf), _config.timeout_ms);
-  if (err != ESP_OK) {
-    ESP_LOGW(TAG, "write cmd 0x%02X failed: %s", cmd, esp_err_to_name(err));
-    return false;
-  }
-  return true;
+  // This part supports only the 1-byte write format and NACKs every data byte
+  // after the first (TRM §3.4, Figure 3-1 and the "Attempt at incremental
+  // writes" case below it).  A single 3-byte transaction therefore delivers
+  // the low byte and drops the high one, leaving Control() with no complete
+  // subcommand to latch — so the word goes out as two 1-byte writes to
+  // consecutive command addresses.  The BQ27427 on v1 does accept the
+  // incremental form, which is why the same code works there.
+  return _write_byte(cmd, static_cast<uint8_t>(value & 0xFF)) &&
+         _write_byte(static_cast<uint8_t>(cmd + 1), static_cast<uint8_t>((value >> 8) & 0xFF));
 }
 
 bool BQ27742::_read_byte(uint8_t reg, uint8_t &out) {
