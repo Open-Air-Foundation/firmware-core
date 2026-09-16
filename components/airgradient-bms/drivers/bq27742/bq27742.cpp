@@ -93,6 +93,11 @@ constexpr uint8_t OFFSET_SLEEP_CURRENT = 2;
 constexpr uint8_t OFFSET_TERMINATE_VOLTAGE = 64;
 constexpr uint8_t OFFSET_QMAX_CELL0 = 0;
 constexpr uint8_t OFFSET_UPDATE_STATUS = 2;
+constexpr uint16_t QMAX_CELL0_MAX_MAH = 14500; // TRM Table 5-5
+
+// Update Status bits (TRM §5.5.3.2).
+constexpr uint8_t UPDATE_STATUS_QMAX_INITIAL = (1u << 0);
+constexpr uint8_t UPDATE_STATUS_QMAX_OPTIMISED = (1u << 1);
 constexpr uint8_t OFFSET_RA_FIRST = 2;
 
 constexpr size_t DF_BLOCK_SIZE = 32;
@@ -482,6 +487,46 @@ bool BQ27742::read_qmax_cell0(uint16_t &out) {
     return false;
   }
   out = (static_cast<uint16_t>(block[OFFSET_QMAX_CELL0]) << 8) | block[OFFSET_QMAX_CELL0 + 1];
+  return true;
+}
+
+bool BQ27742::read_learning_progress(FgLearningProgress &out) {
+  // Update Status walks 0x04 (IT enabled) -> 0x05 (initial Qmax, charge half
+  // done) -> 0x06 (optimised Qmax + Ra, cycle done).  Bit 0 is cleared again at
+  // 0x06, so "a Qmax was learned" is bit 0 or bit 1 (TRM SLUUAX0C §5.5.3.2).
+  uint8_t status = 0;
+  if (!read_update_status(status)) {
+    return false;
+  }
+  out.qmax_updated = (status & (UPDATE_STATUS_QMAX_INITIAL | UPDATE_STATUS_QMAX_OPTIMISED)) != 0;
+  out.ra_updated = (status & UPDATE_STATUS_QMAX_OPTIMISED) != 0;
+  return true;
+}
+
+bool BQ27742::read_qmax_mah(uint16_t &out) {
+  // Qmax Cell 0 is stored in mAh on this part (TRM Table 5-5), no scaling.
+  return read_qmax_cell0(out);
+}
+
+bool BQ27742::write_qmax_cell0(uint16_t qmax_mah) {
+  if (!ready()) {
+    return false;
+  }
+  if (qmax_mah == 0 || qmax_mah > QMAX_CELL0_MAX_MAH) {
+    ESP_LOGE(TAG, "Qmax %u mAh outside 1..%u - refusing to write", qmax_mah, QMAX_CELL0_MAX_MAH);
+    return false;
+  }
+  if (!_write_df_word(SUBCLASS_STATE, OFFSET_QMAX_CELL0, qmax_mah)) {
+    return false;
+  }
+
+  RTOS::delay_ms(50);
+  uint16_t verify = 0;
+  if (!read_qmax_cell0(verify) || verify != qmax_mah) {
+    ESP_LOGE(TAG, "Qmax write did NOT stick - read back %u, wanted %u", verify, qmax_mah);
+    return false;
+  }
+  ESP_LOGI(TAG, "Qmax Cell 0 set to %u mAh", qmax_mah);
   return true;
 }
 

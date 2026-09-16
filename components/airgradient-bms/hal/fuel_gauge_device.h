@@ -11,6 +11,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "types/bms_types.h"
+
 /// Abstract fuel gauge device interface for runtime polling.
 ///
 /// Parallel to BmsDevice.  Only the runtime-poll API needs polymorphism;
@@ -44,11 +46,13 @@ public:
   // HAL (not just the concrete driver) so PowerService can aggregate them
   // through its FuelGaugeDevice pointer and host tests can mock them.
 
-  /// CONTROL_STATUS register (Control(0x0000)) for QMAX_UP / RES_UP.
-  virtual bool read_control_status(uint16_t &out) = 0;
+  /// Impedance-Track learning progress, in part-neutral terms.  Each driver
+  /// reads whichever register its gauge keeps it in.
+  virtual bool read_learning_progress(FgLearningProgress &out) = 0;
 
-  /// Learned Qmax for cell 0 (State subclass bytes 0/1), raw gauge units.
-  virtual bool read_qmax_cell0(uint16_t &out) = 0;
+  /// Learned Qmax for cell 0, in mAh.  The raw data-flash units differ between
+  /// parts, so each driver applies its own conversion.
+  virtual bool read_qmax_mah(uint16_t &out) = 0;
 
   /// Ra impedance grid (Ra0 RAM subclass). @p len must be >= FG_RA_TABLE_SIZE.
   virtual bool read_ra_table(int16_t *out, size_t len) = 0;

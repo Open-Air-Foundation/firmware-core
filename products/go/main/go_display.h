@@ -66,10 +66,6 @@ struct ListRow {
 // Fuel-gauge learning dashboard (factory path)
 // ---------------------------------------------------------------------------
 
-/// Compile-time design capacity used for the FCC-drift label (avoids a
-/// per-paint read). Confirm against the configured cell on the shipped board.
-inline constexpr uint16_t FG_LEARNING_DESIGN_CAPACITY_MAH = 2000;
-
 /// Full-refresh heartbeat for the learning dashboard. The runner also paints
 /// on every stage transition.
 inline constexpr uint32_t FG_LEARNING_DISPLAY_REFRESH_MS = 60000; // 60 s

@@ -73,8 +73,10 @@ public:
   bool read_flags(uint16_t &out) override;
 
   // -- Fuel-gauge learning reads/config (FuelGaugeDevice overrides) ----------
-  bool read_control_status(uint16_t &out) override;
-  bool read_qmax_cell0(uint16_t &out) override;
+  bool read_learning_progress(FgLearningProgress &out) override;
+  bool read_qmax_mah(uint16_t &out) override;
+  bool read_control_status(uint16_t &out); ///< CONTROL_STATUS, this part's layout
+  bool read_qmax_cell0(uint16_t &out);     ///< Qmax Cell 0 in raw fixed-point units
   bool read_ra_table(int16_t *out, size_t len) override;
   bool read_design_capacity_mah(uint16_t &out) override;
   bool select_chemistry_4v2() override; ///< idempotent; reads Chem ID first

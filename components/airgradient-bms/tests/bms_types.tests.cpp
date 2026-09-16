@@ -307,3 +307,19 @@ TEST_CASE("fg_protector_checksum is the plain sum the gauge checks", "[BmsTypes]
   REQUIRE(fg_protector_checksum(0x0A, 0x00) == 0x000A); // OVP code 000 on factory OC
   REQUIRE(fg_protector_checksum(0xFF, 0xFF) == 0x01FE); // no 8-bit wrap
 }
+
+TEST_CASE("fg_qmax_q14_to_mah converts the BQ27427 fixed-point Qmax", "[BmsTypes]") {
+  // Captured from a real device: 17211 * 2000 / 16384 = 2100 mAh.
+  REQUIRE(fg_qmax_q14_to_mah(17211, 2000) == 2100);
+  REQUIRE(fg_qmax_q14_to_mah(16384, 2000) == 2000); // exactly design capacity
+  REQUIRE(fg_qmax_q14_to_mah(0, 2000) == 0);
+  // Widest in-range inputs: the 32-bit intermediate holds, and the result still
+  // fits the uint16_t return (max Design Capacity is 14500 mAh, TRM Table 5-5).
+  REQUIRE(fg_qmax_q14_to_mah(65535, 14500) == 57999);
+}
+
+TEST_CASE("FgLearningProgress defaults to nothing learned", "[BmsTypes]") {
+  FgLearningProgress p{};
+  REQUIRE_FALSE(p.qmax_updated);
+  REQUIRE_FALSE(p.ra_updated);
+}

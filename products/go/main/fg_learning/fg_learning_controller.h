@@ -40,7 +40,7 @@ enum class FgLearnFailReason : uint8_t {
   PorLossCap,           ///< gauge POR (ITPOR) restarts hit ITPOR_LOSS_CAP
   VerifyReadFail,       ///< verify gauge reads failed
   VerifyItpor,          ///< a POR wiped learning before verify
-  VerifyQmaxNotUpdated, ///< CONTROL_STATUS QMAX_UP never set
+  VerifyQmaxNotUpdated, ///< the gauge never reported a learned Qmax
   VerifyDesignCapZero,  ///< design capacity read as 0
   VerifyQmaxOutOfBand,  ///< learned Qmax outside [0.7, 1.4] x design
   VerifyRaInvalid,      ///< an Ra grid entry <= 0
@@ -60,13 +60,13 @@ struct FgLearningAction {
   bool active = false;                    ///< false in {Idle, Complete, Failed}
 };
 // Note: no commit_then_ship field. The EDV persist-then-ship ordering is owned
-// by FgLearningRunner::handle_edv_ship(); the FSM only transitions
-// Discharge -> CycleDone on edv_cutoff_reached.
+// by FgLearningRunner::handle_edv_ship(), which is v1-only; the FSM transitions
+// Discharge -> CycleDone on discharge_target_reached, which both variants set.
 
 struct VerifyInputs {
   bool reads_ok = false;
   bool itpor = false;    ///< a POR wiped learning
-  bool qmax_up = false;  ///< CONTROL_STATUS QMAX_UP
+  bool qmax_up = false;  ///< the gauge reported a learned Qmax
   uint16_t qmax_mah = 0; ///< learned Qmax converted to mAh
   uint16_t design_capacity_mah = 0;
   int16_t ra[FG_LEARNING_RA_TABLE_SIZE] = {};

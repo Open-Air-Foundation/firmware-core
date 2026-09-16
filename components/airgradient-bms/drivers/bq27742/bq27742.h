@@ -79,8 +79,10 @@ public:
   bool read_flags(uint16_t &out) override; ///< normalised to FgFlags bit layout
 
   // -- Fuel-gauge learning reads/config (FuelGaugeDevice overrides) ----------
-  bool read_control_status(uint16_t &out) override; ///< raw CONTROL_STATUS (bq27742 layout)
-  bool read_qmax_cell0(uint16_t &out) override;
+  bool read_learning_progress(FgLearningProgress &out) override;
+  bool read_qmax_mah(uint16_t &out) override;
+  bool read_control_status(uint16_t &out); ///< raw CONTROL_STATUS (bq27742 layout)
+  bool read_qmax_cell0(uint16_t &out);     ///< Qmax Cell 0; already mAh on this part
   bool read_ra_table(int16_t *out, size_t len) override;
   bool read_design_capacity_mah(uint16_t &out) override; ///< DesignCapacity() 0x3C, sealed-readable
   bool select_chemistry_4v2() override;                  ///< no-op: chemistry is a data-flash image
@@ -126,6 +128,11 @@ public:
   /// gauge may open both FETs for up to a second, so call this only while an
   /// adapter powers the system.
   bool write_protector_config(uint8_t pack_config_d, uint8_t prot_ov_config);
+
+  /// Data-flash write of Qmax Cell 0, in mAh.  Seeds Impedance Track with the
+  /// design capacity before IT_ENABLE; once learning has started this value
+  /// belongs to the gauge, so callers must not write it again.
+  bool write_qmax_cell0(uint16_t qmax_mah);
 
 private:
   i2c_master_bus_handle_t _bus = nullptr;

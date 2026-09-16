@@ -100,8 +100,8 @@ public:
   IMPLEMENT_MOCK1(read_full_charge_capacity_mah);
   IMPLEMENT_MOCK1(read_internal_temperature_c);
   IMPLEMENT_MOCK1(read_flags);
-  IMPLEMENT_MOCK1(read_control_status);
-  IMPLEMENT_MOCK1(read_qmax_cell0);
+  IMPLEMENT_MOCK1(read_learning_progress);
+  IMPLEMENT_MOCK1(read_qmax_mah);
   IMPLEMENT_MOCK2(read_ra_table);
   IMPLEMENT_MOCK1(read_design_capacity_mah);
   IMPLEMENT_MOCK0(select_chemistry_4v2);
@@ -2114,8 +2114,11 @@ TEST_CASE("poll_bms_fg_learning: packs fg_learning_flags from Flags + CONTROL_ST
         .SIDE_EFFECT(_1 = FgFlags::FC | FgFlags::CHG | FgFlags::DSG | FgFlags::ITPOR |
                           FgFlags::OCVTAKEN)
         .RETURN(true);
-    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_))
-        .SIDE_EFFECT(_1 = FgControlStatus::QMAX_UP | FgControlStatus::RES_UP)
+    ALLOW_CALL(mock_fg, read_learning_progress(trompeloeil::_))
+        .SIDE_EFFECT(_1.qmax_updated = true; _1.ra_updated = true)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 2000)
         .RETURN(true);
 
     const PowerSnapshot snap = svc.poll_bms_fg_learning();
@@ -2128,9 +2131,12 @@ TEST_CASE("poll_bms_fg_learning: packs fg_learning_flags from Flags + CONTROL_ST
     CHECK((snap.fg_learning_flags & FG_LEARN_RES_UP));
   }
 
-  SECTION("CONTROL_STATUS read fails -> qmax/res clear, Flags bits still set") {
+  SECTION("progress read fails -> qmax/res clear, Flags bits still set") {
     ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = FgFlags::FC).RETURN(true);
-    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg, read_learning_progress(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 2000)
+        .RETURN(true);
 
     const PowerSnapshot snap = svc.poll_bms_fg_learning();
     CHECK((snap.fg_learning_flags & FG_LEARN_FC));
@@ -2177,6 +2183,87 @@ TEST_CASE("poll_bms_fg_learning: edv_cutoff_reached mirrors over-discharge ship 
   }
   CHECK(snap.ship_mode_request == ShipModeRequest::OverDischarge);
   CHECK(snap.edv_cutoff_reached);
+  CHECK(snap.discharge_target_reached); // v1: the EDV cutoff is the discharge end
+}
+
+TEST_CASE("poll_bms_fg_learning: a gauge with its own protector never asks for EDV ship mode",
+          "[PowerService][fg][learning][edv]") {
+  PowerService::Config cfg = DEFAULT_CONFIG;
+  cfg.fg_has_protector = true;
+  MockBmsDevice mock_bms;
+  PowerService svc(&mock_bms, test_gpio_hal, cfg);
+
+  ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+      .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+      .RETURN(true);
+  ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_)).SIDE_EFFECT(*_1 = 2.0f).RETURN(true);
+  ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+      .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
+                   _1.power_source = BmsPowerSource::None)
+      .RETURN(true);
+
+  PowerSnapshot snap;
+  for (int i = 0; i < PowerService::EDV_SHIP_DEBOUNCE_SAMPLES; ++i) {
+    snap = svc.poll_bms_fg_learning();
+  }
+  CHECK(snap.ship_mode_request == ShipModeRequest::None);
+  CHECK_FALSE(snap.edv_cutoff_reached);
+}
+
+TEST_CASE("poll_bms_fg_learning: with a protector the discharge end is the gauge voltage",
+          "[PowerService][fg][learning][edv]") {
+  PowerService::Config cfg = DEFAULT_CONFIG;
+  cfg.fg_has_protector = true;
+  MockBmsDevice mock_bms;
+  MockFuelGaugeDevice mock_fg;
+  PowerService svc(&mock_bms, test_gpio_hal, cfg);
+  svc.set_fuel_gauge(&mock_fg);
+
+  ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_)).RETURN(true);
+  ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+      .SIDE_EFFECT(*_1 = 20.0f)
+      .RETURN(true);
+  ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+      .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
+                   _1.power_source = BmsPowerSource::None)
+      .RETURN(true);
+  ALLOW_CALL(mock_fg, ready()).RETURN(true);
+  ALLOW_CALL(mock_fg, read_soc_percent(trompeloeil::_)).SIDE_EFFECT(_1 = 10).RETURN(true);
+  ALLOW_CALL(mock_fg, read_average_current_ma(trompeloeil::_)).SIDE_EFFECT(_1 = -300).RETURN(true);
+  ALLOW_CALL(mock_fg, read_average_power_mw(trompeloeil::_)).SIDE_EFFECT(_1 = -1000).RETURN(true);
+  ALLOW_CALL(mock_fg, read_remaining_capacity_mah(trompeloeil::_))
+      .SIDE_EFFECT(_1 = 200)
+      .RETURN(true);
+  ALLOW_CALL(mock_fg, read_full_charge_capacity_mah(trompeloeil::_))
+      .SIDE_EFFECT(_1 = 2600)
+      .RETURN(true);
+  ALLOW_CALL(mock_fg, read_internal_temperature_c(trompeloeil::_))
+      .SIDE_EFFECT(_1 = 25.0f)
+      .RETURN(true);
+  ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);
+  ALLOW_CALL(mock_fg, read_learning_progress(trompeloeil::_)).RETURN(true);
+  ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_)).SIDE_EFFECT(_1 = 2600).RETURN(true);
+
+  SECTION("above the floor the discharge continues") {
+    ALLOW_CALL(mock_fg, read_voltage_mv(trompeloeil::_))
+        .SIDE_EFFECT(_1 = PowerService::FG_LEARNING_DISCHARGE_END_MV + 1)
+        .RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms_fg_learning();
+    CHECK_FALSE(snap.discharge_target_reached);
+    CHECK(snap.fg_design_capacity_mah == 2600);
+  }
+
+  SECTION("at the floor the discharge is done") {
+    ALLOW_CALL(mock_fg, read_voltage_mv(trompeloeil::_))
+        .SIDE_EFFECT(_1 = PowerService::FG_LEARNING_DISCHARGE_END_MV)
+        .RETURN(true);
+    CHECK(svc.poll_bms_fg_learning().discharge_target_reached);
+  }
+
+  SECTION("an unreadable gauge voltage is not a discharge end") {
+    ALLOW_CALL(mock_fg, read_voltage_mv(trompeloeil::_)).RETURN(false);
+    CHECK_FALSE(svc.poll_bms_fg_learning().discharge_target_reached);
+  }
 }
 
 // ============================================================================
@@ -2192,13 +2279,11 @@ TEST_CASE("read_fg_learning_verify aggregates learned values", "[PowerService][f
   SECTION("all reads ok") {
     ALLOW_CALL(mock_fg, ready()).RETURN(true);
     ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);
-    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_))
-        .SIDE_EFFECT(_1 = FgControlStatus::QMAX_UP)
+    ALLOW_CALL(mock_fg, read_learning_progress(trompeloeil::_))
+        .SIDE_EFFECT(_1.qmax_updated = true)
         .RETURN(true);
-    // Qmax Cell 0 is a fixed-point raw value, not mAh. The aggregator must
-    // convert: Qmax(mAh) = raw * DC / 2^14 (TRM §7.4.2.3.1). Use the real
-    // captured device value: 17211 * 2000 / 16384 = 2100 mAh.
-    ALLOW_CALL(mock_fg, read_qmax_cell0(trompeloeil::_)).SIDE_EFFECT(_1 = 17211).RETURN(true);
+    // The driver already converts to mAh; the aggregator passes it through.
+    ALLOW_CALL(mock_fg, read_qmax_mah(trompeloeil::_)).SIDE_EFFECT(_1 = 2100).RETURN(true);
     ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_))
         .SIDE_EFFECT(_1 = 2000)
         .RETURN(true);
@@ -2210,7 +2295,7 @@ TEST_CASE("read_fg_learning_verify aggregates learned values", "[PowerService][f
     CHECK(v.ok);
     CHECK_FALSE(v.itpor);
     CHECK(v.qmax_up);
-    CHECK(v.qmax_mah == 2100); // 17211 * 2000 / 16384
+    CHECK(v.qmax_mah == 2100);
     CHECK(v.design_capacity_mah == 2000);
     CHECK(v.ra[0] == 100);
     CHECK(v.ra[FG_RA_TABLE_SIZE - 1] == static_cast<int16_t>(100 + FG_RA_TABLE_SIZE - 1));
@@ -2219,8 +2304,8 @@ TEST_CASE("read_fg_learning_verify aggregates learned values", "[PowerService][f
   SECTION("ITPOR decoded from Flags") {
     ALLOW_CALL(mock_fg, ready()).RETURN(true);
     ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = FgFlags::ITPOR).RETURN(true);
-    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);
-    ALLOW_CALL(mock_fg, read_qmax_cell0(trompeloeil::_)).SIDE_EFFECT(_1 = 1950).RETURN(true);
+    ALLOW_CALL(mock_fg, read_learning_progress(trompeloeil::_)).RETURN(true);
+    ALLOW_CALL(mock_fg, read_qmax_mah(trompeloeil::_)).SIDE_EFFECT(_1 = 1950).RETURN(true);
     ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_))
         .SIDE_EFFECT(_1 = 2000)
         .RETURN(true);
@@ -2236,8 +2321,8 @@ TEST_CASE("read_fg_learning_verify aggregates learned values", "[PowerService][f
   SECTION("a failed read clears ok") {
     ALLOW_CALL(mock_fg, ready()).RETURN(true);
     ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);
-    ALLOW_CALL(mock_fg, read_control_status(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);
-    ALLOW_CALL(mock_fg, read_qmax_cell0(trompeloeil::_)).RETURN(false);
+    ALLOW_CALL(mock_fg, read_learning_progress(trompeloeil::_)).RETURN(true);
+    ALLOW_CALL(mock_fg, read_qmax_mah(trompeloeil::_)).RETURN(false);
     ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_))
         .SIDE_EFFECT(_1 = 2000)
         .RETURN(true);

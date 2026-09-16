@@ -1,8 +1,11 @@
 # Fuel-Gauge Learning
 
-The AirGradient Go uses a BQ27427 Impedance-Track fuel gauge whose accuracy
-depends on two learned values — `Qmax` (true cell capacity) and the `Ra` table
-(per-SOC internal resistance). The gauge learns them only by observing clean
+The AirGradient Go uses an Impedance-Track fuel gauge whose accuracy depends on
+two learned values — `Qmax` (true cell capacity) and the `Ra` table (per-SOC
+internal resistance). Board rev 1 carries a BQ27427; rev 2.0 carries a
+BQ27742-G1, which keeps the same two learned values but reports progress and
+ends its discharge differently (see
+[Variant Differences](#variant-differences)). The gauge learns them only by observing clean
 charge → rest → discharge → rest cycles. This is a **per-unit, end-of-line
 operation**: a unit learns its own gauge once on the assembly line and never
 again in the field. Learning runs in a **dedicated factory boot path** that
@@ -39,7 +42,7 @@ to normal operation.
 | `BuzzerService` | `buzzer/go_buzzer` | Unplug-alert melody |
 | `ConfigStore` | `airgradient-config` (`config_store.h`) | `FactorySettings` load / save / clear |
 | `GoBoard` | `go_board` | GPIO HAL for the abort-button read (`reboot()` is a free function) |
-| `FuelGaugeDevice` / `BQ27427` | `airgradient-bms` | Learned-value reads and chemistry / Update-Status writes |
+| `FuelGaugeDevice` / `BQ27427` / `BQ27742` | `airgradient-bms` | Learned-value reads and chemistry / Update-Status writes |
 
 ## Public API
 
@@ -70,8 +73,8 @@ for `FgLearningAction`, `VerifyInputs`, and the accessors (`stage`, `cycle`,
 
 | Method | Returns | Purpose |
 |---|---|---|
-| `poll_bms_fg_learning()` | `PowerSnapshot` | Normal poll plus the learning-only fields (one extra CONTROL_STATUS read) |
-| `read_fg_learning_verify()` | `FgLearningVerifyReadout` | Aggregate Qmax / Ra grid / Design Capacity / ITPOR / QMAX_UP |
+| `poll_bms_fg_learning()` | `PowerSnapshot` | Normal poll plus the learning-only fields (progress and Design Capacity reads) |
+| `read_fg_learning_verify()` | `FgLearningVerifyReadout` | Aggregate Qmax / Ra grid / Design Capacity / ITPOR / learned-Qmax flag |
 | `set_charge_current_ma(ma)` | `bool` | Program ICHG |
 | `set_manual_charge_disabled(disabled)` | `void` | Enable / disable the charge path |
 | `set_chemistry_4v2()` | `bool` | Idempotent switch to Chem ID `0x1202` |
@@ -278,8 +281,9 @@ The runner builds a `DisplayValues` directly (no `UIManager`) — setting
 between paints, a `FG_LEARNING_DISPLAY_REFRESH_MS` (60 s) heartbeat plus a paint
 on every stage transition and on any charging-state / plug change (so a
 plug/unplug shows within a poll, not a heartbeat). FCC drift is shown against the
-compile-time `FG_LEARNING_DESIGN_CAPACITY_MAH` (2000), so the dashboard adds zero
-I²C reads.
+Design Capacity the gauge is configured with, read once per learning poll into
+`PowerSnapshot::fg_design_capacity_mah`, so the two cell variants each show their
+own number.
 
 The frame shows a bold phase banner (two-word stages wrap to two lines), the
 `Cycle n/N` line, the SOC / voltage / signed-current block, the capacity /
@@ -292,14 +296,15 @@ current stage **this power session**, so it resets across the ship-off / re-plug
 
 The dashboard's `Q R OCV` row is the gauge's own report of how far Impedance
 Track has gotten. `poll_bms_fg_learning()` packs these three bits into
-`fg_learning_flags` from two gauge registers (the CONTROL_STATUS bit positions
-are bench-pending confirmation against TRM sluucd5):
+`fg_learning_flags`. `OCV` comes straight from `Flags()`; the other two come
+from `FuelGaugeDevice::read_learning_progress()`, which each driver fills from
+whichever register its part keeps progress in:
 
-| Display | Flag | Register | Constant |
-|---|---|---|---|
-| `OCV` | OCVTAKEN | `Flags()` bit 7 | `FG_LEARN_OCV_TAKEN` |
-| `Q` | QMAX_UP | `CONTROL_STATUS` bit 4 | `FG_LEARN_QMAX_UP` |
-| `R` | RES_UP | `CONTROL_STATUS` bit 5 | `FG_LEARN_RES_UP` |
+| Display | Meaning | Constant | BQ27427 source | BQ27742 source |
+|---|---|---|---|---|
+| `OCV` | OCV taken | `FG_LEARN_OCV_TAKEN` | `Flags()` bit 7 | `Flags()` bit 7 |
+| `Q` | a Qmax was learned | `FG_LEARN_QMAX_UP` | `CONTROL_STATUS` QMAX_UP | Update Status bit 0 or 1 |
+| `R` | Ra learned, cycle done | `FG_LEARN_RES_UP` | `CONTROL_STATUS` RES_UP | Update Status bit 1 |
 
 - **`OCV` — OCV taken.** The cell's _rested_ open-circuit voltage, measured once
   current has stayed below the Quit Current (~80 mA) long enough to relax. It
@@ -424,3 +429,28 @@ frame, lights the result LED (green / red), and holds until the POWER press.
 - **Boot cost:** every normal fast / button-wake boot now pays one `init_nvs()`
   plus a single key read before path selection; confirm on hardware that this is
   not measurable.
+
+## Variant Differences
+
+The FSM and the runner are variant-neutral. Everything that differs between the
+two gauges is resolved below them, either in the driver or in `PowerService`.
+
+| Concern | Board rev 1 (BQ27427) | Board rev 2.0 (BQ27742-G1) |
+|---|---|---|
+| Learning progress | `CONTROL_STATUS` QMAX_UP / RES_UP | Update Status byte, `0x04` → `0x05` → `0x06` |
+| Qmax Cell 0 units | Q14 fraction of Design Capacity | mAh |
+| Seeding Qmax | left to the gauge | board writes Design Capacity while Update Status is 0 |
+| End of the discharge half | firmware EDV cutoff, which also ships the device | cell reaches `FG_LEARNING_DISCHARGE_END_MV` while the system stays up |
+| Undervoltage cutoff | firmware, `EDV_SHIP_THRESHOLD_V` | the gauge's own UV Prot, see [`bq27742_capability.md`](bq27742_capability.md) |
+
+Two consequences are worth stating plainly.
+
+`PowerSnapshot::discharge_target_reached` is what the FSM reads, and
+`PowerService` derives it per variant from `Config::fg_has_protector`. The older
+`edv_cutoff_reached` still exists but is now only the v1 ship-mode trigger for
+`FgLearningRunner::handle_edv_ship()`. A gauge with its own protector never sets
+it, so nothing shuts the device off mid-cycle.
+
+The rev 2.0 discharge therefore ends 300 mV above the gauge's undervoltage trip
+rather than at it. That margin is what lets the run persist its stage and move
+into the rest phase instead of losing power at the cutoff.

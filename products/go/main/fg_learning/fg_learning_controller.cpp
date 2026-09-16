@@ -218,7 +218,7 @@ FgLearningAction FgLearningController::tick(const PowerSnapshot &snap, uint32_t 
     break;
 
   case FgLearningStage::Discharge:
-    if (snap.edv_cutoff_reached) {
+    if (snap.discharge_target_reached) {
       enter_stage(FgLearningStage::CycleDone, now_ms);
     }
     break;

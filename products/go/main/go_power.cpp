@@ -348,24 +348,33 @@ PowerSnapshot PowerService::poll_bms_fg_learning(bool pm_invalid_hint) {
     lf |= FG_LEARN_OCV_TAKEN;
   }
 
-  // CONTROL_STATUS (QMAX_UP / RES_UP) is the one extra read — learning only.
+  // Learning progress and Design Capacity are the extra reads — learning only.
   if (_fg != nullptr && _fg->ready()) {
-    uint16_t cs = 0;
-    if (_fg->read_control_status(cs)) {
-      if (cs & FgControlStatus::QMAX_UP) {
+    FgLearningProgress progress{};
+    if (_fg->read_learning_progress(progress)) {
+      if (progress.qmax_updated) {
         lf |= FG_LEARN_QMAX_UP;
       }
-      if (cs & FgControlStatus::RES_UP) {
+      if (progress.ra_updated) {
         lf |= FG_LEARN_RES_UP;
       }
     }
+    _fg->read_design_capacity_mah(status.fg_design_capacity_mah);
   }
   status.fg_learning_flags = lf;
 
   status.external_input_present =
       bms_power_source_has_external_input(status.charger_status.power_source);
-  // Derived mirror for the pure FSM: Discharge -> CycleDone trips on this.
   status.edv_cutoff_reached = (status.ship_mode_request == ShipModeRequest::OverDischarge);
+
+  // Derived mirror for the pure FSM: Discharge -> CycleDone trips on this.
+  // Without a protector the firmware EDV cutoff is the end of the discharge and
+  // also ships the device; with one the cell simply has to reach the learning
+  // floor, and the system keeps running so the run can rest and carry on.
+  status.discharge_target_reached = _config.fg_has_protector
+                                        ? (status.fg_voltage_mv != BmsInvalid::VOLTAGE_MV &&
+                                           status.fg_voltage_mv <= FG_LEARNING_DISCHARGE_END_MV)
+                                        : status.edv_cutoff_reached;
 
   return status;
 }
@@ -381,17 +390,13 @@ FgLearningVerifyReadout PowerService::read_fg_learning_verify() {
   ok = _fg->read_flags(flags) && ok;
   out.itpor = (flags & FgFlags::ITPOR) != 0;
 
-  uint16_t cs = 0;
-  ok = _fg->read_control_status(cs) && ok;
-  out.qmax_up = (cs & FgControlStatus::QMAX_UP) != 0;
+  FgLearningProgress progress{};
+  ok = _fg->read_learning_progress(progress) && ok;
+  out.qmax_up = progress.qmax_updated;
 
-  // Qmax Cell 0 is fixed-point, not mAh: Qmax(mAh) = raw * DC / 2^14
-  // (TRM 7.4.2.3.1). Scale here so the verify band check sees true mAh.
-  uint16_t qmax_raw = 0;
-  ok = _fg->read_qmax_cell0(qmax_raw) && ok;
+  // The driver converts Qmax to mAh; the raw data-flash units differ per part.
+  ok = _fg->read_qmax_mah(out.qmax_mah) && ok;
   ok = _fg->read_design_capacity_mah(out.design_capacity_mah) && ok;
-  out.qmax_mah =
-      static_cast<uint16_t>((static_cast<uint32_t>(qmax_raw) * out.design_capacity_mah) / 16384u);
   ok = _fg->read_ra_table(out.ra, FG_RA_TABLE_SIZE) && ok;
 
   out.ok = ok;

@@ -179,15 +179,27 @@ TEST_CASE("Discharge raises the Unplug cue and full load", "[fg]") {
   REQUIRE(a.screen == Screen::FgLearnUnplug);
 }
 
-TEST_CASE("Discharge advances to CycleDone on EDV cutoff", "[fg]") {
+TEST_CASE("Discharge advances to CycleDone when the discharge target is reached", "[fg]") {
   FgLearningController c;
   c.load(FgLearningStage::Discharge, 1, 0);
   PowerSnapshot s = quiet_snapshot();
-  s.edv_cutoff_reached = true;
+  s.discharge_target_reached = true;
   FgLearningAction a = c.tick(s, 0);
   REQUIRE(c.stage() == FgLearningStage::CycleDone);
   REQUIRE(a.persist_stage);
   REQUIRE(a.screen == Screen::DischargeComplete);
+}
+
+TEST_CASE("Discharge holds while only the v1 EDV mirror is set", "[fg]") {
+  // The FSM reads discharge_target_reached, which PowerService derives per
+  // variant; edv_cutoff_reached alone is the v1 ship-mode trigger and must not
+  // move the stage on its own.
+  FgLearningController c;
+  c.load(FgLearningStage::Discharge, 1, 0);
+  PowerSnapshot s = quiet_snapshot();
+  s.edv_cutoff_reached = true;
+  c.tick(s, 0);
+  REQUIRE(c.stage() == FgLearningStage::Discharge);
 }
 
 // ============================================================================

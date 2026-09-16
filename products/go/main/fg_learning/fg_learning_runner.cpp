@@ -357,7 +357,7 @@ DisplayValues FgLearningRunner::build_dashboard_values(const PowerSnapshot &snap
   d.current_ma = snap.fg_current_ma;
   d.remaining_mah = snap.fg_remaining_capacity_mah;
   d.full_charge_mah = snap.fg_full_charge_capacity_mah;
-  d.design_capacity_mah = FG_LEARNING_DESIGN_CAPACITY_MAH;
+  d.design_capacity_mah = snap.fg_design_capacity_mah;
   d.temperature_c = snap.fg_internal_temperature_c;
   d.flag_fc = (snap.fg_learning_flags & FG_LEARN_FC) != 0;
   d.flag_chg = (snap.fg_learning_flags & FG_LEARN_CHG) != 0;

@@ -523,6 +523,30 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
     }
   }
 
+  // Impedance Track starts from Qmax Cell 0, so it has to hold the design
+  // capacity before IT_ENABLE.  Afterwards the value is the gauge's own learned
+  // one and must never be written back, which is what Update Status gates: it
+  // is 0 only while IT has never been enabled on this part.
+  uint8_t update_status = 0;
+  uint16_t qmax_mah = 0;
+  if (!_fuel_gauge_v2->read_update_status(update_status) ||
+      !_fuel_gauge_v2->read_qmax_cell0(qmax_mah)) {
+    AG_LOGW(TAG, "BQ27742 Qmax / Update Status unreadable — Qmax left as-is");
+  } else if (update_status != 0) {
+    AG_LOGI(TAG,
+            "BQ27742 Impedance Track already started (Update Status 0x%02X) — Qmax %u mAh "
+            "belongs to the gauge",
+            update_status, qmax_mah);
+  } else if (qmax_mah == AGO_CELL_CONFIG_V2.design_capacity_mah) {
+    AG_LOGI(TAG, "BQ27742 Qmax already seeded (%u mAh) — preserved", qmax_mah);
+  } else {
+    AG_LOGI(TAG, "BQ27742 seeding Qmax %u → %u mAh before learning", qmax_mah,
+            AGO_CELL_CONFIG_V2.design_capacity_mah);
+    if (!_fuel_gauge_v2->write_qmax_cell0(AGO_CELL_CONFIG_V2.design_capacity_mah)) {
+      AG_LOGW(TAG, "BQ27742 write_qmax_cell0() failed — Qmax not seeded");
+    }
+  }
+
   uint8_t soc = 0;
   uint16_t mv = 0;
   int16_t ma = 0;

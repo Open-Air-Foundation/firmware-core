@@ -323,6 +323,25 @@ static constexpr uint16_t FC = (1u << 9);       ///< Full Charge
 // the learning verify always fail.
 // ---------------------------------------------------------------------------
 
+/// Impedance-Track learning progress, normalised across gauge parts.
+///
+/// The BQ27427 reports it in CONTROL_STATUS (QMAX_UP then RES_UP); the
+/// BQ27742-G1 reports it in the Update Status data-flash byte (0x04 once IT is
+/// enabled, 0x05 after the charge half, 0x06 after the discharge half).  Each
+/// driver maps its own register onto these two booleans so PowerService and the
+/// learning FSM stay part-neutral.
+struct FgLearningProgress {
+  bool qmax_updated = false; ///< a Qmax value has been learned this run
+  bool ra_updated = false;   ///< optimised Qmax + Ra learned (cycle complete)
+};
+
+/// Convert a Q14 Qmax Cell 0 reading to mAh.  The BQ27427 stores Qmax as a
+/// fraction of Design Capacity in 14-bit fixed point (TRM SLUUCD5 §7.4.2.3.1);
+/// the BQ27742-G1 stores mAh directly and needs no conversion.
+inline uint16_t fg_qmax_q14_to_mah(uint16_t raw, uint16_t design_capacity_mah) {
+  return static_cast<uint16_t>((static_cast<uint32_t>(raw) * design_capacity_mah) / 16384u);
+}
+
 namespace FgControlStatus {
 static constexpr uint16_t QMAX_UP = (1u << 9); ///< Qmax updated (clears on POR/BAT_DET)
 static constexpr uint16_t RES_UP = (1u << 8);  ///< Ra updated (sets only after QMAX_UP)

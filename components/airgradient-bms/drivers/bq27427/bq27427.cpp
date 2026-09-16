@@ -228,6 +228,28 @@ bool BQ27427::read_control_status(uint16_t &out) {
 
 bool BQ27427::read_chem_id(uint16_t &out) { return control_subcommand(CTRL_CHEM_ID, out); }
 
+bool BQ27427::read_learning_progress(FgLearningProgress &out) {
+  uint16_t cs = 0;
+  if (!read_control_status(cs)) {
+    return false;
+  }
+  out.qmax_updated = (cs & FgControlStatus::QMAX_UP) != 0;
+  out.ra_updated = (cs & FgControlStatus::RES_UP) != 0;
+  return true;
+}
+
+bool BQ27427::read_qmax_mah(uint16_t &out) {
+  // Qmax Cell 0 is fixed-point on this part, not mAh:
+  // Qmax(mAh) = raw * DesignCapacity / 2^14 (TRM SLUUCD5 7.4.2.3.1).
+  uint16_t raw = 0;
+  uint16_t design_capacity = 0;
+  if (!read_qmax_cell0(raw) || !read_design_capacity_mah(design_capacity)) {
+    return false;
+  }
+  out = fg_qmax_q14_to_mah(raw, design_capacity);
+  return true;
+}
+
 bool BQ27427::read_qmax_cell0(uint16_t &out) {
   if (!_select_data_block(SUBCLASS_STATE, 0x00)) {
     return false;
