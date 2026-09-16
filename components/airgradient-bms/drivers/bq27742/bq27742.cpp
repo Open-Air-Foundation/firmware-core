@@ -23,7 +23,11 @@ namespace {
 // Standard commands.
 constexpr uint8_t CMD_CONTROL = 0x00;
 constexpr uint8_t CMD_TEMPERATURE = 0x06;
+constexpr uint8_t CMD_AT_RATE = 0x02; // the one read/write standard command
 constexpr uint8_t CMD_VOLTAGE = 0x08;
+constexpr uint8_t CMD_TIME_TO_EMPTY = 0x16;
+constexpr uint8_t CMD_FULL_CHG_CAPACITY = 0x12;
+constexpr uint8_t CMD_REM_CAPACITY = 0x10;
 constexpr uint8_t CMD_FLAGS = 0x0A;
 constexpr uint8_t CMD_REMAIN_CAP = 0x10;
 constexpr uint8_t CMD_FULL_CHARGE_CAP = 0x12;
@@ -319,6 +323,84 @@ void BQ27742::_log_identity_diagnostics(uint16_t first_device_type) {
     ESP_LOGW(TAG, "  Voltage()=%u mV (standard command — compare with charger vbat)", mv);
   } else {
     ESP_LOGW(TAG, "  Voltage() read failed");
+  }
+
+  // --- Does anything we write reach this chip?  AtRate() is the only
+  // read/write standard command on the part, so it is the cleanest test of
+  // the write path that does not involve Control() at all.
+  uint16_t atrate_before = 0;
+  uint16_t atrate_after = 0;
+  const bool ar_read0 = _read_word(CMD_AT_RATE, atrate_before);
+  const bool ar_write = _write_word(CMD_AT_RATE, 0x0064);
+  RTOS::delay_ms(CONTROL_SETTLE_MS);
+  const bool ar_read1 = _read_word(CMD_AT_RATE, atrate_after);
+  ESP_LOGW(TAG, "  AtRate() before=0x%04X write(0x0064)=%s after=0x%04X -> %s",
+           atrate_before, ar_write ? "ok" : "FAILED", atrate_after,
+           (ar_read1 && atrate_after == 0x0064) ? "WRITE STICKS (writes reach the chip)"
+                                                : "write ignored");
+  if (ar_read0 && ar_write) {
+    _write_word(CMD_AT_RATE, atrate_before); // restore
+  }
+
+  // --- Does a plain byte written to Control() low byte stick?  0xA5 with any
+  // current high byte forms no defined subcommand, so this is inert.
+  uint8_t r00 = 0;
+  uint8_t r01 = 0;
+  _read_byte(0x00, r00);
+  _read_byte(0x01, r01);
+  ESP_LOGW(TAG, "  reg 0x00=0x%02X reg 0x01=0x%02X (two separate 1-byte reads)", r00, r01);
+  if (_write_byte(CMD_CONTROL, 0xA5)) {
+    RTOS::delay_ms(1);
+    uint8_t rb = 0;
+    _read_byte(0x00, rb);
+    ESP_LOGW(TAG, "  wrote 0xA5 to reg 0x00, reads back 0x%02X -> %s", rb,
+             rb == 0xA5 ? "sticks" : "ignored");
+  }
+
+  // --- How much of the standard command set behaves like a gauge?
+  struct Cmd {
+    uint8_t code;
+    const char *name;
+  };
+  const Cmd cmds[] = {
+      {CMD_TEMPERATURE, "Temperature 0.1K"}, {CMD_FLAGS, "Flags"},
+      {CMD_REM_CAPACITY, "RemainingCap mAh"}, {CMD_FULL_CHG_CAPACITY, "FullChgCap mAh"},
+      {CMD_AVG_CURRENT, "AvgCurrent mA"},     {CMD_TIME_TO_EMPTY, "TimeToEmpty min"},
+      {CMD_INT_TEMP, "InternalTemp 0.1K"},    {CMD_SOC, "SOC %"},
+      {CMD_DESIGN_CAPACITY, "DesignCap mAh"},
+  };
+  for (const Cmd &c : cmds) {
+    uint16_t v = 0;
+    if (_read_word(c.code, v)) {
+      ESP_LOGW(TAG, "  0x%02X %-18s = %u (0x%04X, signed %d)", c.code, c.name, v, v,
+               static_cast<int16_t>(v));
+    } else {
+      ESP_LOGW(TAG, "  0x%02X %-18s read failed", c.code, c.name);
+    }
+  }
+
+  // --- Same DEVICE_TYPE read with the bus clocked at 100 kHz, in case the
+  // gauge misreads master-driven data bits at 400 kHz while its own reads
+  // (slave-driven) come through clean.
+  i2c_master_bus_rm_device(_dev);
+  _dev = nullptr;
+  i2c_device_config_t slow_cfg = {
+      .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+      .device_address = _config.address,
+      .scl_speed_hz = 100000,
+      .scl_wait_us = 20000,
+      .flags = {},
+  };
+  if (i2c_master_bus_add_device(_bus, &slow_cfg, &_dev) == ESP_OK) {
+    uint16_t slow = 0;
+    if (control_subcommand(CTRL_DEVICE_TYPE, slow)) {
+      ESP_LOGW(TAG, "  DEVICE_TYPE @100kHz = 0x%04X -> %s", slow,
+               slow == DEVICE_TYPE_BQ27742 ? "CORRECT at 100 kHz (bus speed issue)" : "same failure");
+    } else {
+      ESP_LOGW(TAG, "  DEVICE_TYPE @100kHz read failed");
+    }
+  } else {
+    ESP_LOGW(TAG, "  could not re-add device at 100 kHz");
   }
 
   ESP_LOGW(TAG, "  I2C link to 0x%02X is WORKING (%d/%d reads returned data)", _config.address,
