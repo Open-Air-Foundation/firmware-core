@@ -107,6 +107,27 @@ static constexpr FgProtectionConfig AGO_PROTECTION_CONFIG = {
     .ot_dsg_recovery_dc = 550,    // TI default
 };
 
+// Hardware protector, written once per unit with an adapter attached.  Pack
+// Configuration D gains CIFET and CSFET so the gauge opens the CHG FET itself
+// outside the JEITA window (T1 = 0 °C, T4/T5 = 50/60 °C factory) instead of
+// only reporting it — the charger never reads ChargingCurrent().  OVP code 000
+// is the lowest hardware trip available, 4.275 V, and pairs the fixed UVP to
+// 2.340 V; the factory 111 (4.450 V) never fires for a 4.20 V cell.  Prot OC
+// Config stays at factory until R8 and the system peak current are measured.
+static constexpr uint8_t AGO_PROTECTOR_PACK_CONFIG_D = 0xB3; // TI default 0x83
+static constexpr uint8_t AGO_PROTECTOR_OV_CONFIG = 0x00;     // TI default 0x07 (4.450 V)
+
+// The protector write leaves a window in which the gauge may open both FETs;
+// on battery that would cut the system mid-sequence.
+static bool adapter_present(BmsDevice *bms) {
+  BmsStatus status{};
+  if (bms == nullptr || !bms->read_status(status) || !status.is_power_source_valid()) {
+    return false;
+  }
+  return status.power_source != BmsPowerSource::None &&
+         status.power_source != BmsPowerSource::OtgMode;
+}
+
 // FG DM corruption sanity ranges.  A reading outside any of these
 // ranges is treated as evidence of a corrupted persistent block
 // (most commonly a prior aborted CFGUPDATE).
@@ -241,9 +262,8 @@ void GoHardwareBoard::_init_i2c_and_variant() {
   const bool expander_present = i2c_device_present(_i2c_bus, I2C_ADDR_TCA6408A, PROBE_TIMEOUT_MS);
   const bool fg_present = i2c_device_present(_i2c_bus, I2C_ADDR_BQ27742, PROBE_TIMEOUT_MS);
   _variant = detect_board_variant(expander_present, fg_present);
-  AG_LOGI(TAG, "board variant: %s (TCA6408A @ 0x20 %s, FG @ 0x55 %s)",
-          board_variant_str(_variant), expander_present ? "ACK" : "NACK",
-          fg_present ? "ACK" : "NACK");
+  AG_LOGI(TAG, "board variant: %s (TCA6408A @ 0x20 %s, FG @ 0x55 %s)", board_variant_str(_variant),
+          expander_present ? "ACK" : "NACK", fg_present ? "ACK" : "NACK");
   _label_chips();
   // The census matters most when detection went wrong, so it runs on every
   // variant (about 100 ms of probing).
@@ -468,14 +488,15 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
       evaluate_fg_state(dc, dc_ok, fcc, fcc_ok, current, cfg_ok, AGO_CELL_CONFIG_V2,
                         FG_DC_SANITY_MIN_MAH, FG_DC_SANITY_MAX_MAH, FG_FCC_SANITY_MAX_MAH);
   if (decision.needs_factory_reset) {
-    AG_LOGW(TAG, "BQ27742 state out of range (dc=%u fcc=%u) — reset skipped on v2, "
-                 "program data flash with bqStudio",
+    AG_LOGW(TAG,
+            "BQ27742 state out of range (dc=%u fcc=%u) — reset skipped on v2, "
+            "program data flash with bqStudio",
             dc, fcc);
   }
   if (decision.needs_config_write) {
     AG_LOGI(TAG, "BQ27742 applying cell config (had DC=%u DE=%u TermV=%u SleepI=%u)",
-            current.design_capacity_mah, current.design_energy_mwh,
-            current.terminate_voltage_mv, current.sleep_current_ma);
+            current.design_capacity_mah, current.design_energy_mwh, current.terminate_voltage_mv,
+            current.sleep_current_ma);
     if (!_fuel_gauge_v2->write_cell_config(AGO_CELL_CONFIG_V2)) {
       AG_LOGW(TAG, "BQ27742 write_cell_config() failed — cell parameters not updated");
     }
@@ -506,6 +527,31 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
     }
   }
 
+  FgProtectorConfig hw{};
+  if (!_fuel_gauge_v2->read_protector_config(hw)) {
+    AG_LOGW(TAG, "BQ27742 protector config unreadable — left as-is");
+  } else {
+    const uint16_t expected = fg_protector_checksum(hw.prot_oc_config, hw.prot_ov_config);
+    AG_LOGI(TAG,
+            "BQ27742 protector config: PackCfgD=0x%02X ProtOC=0x%02X ProtOV=0x%02X "
+            "ProtChk=0x%04X%s",
+            hw.pack_config_d, hw.prot_oc_config, hw.prot_ov_config, hw.prot_checksum,
+            hw.prot_checksum == expected ? "" : " (MISMATCH — gauge holds both FETs open)");
+    if (hw.pack_config_d == AGO_PROTECTOR_PACK_CONFIG_D &&
+        hw.prot_ov_config == AGO_PROTECTOR_OV_CONFIG && hw.prot_checksum == expected) {
+      AG_LOGI(TAG, "BQ27742 protector config already correct — preserved");
+    } else if (!adapter_present(_bms_driver)) {
+      AG_LOGW(TAG,
+              "BQ27742 protector config differs — write deferred until an adapter is attached");
+    } else {
+      AG_LOGI(TAG, "BQ27742 applying protector config");
+      if (!_fuel_gauge_v2->write_protector_config(AGO_PROTECTOR_PACK_CONFIG_D,
+                                                  AGO_PROTECTOR_OV_CONFIG)) {
+        AG_LOGE(TAG, "BQ27742 write_protector_config() failed — see safety/protector below");
+      }
+    }
+  }
+
   uint8_t soc = 0;
   uint16_t mv = 0;
   int16_t ma = 0;
@@ -526,7 +572,8 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
   _fuel_gauge_v2->read_protector_state(state);
   AG_LOGI(TAG, "BQ27742 boot: soc=%u%% v=%umV i=%dmA tint=%.1fC tpack=%.1fC", soc, mv, ma, tc,
           tpack);
-  AG_LOGI(TAG, "BQ27742 boot: flags=0x%04X safety=0x%04X protector=0x%02X (CHG %s, DSG %s) state=0x%02X",
+  AG_LOGI(TAG,
+          "BQ27742 boot: flags=0x%04X safety=0x%04X protector=0x%02X (CHG %s, DSG %s) state=0x%02X",
           flags, safety, prot, (prot & BQ27742::ProtectorStatus::CHG_OFF) ? "OFF" : "on",
           (prot & BQ27742::ProtectorStatus::DSG_OFF) ? "OFF" : "on", state);
 }
@@ -719,8 +766,9 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
       // expander means the TCA6408A never ACKed, and every verdict that
       // depends on the expander (PM, NAND, touch, LED, SHT4x) is void.
       if (spl07 && _variant != BoardVariant::V2) {
-        AG_LOGW(TAG, "SPL07-003 (v2.0 part) found but board detected as %s: TCA6408A @0x20 "
-                     "did not ACK — check U17 ~RESET pull-up (R2), VCCP/VCCI, ADDR",
+        AG_LOGW(TAG,
+                "SPL07-003 (v2.0 part) found but board detected as %s: TCA6408A @0x20 "
+                "did not ACK — check U17 ~RESET pull-up (R2), VCCP/VCCI, ADDR",
                 board_variant_str(_variant));
         _chips.set(Chip::Expander, ChipState::Fail, "no ACK, check R2");
       }
@@ -809,8 +857,8 @@ DisplayService &GoHardwareBoard::display() {
     _display = new DisplayService({
         .spi_host = SPI_HOST,
         .pin_cs = PIN_DISPLAY_CS,
-        .pin_dc = _variant == BoardVariant::V2 ? PIN_V2_DISPLAY_DC
-                                               : static_cast<int>(PIN_DISPLAY_DC),
+        .pin_dc =
+            _variant == BoardVariant::V2 ? PIN_V2_DISPLAY_DC : static_cast<int>(PIN_DISPLAY_DC),
         .pin_rst = PIN_DISPLAY_RST,
         .pin_busy = PIN_DISPLAY_BUSY,
         .gpio = &gpio_hal(),
@@ -953,8 +1001,7 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
   cfg.delta_sense = TOUCH_DELTA_SENSE;
   // The Enter pad needs clean press/release edges for its gesture FSM, so
   // it is the one channel without the repeat rate.
-  cfg.repeat_rate_channels =
-      static_cast<uint8_t>(TouchChannel::ALL & ~touch_channel_map().enter);
+  cfg.repeat_rate_channels = static_cast<uint8_t>(TouchChannel::ALL & ~touch_channel_map().enter);
   auto *touch = new CAP1203(_i2c_bus, I2C_ADDR_CAP1203, cfg);
   const bool ok = touch->init();
   if (!ok) {

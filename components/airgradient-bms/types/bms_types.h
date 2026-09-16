@@ -284,6 +284,25 @@ inline bool operator!=(const FgProtectionConfig &a, const FgProtectionConfig &b)
   return !(a == b);
 }
 
+/// BQ27742-G1 hardware-protector configuration: subclass 64 (Registers)
+/// bytes 4–6 and the Prot Checksum in subclass 57 (Integrity Data).  The
+/// gauge compares the checksum against Prot OC Config + Prot OV Config every
+/// second and holds both FETs open while they disagree (TRM §5.3.8.4), so the
+/// three values are only meaningful together.
+struct FgProtectorConfig {
+  uint8_t pack_config_d;  ///< OTFET/FCFET/CIFET/CSFET… FET enables
+  uint8_t prot_oc_config; ///< OCC/OCD/SCD codes
+  uint8_t prot_ov_config; ///< OVP[2:0] code; fixes the paired UVP
+  uint16_t prot_checksum;
+};
+
+/// The gauge's rule for Prot Checksum: a plain 16-bit sum of the two config
+/// bytes (factory 0x0A + 0x07 = 0x0011), not the one's-complement block
+/// checksum used to commit data flash.
+inline uint16_t fg_protector_checksum(uint8_t prot_oc_config, uint8_t prot_ov_config) {
+  return static_cast<uint16_t>(prot_oc_config) + static_cast<uint16_t>(prot_ov_config);
+}
+
 // ---------------------------------------------------------------------------
 // FgFlags — BQ27427 Flags() register bit definitions (TRM SLUUCD5 §5.1)
 // ---------------------------------------------------------------------------

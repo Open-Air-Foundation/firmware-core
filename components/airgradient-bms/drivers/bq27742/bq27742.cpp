@@ -8,6 +8,7 @@
 #include "drivers/bq27742/bq27742.h"
 
 #include <cstdio>
+#include <cstring>
 
 #include "esp_log.h"
 #include "rtos.h"
@@ -53,18 +54,21 @@ constexpr uint16_t CTRL_FW_VERSION = 0x0002;
 constexpr uint16_t CTRL_HW_VERSION = 0x0003;
 constexpr uint16_t CTRL_PREV_MACWRITE = 0x0007;
 constexpr uint16_t CTRL_IT_ENABLE = 0x0021;
+constexpr uint16_t CTRL_PROTECTOR_CHKSUM = 0x001A;
 
 // Default unseal key 0x36720414 (TRM §5.9.1): Control(0x0414) then Control(0x3672).
 constexpr uint16_t UNSEAL_KEY_1 = 0x0414;
 constexpr uint16_t UNSEAL_KEY_0 = 0x3672;
 
 // Data-flash subclasses and offsets (TRM Tables 5-3…5-9).
-constexpr uint8_t SUBCLASS_SAFETY = 2;   // OV/UV/OT protection thresholds
-constexpr uint8_t SUBCLASS_DATA = 48;    // Design Capacity @12, Design Energy @14
-constexpr uint8_t SUBCLASS_POWER = 68;   // Sleep Current @2
-constexpr uint8_t SUBCLASS_IT_CFG = 80;  // Terminate Voltage @64
-constexpr uint8_t SUBCLASS_STATE = 82;   // Qmax Cell 0 @0, Update Status @2
-constexpr uint8_t SUBCLASS_RA0 = 88;     // flag @0, Ra 0..14 @2..30
+constexpr uint8_t SUBCLASS_SAFETY = 2;     // OV/UV/OT protection thresholds
+constexpr uint8_t SUBCLASS_INTEGRITY = 57; // Prot Checksum @12
+constexpr uint8_t SUBCLASS_REGISTERS = 64; // Pack Config A-D @0-4, Prot OC/OV Config @5/6
+constexpr uint8_t SUBCLASS_DATA = 48;      // Design Capacity @12, Design Energy @14
+constexpr uint8_t SUBCLASS_POWER = 68;     // Sleep Current @2
+constexpr uint8_t SUBCLASS_IT_CFG = 80;    // Terminate Voltage @64
+constexpr uint8_t SUBCLASS_STATE = 82;     // Qmax Cell 0 @0, Update Status @2
+constexpr uint8_t SUBCLASS_RA0 = 88;       // flag @0, Ra 0..14 @2..30
 constexpr uint8_t OFFSET_OV_PROT_THRESHOLD = 0;
 constexpr uint8_t OFFSET_OV_PROT_RECOVERY = 3;
 constexpr uint8_t OFFSET_UV_PROT_THRESHOLD = 5;
@@ -73,6 +77,16 @@ constexpr uint8_t OFFSET_OT_CHG = 12;
 constexpr uint8_t OFFSET_OT_CHG_RECOVERY = 15;
 constexpr uint8_t OFFSET_OT_DSG = 17;
 constexpr uint8_t OFFSET_OT_DSG_RECOVERY = 20;
+constexpr uint8_t OFFSET_BODY_DIODE_THRESHOLD = 10;
+constexpr uint8_t OFFSET_PACK_CONFIG_D = 4;
+constexpr uint8_t OFFSET_PROT_OC_CONFIG = 5;
+constexpr uint8_t OFFSET_PROT_OV_CONFIG = 6;
+constexpr uint8_t OFFSET_PROT_CHECKSUM = 12;
+
+// Reserved bits that must read and stay 0 (TRM Tables 5-18..5-20).
+constexpr uint8_t PACK_CONFIG_D_RSVD = 0x04;
+constexpr uint8_t PROT_OC_CONFIG_RSVD = 0xC0;
+constexpr uint8_t PROT_OV_CONFIG_RSVD = 0xF8;
 constexpr uint8_t OFFSET_DESIGN_CAPACITY = 12;
 constexpr uint8_t OFFSET_DESIGN_ENERGY = 14;
 constexpr uint8_t OFFSET_SLEEP_CURRENT = 2;
@@ -88,8 +102,13 @@ constexpr uint16_t RAW_FLAG_DSG = (1u << 0);
 constexpr uint16_t RAW_FLAG_CHG = (1u << 3);
 constexpr uint16_t RAW_FLAG_FC = (1u << 9);
 
+constexpr uint16_t CONTROL_STATUS_SS = (1u << 13);            // TRM Table 4-3, high byte bit 5
+constexpr uint16_t SAFETY_STATUS_INV_PROT_CHKSUM = (1u << 7); // TRM Table 4-5, low byte bit 7
+
 constexpr uint32_t CONTROL_SETTLE_MS = 2;
 constexpr uint32_t DF_SETTLE_MS = 10;
+constexpr uint32_t CHECKSUM_SETTLE_MS = 100;    // TRM §3.4.2: checksum subcommands
+constexpr uint32_t PROT_CHECK_PERIOD_MS = 1200; // gauge re-checks Prot Checksum every 1 s
 
 } // namespace
 
@@ -334,8 +353,8 @@ void BQ27742::_log_identity_diagnostics(uint16_t first_device_type) {
   const bool ar_write = _write_word(CMD_AT_RATE, 0x0064);
   RTOS::delay_ms(CONTROL_SETTLE_MS);
   const bool ar_read1 = _read_word(CMD_AT_RATE, atrate_after);
-  ESP_LOGW(TAG, "  AtRate() before=0x%04X write(0x0064)=%s after=0x%04X -> %s",
-           atrate_before, ar_write ? "ok" : "FAILED", atrate_after,
+  ESP_LOGW(TAG, "  AtRate() before=0x%04X write(0x0064)=%s after=0x%04X -> %s", atrate_before,
+           ar_write ? "ok" : "FAILED", atrate_after,
            (ar_read1 && atrate_after == 0x0064) ? "WRITE STICKS (writes reach the chip)"
                                                 : "write ignored");
   if (ar_read0 && ar_write) {
@@ -363,7 +382,7 @@ void BQ27742::_log_identity_diagnostics(uint16_t first_device_type) {
     const char *name;
   };
   const Cmd cmds[] = {
-      {CMD_TEMPERATURE, "Temperature 0.1K"}, {CMD_FLAGS, "Flags"},
+      {CMD_TEMPERATURE, "Temperature 0.1K"},  {CMD_FLAGS, "Flags"},
       {CMD_REM_CAPACITY, "RemainingCap mAh"}, {CMD_FULL_CHG_CAPACITY, "FullChgCap mAh"},
       {CMD_AVG_CURRENT, "AvgCurrent mA"},     {CMD_TIME_TO_EMPTY, "TimeToEmpty min"},
       {CMD_INT_TEMP, "InternalTemp 0.1K"},    {CMD_SOC, "SOC %"},
@@ -395,7 +414,8 @@ void BQ27742::_log_identity_diagnostics(uint16_t first_device_type) {
     uint16_t slow = 0;
     if (control_subcommand(CTRL_DEVICE_TYPE, slow)) {
       ESP_LOGW(TAG, "  DEVICE_TYPE @100kHz = 0x%04X -> %s", slow,
-               slow == DEVICE_TYPE_BQ27742 ? "CORRECT at 100 kHz (bus speed issue)" : "same failure");
+               slow == DEVICE_TYPE_BQ27742 ? "CORRECT at 100 kHz (bus speed issue)"
+                                           : "same failure");
     } else {
       ESP_LOGW(TAG, "  DEVICE_TYPE @100kHz read failed");
     }
@@ -571,19 +591,21 @@ bool BQ27742::write_protection_config(const FgProtectionConfig &cfg) {
     return false;
   }
   // The block is written back whole, so the bytes we keep must be trustworthy.
-  // A corrupted read (seen on this bus at 400 kHz) would otherwise be committed
-  // along with the new thresholds — and a zero in UV Prot Delay turns
-  // undervoltage protection off.  These four U1 fields have documented ranges
-  // (TRM Table 5-3): OV/UV Prot Delay 0-5 s, OT Chg/Dsg Time 0-60 s.
+  // A zero in any of the four U1 delay/time fields disables that protection
+  // (TRM §5.3.1), so only 1-5 s and 1-60 s are accepted; Body Diode Threshold
+  // is bounded 0-100 mA (TRM Table 5-3).
   const uint8_t ov_delay = block[2];
   const uint8_t uv_delay = block[7];
   const uint8_t otc_time = block[14];
   const uint8_t otd_time = block[19];
-  if (ov_delay > 5 || uv_delay == 0 || uv_delay > 5 || otc_time > 60 || otd_time > 60) {
+  const uint16_t body_diode_ma = (static_cast<uint16_t>(block[OFFSET_BODY_DIODE_THRESHOLD]) << 8) |
+                                 block[OFFSET_BODY_DIODE_THRESHOLD + 1];
+  if (ov_delay == 0 || ov_delay > 5 || uv_delay == 0 || uv_delay > 5 || otc_time == 0 ||
+      otc_time > 60 || otd_time == 0 || otd_time > 60 || body_diode_ma > 100) {
     ESP_LOGE(TAG,
              "Safety block read looks corrupt (OV delay %u, UV delay %u, OTC time %u, OTD time "
-             "%u) - refusing to write protection config",
-             ov_delay, uv_delay, otc_time, otd_time);
+             "%u, body diode %u mA) - refusing to write protection config",
+             ov_delay, uv_delay, otc_time, otd_time, body_diode_ma);
     return false;
   }
   // Only the eight threshold words are replaced.  The U1 delay/time fields at
@@ -625,7 +647,6 @@ bool BQ27742::write_protection_config(const FgProtectionConfig &cfg) {
   return true;
 }
 
-
 bool BQ27742::write_cell_config(const FgCellConfig &cfg) {
   if (!ready()) {
     return false;
@@ -653,6 +674,112 @@ bool BQ27742::write_cell_config(const FgCellConfig &cfg) {
   return true;
 }
 
+bool BQ27742::read_protector_config(FgProtectorConfig &out) {
+  uint8_t block[DF_BLOCK_SIZE] = {};
+  if (!_read_df_block(SUBCLASS_REGISTERS, 0, block)) {
+    return false;
+  }
+  out.pack_config_d = block[OFFSET_PACK_CONFIG_D];
+  out.prot_oc_config = block[OFFSET_PROT_OC_CONFIG];
+  out.prot_ov_config = block[OFFSET_PROT_OV_CONFIG];
+
+  if (!_read_df_block(SUBCLASS_INTEGRITY, 0, block)) {
+    return false;
+  }
+  out.prot_checksum =
+      (static_cast<uint16_t>(block[OFFSET_PROT_CHECKSUM]) << 8) | block[OFFSET_PROT_CHECKSUM + 1];
+  return true;
+}
+
+bool BQ27742::write_protector_config(uint8_t pack_config_d, uint8_t prot_ov_config) {
+  if (!ready()) {
+    return false;
+  }
+  if ((pack_config_d & PACK_CONFIG_D_RSVD) != 0 || (prot_ov_config & PROT_OV_CONFIG_RSVD) != 0) {
+    ESP_LOGE(TAG, "protector config 0x%02X/0x%02X sets reserved bits - refusing to write",
+             pack_config_d, prot_ov_config);
+    return false;
+  }
+
+  uint8_t regs[DF_BLOCK_SIZE] = {};
+  if (!_read_df_block(SUBCLASS_REGISTERS, 0, regs)) {
+    return false;
+  }
+  const uint8_t prot_oc_config = regs[OFFSET_PROT_OC_CONFIG];
+  if ((regs[OFFSET_PACK_CONFIG_D] & PACK_CONFIG_D_RSVD) != 0 ||
+      (prot_oc_config & PROT_OC_CONFIG_RSVD) != 0 ||
+      (regs[OFFSET_PROT_OV_CONFIG] & PROT_OV_CONFIG_RSVD) != 0) {
+    ESP_LOGE(TAG,
+             "Registers block read looks corrupt (D=0x%02X OC=0x%02X OV=0x%02X) - refusing to "
+             "write protector config",
+             regs[OFFSET_PACK_CONFIG_D], prot_oc_config, regs[OFFSET_PROT_OV_CONFIG]);
+    return false;
+  }
+  const uint16_t checksum = fg_protector_checksum(prot_oc_config, prot_ov_config);
+
+  if (regs[OFFSET_PACK_CONFIG_D] != pack_config_d ||
+      regs[OFFSET_PROT_OV_CONFIG] != prot_ov_config) {
+    regs[OFFSET_PACK_CONFIG_D] = pack_config_d;
+    regs[OFFSET_PROT_OV_CONFIG] = prot_ov_config;
+    if (!_write_df_block(SUBCLASS_REGISTERS, 0, regs)) {
+      return false;
+    }
+    uint8_t verify[DF_BLOCK_SIZE] = {};
+    if (!_read_df_block(SUBCLASS_REGISTERS, 0, verify) ||
+        memcmp(verify, regs, DF_BLOCK_SIZE) != 0) {
+      ESP_LOGE(TAG, "Registers block write did NOT stick - readback mismatch");
+      return false;
+    }
+  }
+
+  // Until the checksum lands, the gauge's one-second check may find a mismatch
+  // and open both FETs; a failed write is retried once rather than left for
+  // the next boot.
+  bool checksum_ok = false;
+  for (int attempt = 0; attempt < 2 && !checksum_ok; ++attempt) {
+    checksum_ok = _write_df_word(SUBCLASS_INTEGRITY, OFFSET_PROT_CHECKSUM, checksum);
+  }
+  if (!checksum_ok) {
+    ESP_LOGE(TAG, "Prot Checksum write failed - pack stays locked until 0x%04X is stored",
+             checksum);
+    return false;
+  }
+
+  // PROTECTOR_CHKSUM recomputes the sum from data flash; bit 15 set means it
+  // differs from the stored value.
+  uint16_t computed = 0;
+  if (!_write_word(CMD_CONTROL, CTRL_PROTECTOR_CHKSUM)) {
+    return false;
+  }
+  RTOS::delay_ms(CHECKSUM_SETTLE_MS);
+  if (!_read_word(CMD_CONTROL, computed)) {
+    return false;
+  }
+  if ((computed & 0x8000) != 0 || (computed & 0x7FFF) != checksum) {
+    ESP_LOGE(TAG, "PROTECTOR_CHKSUM returned 0x%04X, expected 0x%04X with bit 15 clear", computed,
+             checksum);
+    return false;
+  }
+
+  RTOS::delay_ms(PROT_CHECK_PERIOD_MS);
+  uint16_t safety = 0;
+  uint8_t prot = 0;
+  if (!read_safety_status(safety) || !read_protector_status(prot)) {
+    return false;
+  }
+  const uint8_t both_off = ProtectorStatus::CHG_OFF | ProtectorStatus::DSG_OFF;
+  if ((safety & SAFETY_STATUS_INV_PROT_CHKSUM) != 0 || (prot & both_off) == both_off) {
+    ESP_LOGE(TAG, "protector config stored but FETs not restored (safety=0x%04X protector=0x%02X)",
+             safety, prot);
+    return false;
+  }
+  ESP_LOGI(TAG,
+           "protector config verified (PackCfgD=0x%02X ProtOC=0x%02X ProtOV=0x%02X "
+           "ProtChk=0x%04X)",
+           pack_config_d, prot_oc_config, prot_ov_config, checksum);
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Data flash helpers
 // ---------------------------------------------------------------------------
@@ -663,6 +790,16 @@ bool BQ27742::_unseal() {
     return false;
   }
   RTOS::delay_ms(DF_SETTLE_MS);
+  // The key writes are ACKed whether or not they were accepted;
+  // CONTROL_STATUS[SS] is the only confirmation (TRM §5.1.4).
+  uint16_t status = 0;
+  if (!control_subcommand(CTRL_CONTROL_STATUS, status)) {
+    return false;
+  }
+  if ((status & CONTROL_STATUS_SS) != 0) {
+    ESP_LOGE(TAG, "still SEALED after unseal keys (CONTROL_STATUS=0x%04X)", status);
+    return false;
+  }
   return true;
 }
 
@@ -675,7 +812,19 @@ bool BQ27742::_read_df_block(uint8_t subclass, uint8_t block, uint8_t *out32) {
     return false;
   }
   RTOS::delay_ms(DF_SETTLE_MS);
-  return _read_block(CMD_BLOCK_DATA_BASE, out32, DF_BLOCK_SIZE);
+  // Every writer rebuilds a whole block around these bytes, so one corrupted
+  // read (seen on this bus at 400 kHz) would be committed to flash.  Two
+  // matching reads are required before the block is trusted.
+  uint8_t again[DF_BLOCK_SIZE] = {};
+  if (!_read_block(CMD_BLOCK_DATA_BASE, out32, DF_BLOCK_SIZE) ||
+      !_read_block(CMD_BLOCK_DATA_BASE, again, DF_BLOCK_SIZE)) {
+    return false;
+  }
+  if (memcmp(out32, again, DF_BLOCK_SIZE) != 0) {
+    ESP_LOGE(TAG, "data flash %u/%u read unstable - two reads differ", subclass, block);
+    return false;
+  }
+  return true;
 }
 
 bool BQ27742::_write_df_block(uint8_t subclass, uint8_t block, const uint8_t *in32) {
@@ -739,13 +888,12 @@ bool BQ27742::_read_word(uint8_t cmd, uint16_t &out) {
 }
 
 bool BQ27742::_write_word(uint8_t cmd, uint16_t value) {
-  // This part supports only the 1-byte write format and NACKs every data byte
-  // after the first (TRM §3.4, Figure 3-1 and the "Attempt at incremental
-  // writes" case below it).  A single 3-byte transaction therefore delivers
-  // the low byte and drops the high one, leaving Control() with no complete
-  // subcommand to latch — so the word goes out as two 1-byte writes to
-  // consecutive command addresses.  The BQ27427 on v1 does accept the
-  // incremental form, which is why the same code works there.
+  // TRM Figure 3-1 shows only the 1-byte write for this part, so the word goes
+  // out as two 1-byte writes to consecutive command addresses.  The gauge does
+  // ACK longer writes — the 33-byte block write in _write_block is how every
+  // data-flash block on the board is committed — so the split matches the
+  // figure as a precaution; it is not what fixed the Control() reads (that was
+  // the bus speed).
   return _write_byte(cmd, static_cast<uint8_t>(value & 0xFF)) &&
          _write_byte(static_cast<uint8_t>(cmd + 1), static_cast<uint8_t>((value >> 8) & 0xFF));
 }

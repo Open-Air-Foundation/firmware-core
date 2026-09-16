@@ -277,3 +277,33 @@ TEST_CASE("bms_power_source_str returns non-null for all values", "[BmsTypes]") 
   REQUIRE(std::string(bms_power_source_str(BmsPowerSource::NonStandard)) == "NonStandard");
   REQUIRE(std::string(bms_power_source_str(BmsPowerSource::OtgMode)) == "OTG");
 }
+
+// ---------------------------------------------------------------------------
+// Fuel-gauge protection configuration
+// ---------------------------------------------------------------------------
+
+TEST_CASE("FgProtectionConfig equality compares every field", "[BmsTypes]") {
+  const FgProtectionConfig a{4250, 4150, 2700, 2900, 450, 400, 600, 550};
+  FgProtectionConfig b = a;
+  REQUIRE(a == b);
+  REQUIRE_FALSE(a != b);
+
+  SECTION("threshold differs") {
+    b.uv_prot_threshold_mv = 2800;
+    REQUIRE(a != b);
+  }
+  SECTION("recovery differs") {
+    b.ot_chg_recovery_dc = 500;
+    REQUIRE(a != b);
+  }
+  SECTION("last field differs") {
+    b.ot_dsg_recovery_dc = 549;
+    REQUIRE(a != b);
+  }
+}
+
+TEST_CASE("fg_protector_checksum is the plain sum the gauge checks", "[BmsTypes]") {
+  REQUIRE(fg_protector_checksum(0x0A, 0x07) == 0x0011); // TI factory default
+  REQUIRE(fg_protector_checksum(0x0A, 0x00) == 0x000A); // OVP code 000 on factory OC
+  REQUIRE(fg_protector_checksum(0xFF, 0xFF) == 0x01FE); // no 8-bit wrap
+}

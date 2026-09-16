@@ -37,7 +37,11 @@ public:
 
   struct Config {
     uint8_t address = DEFAULT_ADDRESS;
-    uint32_t scl_speed_hz = 400000;
+    /// 100 kHz, not the bus's 400 kHz: on the GO v2.0 bus the incremental
+    /// 2-byte read of a Control() result is corrupted at 400 kHz (the gauge
+    /// clock-stretches while serving it), which breaks unseal and every
+    /// data-flash access.  Standard commands were fine at either speed.
+    uint32_t scl_speed_hz = 100000;
     int timeout_ms = 100;
   };
 
@@ -110,6 +114,18 @@ public:
   /// reboot the system when running on battery.  New values are picked up by
   /// Impedance Track at the next gauge power cycle or IT ENABLE.
   bool write_cell_config(const FgCellConfig &cfg);
+
+  /// Data-flash read of Pack Configuration D, Prot OC/OV Config (subclass 64)
+  /// and Prot Checksum (subclass 57).  Unseals the gauge.
+  bool read_protector_config(FgProtectorConfig &out);
+
+  /// Data-flash write of Pack Configuration D and Prot OV Config followed by
+  /// the Prot Checksum that makes them valid, verified through
+  /// PROTECTOR_CHKSUM and the FET state.  Prot OC Config is preserved.
+  /// Between the two block commits the stored checksum is stale and the
+  /// gauge may open both FETs for up to a second, so call this only while an
+  /// adapter powers the system.
+  bool write_protector_config(uint8_t pack_config_d, uint8_t prot_ov_config);
 
 private:
   i2c_master_bus_handle_t _bus = nullptr;
