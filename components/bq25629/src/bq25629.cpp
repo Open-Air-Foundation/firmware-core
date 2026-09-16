@@ -254,8 +254,11 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
     return ret;
   }
 
-  // Configure pre-charge current
-  uint16_t iprechg_value = (config.precharge_current_ma - 10) / 10;
+  // Configure pre-charge current.  IPRECHG is a plain multiple of the 10 mA
+  // step with no offset: code 1h = 10 mA, POR 3h = 30 mA, 1Fh = 310 mA
+  // (SLUSEG4C Table 8-15).  Truncate so the programmed limit never exceeds
+  // what the caller asked for.
+  uint16_t iprechg_value = config.precharge_current_ma / 10;
   iprechg_value = iprechg_value > 0x1F ? 0x1F : iprechg_value;
   if (iprechg_value < 1)
     iprechg_value = 1;
@@ -265,8 +268,9 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
     return ret;
   }
 
-  // Configure termination current
-  uint16_t iterm_value = (config.term_current_ma - 5) / 5;
+  // Configure termination current.  ITERM is likewise a plain multiple of the
+  // 5 mA step: code 1h = 5 mA, POR 4h = 20 mA, 3Eh = 310 mA (Table 8-16).
+  uint16_t iterm_value = config.term_current_ma / 5;
   iterm_value = iterm_value > 0x3E ? 0x3E : iterm_value;
   if (iterm_value < 1)
     iterm_value = 1;
@@ -275,6 +279,13 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
     ESP_LOGE(TAG, "Failed to set termination current");
     return ret;
   }
+
+  // Log what the registers actually hold, not what was asked for: the codes are
+  // truncated to the step and clamped, and this is the only place the two can
+  // be compared on a bench log.
+  ESP_LOGI(TAG, "Charge limits programmed: term %u mA (ITERM 0x%02X), precharge %u mA (IPRECHG 0x%02X)",
+           static_cast<unsigned>(iterm_value * 5), static_cast<unsigned>(iterm_value),
+           static_cast<unsigned>(iprechg_value * 10), static_cast<unsigned>(iprechg_value));
 
   // Enable/disable charging
   ret = enable_charging(config.enable_charging);

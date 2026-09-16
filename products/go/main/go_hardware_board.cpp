@@ -401,7 +401,20 @@ bool GoHardwareBoard::init_bms() {
   }
   _bms_init_attempted = true;
 
-  constexpr drivers::BQ25629_Config config = {
+  // Termination and pre-charge follow the cell, so they differ per variant.
+  //
+  // v2.0 (Cowon INR18490NP, 2600 mAh) specifies end-of-charge at 0.02C = 52 mA;
+  // 50 mA is the nearest 5 mA step and the lowest setting TI characterises
+  // tightly (ITERM_ACC +-17% at 50 mA, against +-80% at 10 mA, SLUSEG4C
+  // §6.5).  Pre-charge at 200 mA is 0.077C, inside the usual 0.1C ceiling, and
+  // it matters on this board: the gauge's undervoltage trip leaves the cell
+  // between 2.7 V and the 3.0 V fast-charge threshold, and pre-charge is the
+  // current that climbs back out of that band.
+  //
+  // v1 keeps its own numbers.  Its cell is a different 2000 mAh part and its
+  // datasheet is not on hand, so there is nothing to justify changing them.
+  const bool cell_v2 = (_variant == BoardVariant::V2);
+  const drivers::BQ25629_Config config = {
       .charge_voltage_mv = 4200,
       .charge_current_ma = 500,
       // Input current is the lower of this register and the BQ25628's ILIM
@@ -411,8 +424,8 @@ bool GoHardwareBoard::init_bms() {
       .input_current_limit_ma = 1000,
       .input_voltage_limit_mv = 4600,
       .min_system_voltage_mv = 3520,
-      .precharge_current_ma = 30,
-      .term_current_ma = 20,
+      .precharge_current_ma = static_cast<uint16_t>(cell_v2 ? 200 : 30),
+      .term_current_ma = static_cast<uint16_t>(cell_v2 ? 50 : 20),
       .enable_charging = true,
       .enable_adc = true,
   };
@@ -425,6 +438,8 @@ bool GoHardwareBoard::init_bms() {
     return false;
   }
   _chips.set(Chip::Charger, true);
+  AG_LOGI(TAG, "BQ25628 charge profile: ICHG %u mA, term %u mA, precharge %u mA",
+          config.charge_current_ma, config.term_current_ma, config.precharge_current_ma);
 
   if (_power != nullptr) {
     _power->set_bms(_bms_driver);
