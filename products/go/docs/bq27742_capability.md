@@ -219,9 +219,10 @@ itself on these; the hardware protector below is the second, coarser level.
 | 20 | OT Dsg Recovery | I2 | 0 | 1200 | 550 | 0.1 °C | 550 |
 
 UV Prot is set to 2700 mV rather than the cell's 2500 mV cut-off so that the
-firmware layer trips 262 mV above the fixed hardware UVP (2438 mV): a flat
-battery is then a `SafetyStatus()` event, not a lifetime AFE fault, and pulse
-sag has headroom.
+firmware layer trips well above the fixed hardware UVP: a flat battery is then
+a `SafetyStatus()` event, not a lifetime AFE fault, and pulse sag has headroom.
+The margin is 262 mV on a factory gauge (hardware UVP 2438 mV) and 360 mV once
+OVP code 000 moves the pair to 2340 mV, which is the shipped configuration.
 
 ### Subclass 39 JEITA
 
@@ -253,7 +254,7 @@ Temperature ranges used by charge inhibit / suspend (TRM p.61, §2.6.1).
 | 6 | All DF Checksum | H2 | 0x7FFF | 0x0000 | — |
 | 8 | Static Chem DF Checksum | H2 | 0x7FFF | 0x7C23 | — |
 | 10 | Static DF Checksum | H2 | 0x7FFF | 0x0000 | — |
-| 12 | Prot Checksum | H2 | 0x7FFF | 0x0011 | — (see [Protector Checksum](#protector-checksum)) |
+| 12 | Prot Checksum | H2 | 0x7FFF | 0x0011 | 0x000A (see [Protector Checksum](#protector-checksum)) |
 
 ### Subclass 64 Registers
 
@@ -264,9 +265,9 @@ All six fields share block 0 (TRM p.62, p.81–84).
 | 0 | Pack Configuration (A) | H2 | 0x097F | — |
 | 2 | Pack Configuration B | H1 | 0xA7 | — |
 | 3 | Pack Configuration C | H1 | 0xB9 | — |
-| 4 | Pack Configuration D | H1 | 0x83 | — (target 0xB3, not written) |
+| 4 | Pack Configuration D | H1 | 0x83 | 0xB3 |
 | 5 | Prot OC Config | H1 | 0x0A | — |
-| 6 | Prot OV Config | H1 | 0x07 | — (target 0x00, not written) |
+| 6 | Prot OV Config | H1 | 0x07 | 0x00 |
 
 ### Subclass 68 Power
 
@@ -512,6 +513,7 @@ Board wiring: [`go_hardware_board.cpp`](../main/go_hardware_board.cpp).
 
 | Capability | Driver API | Board rev 2.0 today |
 |---|---|---|
+| Protector config | `read_protector_config()`, `write_protector_config()` | written from `init_bms()` when an adapter is present and the values differ; verified by read-back, `PROTECTOR_CHKSUM`, then FET state |
 | Identity probe | `init()` checks DEVICE_TYPE; `_log_identity_diagnostics()` on mismatch | runs every boot |
 | Runtime reads | `read_soc_percent()`, `read_voltage_mv()`, `read_average_current_ma()`, `read_temperature_c()`, `read_flags()` | polled every 30 s |
 | Average power | `read_average_power_mw()` derives V × I | `AveragePower()` `0x76` not used yet |
@@ -520,9 +522,12 @@ Board wiring: [`go_hardware_board.cpp`](../main/go_hardware_board.cpp).
 | Status | `read_safety_status()`, `read_protector_status()`, `read_protector_state()` | logged at boot |
 | Learning reads | `read_qmax_cell0()`, `read_ra_table()`, `read_update_status()`, `read_control_status()` | available; runner still targets BQ27427 |
 | `IT_ENABLE` | `set_update_status_learning(true)` | not sent on rev 2.0 |
-| Pack Config D, Prot OV Config, Prot Checksum | none | not written |
-| `PROTECTOR_CHKSUM` subcommand | `control_subcommand(0x001A, …)` | not used yet |
+| `PROTECTOR_CHKSUM` subcommand | `control_subcommand(0x001A, …)` | used to verify the protector write |
 | Qmax Cell 0 write | none | not written |
 
-Both boot-time writes are idempotent: on the second boot the driver logs
-"already correct — preserved" for each block and does not touch flash.
+All three boot-time writes are idempotent: on the next boot the board logs
+"already correct — preserved" for each and does not touch flash.
+
+The protector write runs from `init_bms()`, not `init_fuel_gauge()`. Every
+boot path brings the gauge up before the charger, so that is the first point
+where the adapter state the write depends on can be read at all.

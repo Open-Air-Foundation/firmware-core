@@ -93,7 +93,8 @@ static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
 // Cowon INR18490NP is a 4.20 ± 0.05 V part rated 0–45 °C charge, −20–60 °C
 // discharge, 2.50 V end-of-discharge, so OV and OT Chg come down to sit inside
 // those limits.  UV stays 200 mV above the cell's loaded cut-off to absorb
-// pulse sag and 262 mV above the fixed 2.438 V hardware UVP, so the firmware
+// pulse sag and stay well above the hardware UVP (2.438 V on a factory gauge,
+// 2.340 V once the protector below is programmed), so the firmware
 // layer always trips first and a flat battery is recorded in SafetyStatus
 // rather than the lifetime protector-fault log.
 static constexpr FgProtectionConfig AGO_PROTECTION_CONFIG = {
