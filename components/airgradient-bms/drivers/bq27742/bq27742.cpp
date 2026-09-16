@@ -7,6 +7,8 @@
 
 #include "drivers/bq27742/bq27742.h"
 
+#include <cstdio>
+
 #include "esp_log.h"
 #include "rtos.h"
 
@@ -44,6 +46,7 @@ constexpr uint8_t CMD_PROTECTOR_STATE = 0x78;
 constexpr uint16_t CTRL_CONTROL_STATUS = 0x0000;
 constexpr uint16_t CTRL_DEVICE_TYPE = 0x0001;
 constexpr uint16_t CTRL_FW_VERSION = 0x0002;
+constexpr uint16_t CTRL_HW_VERSION = 0x0003;
 constexpr uint16_t CTRL_IT_ENABLE = 0x0021;
 
 // Default unseal key 0x36720414 (TRM §5.9.1): Control(0x0414) then Control(0x3672).
@@ -51,11 +54,20 @@ constexpr uint16_t UNSEAL_KEY_1 = 0x0414;
 constexpr uint16_t UNSEAL_KEY_0 = 0x3672;
 
 // Data-flash subclasses and offsets (TRM Tables 5-3…5-9).
+constexpr uint8_t SUBCLASS_SAFETY = 2;   // OV/UV/OT protection thresholds
 constexpr uint8_t SUBCLASS_DATA = 48;    // Design Capacity @12, Design Energy @14
 constexpr uint8_t SUBCLASS_POWER = 68;   // Sleep Current @2
 constexpr uint8_t SUBCLASS_IT_CFG = 80;  // Terminate Voltage @64
 constexpr uint8_t SUBCLASS_STATE = 82;   // Qmax Cell 0 @0, Update Status @2
 constexpr uint8_t SUBCLASS_RA0 = 88;     // flag @0, Ra 0..14 @2..30
+constexpr uint8_t OFFSET_OV_PROT_THRESHOLD = 0;
+constexpr uint8_t OFFSET_OV_PROT_RECOVERY = 3;
+constexpr uint8_t OFFSET_UV_PROT_THRESHOLD = 5;
+constexpr uint8_t OFFSET_UV_PROT_RECOVERY = 8;
+constexpr uint8_t OFFSET_OT_CHG = 12;
+constexpr uint8_t OFFSET_OT_CHG_RECOVERY = 15;
+constexpr uint8_t OFFSET_OT_DSG = 17;
+constexpr uint8_t OFFSET_OT_DSG_RECOVERY = 20;
 constexpr uint8_t OFFSET_DESIGN_CAPACITY = 12;
 constexpr uint8_t OFFSET_DESIGN_ENERGY = 14;
 constexpr uint8_t OFFSET_SLEEP_CURRENT = 2;
@@ -129,6 +141,7 @@ bool BQ27742::init() {
   }
   if (device_type != DEVICE_TYPE_BQ27742) {
     ESP_LOGE(TAG, "DEVICE_TYPE=0x%04X, expected 0x%04X", device_type, DEVICE_TYPE_BQ27742);
+    _log_identity_diagnostics(device_type);
     i2c_master_bus_rm_device(_dev);
     _dev = nullptr;
     return false;
@@ -237,6 +250,70 @@ bool BQ27742::read_protector_state(uint8_t &out) { return _read_byte(CMD_PROTECT
 // Control() subcommands
 // ---------------------------------------------------------------------------
 
+void BQ27742::_log_identity_diagnostics(uint16_t first_device_type) {
+  constexpr int REPEATS = 10;
+  constexpr uint16_t FW_VERSION_EXPECTED = 0x0103;
+  constexpr uint16_t HW_VERSION_A = 0x0000;
+  constexpr uint16_t HW_VERSION_B = 0x0060;
+
+  ESP_LOGW(TAG, "identity probe (read-only) — the part answers on I2C but reports a "
+                "different DEVICE_TYPE");
+
+  char list[REPEATS * 6 + 1] = {};
+  size_t used = 0;
+  int reads_ok = 0;
+  int identical = 0;
+  int as_expected = 0;
+  for (int i = 0; i < REPEATS; ++i) {
+    uint16_t v = 0;
+    if (!control_subcommand(CTRL_DEVICE_TYPE, v)) {
+      used += static_cast<size_t>(snprintf(list + used, sizeof(list) - used, " ....."));
+      continue;
+    }
+    ++reads_ok;
+    if (v == first_device_type) {
+      ++identical;
+    }
+    if (v == DEVICE_TYPE_BQ27742) {
+      ++as_expected;
+    }
+    used += static_cast<size_t>(snprintf(list + used, sizeof(list) - used, " %04X", v));
+  }
+  ESP_LOGW(TAG, "  DEVICE_TYPE x%d:%s", REPEATS, list);
+  ESP_LOGW(TAG, "  reads_ok=%d/%d identical=%d correct_0742=%d", reads_ok, REPEATS, identical,
+           as_expected);
+
+  uint16_t fw = 0;
+  if (control_subcommand(CTRL_FW_VERSION, fw)) {
+    ESP_LOGW(TAG, "  FW_VERSION=0x%04X (bq27742-G1 reports 0x%04X) %s", fw, FW_VERSION_EXPECTED,
+             fw == FW_VERSION_EXPECTED ? "MATCH" : "mismatch");
+  } else {
+    ESP_LOGW(TAG, "  FW_VERSION read failed");
+  }
+
+  uint16_t hw = 0;
+  if (control_subcommand(CTRL_HW_VERSION, hw)) {
+    ESP_LOGW(TAG, "  HW_VERSION=0x%04X (bq27742-G1 reports 0x%04X or 0x%04X) %s", hw, HW_VERSION_A,
+             HW_VERSION_B, (hw == HW_VERSION_A || hw == HW_VERSION_B) ? "MATCH" : "mismatch");
+  } else {
+    ESP_LOGW(TAG, "  HW_VERSION read failed");
+  }
+
+  // Voltage() is a standard command: it does not go through Control() at all,
+  // so it tells us whether the part behaves like a gauge independently of the
+  // subcommand mechanism.  Compare against the charger's VBAT_ADC in the same
+  // boot.
+  uint16_t mv = 0;
+  if (_read_word(CMD_VOLTAGE, mv)) {
+    ESP_LOGW(TAG, "  Voltage()=%u mV (standard command — compare with charger vbat)", mv);
+  } else {
+    ESP_LOGW(TAG, "  Voltage() read failed");
+  }
+
+  ESP_LOGW(TAG, "  I2C link to 0x%02X is WORKING (%d/%d reads returned data)", _config.address,
+           reads_ok, REPEATS);
+}
+
 bool BQ27742::control_subcommand(uint16_t subcmd, uint16_t &result) {
   if (!_write_word(CMD_CONTROL, subcmd)) {
     return false;
@@ -343,9 +420,102 @@ bool BQ27742::read_cell_config(FgCellConfig &out) {
   return true;
 }
 
+bool BQ27742::read_protection_config(FgProtectionConfig &out) {
+  uint8_t block[DF_BLOCK_SIZE] = {};
+  if (!_read_df_block(SUBCLASS_SAFETY, 0, block)) {
+    return false;
+  }
+  auto unpack = [&block](uint8_t offset) -> uint16_t {
+    return (static_cast<uint16_t>(block[offset]) << 8) | block[offset + 1];
+  };
+  out.ov_prot_threshold_mv = unpack(OFFSET_OV_PROT_THRESHOLD);
+  out.ov_prot_recovery_mv = unpack(OFFSET_OV_PROT_RECOVERY);
+  out.uv_prot_threshold_mv = unpack(OFFSET_UV_PROT_THRESHOLD);
+  out.uv_prot_recovery_mv = unpack(OFFSET_UV_PROT_RECOVERY);
+  out.ot_chg_dc = static_cast<int16_t>(unpack(OFFSET_OT_CHG));
+  out.ot_chg_recovery_dc = static_cast<int16_t>(unpack(OFFSET_OT_CHG_RECOVERY));
+  out.ot_dsg_dc = static_cast<int16_t>(unpack(OFFSET_OT_DSG));
+  out.ot_dsg_recovery_dc = static_cast<int16_t>(unpack(OFFSET_OT_DSG_RECOVERY));
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Data flash writes
 // ---------------------------------------------------------------------------
+bool BQ27742::write_protection_config(const FgProtectionConfig &cfg) {
+  if (!ready()) {
+    return false;
+  }
+
+  // Out-of-range data flash values are accepted silently and persist, so the
+  // limits from TRM Table 5-3 are enforced here instead of by the gauge.
+  struct Bound {
+    int32_t value;
+    int32_t min;
+    int32_t max;
+    const char *name;
+  };
+  const Bound bounds[] = {
+      {cfg.ov_prot_threshold_mv, 4200, 4600, "OV Prot Threshold"},
+      {cfg.ov_prot_recovery_mv, 4100, 4500, "OV Prot Recovery"},
+      {cfg.uv_prot_threshold_mv, 2300, 3100, "UV Prot Threshold"},
+      {cfg.uv_prot_recovery_mv, 2400, 3200, "UV Prot Recovery"},
+      {cfg.ot_chg_dc, 0, 1200, "OT Chg"},
+      {cfg.ot_chg_recovery_dc, 0, 1200, "OT Chg Recovery"},
+      {cfg.ot_dsg_dc, 0, 1200, "OT Dsg"},
+      {cfg.ot_dsg_recovery_dc, 0, 1200, "OT Dsg Recovery"},
+  };
+  for (const Bound &b : bounds) {
+    if (b.value < b.min || b.value > b.max) {
+      ESP_LOGE(TAG, "%s %ld outside %ld..%ld - refusing to write protection config", b.name,
+               static_cast<long>(b.value), static_cast<long>(b.min), static_cast<long>(b.max));
+      return false;
+    }
+  }
+
+  uint8_t block[DF_BLOCK_SIZE] = {};
+  if (!_read_df_block(SUBCLASS_SAFETY, 0, block)) {
+    return false;
+  }
+  // Only the eight threshold words are replaced.  The U1 delay/time fields at
+  // offsets 2, 7, 14 and 19 keep whatever the gauge shipped with: a zero in UV
+  // Prot Delay disables undervoltage protection entirely (TRM §5.3.1.2).
+  auto pack = [&block](uint8_t offset, uint16_t value) {
+    block[offset] = static_cast<uint8_t>((value >> 8) & 0xFF);
+    block[offset + 1] = static_cast<uint8_t>(value & 0xFF);
+  };
+  pack(OFFSET_OV_PROT_THRESHOLD, cfg.ov_prot_threshold_mv);
+  pack(OFFSET_OV_PROT_RECOVERY, cfg.ov_prot_recovery_mv);
+  pack(OFFSET_UV_PROT_THRESHOLD, cfg.uv_prot_threshold_mv);
+  pack(OFFSET_UV_PROT_RECOVERY, cfg.uv_prot_recovery_mv);
+  pack(OFFSET_OT_CHG, static_cast<uint16_t>(cfg.ot_chg_dc));
+  pack(OFFSET_OT_CHG_RECOVERY, static_cast<uint16_t>(cfg.ot_chg_recovery_dc));
+  pack(OFFSET_OT_DSG, static_cast<uint16_t>(cfg.ot_dsg_dc));
+  pack(OFFSET_OT_DSG_RECOVERY, static_cast<uint16_t>(cfg.ot_dsg_recovery_dc));
+
+  if (!_write_df_block(SUBCLASS_SAFETY, 0, block)) {
+    return false;
+  }
+
+  RTOS::delay_ms(50);
+  FgProtectionConfig verify{};
+  if (!read_protection_config(verify)) {
+    ESP_LOGE(TAG, "protection config readback failed after write");
+    return false;
+  }
+  if (verify != cfg) {
+    ESP_LOGE(TAG, "protection config write did NOT stick - readback mismatch");
+    return false;
+  }
+  ESP_LOGI(TAG,
+           "protection config verified (OV %u/%u mV, UV %u/%u mV, OT chg %.1f/%.1f C, "
+           "dsg %.1f/%.1f C)",
+           cfg.ov_prot_threshold_mv, cfg.ov_prot_recovery_mv, cfg.uv_prot_threshold_mv,
+           cfg.uv_prot_recovery_mv, cfg.ot_chg_dc / 10.0f, cfg.ot_chg_recovery_dc / 10.0f,
+           cfg.ot_dsg_dc / 10.0f, cfg.ot_dsg_recovery_dc / 10.0f);
+  return true;
+}
+
 
 bool BQ27742::write_cell_config(const FgCellConfig &cfg) {
   if (!ready()) {

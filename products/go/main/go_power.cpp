@@ -217,9 +217,14 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
   }
 
   // -------------------------------------------------------------------------
-  // EDV (over-discharge) trip — gated on explicit "on-battery" status
+  // EDV (over-discharge) trip — v1 only, gated on explicit "on-battery" status.
+  // Where the gauge has its own protector it opens the DSG FET at its own UV
+  // threshold, so the cell is left to drain to that point instead of cutting
+  // system power from here.
   // -------------------------------------------------------------------------
-  {
+  if (_config.fg_has_protector) {
+    _edv_low_count = 0;
+  } else {
     const bool on_battery = status_ok && (bms_status.power_source == BmsPowerSource::None ||
                                           bms_status.power_source == BmsPowerSource::OtgMode);
 

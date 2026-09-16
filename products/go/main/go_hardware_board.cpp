@@ -77,6 +77,25 @@ static constexpr FgCellConfig AGO_CELL_CONFIG = {
     .sleep_current_ma = 50,
 };
 
+// Firmware-layer protection thresholds for the same cell.  TI's factory
+// defaults suit a generic cell that tolerates 4.35 V and 55 °C charging; the
+// Cowon INR18490NP is a 4.20 ± 0.05 V part rated 0–45 °C charge, −20–60 °C
+// discharge, 2.50 V end-of-discharge, so OV and OT Chg come down to sit inside
+// those limits.  UV stays 200 mV above the cell's loaded cut-off to absorb
+// pulse sag and 262 mV above the fixed 2.438 V hardware UVP, so the firmware
+// layer always trips first and a flat battery is recorded in SafetyStatus
+// rather than the lifetime protector-fault log.
+static constexpr FgProtectionConfig AGO_PROTECTION_CONFIG = {
+    .ov_prot_threshold_mv = 4250, // TI default 4390
+    .ov_prot_recovery_mv = 4150,  // TI default 4290
+    .uv_prot_threshold_mv = 2700, // TI default 2800
+    .uv_prot_recovery_mv = 2900,  // TI default, kept — 200 mV hysteresis
+    .ot_chg_dc = 450,             // TI default 550
+    .ot_chg_recovery_dc = 400,    // TI default 500
+    .ot_dsg_dc = 600,             // TI default, already matches the cell
+    .ot_dsg_recovery_dc = 550,    // TI default
+};
+
 // FG DM corruption sanity ranges.  A reading outside any of these
 // ranges is treated as evidence of a corrupted persistent block
 // (most commonly a prior aborted CFGUPDATE).
@@ -364,7 +383,11 @@ bool GoHardwareBoard::init_bms() {
   constexpr drivers::BQ25629_Config config = {
       .charge_voltage_mv = 4200,
       .charge_current_ma = 500,
-      .input_current_limit_ma = 1500,
+      // Input current is the lower of this register and the BQ25628's ILIM
+      // pin; R21 = 2.49k puts that ceiling near 1.0 A, so anything higher
+      // here is fiction.  EN_EXTILIM stays enabled: IINDPM alone comes up at
+      // 3.2 A after a POR, the ILIM pin does not.
+      .input_current_limit_ma = 1000,
       .input_voltage_limit_mv = 4600,
       .min_system_voltage_mv = 3520,
       .precharge_current_ma = 30,
@@ -444,6 +467,27 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
     AG_LOGI(TAG, "BQ27742 cell config already correct — preserved");
   } else {
     AG_LOGW(TAG, "BQ27742 cell config unreadable — left as-is");
+  }
+
+  FgProtectionConfig prot_current{};
+  if (!_fuel_gauge_v2->read_protection_config(prot_current)) {
+    AG_LOGW(TAG, "BQ27742 protection config unreadable — left as-is");
+  } else {
+    AG_LOGI(TAG,
+            "BQ27742 protection config: OV %u/%u mV, UV %u/%u mV, OT chg %.1f/%.1f °C, "
+            "dsg %.1f/%.1f °C",
+            prot_current.ov_prot_threshold_mv, prot_current.ov_prot_recovery_mv,
+            prot_current.uv_prot_threshold_mv, prot_current.uv_prot_recovery_mv,
+            prot_current.ot_chg_dc / 10.0f, prot_current.ot_chg_recovery_dc / 10.0f,
+            prot_current.ot_dsg_dc / 10.0f, prot_current.ot_dsg_recovery_dc / 10.0f);
+    if (prot_current != AGO_PROTECTION_CONFIG) {
+      AG_LOGI(TAG, "BQ27742 applying protection config");
+      if (!_fuel_gauge_v2->write_protection_config(AGO_PROTECTION_CONFIG)) {
+        AG_LOGW(TAG, "BQ27742 write_protection_config() failed — thresholds not updated");
+      }
+    } else {
+      AG_LOGI(TAG, "BQ27742 protection config already correct — preserved");
+    }
   }
 
   uint8_t soc = 0;
@@ -861,6 +905,7 @@ PowerService &GoHardwareBoard::power() {
                                   .pin_pm_power = _pm_power_pin(),
                                   .pm_power_on_level = pm_power_on_level(_variant),
                                   .sensor_hold_max_sleep_ms = 20000,
+                                  .fg_has_protector = (_variant == BoardVariant::V2),
                               });
     _power->init_ext_watchdog();
     _power->reset_ext_watchdog();

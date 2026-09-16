@@ -96,6 +96,15 @@ public:
   /// Sleep Current.  Unseals the gauge (idempotent; it stays unsealed).
   bool read_cell_config(FgCellConfig &out);
 
+  /// Data-flash read of the firmware-layer protection thresholds (Safety
+  /// subclass).  Unseals the gauge (idempotent; it stays unsealed).
+  bool read_protection_config(FgProtectionConfig &out);
+
+  /// Data-flash write of the same eight fields as one block operation.
+  /// Rejects out-of-range values: the gauge accepts and keeps them silently.
+  /// Leaves the U1 delay/time fields in the same block untouched.
+  bool write_protection_config(const FgProtectionConfig &cfg);
+
   /// Data-flash write of the same four fields.  Does NOT reset the gauge:
   /// a RESET briefly opens both protection FETs, which would drop Pack+ and
   /// reboot the system when running on battery.  New values are picked up by
@@ -106,6 +115,11 @@ private:
   i2c_master_bus_handle_t _bus = nullptr;
   i2c_master_dev_handle_t _dev = nullptr;
   Config _config;
+
+  /// Read-only probe logged when DEVICE_TYPE does not match, before the I2C
+  /// handle is released — separates a flaky read from a part that is not a
+  /// bq27742-G1.
+  void _log_identity_diagnostics(uint16_t first_device_type);
 
   bool _read_word(uint8_t cmd, uint16_t &out);
   bool _write_word(uint8_t cmd, uint16_t value);

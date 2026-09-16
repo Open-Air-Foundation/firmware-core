@@ -173,6 +173,9 @@ public:
                                                ///<   v1:        0 (active-low)
     uint32_t sensor_hold_max_sleep_ms = 20000; ///< Max sleep (ms) to hold PM sensor powered
     uint32_t pm_sleep_threshold_ms = 20000;    ///< Min measure interval (ms) to power-cycle PM
+    bool fg_has_protector = false;             ///< Gauge opens the DSG FET on undervoltage by
+                                               ///< itself (v2.0 BQ27742-G1), so the firmware EDV
+                                               ///< ship-mode path below is not needed.
   };
 
   // -------------------------------------------------------------------------
@@ -413,7 +416,7 @@ public:
   /// Fixed threshold — not a user-configurable setting.
   static constexpr float BATTERY_CRITICAL_PERCENT = 5.0f;
 
-  // --- EDV (over-discharge) thresholds ---
+  // --- EDV (over-discharge) thresholds — v1 only, see Config::fg_has_protector ---
   static constexpr float EDV_SHIP_THRESHOLD_V = 2.9f;
   static constexpr int EDV_SHIP_DEBOUNCE_SAMPLES = 3;
 

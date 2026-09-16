@@ -254,6 +254,36 @@ inline bool operator==(const FgCellConfig &a, const FgCellConfig &b) {
 
 inline bool operator!=(const FgCellConfig &a, const FgCellConfig &b) { return !(a == b); }
 
+/// Fuel-gauge firmware-layer protection thresholds (BQ27742-G1 Safety
+/// subclass, TRM SLUUAX0C §5.3.1).  All eight fields share one 32-byte data
+/// flash block; the U1 delay/time fields in the same block are not exposed
+/// because a zero in UV Prot Delay disables undervoltage protection outright.
+/// Lives here (not in the driver header) so host tests can use it without
+/// pulling in ESP-IDF.
+struct FgProtectionConfig {
+  uint16_t ov_prot_threshold_mv;
+  uint16_t ov_prot_recovery_mv;
+  uint16_t uv_prot_threshold_mv;
+  uint16_t uv_prot_recovery_mv;
+  int16_t ot_chg_dc;          ///< 0.1 °C
+  int16_t ot_chg_recovery_dc; ///< 0.1 °C
+  int16_t ot_dsg_dc;          ///< 0.1 °C
+  int16_t ot_dsg_recovery_dc; ///< 0.1 °C
+};
+
+inline bool operator==(const FgProtectionConfig &a, const FgProtectionConfig &b) {
+  return a.ov_prot_threshold_mv == b.ov_prot_threshold_mv &&
+         a.ov_prot_recovery_mv == b.ov_prot_recovery_mv &&
+         a.uv_prot_threshold_mv == b.uv_prot_threshold_mv &&
+         a.uv_prot_recovery_mv == b.uv_prot_recovery_mv && a.ot_chg_dc == b.ot_chg_dc &&
+         a.ot_chg_recovery_dc == b.ot_chg_recovery_dc && a.ot_dsg_dc == b.ot_dsg_dc &&
+         a.ot_dsg_recovery_dc == b.ot_dsg_recovery_dc;
+}
+
+inline bool operator!=(const FgProtectionConfig &a, const FgProtectionConfig &b) {
+  return !(a == b);
+}
+
 // ---------------------------------------------------------------------------
 // FgFlags — BQ27427 Flags() register bit definitions (TRM SLUUCD5 §5.1)
 // ---------------------------------------------------------------------------
