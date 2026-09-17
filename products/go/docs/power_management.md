@@ -184,6 +184,14 @@ The low-battery watch path follows the same reasoning: if the charger still
 will not come up, it sleeps for another watch interval rather than restarting,
 because a restart loop on an empty cell is the one outcome worse than waiting.
 
+`rekick_pmid_if_collapsed()` skips for the same reason. A rail that is down
+because the chip refuses to start it is not a collapsed rail, and asking again
+every poll would cost current and sag the cell for a refusal we can predict.
+Below `PMID_BOOST_MIN_BATTERY_V` it logs once and leaves the rail off. The
+practical consequence is that **PM readings stay invalid on a cell under about
+3 V** until it is charged or the device shuts down; that is the charger's
+design, not a sensor fault.
+
 ## Low-Battery Watch
 
 A cell already reading under the ship threshold is no longer on a measurement

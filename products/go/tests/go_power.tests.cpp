@@ -406,6 +406,36 @@ TEST_CASE("poll_status: charger status pass-through", "[PowerService][status]") 
 // TEST CASE 4 — evaluate_sleep
 // ============================================================================
 
+TEST_CASE("rekick_pmid_if_collapsed: not below the charger's boost threshold",
+          "[PowerService][pmid][rekick]") {
+  ScopedMockRTOS rtos;
+  MockBmsDevice mock_bms;
+  PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+
+  BmsTelemetry t{};
+  t.pmid_voltage_mv = 0; // rail down
+
+  SECTION("an empty cell is left alone") {
+    // The chip would refuse the boost anyway, and the attempt sags the cell.
+    // No set_pmid_enabled expectation: the mock fails the test on any call.
+    t.battery_voltage = 2.9f;
+    CHECK_FALSE(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+  }
+
+  SECTION("just under the window is still left alone") {
+    t.battery_voltage = PowerService::PMID_BOOST_MIN_BATTERY_V - 0.01f;
+    CHECK_FALSE(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+  }
+
+  SECTION("a healthy cell still gets the re-kick") {
+    t.battery_voltage = 3.9f;
+    trompeloeil::sequence seq;
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    CHECK(svc.rekick_pmid_if_collapsed(t, BmsPowerSource::None));
+  }
+}
+
 TEST_CASE("decide_sleep: a low cell is re-checked on the watch interval",
           "[PowerService][sleep][edv]") {
   MockBmsDevice mock_bms;

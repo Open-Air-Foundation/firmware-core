@@ -518,6 +518,25 @@ bool PowerService::rekick_pmid_if_collapsed(const BmsTelemetry &t, BmsPowerSourc
   if (!(on_battery && pmid_valid && t.pmid_voltage_mv < PMID_HEALTHY_MIN_MV)) {
     return false;
   }
+
+  // Below the charger's own boost threshold PMID is down because the chip
+  // refuses to start it, not because it collapsed.  Re-kicking there asks for
+  // the same refusal every poll, and the attempt itself sags a nearly empty
+  // cell, so leave the rail off and let the PM sensor read invalid until the
+  // pack is charged or the device shuts down.
+  if (t.is_battery_voltage_valid() && t.battery_voltage < PMID_BOOST_MIN_BATTERY_V) {
+    if (!_pmid_boost_blocked_logged) {
+      AG_LOGW(TAG,
+              "PMID down and cell at %.2fV is below the boost threshold (%.1fV) - "
+              "leaving it off; PM readings stay invalid until charged",
+              static_cast<double>(t.battery_voltage),
+              static_cast<double>(PMID_BOOST_MIN_BATTERY_V));
+      _pmid_boost_blocked_logged = true;
+    }
+    return false;
+  }
+  _pmid_boost_blocked_logged = false;
+
   AG_LOGW(TAG, "PMID collapsed (vpmid=%u mV) -> re-kick boost", t.pmid_voltage_mv);
   _bms->set_pmid_enabled(false);
   RTOS::delay_ms(PMID_REKICK_OFF_MS);

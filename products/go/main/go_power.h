@@ -473,6 +473,11 @@ public:
   // --- PMID boost recovery ---
   static constexpr uint16_t PMID_HEALTHY_MIN_MV = 4500; ///< Floor below which PMID is collapsed
   static constexpr uint32_t PMID_REKICK_OFF_MS = 15;    ///< EN_OTG low dwell before re-assert
+  /// The charger will not start the boost below its own VBAT_OTG window
+  /// (2.9-3.1 V, SLUSEG4C §8.3.10.3.4), so re-kicking under this only costs
+  /// current and a log line.  Uses the top of the window, since the exact trip
+  /// point varies per part.
+  static constexpr float PMID_BOOST_MIN_BATTERY_V = 3.1f;
 
   // --- PM sensor recovery (V1 boost-kill power cycle) ---
   static constexpr uint32_t PM_RECOVER_OFF_MS = 50;     ///< SPS30 discharge after boost kill
@@ -494,6 +499,7 @@ private:
   // --- EDV trip-state members ---
   int _edv_low_count = 0;
   bool _edv_count_seeded = false;
+  bool _pmid_boost_blocked_logged = false;
 
   // --- Battery temperature state ---
 
