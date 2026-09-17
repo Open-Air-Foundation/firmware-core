@@ -106,6 +106,8 @@ constexpr size_t DF_BLOCK_SIZE = 32;
 constexpr uint16_t RAW_FLAG_DSG = (1u << 0);
 constexpr uint16_t RAW_FLAG_CHG = (1u << 3);
 constexpr uint16_t RAW_FLAG_FC = (1u << 9);
+constexpr uint16_t RAW_FLAG_CHG_SUS = (1u << 7);  ///< low byte bit 7
+constexpr uint16_t RAW_FLAG_CHG_INH = (1u << 11); ///< high byte bit 3
 
 constexpr uint16_t CONTROL_STATUS_SS = (1u << 13);            // TRM Table 4-3, high byte bit 5
 constexpr uint16_t SAFETY_STATUS_INV_PROT_CHKSUM = (1u << 7); // TRM Table 4-5, low byte bit 7
@@ -265,6 +267,12 @@ bool BQ27742::read_flags(uint16_t &out) {
   if (raw & RAW_FLAG_FC) {
     norm |= FgFlags::FC;
   }
+  if (raw & RAW_FLAG_CHG_SUS) {
+    norm |= FgFlags::CHG_SUS;
+  }
+  if (raw & RAW_FLAG_CHG_INH) {
+    norm |= FgFlags::CHG_INH;
+  }
   out = norm;
   return true;
 }
@@ -402,34 +410,6 @@ void BQ27742::_log_identity_diagnostics(uint16_t first_device_type) {
       ESP_LOGW(TAG, "  0x%02X %-18s read failed", c.code, c.name);
     }
   }
-
-  // --- Same DEVICE_TYPE read with the bus clocked at 100 kHz, in case the
-  // gauge misreads master-driven data bits at 400 kHz while its own reads
-  // (slave-driven) come through clean.
-  i2c_master_bus_rm_device(_dev);
-  _dev = nullptr;
-  i2c_device_config_t slow_cfg = {
-      .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-      .device_address = _config.address,
-      .scl_speed_hz = 100000,
-      .scl_wait_us = 20000,
-      .flags = {},
-  };
-  if (i2c_master_bus_add_device(_bus, &slow_cfg, &_dev) == ESP_OK) {
-    uint16_t slow = 0;
-    if (control_subcommand(CTRL_DEVICE_TYPE, slow)) {
-      ESP_LOGW(TAG, "  DEVICE_TYPE @100kHz = 0x%04X -> %s", slow,
-               slow == DEVICE_TYPE_BQ27742 ? "CORRECT at 100 kHz (bus speed issue)"
-                                           : "same failure");
-    } else {
-      ESP_LOGW(TAG, "  DEVICE_TYPE @100kHz read failed");
-    }
-  } else {
-    ESP_LOGW(TAG, "  could not re-add device at 100 kHz");
-  }
-
-  ESP_LOGW(TAG, "  I2C link to 0x%02X is WORKING (%d/%d reads returned data)", _config.address,
-           reads_ok, REPEATS);
 }
 
 bool BQ27742::control_subcommand(uint16_t subcmd, uint16_t &result) {

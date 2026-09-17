@@ -124,6 +124,12 @@ struct PowerSnapshot {
   /// Learning-only: Design Capacity as configured in the gauge, mAh.
   uint16_t fg_design_capacity_mah = 0;
 
+  /// True when the gauge is holding the CHG FET open on temperature
+  /// (Flags CHG_SUS or CHG_INH).  Charger status is rewritten away from
+  /// ChargeTerminationDone while this is set, because the charger reports a
+  /// gauge-blocked charge and a finished one identically.
+  bool charge_blocked_by_gauge = false;
+
   /// True when charging has been paused because the battery is full and
   /// external power is present.  Cleared when SOC drops below the resume
   /// threshold.

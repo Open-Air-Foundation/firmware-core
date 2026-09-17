@@ -290,6 +290,21 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
   }
 
   // -------------------------------------------------------------------------
+  // Gauge-blocked charging — the charger cannot tell it apart from "full"
+  // -------------------------------------------------------------------------
+  // Once Pack Configuration D enables CIFET/CSFET the gauge opens the CHG FET
+  // itself outside the JEITA window.  The charger only sees its current fall
+  // to zero and reports termination, which would otherwise surface as a full
+  // battery on the UI and over BLE while the pack is actually too cold or too
+  // hot to charge.  The gauge's own flags are the only thing that separates
+  // the two, so they decide what the rest of the firmware is told.
+  status.charge_blocked_by_gauge = (status.fg_flags & (FgFlags::CHG_SUS | FgFlags::CHG_INH)) != 0;
+  if (status.charge_blocked_by_gauge &&
+      status.charging_status == BmsChargingState::ChargeTerminationDone) {
+    status.charging_status = BmsChargingState::NotCharging;
+  }
+
+  // -------------------------------------------------------------------------
   // Full-charge pause — disable charging when battery is full + plugged
   // -------------------------------------------------------------------------
   const bool plugged = status_ok && bms_power_source_has_external_input(bms_status.power_source);

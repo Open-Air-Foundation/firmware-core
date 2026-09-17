@@ -2186,6 +2186,60 @@ TEST_CASE("poll_bms_fg_learning: edv_cutoff_reached mirrors over-discharge ship 
   CHECK(snap.discharge_target_reached); // v1: the EDV cutoff is the discharge end
 }
 
+TEST_CASE("poll_bms: a gauge blocking charge on temperature is not a finished charge",
+          "[PowerService][fg][charge]") {
+  MockBmsDevice mock_bms;
+  MockFuelGaugeDevice mock_fg;
+  PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  svc.set_fuel_gauge(&mock_fg);
+
+  // Charger sees its current fall to zero and calls that termination.
+  ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_)).RETURN(true);
+  ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+      .SIDE_EFFECT(*_1 = 50.0f)
+      .RETURN(true);
+  ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+      .SIDE_EFFECT(_1.charging_state = BmsChargingState::ChargeTerminationDone;
+                   _1.power_source = BmsPowerSource::UsbSdp)
+      .RETURN(true);
+  ALLOW_CALL(mock_bms, set_charge_enable(trompeloeil::_)).RETURN(true);
+  ALLOW_CALL(mock_fg, ready()).RETURN(true);
+  ALLOW_CALL(mock_fg, read_soc_percent(trompeloeil::_)).SIDE_EFFECT(_1 = 50).RETURN(true);
+  ALLOW_CALL(mock_fg, read_voltage_mv(trompeloeil::_)).SIDE_EFFECT(_1 = 3800).RETURN(true);
+  ALLOW_CALL(mock_fg, read_average_current_ma(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);
+  ALLOW_CALL(mock_fg, read_average_power_mw(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);
+  ALLOW_CALL(mock_fg, read_remaining_capacity_mah(trompeloeil::_))
+      .SIDE_EFFECT(_1 = 1300)
+      .RETURN(true);
+  ALLOW_CALL(mock_fg, read_full_charge_capacity_mah(trompeloeil::_))
+      .SIDE_EFFECT(_1 = 2600)
+      .RETURN(true);
+  ALLOW_CALL(mock_fg, read_internal_temperature_c(trompeloeil::_))
+      .SIDE_EFFECT(_1 = -5.0f)
+      .RETURN(true);
+
+  SECTION("charge suspended mid-charge") {
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = FgFlags::CHG_SUS).RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.charge_blocked_by_gauge);
+    CHECK(snap.charging_status == BmsChargingState::NotCharging);
+  }
+
+  SECTION("charge inhibited before it starts") {
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = FgFlags::CHG_INH).RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK(snap.charge_blocked_by_gauge);
+    CHECK(snap.charging_status == BmsChargingState::NotCharging);
+  }
+
+  SECTION("nothing blocking leaves a real termination alone") {
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = FgFlags::FC).RETURN(true);
+    const PowerSnapshot snap = svc.poll_bms();
+    CHECK_FALSE(snap.charge_blocked_by_gauge);
+    CHECK(snap.charging_status == BmsChargingState::ChargeTerminationDone);
+  }
+}
+
 TEST_CASE("poll_bms_fg_learning: a gauge with its own protector never asks for EDV ship mode",
           "[PowerService][fg][learning][edv]") {
   PowerService::Config cfg = DEFAULT_CONFIG;

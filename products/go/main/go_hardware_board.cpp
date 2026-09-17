@@ -487,6 +487,11 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
     return;
   }
   _chips.set(Chip::FuelGauge, true, "DEVICE_TYPE 0x0742");
+  // Every data-flash step below logs and continues, because failing one leaves
+  // TI's defaults, which are safer than the targets in every direction.  The
+  // chip report still has to say so, or a bench run reads PASS while the cell
+  // is on factory thresholds.
+  bool df_ok = true;
 
   uint16_t dc = 0;
   uint16_t fcc = 0;
@@ -510,6 +515,7 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
             current.sleep_current_ma);
     if (!_fuel_gauge_v2->write_cell_config(AGO_CELL_CONFIG_V2)) {
       AG_LOGW(TAG, "BQ27742 write_cell_config() failed — cell parameters not updated");
+      df_ok = false;
     }
   } else if (cfg_ok) {
     AG_LOGI(TAG, "BQ27742 cell config already correct — preserved");
@@ -532,6 +538,7 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
       AG_LOGI(TAG, "BQ27742 applying protection config");
       if (!_fuel_gauge_v2->write_protection_config(AGO_PROTECTION_CONFIG)) {
         AG_LOGW(TAG, "BQ27742 write_protection_config() failed — thresholds not updated");
+        df_ok = false;
       }
     } else {
       AG_LOGI(TAG, "BQ27742 protection config already correct — preserved");
@@ -559,7 +566,12 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
             AGO_CELL_CONFIG_V2.design_capacity_mah);
     if (!_fuel_gauge_v2->write_qmax_cell0(AGO_CELL_CONFIG_V2.design_capacity_mah)) {
       AG_LOGW(TAG, "BQ27742 write_qmax_cell0() failed — Qmax not seeded");
+      df_ok = false;
     }
+  }
+
+  if (!df_ok) {
+    _chips.set(Chip::FuelGauge, false, "data flash write failed");
   }
 
   uint8_t soc = 0;
@@ -629,6 +641,7 @@ void GoHardwareBoard::_apply_fuel_gauge_protector() {
   if (!_fuel_gauge_v2->write_protector_config(AGO_PROTECTOR_PACK_CONFIG_D,
                                               AGO_PROTECTOR_OV_CONFIG)) {
     AG_LOGE(TAG, "BQ27742 write_protector_config() failed — retried at next boot on USB");
+    _chips.set(Chip::FuelGauge, false, "protector write failed");
   }
 
   uint16_t safety = 0;

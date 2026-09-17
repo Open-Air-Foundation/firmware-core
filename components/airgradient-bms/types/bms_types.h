@@ -304,7 +304,8 @@ inline uint16_t fg_protector_checksum(uint8_t prot_oc_config, uint8_t prot_ov_co
 }
 
 // ---------------------------------------------------------------------------
-// FgFlags — BQ27427 Flags() register bit definitions (TRM SLUUCD5 §5.1)
+// FgFlags — part-neutral gauge flag set (BQ27427 Flags() layout plus the
+// BQ27742-G1 charge-block bits)
 // ---------------------------------------------------------------------------
 
 namespace FgFlags {
@@ -315,6 +316,11 @@ static constexpr uint16_t ITPOR = (1u << 5);    ///< Gauge POR / reset detected
 static constexpr uint16_t OCVTAKEN = (1u << 7); ///< OCV measurement taken
 static constexpr uint16_t CHG = (1u << 8);      ///< Charge condition
 static constexpr uint16_t FC = (1u << 9);       ///< Full Charge
+/// Gauge is blocking charge on temperature.  Only the BQ27742-G1 reports these;
+/// the BQ27427 has no equivalent and never sets them.  Bit positions are this
+/// neutral layout's own, not either gauge's.
+static constexpr uint16_t CHG_SUS = (1u << 10); ///< Charge suspended (was charging)
+static constexpr uint16_t CHG_INH = (1u << 11); ///< Charge inhibited (not yet charging)
 } // namespace FgFlags
 
 // ---------------------------------------------------------------------------
