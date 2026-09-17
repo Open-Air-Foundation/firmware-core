@@ -432,8 +432,17 @@ public:
   /// Fixed threshold — not a user-configurable setting.
   static constexpr float BATTERY_CRITICAL_PERCENT = 5.0f;
 
-  // --- EDV (over-discharge) thresholds — v1 only, see Config::fg_has_protector ---
+  // --- EDV (over-discharge) thresholds ---
+  //
+  // The firmware shuts the device down on its own so the user sees why and the
+  // storage layer gets to close.  A gauge that owns undervoltage is the
+  // backstop underneath that, not the normal way the device stops: letting it
+  // be the one to cut a running system means no warning, and its recovery
+  // threshold then re-closes the FET once the unloaded cell springs back,
+  // which cycles.
   static constexpr float EDV_SHIP_THRESHOLD_V = 2.9f;
+  /// Used where the gauge has its own undervoltage trip underneath this one.
+  static constexpr float EDV_SHIP_THRESHOLD_PROTECTED_V = 2.8f;
   static constexpr int EDV_SHIP_DEBOUNCE_SAMPLES = 3;
 
   /// End of the discharge half of a learning cycle on a gauge that owns

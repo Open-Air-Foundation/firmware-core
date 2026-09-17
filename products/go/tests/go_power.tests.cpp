@@ -2240,28 +2240,42 @@ TEST_CASE("poll_bms: a gauge blocking charge on temperature is not a finished ch
   }
 }
 
-TEST_CASE("poll_bms_fg_learning: a gauge with its own protector never asks for EDV ship mode",
+TEST_CASE("poll_bms_fg_learning: a protector gauge ships at its own lower threshold",
           "[PowerService][fg][learning][edv]") {
   PowerService::Config cfg = DEFAULT_CONFIG;
   cfg.fg_has_protector = true;
   MockBmsDevice mock_bms;
   PowerService svc(&mock_bms, test_gpio_hal, cfg);
 
-  ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
-      .SIDE_EFFECT(_1.battery_voltage = 2.8f)
-      .RETURN(true);
   ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_)).SIDE_EFFECT(*_1 = 2.0f).RETURN(true);
   ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
       .SIDE_EFFECT(_1.charging_state = BmsChargingState::NotCharging;
                    _1.power_source = BmsPowerSource::None)
       .RETURN(true);
 
-  PowerSnapshot snap;
-  for (int i = 0; i < PowerService::EDV_SHIP_DEBOUNCE_SAMPLES; ++i) {
-    snap = svc.poll_bms_fg_learning();
+  SECTION("above the protected threshold, below the unprotected one, nothing happens") {
+    // 2.85 V would have tripped a v1 board; a protector gauge waits.
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 2.85f)
+        .RETURN(true);
+    PowerSnapshot snap;
+    for (int i = 0; i < PowerService::EDV_SHIP_DEBOUNCE_SAMPLES; ++i) {
+      snap = svc.poll_bms_fg_learning();
+    }
+    CHECK(snap.ship_mode_request == ShipModeRequest::None);
   }
-  CHECK(snap.ship_mode_request == ShipModeRequest::None);
-  CHECK_FALSE(snap.edv_cutoff_reached);
+
+  SECTION("below the protected threshold it ships, so the gauge never has to") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 2.75f)
+        .RETURN(true);
+    PowerSnapshot snap;
+    for (int i = 0; i < PowerService::EDV_SHIP_DEBOUNCE_SAMPLES; ++i) {
+      snap = svc.poll_bms_fg_learning();
+    }
+    CHECK(snap.ship_mode_request == ShipModeRequest::OverDischarge);
+    CHECK(snap.edv_cutoff_reached);
+  }
 }
 
 TEST_CASE("poll_bms_fg_learning: with a protector the discharge end is the gauge voltage",

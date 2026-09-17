@@ -217,29 +217,28 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
   }
 
   // -------------------------------------------------------------------------
-  // EDV (over-discharge) trip — v1 only, gated on explicit "on-battery" status.
-  // Where the gauge has its own protector it opens the DSG FET at its own UV
-  // threshold, so the cell is left to drain to that point instead of cutting
-  // system power from here.
+  // EDV (over-discharge) trip — gated on explicit "on-battery" status.
   // -------------------------------------------------------------------------
-  if (_config.fg_has_protector) {
-    _edv_low_count = 0;
+  // Both variants shut down from here.  A gauge with its own undervoltage trip
+  // only changes where this sits: the threshold drops so the firmware still
+  // acts first, and the gauge stays the backstop for the case where it does
+  // not.
+  const float edv_threshold =
+      _config.fg_has_protector ? EDV_SHIP_THRESHOLD_PROTECTED_V : EDV_SHIP_THRESHOLD_V;
+  const bool on_battery = status_ok && (bms_status.power_source == BmsPowerSource::None ||
+                                        bms_status.power_source == BmsPowerSource::OtgMode);
+
+  if (on_battery && telemetry_ok && telemetry.is_battery_voltage_valid() &&
+      telemetry.battery_voltage < edv_threshold) {
+    ++_edv_low_count;
   } else {
-    const bool on_battery = status_ok && (bms_status.power_source == BmsPowerSource::None ||
-                                          bms_status.power_source == BmsPowerSource::OtgMode);
+    _edv_low_count = 0;
+  }
 
-    if (on_battery && telemetry_ok && telemetry.is_battery_voltage_valid() &&
-        telemetry.battery_voltage < EDV_SHIP_THRESHOLD_V) {
-      ++_edv_low_count;
-    } else {
-      _edv_low_count = 0;
-    }
-
-    if (_edv_low_count >= EDV_SHIP_DEBOUNCE_SAMPLES) {
-      AG_LOGW(TAG, "EDV trip: cell %.2fV < %.1fV for %d polls -> requesting ship mode",
-              telemetry.battery_voltage, EDV_SHIP_THRESHOLD_V, _edv_low_count);
-      status.ship_mode_request = ShipModeRequest::OverDischarge;
-    }
+  if (_edv_low_count >= EDV_SHIP_DEBOUNCE_SAMPLES) {
+    AG_LOGW(TAG, "EDV trip: cell %.2fV < %.2fV for %d polls -> requesting ship mode",
+            telemetry.battery_voltage, edv_threshold, _edv_low_count);
+    status.ship_mode_request = ShipModeRequest::OverDischarge;
   }
 
   // -------------------------------------------------------------------------

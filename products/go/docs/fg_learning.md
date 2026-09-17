@@ -441,15 +441,16 @@ two gauges is resolved below them, either in the driver or in `PowerService`.
 | Qmax Cell 0 units | Q14 fraction of Design Capacity | mAh |
 | Seeding Qmax | left to the gauge | board writes Design Capacity while Update Status is 0 |
 | End of the discharge half | firmware EDV cutoff, which also ships the device | cell reaches `FG_LEARNING_DISCHARGE_END_MV` while the system stays up |
-| Undervoltage cutoff | firmware, `EDV_SHIP_THRESHOLD_V` | the gauge's own UV Prot, see [`bq27742_capability.md`](bq27742_capability.md) |
+| Undervoltage cutoff | firmware at `EDV_SHIP_THRESHOLD_V` | firmware at `EDV_SHIP_THRESHOLD_PROTECTED_V`, with the gauge's UV Prot as backstop, see [`bq27742_capability.md`](bq27742_capability.md) |
 
 Two consequences are worth stating plainly.
 
 `PowerSnapshot::discharge_target_reached` is what the FSM reads, and
-`PowerService` derives it per variant from `Config::fg_has_protector`. The older
-`edv_cutoff_reached` still exists but is now only the v1 ship-mode trigger for
-`FgLearningRunner::handle_edv_ship()`. A gauge with its own protector never sets
-it, so nothing shuts the device off mid-cycle.
+`PowerService` derives it per variant from `Config::fg_has_protector`. `edv_cutoff_reached` still exists as the ship-mode trigger for
+`FgLearningRunner::handle_edv_ship()`, and both variants can set it. On rev 2.0
+it sits at 2.8 V, below the 3.0 V floor the discharge half stops at, so a normal
+run reaches CycleDone first and the ship path is only the fallback for a run that
+somehow keeps draining.
 
 The rev 2.0 discharge therefore ends 300 mV above the gauge's undervoltage trip
 rather than at it. That margin is what lets the run persist its stage and move

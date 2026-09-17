@@ -207,9 +207,9 @@ itself on these; the hardware protector below is the second, coarser level.
 | 0 | OV Prot Threshold | I2 | 4200 | 4600 | 4390 | mV | 4250 |
 | 2 | OV Prot Delay | U1 | 0 | 5 | 1 | s | — |
 | 3 | OV Prot Recovery | I2 | 4100 | 4500 | 4290 | mV | 4150 |
-| 5 | UV Prot Threshold | I2 | 2300 | 3100 | 2800 | mV | 2700 |
+| 5 | UV Prot Threshold | I2 | 2300 | 3100 | 2800 | mV | 2600 |
 | 7 | UV Prot Delay | U1 | 0 | 5 | 1 | s | — |
-| 8 | UV Prot Recovery | I2 | 2400 | 3200 | 2900 | mV | 2900 |
+| 8 | UV Prot Recovery | I2 | 2400 | 3200 | 2900 | mV | 3100 |
 | 10 | Body Diode Threshold | I2 | 0 | 100 | 60 | mA | — |
 | 12 | OT Chg | I2 | 0 | 1200 | 550 | 0.1 °C | 450 |
 | 14 | OT Chg Time | U1 | 0 | 60 | 5 | s | — |
@@ -218,11 +218,24 @@ itself on these; the hardware protector below is the second, coarser level.
 | 19 | OT Dsg Time | U1 | 0 | 60 | 5 | s | — |
 | 20 | OT Dsg Recovery | I2 | 0 | 1200 | 550 | 0.1 °C | 550 |
 
-UV Prot is set to 2700 mV rather than the cell's 2500 mV cut-off so that the
-firmware layer trips well above the fixed hardware UVP: a flat battery is then
-a `SafetyStatus()` event, not a lifetime AFE fault, and pulse sag has headroom.
-The margin is 262 mV on a factory gauge (hardware UVP 2438 mV) and 360 mV once
-OVP code 000 moves the pair to 2340 mV, which is the shipped configuration.
+UV Prot is not where the device stops. PowerService ships the unit at 2.8 V so
+the user gets a reason on screen and storage closes cleanly, and the gauge's
+trip is the backstop for when that does not happen. 2600 mV keeps 260 mV over
+the hardware UVP (2340 mV once OVP code 000 is programmed) while leaving 200 mV
+under the firmware's own trip, so the gauge cannot cut the pack out from under a
+shutdown already in progress. It also stays 100 mV above the cell's 2500 mV
+end-of-discharge rating.
+
+Recovery sits far above the trip on purpose. This layer re-closes the DSG FET on
+`Voltage()` alone, with no charger required:
+
+> "The FET is re-enabled and the flag cleared after Voltage() rises back above
+> UV Prot Recovery." (TRM p.67 §5.3.1.2)
+
+A narrow band therefore oscillates: the trip fires at the loaded voltage, the
+unloaded cell springs back past recovery, the FET closes, the load returns and
+it trips again. Each cycle is a brownout of the host. 3100 mV is past where an
+empty cell rests, which makes the trip a latch until the pack is charged.
 
 ### Subclass 39 JEITA
 
@@ -408,10 +421,13 @@ backstop ("two levels of safety", DS p.17 §7.3.4.1). Firmware cannot force a
 FET closed while the hardware protector holds it open (TRM p.22). On the
 board:
 
+The host shuts down before any of this: PowerService requests ship mode at
+2.8 V on a board whose gauge has a protector, 2.9 V on one whose gauge does not.
+
 | Direction | Firmware trips at | Hardware trips at |
 |---|---|---|
 | Overvoltage | 4250 mV after 1 s | 4450 mV after 1 s (4275 mV once OVP code 000 is written) |
-| Undervoltage | 2700 mV after 1 s | 2438 mV after 31.25 ms (2340 mV once OVP code 000 is written) |
+| Undervoltage | 2600 mV after 1 s | 2438 mV after 31.25 ms (2340 mV once OVP code 000 is written) |
 | Over-temperature charge | 45.0 °C after 5 s | none (temperature is firmware-only) |
 
 ### Status Registers

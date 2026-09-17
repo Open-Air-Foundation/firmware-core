@@ -91,17 +91,26 @@ static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
 // Firmware-layer protection thresholds for the same cell.  TI's factory
 // defaults suit a generic cell that tolerates 4.35 V and 55 °C charging; the
 // Cowon INR18490NP is a 4.20 ± 0.05 V part rated 0–45 °C charge, −20–60 °C
-// discharge, 2.50 V end-of-discharge, so OV and OT Chg come down to sit inside
-// those limits.  UV stays 200 mV above the cell's loaded cut-off to absorb
-// pulse sag and stay well above the hardware UVP (2.438 V on a factory gauge,
-// 2.340 V once the protector below is programmed), so the firmware
-// layer always trips first and a flat battery is recorded in SafetyStatus
-// rather than the lifetime protector-fault log.
+// discharge, 2.50 V end-of-discharge (datasheet 4.7), so OV and OT Chg come
+// down to sit inside those limits.
+//
+// UV sits between two things.  Above it, PowerService ships the device at
+// 2.8 V, and the poll that decides is 30 s with a three-sample debounce, so
+// the cell can fall a good way further before the screen is even drawn; below
+// it, the hardware UVP is 2.340 V once OVP code 000 is programmed.  2.6 V
+// keeps the same 260 mV clearance over the hardware trip the original 2.7 V
+// had over 2.438 V, while leaving 200 mV under the firmware's own trip so the
+// gauge does not cut the pack out from under a shutdown in progress.
+//
+// Recovery is deliberately far above the trip.  The firmware layer re-closes
+// the DSG FET on Voltage() alone (TRM §5.3.1.2), so a narrow band lets an
+// unloaded cell spring back, re-close, sag, and trip again.  3.1 V is past
+// where an empty cell rests, which turns the trip into a latch until charged.
 static constexpr FgProtectionConfig AGO_PROTECTION_CONFIG = {
     .ov_prot_threshold_mv = 4250, // TI default 4390
     .ov_prot_recovery_mv = 4150,  // TI default 4290
-    .uv_prot_threshold_mv = 2700, // TI default 2800
-    .uv_prot_recovery_mv = 2900,  // TI default, kept — 200 mV hysteresis
+    .uv_prot_threshold_mv = 2600, // TI default 2800
+    .uv_prot_recovery_mv = 3100,  // TI default 2900 — 500 mV, anti-chatter
     .ot_chg_dc = 450,             // TI default 550
     .ot_chg_recovery_dc = 400,    // TI default 500
     .ot_dsg_dc = 600,             // TI default, already matches the cell
