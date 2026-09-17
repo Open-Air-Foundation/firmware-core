@@ -216,7 +216,7 @@ back, so every boot path inherits it without doing anything.
 
 The debounce itself is shorter where the gauge has its own trip underneath:
 `EDV_SHIP_DEBOUNCE_SAMPLES_PROTECTED` is two readings against three. A minute
-separates them on the watch interval, and a cell at 2.9 V is on the steep part
+separates them on the watch interval, and a cell at 2.85 V is on the steep part
 of its curve, so a third reading spends margin the shutdown sequence needs.
 
 Because the count now survives sleep, the first poll of a boot can be the one

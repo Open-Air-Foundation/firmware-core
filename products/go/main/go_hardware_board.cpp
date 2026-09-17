@@ -95,12 +95,14 @@ static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
 // down to sit inside those limits.
 //
 // UV sits between two things.  Above it, PowerService ships the device at
-// 2.9 V after two readings a minute apart, so the cell falls a little further
-// while the shutdown draws its screen; below it, the hardware UVP is 2.340 V
-// once OVP code 000 is programmed.  2.7 V leaves 200 mV under the firmware's
-// own trip, enough for that fall plus load sag so the gauge does not cut the
-// pack out from under a shutdown in progress, and keeps 200 mV over the cell's
-// rated 2.50 V end-of-discharge.
+// 2.85 V, confirmed on two readings and acted on by the first poll of the boot
+// it hands to; below it, the hardware UVP is 2.340 V once OVP code 000 is
+// programmed.  2.7 V leaves 150 mV under the firmware's own trip, which is the
+// few seconds of discharge between that decision and the screen being drawn —
+// the reading that triggers it is already a loaded one, so there is no sag step
+// to absorb on top.  It also keeps 200 mV over the cell's rated 2.50 V
+// end-of-discharge, the widest margin of the pairings tried, which is why it
+// stays here rather than following the trip down.
 //
 // Recovery is deliberately far above the trip.  The firmware layer re-closes
 // the DSG FET on Voltage() alone (TRM §5.3.1.2), so a narrow band lets an

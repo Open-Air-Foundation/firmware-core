@@ -448,7 +448,7 @@ Two consequences are worth stating plainly.
 `PowerSnapshot::discharge_target_reached` is what the FSM reads, and
 `PowerService` derives it per variant from `Config::fg_has_protector`. `edv_cutoff_reached` still exists as the ship-mode trigger for
 `FgLearningRunner::handle_edv_ship()`, and both variants can set it. On rev 2.0
-it sits at 2.9 V, below the 3.0 V floor the discharge half stops at, so a normal
+it sits at 2.85 V, below the 3.0 V floor the discharge half stops at, so a normal
 run reaches CycleDone first and the ship path is only the fallback for a run that
 somehow keeps draining.
 

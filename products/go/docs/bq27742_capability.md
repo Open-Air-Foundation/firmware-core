@@ -218,14 +218,14 @@ itself on these; the hardware protector below is the second, coarser level.
 | 19 | OT Dsg Time | U1 | 0 | 60 | 5 | s | — |
 | 20 | OT Dsg Recovery | I2 | 0 | 1200 | 550 | 0.1 °C | 550 |
 
-UV Prot is not where the device stops. PowerService ships the unit at 2.9 V so
+UV Prot is not where the device stops. PowerService ships the unit at 2.85 V so
 the user gets a reason on screen and storage closes cleanly, and the gauge's
-trip is the backstop for when that does not happen. 2700 mV leaves 200 mV under
-the firmware's own trip, which covers the cell's fall between the two readings
-that confirm the shutdown plus the load sag while the screen is drawn, so the
-gauge cannot cut the pack out from under a shutdown already in progress. It also
-keeps 200 mV over the cell's 2500 mV end-of-discharge rating and 360 mV over the
-hardware UVP (2340 mV once OVP code 000 is programmed).
+trip is the backstop for when that does not happen. 2700 mV leaves 150 mV under
+the firmware's own trip, which covers the seconds of discharge between that
+decision and the screen being drawn; the reading that triggers it is already a
+loaded one, so there is no sag step to absorb on top. It also keeps 200 mV over
+the cell's 2500 mV end-of-discharge rating and 360 mV over the hardware UVP
+(2340 mV once OVP code 000 is programmed).
 
 Recovery sits far above the trip on purpose. This layer re-closes the DSG FET on
 `Voltage()` alone, with no charger required:
@@ -423,9 +423,9 @@ FET closed while the hardware protector holds it open (TRM p.22). On the
 board:
 
 The host shuts down before any of this: PowerService requests ship mode at
-2.9 V. A board whose gauge has a protector may be given a lower threshold, since
-the gauge catches whatever the firmware misses; today both use 2.9 V and differ
-only in how many readings confirm it.
+2.85 V on a board whose gauge has a protector and 2.9 V on one whose gauge does
+not. The lower figure is affordable precisely because the gauge catches whatever
+the firmware misses.
 
 | Direction | Firmware trips at | Hardware trips at |
 |---|---|---|
