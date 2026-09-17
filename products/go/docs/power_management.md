@@ -144,22 +144,49 @@ threshold:
 
 ## Sleep Type Selection
 
-`decide_sleep(settings, lock_state, mode, awake_ms)` is pure logic (no
-platform calls, testable on host). Returns `SleepDecision {type, duration_ms}`:
+`decide_sleep(settings, lock_state, mode, awake_ms, low_battery)` is pure logic
+(no platform calls, testable on host). Returns
+`SleepDecision {type, duration_ms}`:
 
 ```text
 Not Offline mode → {None, 0}   (only Offline mode sleeps)
 Unlocked         → {None, 0}   (never sleep while user is active)
 
-sleep_ms = (measure_interval_seconds * 1000) - awake_ms   (clamped to 0)
+interval_ms = low_battery ? LOW_BATTERY_WATCH_INTERVAL_MS
+                          : measure_interval_seconds * 1000
+sleep_ms    = interval_ms - awake_ms                        (clamped to 0)
 
 sleep_ms >= deep_sleep_threshold_ms → {Deep, sleep_ms}
 sleep_ms <  deep_sleep_threshold_ms → {None, 0}   (stay awake)
 ```
 
-The single `measure_interval_seconds` (always ≥ 1) determines the sleep
-duration directly. `awake_ms` is subtracted so the total cycle (awake +
-sleep) matches the configured interval.
+Normally `measure_interval_seconds` (always ≥ 1) determines the duration
+directly, with `awake_ms` subtracted so the total cycle matches the configured
+interval.
+
+## Low-Battery Watch
+
+A cell already reading under the ship threshold is no longer on a measurement
+schedule. The only open question is whether it stays there, so the device
+drops to `LOW_BATTERY_WATCH_INTERVAL_MS` (60 s) and each wake answers just that
+question.
+
+Two pieces make it work.
+
+`PowerSnapshot`'s debounce counter lives in `RtcAppState::low_battery_polls`,
+not only in `PowerService`. Deep sleep is a full reboot, so a counter held only
+in the service would restart at zero every cycle and `EDV_SHIP_DEBOUNCE_SAMPLES`
+would never be reached on a device that sleeps between measurements.
+`poll_bms()` seeds itself from RTC on its first call and mirrors the new value
+back, so every boot path inherits it without doing anything.
+
+`select_boot_path()` routes a timer wake with a non-zero count to
+`BootPath::LowBatteryWatch`, ahead of the fast path. That path brings up the
+charger and gauge, calls `poll_bms()` once and goes straight back to sleep: no
+sensor warm-up, no display, no radios. When the count reaches the debounce, or
+a charger clears it back to zero, it hands over to the interactive path, which
+already owns the shutdown screen and the ship sequence. A button wake still
+wins, so the operator can always get a screen.
 
 ## Sleep Entry
 

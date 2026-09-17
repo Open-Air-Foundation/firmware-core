@@ -308,6 +308,10 @@ public:
   /// fuel gauge is attached.
   bool set_update_status_learning(bool enable);
 
+  /// Consecutive readings under the ship threshold.  Mirrored into
+  /// RtcAppState by poll_bms() so it survives deep sleep.
+  int edv_low_count() const { return _edv_low_count; }
+
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   void shutdown();
 
@@ -362,8 +366,11 @@ public:
   /// @param lock_state Current lock state.
   /// @param mode       Current operating mode.
   /// @param awake_ms   Milliseconds the device has been awake this cycle.
+  /// @param low_battery  A reading has already come in under the ship
+  ///                     threshold, so re-check the cell on the watch interval
+  ///                     instead of the measurement interval.
   SleepDecision decide_sleep(const GoSettings &settings, LockState lock_state, OperatingMode mode,
-                             uint32_t awake_ms) const;
+                             uint32_t awake_ms, bool low_battery = false) const;
 
   /// Return true when the given sleep duration is short enough that keeping
   /// the PM sensor powered (GPIO held) across deep sleep is beneficial.
@@ -444,6 +451,10 @@ public:
   /// Used where the gauge has its own undervoltage trip underneath this one.
   static constexpr float EDV_SHIP_THRESHOLD_PROTECTED_V = 2.8f;
   static constexpr int EDV_SHIP_DEBOUNCE_SAMPLES = 3;
+  /// Sleep length once a reading comes in under the threshold.  The device
+  /// stops following the measurement interval and just re-checks the cell, so
+  /// the debounce completes in minutes instead of never.
+  static constexpr uint32_t LOW_BATTERY_WATCH_INTERVAL_MS = 60000;
 
   /// End of the discharge half of a learning cycle on a gauge that owns
   /// undervoltage itself (v2).  Set at the gauge's Terminate Voltage, which
@@ -482,6 +493,7 @@ private:
 
   // --- EDV trip-state members ---
   int _edv_low_count = 0;
+  bool _edv_count_seeded = false;
 
   // --- Battery temperature state ---
 

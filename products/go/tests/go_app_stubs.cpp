@@ -508,7 +508,8 @@ RtcAppState PowerService::load_state() const { return test_spy::rtc_state; }
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*settings*/,
                                                        LockState /*lock_state*/,
                                                        OperatingMode /*mode*/,
-                                                       uint32_t /*awake_ms*/) const {
+                                                       uint32_t /*awake_ms*/,
+                                                       bool /*low_battery*/) const {
   return test_spy::sleep_decision_to_return;
 }
 

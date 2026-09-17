@@ -176,6 +176,9 @@ void GoApp::run() {
   BootPath path = select_boot_path(cause, state);
 
   switch (path) {
+  case BootPath::LowBatteryWatch:
+    run_low_battery_watch_path(state);
+    break; // never reached
   case BootPath::FastPath:
     run_fast_path(state);
     break; // never reached
@@ -187,6 +190,52 @@ void GoApp::run() {
     run_interactive(cause, {});
     break; // never reached
   }
+}
+
+// ===========================================================================
+// Low-battery watch path
+// ===========================================================================
+
+// Reached only from a timer wake that already had a reading under the ship
+// threshold.  Brings up the charger and the gauge, reads the cell, and goes
+// straight back to sleep — no sensors, no display, no radios — until the
+// debounce either confirms the cell is done or a charger clears it.
+void GoApp::run_low_battery_watch_path(const RtcAppState &state) {
+  AG_LOGI(TAG, "run_low_battery_watch_path: %u prior low reading(s)",
+          static_cast<unsigned>(state.low_battery_polls));
+#ifndef TEST_HOST
+  _board.init_core();
+  _board.init_fuel_gauge();
+  if (!init_bms_with_retry()) {
+    AG_LOGE(TAG, "BMS unavailable on the low-battery watch; restarting");
+    _board.restart();
+    return;
+  }
+
+  // poll_bms() seeds its counter from RTC and writes the new one back, so the
+  // decision here is only what to do with the verdict.
+  const PowerSnapshot snap = _board.power().poll_bms();
+  AG_LOGI(TAG, "low-battery watch: vbat=%.2fV polls=%d ship=%d",
+          static_cast<double>(snap.battery_voltage), _board.power().edv_low_count(),
+          static_cast<int>(snap.ship_mode_request));
+
+  // Confirmed, or a charger has cleared it: hand to the normal path, which
+  // owns the shutdown screen and the ship sequence in one tested place.
+  if (snap.ship_mode_request != ShipModeRequest::None || _board.power().edv_low_count() == 0) {
+    run_interactive(WakeCause::Timer, {}); // never returns
+    return;
+  }
+
+  RtcAppState next = state;
+  next.low_battery_polls = static_cast<uint8_t>(_board.power().edv_low_count());
+  _board.power().save_state(next);
+  AG_LOGI(TAG, "low-battery watch: re-checking in %lu ms",
+          static_cast<unsigned long>(PowerService::LOW_BATTERY_WATCH_INTERVAL_MS));
+  _board.power().enter_sleep(PowerService::LOW_BATTERY_WATCH_INTERVAL_MS);
+  // Never returns — CPU reboots on wake.
+#else
+  (void)state;
+#endif
 }
 
 // ===========================================================================
@@ -928,6 +977,12 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
 // ===========================================================================
 
 BootPath select_boot_path(WakeCause cause, const RtcAppState &state) {
+  // A cell already under the ship threshold outranks the measurement schedule:
+  // the only question left is whether it has stayed there, and answering it
+  // costs one charger read instead of a full sensor cycle.
+  if (cause == WakeCause::Timer && state.low_battery_polls > 0) {
+    return BootPath::LowBatteryWatch;
+  }
   if (cause == WakeCause::Timer) {
     if (PowerService::is_fast_path_wake(cause, state)) {
       return BootPath::FastPath;

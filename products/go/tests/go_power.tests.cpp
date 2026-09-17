@@ -406,6 +406,63 @@ TEST_CASE("poll_status: charger status pass-through", "[PowerService][status]") 
 // TEST CASE 4 — evaluate_sleep
 // ============================================================================
 
+TEST_CASE("decide_sleep: a low cell is re-checked on the watch interval",
+          "[PowerService][sleep][edv]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  GoSettings settings{};
+  settings.measure_interval_seconds = 600; // 10 min
+
+  const auto normal =
+      svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 0, false);
+  const auto low = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 0, true);
+
+  CHECK(normal.type == PowerService::SleepType::Deep);
+  CHECK(normal.duration_ms == 600000);
+  CHECK(low.type == PowerService::SleepType::Deep);
+  CHECK(low.duration_ms == PowerService::LOW_BATTERY_WATCH_INTERVAL_MS);
+
+  SECTION("an unlocked device still does not sleep") {
+    CHECK(svc.decide_sleep(settings, LockState::Unlocked, OperatingMode::Offline, 0, true).type ==
+          PowerService::SleepType::None);
+  }
+}
+
+TEST_CASE("poll_bms: the low-battery counter survives a rebuilt PowerService",
+          "[PowerService][edv]") {
+  MockBmsDevice mock_bms;
+  {
+    PowerService first(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+    first.save_state(RtcAppState{});
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 2.5f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_))
+        .SIDE_EFFECT(*_1 = 1.0f)
+        .RETURN(true);
+    ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+        .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+        .RETURN(true);
+    first.poll_bms();
+    CHECK(first.edv_low_count() == 1);
+    CHECK(first.load_state().low_battery_polls == 1);
+  }
+
+  // Deep sleep reboots the device; a fresh service must pick the count back up
+  // instead of starting over, or the debounce never completes.
+  PowerService second(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+      .SIDE_EFFECT(_1.battery_voltage = 2.5f)
+      .RETURN(true);
+  ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_)).SIDE_EFFECT(*_1 = 1.0f).RETURN(true);
+  ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+      .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+      .RETURN(true);
+  CHECK(second.poll_bms().ship_mode_request == ShipModeRequest::None);
+  CHECK(second.edv_low_count() == 2);
+  CHECK(second.poll_bms().ship_mode_request == ShipModeRequest::OverDischarge);
+}
+
 TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
   MockBmsDevice mock_bms;
 
@@ -1107,6 +1164,7 @@ TEST_CASE("recover_pm_sensor: EN_PM off -> boost off -> boost on -> EN_PM on",
 TEST_CASE("poll_bms: EDV over-discharge trip", "[PowerService][edv]") {
   MockBmsDevice mock_bms;
   PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  svc.save_state(RtcAppState{}); // the low-battery counter persists in RTC
 
   SECTION("1 sample below 2.9V on battery: no request") {
     POLL_BMS_CYCLE(mock_bms, 2.8f, BmsPowerSource::None);
@@ -2166,6 +2224,7 @@ TEST_CASE("poll_bms_fg_learning: edv_cutoff_reached mirrors over-discharge ship 
           "[PowerService][fg][learning][edv]") {
   MockBmsDevice mock_bms;
   PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  svc.save_state(RtcAppState{});
 
   // On battery, below the EDV threshold for the full debounce window.
   ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
@@ -2246,6 +2305,7 @@ TEST_CASE("poll_bms_fg_learning: a protector gauge ships at its own lower thresh
   cfg.fg_has_protector = true;
   MockBmsDevice mock_bms;
   PowerService svc(&mock_bms, test_gpio_hal, cfg);
+  svc.save_state(RtcAppState{});
 
   ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_)).SIDE_EFFECT(*_1 = 2.0f).RETURN(true);
   ALLOW_CALL(mock_bms, read_status(trompeloeil::_))

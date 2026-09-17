@@ -62,6 +62,11 @@ struct RtcAppState {
   bool tracking_active = false;
   uint32_t tracking_session_id = 0; ///< 5-digit session ID; 0 = no active session
   bool sensors_warm = false;        ///< Sensors kept powered during last deep sleep
+  /// Consecutive battery readings below the ship threshold.  Deep sleep is a
+  /// full reboot, so a counter living in PowerService alone would restart at
+  /// zero every cycle and the shutdown would never be reached on a device that
+  /// sleeps between measurements.
+  uint8_t low_battery_polls = 0;
 };
 
 // --- Forward declarations for BootHandoff pointer members ---

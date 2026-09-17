@@ -3075,7 +3075,8 @@ void Orchestrator::try_enter_sleep() {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   uint32_t awake_ms = now - _last_measurement_ms;
 
-  auto decision = _svc.power_service.decide_sleep(_settings, _lock_state, _mode, awake_ms);
+  auto decision = _svc.power_service.decide_sleep(_settings, _lock_state, _mode, awake_ms,
+                                                  _svc.power_service.edv_low_count() > 0);
 
   if (decision.type == PowerService::SleepType::None) {
     return;
@@ -3189,5 +3190,7 @@ RtcAppState Orchestrator::snapshot_state() const {
       .gps_enabled = _gps_enabled,
       .tracking_active = _tracking_active,
       .tracking_session_id = _tracking_session_id,
+      .sensors_warm = false,
+      .low_battery_polls = static_cast<uint8_t>(_svc.power_service.edv_low_count()),
   };
 }

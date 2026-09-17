@@ -17,6 +17,7 @@ public:
 
 private:
   // --- Boot paths ---
+  void run_low_battery_watch_path(const RtcAppState &state);
   void run_fast_path(const RtcAppState &state);
   void run_button_wake_path(const RtcAppState &state);
   void run_interactive(WakeCause cause, BootHandoff handoff);
@@ -55,7 +56,7 @@ private:
 // Boot path selection
 // ---------------------------------------------------------------------------
 
-enum class BootPath { FastPath, ButtonWake, Interactive };
+enum class BootPath { LowBatteryWatch, FastPath, ButtonWake, Interactive };
 
 BootPath select_boot_path(WakeCause cause, const RtcAppState &state);
 

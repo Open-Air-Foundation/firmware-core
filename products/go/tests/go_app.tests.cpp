@@ -442,6 +442,21 @@ private:
 // Tests: select_boot_path
 // ============================================================================
 
+TEST_CASE("select_boot_path: a low cell outranks the measurement schedule") {
+  RtcAppState state{};
+  state.lock_state = LockState::Locked;
+  state.low_battery_polls = 1;
+  CHECK(select_boot_path(WakeCause::Timer, state) == BootPath::LowBatteryWatch);
+}
+
+TEST_CASE("select_boot_path: a button press still wins over the low-battery watch") {
+  // The operator gets their screen; the watch resumes on the next timer wake.
+  RtcAppState state{};
+  state.mode = OperatingMode::Offline;
+  state.low_battery_polls = 2;
+  CHECK(select_boot_path(WakeCause::Button, state) == BootPath::ButtonWake);
+}
+
 TEST_CASE("select_boot_path: Timer + Locked -> FastPath") {
   RtcAppState state{};
   state.lock_state = LockState::Locked;

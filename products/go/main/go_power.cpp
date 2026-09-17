@@ -228,6 +228,11 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
   const bool on_battery = status_ok && (bms_status.power_source == BmsPowerSource::None ||
                                         bms_status.power_source == BmsPowerSource::OtgMode);
 
+  if (!_edv_count_seeded) {
+    _edv_low_count = load_rtc_app_state().low_battery_polls;
+    _edv_count_seeded = true;
+  }
+
   if (on_battery && telemetry_ok && telemetry.is_battery_voltage_valid() &&
       telemetry.battery_voltage < edv_threshold) {
     ++_edv_low_count;
@@ -239,6 +244,14 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
     AG_LOGW(TAG, "EDV trip: cell %.2fV < %.2fV for %d polls -> requesting ship mode",
             telemetry.battery_voltage, edv_threshold, _edv_low_count);
     status.ship_mode_request = ShipModeRequest::OverDischarge;
+  }
+
+  // Deep sleep reboots the device, so the count has to live in RTC memory or
+  // it restarts at zero every cycle and never reaches the debounce.
+  RtcAppState rtc = load_rtc_app_state();
+  if (rtc.low_battery_polls != _edv_low_count) {
+    rtc.low_battery_polls = static_cast<uint8_t>(_edv_low_count);
+    save_state(rtc);
   }
 
   // -------------------------------------------------------------------------
@@ -623,7 +636,7 @@ RtcAppState PowerService::load_state() const {
 
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &settings,
                                                        LockState lock_state, OperatingMode mode,
-                                                       uint32_t awake_ms) const {
+                                                       uint32_t awake_ms, bool low_battery) const {
   // Only Offline mode enters sleep; Portable and Stationary stay awake.
   if (mode != OperatingMode::Offline) {
     return {SleepType::None, 0};
@@ -633,7 +646,13 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &setting
     return {SleepType::None, 0};
   }
 
-  uint32_t interval_ms = static_cast<uint32_t>(settings.measure_interval_seconds) * 1000;
+  // A cell already under the threshold is no longer on a measurement schedule:
+  // the only thing left to decide is whether to shut down, so wake often
+  // enough for the debounce to finish while the cell still has the margin for
+  // an orderly shutdown.
+  uint32_t interval_ms = low_battery
+                             ? LOW_BATTERY_WATCH_INTERVAL_MS
+                             : static_cast<uint32_t>(settings.measure_interval_seconds) * 1000;
 
   // Subtract time already spent awake so total cycle matches the interval
   uint32_t sleep_ms = (awake_ms < interval_ms) ? (interval_ms - awake_ms) : 0;
