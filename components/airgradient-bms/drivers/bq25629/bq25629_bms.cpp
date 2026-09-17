@@ -77,6 +77,9 @@ bool BQ25629Bms::_apply_pmid_config() {
   //           → settle → readback verify.
   static constexpr uint32_t STEP_DELAY_MS = 10;
   static constexpr uint32_t OTG_SETTLE_MS = 300;
+  /// Highest VBAT at which the chip may still refuse the boost: VBAT_OTG max
+  /// with VBAT_OTG_MIN = 0 (SLUSEG4C §6.5).
+  static constexpr uint16_t VBAT_OTG_MAX_MV = 3100;
 
   esp_err_t err = _charger.disable_hiz_mode();
   if (err != ESP_OK) {
@@ -126,7 +129,24 @@ bool BQ25629Bms::_apply_pmid_config() {
   ESP_LOGI(TAG, "post-OTG verify: EN_OTG=%d vpmid=%umV vbat=%umV", en_otg,
            have_post_adc ? post_adc.vpmid_mv : 0, have_post_adc ? post_adc.vbat_mv : 0);
   if (have_otg && !en_otg) {
-    ESP_LOGE(TAG, "PMID config: chip refused EN_OTG");
+    // The chip refuses the boost below VBAT_OTG, which is 2.9-3.1 V while
+    // VBAT_OTG_MIN is at its POR 0: "Setting EN_OTG = 1 while VBAT < VBAT_OTG
+    // will not enter OTG and the EN_OTG bit will be cleared to 0"
+    // (SLUSEG4C §8.3.10.3.4).  A cell that low is on its way to being shut
+    // down, and PMID only feeds the PM sensor, so treating this as an init
+    // failure would boot-loop the device at exactly the moment it needs to
+    // reach its shutdown path instead.
+    const uint16_t vbat_mv =
+        (have_post_adc && post_adc.vbat_mv > 0) ? post_adc.vbat_mv : pre_adc.vbat_mv;
+    if (vbat_mv <= VBAT_OTG_MAX_MV) {
+      ESP_LOGW(TAG,
+               "PMID not armed: VBAT %u mV is at or below the chip's OTG threshold (%u mV) - "
+               "continuing without the PMID rail",
+               vbat_mv, VBAT_OTG_MAX_MV);
+      _pmid_enabled = false;
+      return true;
+    }
+    ESP_LOGE(TAG, "PMID config: chip refused EN_OTG at VBAT %u mV", vbat_mv);
     return false;
   }
   _pmid_enabled = true;

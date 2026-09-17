@@ -207,8 +207,13 @@ void GoApp::run_low_battery_watch_path(const RtcAppState &state) {
   _board.init_core();
   _board.init_fuel_gauge();
   if (!init_bms_with_retry()) {
-    AG_LOGE(TAG, "BMS unavailable on the low-battery watch; restarting");
-    _board.restart();
+    // Restarting here would spin: the watch only runs on a cell that is
+    // already low, which is the condition most likely to keep the charger
+    // from coming up.  Sleep instead, so the cell is not burned by a boot
+    // loop, and let the next wake try again.
+    AG_LOGE(TAG, "BMS unavailable on the low-battery watch; sleeping %lu ms instead of restarting",
+            static_cast<unsigned long>(PowerService::LOW_BATTERY_WATCH_INTERVAL_MS));
+    _board.power().enter_sleep(PowerService::LOW_BATTERY_WATCH_INTERVAL_MS);
     return;
   }
 

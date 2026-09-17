@@ -164,6 +164,26 @@ Normally `measure_interval_seconds` (always ≥ 1) determines the duration
 directly, with `awake_ms` subtracted so the total cycle matches the configured
 interval.
 
+## PMID Below the Boost Threshold
+
+The BQ25628 refuses the OTG boost while the cell is under `VBAT_OTG`, which is
+2.9 V to 3.1 V with `VBAT_OTG_MIN` at its power-on default:
+
+> "Setting EN_OTG = 1 while VBAT < VBAT_OTG will not enter OTG and the EN_OTG
+> bit will be cleared to 0. When the battery is charged above VBAT_OTG, OTG
+> mode may be entered by setting EN_OTG = 1." (SLUSEG4C §8.3.10.3.4)
+
+`_apply_pmid_config()` therefore treats a cleared `EN_OTG` as fatal only when
+the measured cell is above that window. Below it the rail is simply reported as
+not armed and initialization continues. PMID feeds the PM sensor; a device on an
+empty cell needs to reach its shutdown path far more than it needs a fan, and
+failing the whole BMS init there put the device into a boot loop that drained
+the cell instead of powering it down.
+
+The low-battery watch path follows the same reasoning: if the charger still
+will not come up, it sleeps for another watch interval rather than restarting,
+because a restart loop on an empty cell is the one outcome worse than waiting.
+
 ## Low-Battery Watch
 
 A cell already reading under the ship threshold is no longer on a measurement
