@@ -95,12 +95,12 @@ static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
 // down to sit inside those limits.
 //
 // UV sits between two things.  Above it, PowerService ships the device at
-// 2.8 V, and the poll that decides is 30 s with a three-sample debounce, so
-// the cell can fall a good way further before the screen is even drawn; below
-// it, the hardware UVP is 2.340 V once OVP code 000 is programmed.  2.6 V
-// keeps the same 260 mV clearance over the hardware trip the original 2.7 V
-// had over 2.438 V, while leaving 200 mV under the firmware's own trip so the
-// gauge does not cut the pack out from under a shutdown in progress.
+// 2.85 V after two readings a minute apart, so the cell falls a little further
+// while the shutdown draws its screen; below it, the hardware UVP is 2.340 V
+// once OVP code 000 is programmed.  2.65 V leaves 200 mV under the firmware's
+// own trip, enough for that fall plus load sag so the gauge does not cut the
+// pack out from under a shutdown in progress, and keeps 150 mV over the cell's
+// rated 2.50 V end-of-discharge.
 //
 // Recovery is deliberately far above the trip.  The firmware layer re-closes
 // the DSG FET on Voltage() alone (TRM §5.3.1.2), so a narrow band lets an
@@ -109,7 +109,7 @@ static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
 static constexpr FgProtectionConfig AGO_PROTECTION_CONFIG = {
     .ov_prot_threshold_mv = 4250, // TI default 4390
     .ov_prot_recovery_mv = 4150,  // TI default 4290
-    .uv_prot_threshold_mv = 2600, // TI default 2800
+    .uv_prot_threshold_mv = 2650, // TI default 2800
     .uv_prot_recovery_mv = 3100,  // TI default 2900 — 500 mV, anti-chatter
     .ot_chg_dc = 450,             // TI default 550
     .ot_chg_recovery_dc = 400,    // TI default 500

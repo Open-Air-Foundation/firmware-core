@@ -449,7 +449,7 @@ public:
   // which cycles.
   static constexpr float EDV_SHIP_THRESHOLD_V = 2.9f;
   /// Used where the gauge has its own undervoltage trip underneath this one.
-  static constexpr float EDV_SHIP_THRESHOLD_PROTECTED_V = 2.8f;
+  static constexpr float EDV_SHIP_THRESHOLD_PROTECTED_V = 2.85f;
   static constexpr int EDV_SHIP_DEBOUNCE_SAMPLES = 3;
   /// Fewer samples where the gauge's own trip waits underneath: the cell is on
   /// the steep part of its curve by then, and the watch interval that separates

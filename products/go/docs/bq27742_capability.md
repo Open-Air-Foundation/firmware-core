@@ -207,7 +207,7 @@ itself on these; the hardware protector below is the second, coarser level.
 | 0 | OV Prot Threshold | I2 | 4200 | 4600 | 4390 | mV | 4250 |
 | 2 | OV Prot Delay | U1 | 0 | 5 | 1 | s | — |
 | 3 | OV Prot Recovery | I2 | 4100 | 4500 | 4290 | mV | 4150 |
-| 5 | UV Prot Threshold | I2 | 2300 | 3100 | 2800 | mV | 2600 |
+| 5 | UV Prot Threshold | I2 | 2300 | 3100 | 2800 | mV | 2650 |
 | 7 | UV Prot Delay | U1 | 0 | 5 | 1 | s | — |
 | 8 | UV Prot Recovery | I2 | 2400 | 3200 | 2900 | mV | 3100 |
 | 10 | Body Diode Threshold | I2 | 0 | 100 | 60 | mA | — |
@@ -218,13 +218,14 @@ itself on these; the hardware protector below is the second, coarser level.
 | 19 | OT Dsg Time | U1 | 0 | 60 | 5 | s | — |
 | 20 | OT Dsg Recovery | I2 | 0 | 1200 | 550 | 0.1 °C | 550 |
 
-UV Prot is not where the device stops. PowerService ships the unit at 2.8 V so
+UV Prot is not where the device stops. PowerService ships the unit at 2.85 V so
 the user gets a reason on screen and storage closes cleanly, and the gauge's
-trip is the backstop for when that does not happen. 2600 mV keeps 260 mV over
-the hardware UVP (2340 mV once OVP code 000 is programmed) while leaving 200 mV
-under the firmware's own trip, so the gauge cannot cut the pack out from under a
-shutdown already in progress. It also stays 100 mV above the cell's 2500 mV
-end-of-discharge rating.
+trip is the backstop for when that does not happen. 2650 mV leaves 200 mV under
+the firmware's own trip, which covers the cell's fall between the two readings
+that confirm the shutdown plus the load sag while the screen is drawn, so the
+gauge cannot cut the pack out from under a shutdown already in progress. It also
+keeps 150 mV over the cell's 2500 mV end-of-discharge rating and 310 mV over the
+hardware UVP (2340 mV once OVP code 000 is programmed).
 
 Recovery sits far above the trip on purpose. This layer re-closes the DSG FET on
 `Voltage()` alone, with no charger required:
@@ -422,12 +423,13 @@ FET closed while the hardware protector holds it open (TRM p.22). On the
 board:
 
 The host shuts down before any of this: PowerService requests ship mode at
-2.8 V on a board whose gauge has a protector, 2.9 V on one whose gauge does not.
+2.85 V on a board whose gauge has a protector, 2.9 V on one whose gauge does
+not.
 
 | Direction | Firmware trips at | Hardware trips at |
 |---|---|---|
 | Overvoltage | 4250 mV after 1 s | 4450 mV after 1 s (4275 mV once OVP code 000 is written) |
-| Undervoltage | 2600 mV after 1 s | 2438 mV after 31.25 ms (2340 mV once OVP code 000 is written) |
+| Undervoltage | 2650 mV after 1 s | 2438 mV after 31.25 ms (2340 mV once OVP code 000 is written) |
 | Over-temperature charge | 45.0 °C after 5 s | none (temperature is firmware-only) |
 
 ### Status Registers
