@@ -214,6 +214,16 @@ would never be reached on a device that sleeps between measurements.
 `poll_bms()` seeds itself from RTC on its first call and mirrors the new value
 back, so every boot path inherits it without doing anything.
 
+The debounce itself is shorter where the gauge has its own trip underneath:
+`EDV_SHIP_DEBOUNCE_SAMPLES_PROTECTED` is two readings against three. A minute
+separates them on the watch interval, and a cell at 2.8 V is on the steep part
+of its curve, so a third reading spends margin the shutdown sequence needs.
+
+Because the count now survives sleep, the first poll of a boot can be the one
+that trips. `Orchestrator::init()` therefore acts on every ship-mode reason
+rather than only the temperature ones; waiting for `on_bms_timer()` would run
+the whole system for another poll interval on an empty cell.
+
 `select_boot_path()` routes a timer wake with a non-zero count to
 `BootPath::LowBatteryWatch`, ahead of the fast path. That path brings up the
 charger and gauge, calls `poll_bms()` once and goes straight back to sleep: no

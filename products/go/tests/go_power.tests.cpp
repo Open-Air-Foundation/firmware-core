@@ -2378,16 +2378,36 @@ TEST_CASE("poll_bms_fg_learning: a protector gauge ships at its own lower thresh
     CHECK(snap.ship_mode_request == ShipModeRequest::None);
   }
 
-  SECTION("below the protected threshold it ships, so the gauge never has to") {
+  SECTION("two readings under it are enough, so the gauge never has to trip") {
     ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
         .SIDE_EFFECT(_1.battery_voltage = 2.75f)
         .RETURN(true);
-    PowerSnapshot snap;
-    for (int i = 0; i < PowerService::EDV_SHIP_DEBOUNCE_SAMPLES; ++i) {
-      snap = svc.poll_bms_fg_learning();
-    }
-    CHECK(snap.ship_mode_request == ShipModeRequest::OverDischarge);
-    CHECK(snap.edv_cutoff_reached);
+    static_assert(PowerService::EDV_SHIP_DEBOUNCE_SAMPLES_PROTECTED == 2,
+                  "the sections below count readings by hand");
+    CHECK(svc.poll_bms_fg_learning().ship_mode_request == ShipModeRequest::None);
+    const PowerSnapshot second = svc.poll_bms_fg_learning();
+    CHECK(second.ship_mode_request == ShipModeRequest::OverDischarge);
+    CHECK(second.edv_cutoff_reached);
+  }
+
+  SECTION("a reading back above the threshold starts the count over") {
+    // One low reading, then a recovery, then a low one: still not two in a row.
+    auto low = NAMED_ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+                   .SIDE_EFFECT(_1.battery_voltage = 2.75f)
+                   .RETURN(true);
+    CHECK(svc.poll_bms_fg_learning().ship_mode_request == ShipModeRequest::None);
+    low.reset();
+
+    auto high = NAMED_ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+                    .SIDE_EFFECT(_1.battery_voltage = 3.4f)
+                    .RETURN(true);
+    CHECK(svc.poll_bms_fg_learning().ship_mode_request == ShipModeRequest::None);
+    high.reset();
+
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 2.75f)
+        .RETURN(true);
+    CHECK(svc.poll_bms_fg_learning().ship_mode_request == ShipModeRequest::None);
   }
 }
 

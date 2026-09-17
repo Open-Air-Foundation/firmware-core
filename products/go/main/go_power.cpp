@@ -225,6 +225,8 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
   // not.
   const float edv_threshold =
       _config.fg_has_protector ? EDV_SHIP_THRESHOLD_PROTECTED_V : EDV_SHIP_THRESHOLD_V;
+  const int edv_debounce =
+      _config.fg_has_protector ? EDV_SHIP_DEBOUNCE_SAMPLES_PROTECTED : EDV_SHIP_DEBOUNCE_SAMPLES;
   const bool on_battery = status_ok && (bms_status.power_source == BmsPowerSource::None ||
                                         bms_status.power_source == BmsPowerSource::OtgMode);
 
@@ -240,7 +242,7 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
     _edv_low_count = 0;
   }
 
-  if (_edv_low_count >= EDV_SHIP_DEBOUNCE_SAMPLES) {
+  if (_edv_low_count >= edv_debounce) {
     AG_LOGW(TAG, "EDV trip: cell %.2fV < %.2fV for %d polls -> requesting ship mode",
             telemetry.battery_voltage, edv_threshold, _edv_low_count);
     status.ship_mode_request = ShipModeRequest::OverDischarge;

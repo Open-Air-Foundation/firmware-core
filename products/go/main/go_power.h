@@ -451,6 +451,10 @@ public:
   /// Used where the gauge has its own undervoltage trip underneath this one.
   static constexpr float EDV_SHIP_THRESHOLD_PROTECTED_V = 2.8f;
   static constexpr int EDV_SHIP_DEBOUNCE_SAMPLES = 3;
+  /// Fewer samples where the gauge's own trip waits underneath: the cell is on
+  /// the steep part of its curve by then, and the watch interval that separates
+  /// these readings is a minute, so a third one costs margin the shutdown needs.
+  static constexpr int EDV_SHIP_DEBOUNCE_SAMPLES_PROTECTED = 2;
   /// Sleep length once a reading comes in under the threshold.  The device
   /// stops following the measurement interval and just re-checks the cell, so
   /// the debounce completes in minutes instead of never.

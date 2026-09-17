@@ -288,8 +288,11 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
 
   _latest_power =
       _svc.power_service.poll_bms(_first_measurement_done && !_raw_measures.pm_a.is_pm_25_valid());
-  if (_latest_power.ship_mode_request == ShipModeRequest::OverTemperature ||
-      _latest_power.ship_mode_request == ShipModeRequest::UnderTemperature) {
+  // Every reason, not just the temperature ones.  The over-discharge count now
+  // survives deep sleep, so this first poll can already be the one that trips,
+  // and waiting for on_bms_timer() would run the whole system for another poll
+  // interval on a cell that has nothing left to give.
+  if (_latest_power.ship_mode_request != ShipModeRequest::None) {
     shutdown(_latest_power.ship_mode_request);
     return;
   }
