@@ -561,6 +561,19 @@ void PowerService::recover_pm_sensor() {
   if (_config.pin_pm_power < 0 || _bms == nullptr) {
     return;
   }
+
+  // The recovery works by killing and restarting the boost, which the charger
+  // will refuse to restart below its own threshold.  On an empty cell that
+  // turns a sensor retry into a repeated inrush attempt that browns the device
+  // out, so leave the PM sensor reading invalid instead.
+  BmsTelemetry t{};
+  if (_bms->read_telemetry(t) && t.is_battery_voltage_valid() &&
+      t.battery_voltage < PMID_BOOST_MIN_BATTERY_V) {
+    AG_LOGW(TAG, "PM sensor recovery skipped: cell at %.2fV is below the boost threshold",
+            static_cast<double>(t.battery_voltage));
+    return;
+  }
+
   AG_LOGW(TAG, "PM sensor recovery: power-cycling via boost kill");
   set_pm_power(false);
   _bms->set_pmid_enabled(false);

@@ -800,6 +800,18 @@ void GoHardwareBoard::_ensure_pmid_ready() {
     return;
   }
 
+  // Nothing to wait for while the cell is under the charger's own boost
+  // threshold: the rail will not come up, the re-kick draws an inrush the cell
+  // cannot take, and the half second spent here is half a second not spent
+  // getting to the shutdown path.
+  BmsTelemetry probe{};
+  if (_bms_driver->read_telemetry(probe) && probe.is_battery_voltage_valid() &&
+      probe.battery_voltage < PowerService::PMID_BOOST_MIN_BATTERY_V) {
+    AG_LOGW(TAG, "PMID readiness check skipped: cell at %.2fV is below the boost threshold",
+            static_cast<double>(probe.battery_voltage));
+    return;
+  }
+
   bool rekicked = false;
   uint32_t elapsed_ms = 0;
   while (elapsed_ms < PMID_WAIT_TIMEOUT_MS) {

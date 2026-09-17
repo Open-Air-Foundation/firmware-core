@@ -406,6 +406,23 @@ TEST_CASE("poll_status: charger status pass-through", "[PowerService][status]") 
 // TEST CASE 4 — evaluate_sleep
 // ============================================================================
 
+TEST_CASE("recover_pm_sensor: skipped on a cell that cannot restart the boost",
+          "[PowerService][pmid]") {
+  ScopedMockRTOS rtos;
+  MockBmsDevice mock_bms;
+  PowerService::Config cfg = DEFAULT_CONFIG;
+  cfg.pin_pm_power = 7; // recovery is a no-op without a PM power pin
+  PowerService svc(&mock_bms, test_gpio_hal, cfg);
+
+  // The recovery kills and restarts the boost; below the threshold the charger
+  // refuses the restart, so the attempt is only an inrush on an empty cell.
+  ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+      .SIDE_EFFECT(_1.battery_voltage = 2.9f)
+      .RETURN(true);
+  FORBID_CALL(mock_bms, set_pmid_enabled(trompeloeil::_));
+  svc.recover_pm_sensor();
+}
+
 TEST_CASE("rekick_pmid_if_collapsed: not below the charger's boost threshold",
           "[PowerService][pmid][rekick]") {
   ScopedMockRTOS rtos;
@@ -1137,6 +1154,12 @@ TEST_CASE("recover_pm_sensor: EN_PM off -> boost off -> boost on -> EN_PM on",
     config.pin_pm_power = 26;
     config.pm_power_on_level = 0; // V1: active-low
     PowerService svc(&mock_bms, test_gpio_hal, config);
+
+    // Recovery first checks the cell: the boost cannot be restarted below the
+    // charger's threshold, so a healthy voltage is what lets the sequence run.
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.9f)
+        .RETURN(true);
 
     trompeloeil::sequence seq;
     // set_pm_power(false) -> GPIO level = 1 (inverted for V1 active-low)

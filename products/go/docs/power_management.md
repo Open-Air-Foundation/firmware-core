@@ -184,6 +184,12 @@ The low-battery watch path follows the same reasoning: if the charger still
 will not come up, it sleeps for another watch interval rather than restarting,
 because a restart loop on an empty cell is the one outcome worse than waiting.
 
+Three paths try to restart the rail, and all three now check the cell first:
+`GoHardwareBoard::_ensure_pmid_ready()` at boot, `rekick_pmid_if_collapsed()`
+on every poll, and `recover_pm_sensor()` after the orchestrator sees PM invalid
+for `PM_RECOVERY_TIMEOUT_MS`. Left unguarded on an empty cell they retried on a
+loop, and the inrush of each attempt browned the device out.
+
 `rekick_pmid_if_collapsed()` skips for the same reason. A rail that is down
 because the chip refuses to start it is not a collapsed rail, and asking again
 every poll would cost current and sag the cell for a refusal we can predict.
