@@ -2366,21 +2366,26 @@ TEST_CASE("poll_bms_fg_learning: a protector gauge ships at its own lower thresh
                    _1.power_source = BmsPowerSource::None)
       .RETURN(true);
 
-  SECTION("above the protected threshold, below the unprotected one, nothing happens") {
-    // This voltage would have tripped a board without a protector; one with a
-    // gauge underneath waits for its own, lower threshold.
-    const float between = PowerService::EDV_SHIP_THRESHOLD_PROTECTED_V + 0.01f;
-    static_assert(PowerService::EDV_SHIP_THRESHOLD_PROTECTED_V < PowerService::EDV_SHIP_THRESHOLD_V,
+  SECTION("above the threshold nothing happens, however many readings") {
+    // A protector gauge may be given a lower threshold than a bare one, never a
+    // higher one; today they match and only the debounce differs.
+    static_assert(PowerService::EDV_SHIP_THRESHOLD_PROTECTED_V <=
+                      PowerService::EDV_SHIP_THRESHOLD_V,
                   "a protector gauge must let the cell go lower, not higher");
     ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
-        .SIDE_EFFECT(_1.battery_voltage = between)
+        .SIDE_EFFECT(_1.battery_voltage = PowerService::EDV_SHIP_THRESHOLD_PROTECTED_V + 0.01f)
         .RETURN(true);
     PowerSnapshot snap;
-    for (int i = 0; i < PowerService::EDV_SHIP_DEBOUNCE_SAMPLES; ++i) {
+    for (int i = 0; i < PowerService::EDV_SHIP_DEBOUNCE_SAMPLES + 1; ++i) {
       snap = svc.poll_bms_fg_learning();
     }
-    CHECK(between < PowerService::EDV_SHIP_THRESHOLD_V);
     CHECK(snap.ship_mode_request == ShipModeRequest::None);
+  }
+
+  SECTION("a protector gauge confirms in fewer readings than a bare one") {
+    static_assert(PowerService::EDV_SHIP_DEBOUNCE_SAMPLES_PROTECTED <
+                      PowerService::EDV_SHIP_DEBOUNCE_SAMPLES,
+                  "the protected path exists to reach the shutdown sooner");
   }
 
   SECTION("two readings under it are enough, so the gauge never has to trip") {
