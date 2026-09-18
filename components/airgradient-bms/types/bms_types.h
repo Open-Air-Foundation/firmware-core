@@ -333,12 +333,15 @@ static constexpr uint16_t CHG_INH = (1u << 11); ///< Charge inhibited (not yet c
 ///
 /// The BQ27427 reports it in CONTROL_STATUS (QMAX_UP then RES_UP); the
 /// BQ27742-G1 reports it in the Update Status data-flash byte (0x04 once IT is
-/// enabled, 0x05 after the charge half, 0x06 after the discharge half).  Each
-/// driver maps its own register onto these two booleans so PowerService and the
-/// learning FSM stay part-neutral.
+/// enabled, 0x05 after the charge half, 0x06 after the discharge half).  The
+/// rested-OCV signal also lives in different registers: Flags()[OCVTAKEN] on
+/// the BQ27427, CONTROL_STATUS[OCVTAKEN] on the BQ27742-G1.  Each driver maps
+/// its own registers onto these booleans so PowerService and the learning FSM
+/// stay part-neutral.
 struct FgLearningProgress {
   bool qmax_updated = false; ///< a Qmax value has been learned this run
   bool ra_updated = false;   ///< optimised Qmax + Ra learned (cycle complete)
+  bool ocv_taken = false;    ///< an OCV was measured in the current relaxation
 };
 
 /// Convert a Q14 Qmax Cell 0 reading to mAh.  The BQ27427 stores Qmax as a

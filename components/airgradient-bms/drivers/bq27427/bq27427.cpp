@@ -230,11 +230,13 @@ bool BQ27427::read_chem_id(uint16_t &out) { return control_subcommand(CTRL_CHEM_
 
 bool BQ27427::read_learning_progress(FgLearningProgress &out) {
   uint16_t cs = 0;
-  if (!read_control_status(cs)) {
+  uint16_t flags = 0;
+  if (!read_control_status(cs) || !read_flags(flags)) {
     return false;
   }
   out.qmax_updated = (cs & FgControlStatus::QMAX_UP) != 0;
   out.ra_updated = (cs & FgControlStatus::RES_UP) != 0;
+  out.ocv_taken = (flags & FgFlags::OCVTAKEN) != 0;
   return true;
 }
 

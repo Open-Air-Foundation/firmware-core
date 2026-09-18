@@ -2222,11 +2222,10 @@ TEST_CASE("poll_bms_fg_learning: packs fg_learning_flags from Flags + CONTROL_ST
 
   SECTION("all flags set -> all learning bits set") {
     ALLOW_CALL(mock_fg, read_flags(trompeloeil::_))
-        .SIDE_EFFECT(_1 = FgFlags::FC | FgFlags::CHG | FgFlags::DSG | FgFlags::ITPOR |
-                          FgFlags::OCVTAKEN)
+        .SIDE_EFFECT(_1 = FgFlags::FC | FgFlags::CHG | FgFlags::DSG | FgFlags::ITPOR)
         .RETURN(true);
     ALLOW_CALL(mock_fg, read_learning_progress(trompeloeil::_))
-        .SIDE_EFFECT(_1.qmax_updated = true; _1.ra_updated = true)
+        .SIDE_EFFECT(_1.qmax_updated = true; _1.ra_updated = true; _1.ocv_taken = true)
         .RETURN(true);
     ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_))
         .SIDE_EFFECT(_1 = 2000)
@@ -2253,7 +2252,44 @@ TEST_CASE("poll_bms_fg_learning: packs fg_learning_flags from Flags + CONTROL_ST
     CHECK((snap.fg_learning_flags & FG_LEARN_FC));
     CHECK_FALSE((snap.fg_learning_flags & FG_LEARN_QMAX_UP));
     CHECK_FALSE((snap.fg_learning_flags & FG_LEARN_RES_UP));
+    CHECK_FALSE((snap.fg_learning_flags & FG_LEARN_OCV_TAKEN));
   }
+
+  SECTION("OCV taken comes from the driver, not from Flags()") {
+    // Flags() bit 7 is OCVTAKEN on the BQ27427 but CHG_SUS on the BQ27742-G1,
+    // so PowerService must not read it itself.
+    ALLOW_CALL(mock_fg, read_design_capacity_mah(trompeloeil::_))
+        .SIDE_EFFECT(_1 = 2000)
+        .RETURN(true);
+
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_))
+        .SIDE_EFFECT(_1 = FgFlags::OCVTAKEN)
+        .RETURN(true);
+    ALLOW_CALL(mock_fg, read_learning_progress(trompeloeil::_))
+        .SIDE_EFFECT(_1.ocv_taken = false)
+        .RETURN(true);
+    CHECK_FALSE((svc.poll_bms_fg_learning().fg_learning_flags & FG_LEARN_OCV_TAKEN));
+
+    ALLOW_CALL(mock_fg, read_flags(trompeloeil::_)).SIDE_EFFECT(_1 = 0).RETURN(true);
+    ALLOW_CALL(mock_fg, read_learning_progress(trompeloeil::_))
+        .SIDE_EFFECT(_1.ocv_taken = true)
+        .RETURN(true);
+    CHECK((svc.poll_bms_fg_learning().fg_learning_flags & FG_LEARN_OCV_TAKEN));
+  }
+}
+
+TEST_CASE("fg_learning_rest_min_ms is chosen per gauge variant",
+          "[PowerService][fg][learning]") {
+  MockBmsDevice mock_bms;
+
+  PowerService v1(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  CHECK(v1.fg_learning_rest_min_ms() == PowerService::FG_LEARNING_REST_MIN_MS);
+
+  PowerService::Config cfg = DEFAULT_CONFIG;
+  cfg.fg_has_protector = true;
+  PowerService v2(&mock_bms, test_gpio_hal, cfg);
+  CHECK(v2.fg_learning_rest_min_ms() == PowerService::FG_LEARNING_REST_MIN_PROTECTED_MS);
+  CHECK(v2.fg_learning_rest_min_ms() > v1.fg_learning_rest_min_ms());
 }
 
 TEST_CASE("poll_bms_fg_learning: external_input_present mirrors plug state",

@@ -165,3 +165,9 @@ void FgLearningJournal::edv_ship(uint8_t cycle, uint8_t soc_pct, uint16_t vbat_m
   snprintf(b, sizeof(b), "EDV_SHIP cycle=%u soc=%u%% vbat=%umV", cycle, soc_pct, vbat_mv);
   write_line(b);
 }
+
+void FgLearningJournal::target_ship(uint8_t cycle, uint8_t soc_pct, uint16_t vbat_mv) {
+  char b[96];
+  snprintf(b, sizeof(b), "TARGET_SHIP cycle=%u soc=%u%% vbat=%umV", cycle, soc_pct, vbat_mv);
+  write_line(b);
+}

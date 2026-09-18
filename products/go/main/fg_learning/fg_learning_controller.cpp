@@ -159,7 +159,7 @@ FgLearningAction FgLearningController::build_action() const {
     break;
   case FgLearningStage::CycleDone:
     a.active = true;
-    a.low_power = false;
+    a.low_power = true;
     a.screen = Screen::DischargeComplete;
     break;
   case FgLearningStage::Verify:
@@ -212,7 +212,7 @@ FgLearningAction FgLearningController::tick(const PowerSnapshot &snap, uint32_t 
 
   case FgLearningStage::Rest:
     if ((snap.fg_learning_flags & FG_LEARN_OCV_TAKEN) &&
-        (now_ms - _stage_entered_ms >= REST_TIMEOUT_MS)) {
+        (now_ms - _stage_entered_ms >= _rest_min_ms)) {
       enter_stage(FgLearningStage::Discharge, now_ms);
     }
     break;

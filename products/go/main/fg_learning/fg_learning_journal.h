@@ -53,6 +53,7 @@ public:
   void stage_enter(FgLearningStage stage, uint8_t cycle, uint8_t soc_pct, uint16_t vbat_mv);
   void flag_event(const char *name, uint8_t soc_pct, uint16_t vbat_mv, int16_t current_ma);
   void edv_ship(uint8_t cycle, uint8_t soc_pct, uint16_t vbat_mv);
+  void target_ship(uint8_t cycle, uint8_t soc_pct, uint16_t vbat_mv);
 
 private:
   void write_line(const char *body); ///< prefix seq+uptime, mirror to serial, append+fsync

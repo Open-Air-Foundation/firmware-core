@@ -53,7 +53,8 @@ private:
   void apply_action(const FgLearningAction &a,
                     bool ext_input);                   ///< charge / load / cue / screen / persist
   void run_verify();                                   ///< read FG, on_verify_result, persist
-  bool handle_edv_ship(const PowerSnapshot &snap);     ///< persist CycleDone -> ship (single owner)
+  bool handle_edv_ship(const PowerSnapshot &snap);     ///< v1 EDV pre-emption of the Discharge stage
+  void ship_after_cycle(const PowerSnapshot &snap);    ///< persist CycleDone -> ship (single owner)
   void feed_ext_watchdog(uint32_t now);                ///< pulse external HW WDT (< 60 s window)
   void refresh_dashboard(const PowerSnapshot &snap);   ///< build DisplayValues, full refresh
   bool poll_abort_button();                            ///< power short press -> clear + reboot

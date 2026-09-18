@@ -23,7 +23,7 @@ to normal operation.
 | [`fg_learning/fg_learning_controller.h`](../main/fg_learning/fg_learning_controller.h) | Pure FSM declaration (no hardware / ESP-IDF) |
 | [`fg_learning/fg_learning_controller.cpp`](../main/fg_learning/fg_learning_controller.cpp) | FSM transitions, resume matrix, verify criteria |
 | [`fg_learning/fg_learning_runner.h`](../main/fg_learning/fg_learning_runner.h) | Hardware-owning run declaration (target-only) |
-| [`fg_learning/fg_learning_runner.cpp`](../main/fg_learning/fg_learning_runner.cpp) | Bring-up, poll loop, load stack, EDV ship, dashboard, abort |
+| [`fg_learning/fg_learning_runner.cpp`](../main/fg_learning/fg_learning_runner.cpp) | Bring-up, poll loop, load stack, ship after CycleDone, dashboard, abort |
 | [`go_settings.h`](../main/go_settings.h) / [`go_settings.cpp`](../main/go_settings.cpp) | `FactorySettings` persistence + boot predicate |
 | [`go_power.h`](../main/go_power.h) / [`go_power.cpp`](../main/go_power.cpp) | `poll_bms_fg_learning`, verify read-back, charge / gauge control |
 | [`go_display.h`](../main/go_display.h) / [`go_display.cpp`](../main/go_display.cpp) | `FgLearningDashboardData` + dashboard renderer |
@@ -105,7 +105,7 @@ stateDiagram-v2
     Charge --> Rest: FC flag or BMS charge terminated
     Charge --> Failed: charge timeout
     Rest --> Discharge: OCV taken and rest elapsed
-    Discharge --> CycleDone: EDV cutoff reached
+    Discharge --> CycleDone: discharge target reached
     CycleDone --> [*]: persist then ship mode
 
     state "re-plug or cold boot" as Boot
@@ -141,8 +141,10 @@ target` returns to `Charge` (cycle + 1), while `cycle at target` enters
 `Verify`. So `Verify` lands **right after the final re-plug, on the empty side** —
 it keeps charge off and only reads the learned values back
 (`read_fg_learning_verify()`); it does **not** recharge first. `OCV2` and the
-Qmax recompute happen during the powered-off rest before that re-plug, so a brief
-rest before re-plugging matters. Across the two cycles the flags typically fill
+Qmax recompute happen during the powered-off rest before that re-plug, so the
+rest before re-plugging matters. For the rev 2.0 golden image leave the unit off
+for at least 5 h, the point at which the gauge forces its OCV measurement if the
+cell has not relaxed sooner (TRM SLUUAX0C §2.1). Across the two cycles the flags typically fill
 in as: `OCV` first, `R` during cycle 1's discharge, `Q` once cycle 1 closes, with
 cycle 2 refining both before `Verify`.
 
@@ -242,18 +244,25 @@ for all of cycle 1, so gating on it would misclassify a benign mid-cycle reboot.
 The factory path requires the BQ25629: it makes two initialization attempts
 100 ms apart and restarts instead of constructing the runner when both fail.
 
-### EDV / Ship-Mode Integration
+### CycleDone / Ship-Mode Integration
 
-`handle_edv_ship()` owns the persist-then-ship sequence. **Battery safety beats
-resumability**: continuing to drain a cell already at the 2.9 V cutoff is the
-over-discharge the trip exists to prevent.
+`ship_after_cycle()` owns the persist-then-ship sequence and runs on both
+variants as soon as the FSM has entered `CycleDone`. The bottom rest (OCV2) has
+to happen powered off: a cell at the discharge floor cannot feed the system for
+the hours the gauge needs to relax, and the shipped device draws nothing from
+it. Re-plug reboots into the resume matrix, which carries the run on.
+
+On rev 1 the firmware EDV cutoff pre-empts the stage from `handle_edv_ship()`
+before the FSM ever sees `CycleDone`, and the same sequence runs. **Battery
+safety beats resumability**: continuing to drain a cell already at the cutoff is
+the over-discharge the trip exists to prevent.
 
 ```mermaid
 sequenceDiagram
     participant R as FgLearningRunner
     participant F as FactorySettings (NVS)
     participant B as BMS
-    Note over R: stage is Discharge, EDV cutoff reached
+    Note over R: FSM entered CycleDone (rev 2.0 floor) or EDV cutoff pre-empted Discharge (rev 1)
     R->>R: turn discharge load off — cell recovers
     R->>F: save_fg_learning_state(CycleDone), retry up to EDV_COMMIT_RETRY_MAX
     R->>R: paint final dashboard frame
@@ -262,7 +271,10 @@ sequenceDiagram
 
 The shared EDV detection in `poll_bms()` is unchanged and still protects shipped
 units. Because the EDV trip is sample-count based, the wall-clock debounce in the
-factory path is `3 x` the runner poll cadence.
+factory path is `3 x` the runner poll cadence. The rev 2.0 floor
+(`FG_LEARNING_DISCHARGE_END_MV`) is a single gauge reading; near-empty the
+discharge curve is steep enough that a momentary dip only moves the end by
+minutes, and the gauge's own Update Status decides whether the cycle counted.
 
 ### Watchdogs
 
@@ -302,16 +314,21 @@ whichever register its part keeps progress in:
 
 | Display | Meaning | Constant | BQ27427 source | BQ27742 source |
 |---|---|---|---|---|
-| `OCV` | OCV taken | `FG_LEARN_OCV_TAKEN` | `Flags()` bit 7 | `Flags()` bit 7 |
+| `OCV` | OCV taken | `FG_LEARN_OCV_TAKEN` | `Flags()` bit 7 | `CONTROL_STATUS` bit 15 (`Flags()` bit 7 is `CHG_SUS` on this part) |
 | `Q` | a Qmax was learned | `FG_LEARN_QMAX_UP` | `CONTROL_STATUS` QMAX_UP | Update Status bit 0 or 1 |
 | `R` | Ra learned, cycle done | `FG_LEARN_RES_UP` | `CONTROL_STATUS` RES_UP | Update Status bit 1 |
 
 - **`OCV` — OCV taken.** The cell's _rested_ open-circuit voltage, measured once
-  current has stayed below the Quit Current (~80 mA) long enough to relax. It
-  anchors the cycle: learning needs two points — **OCV1** at the rested top
-  (after charge → rest) and **OCV2** at the rested bottom (after discharge →
-  ship-off rest). This is why `Rest` waits for `OCVTAKEN` _and_ the 500 s gate,
-  and why the quiet stages must stay under the Quit Current.
+  current has stayed below the Quit Current long enough to relax. It anchors
+  the cycle: learning needs two points — **OCV1** at the rested top (after
+  charge → rest) and **OCV2** at the rested bottom (after discharge → ship-off
+  rest). The bit only says an OCV _was measured_ in this relaxation; the gauge
+  will not use the point for Qmax until the cell has relaxed to dV/dt < 1 µV/s,
+  which it checks from 60 s after relaxation entry and forces after 5 h. This is
+  why `Rest` waits for `OCVTAKEN` _and_ a floor
+  (`PowerService::fg_learning_rest_min_ms()`: 500 s on rev 1, 2 h on rev 2.0,
+  the relax TI's learning cycle asks for), and why the quiet stages must stay
+  under the Quit Current.
 - **`Q` — Qmax updated.** `Qmax` is the cell's _true full capacity_, computed
   from the coulombs counted between two relaxed OCV points at known
   depth-of-discharge. `QMAX_UP` sets only after a qualified discharge bounded by
@@ -356,7 +373,8 @@ Logged events (`FGJ #seq <uptime>s ...`):
 | `BOOT` | every boot | **`esp_reset_reason()`**, resumed stage/cycle/itpor, ITPOR-now, soc, vbat |
 | `STAGE` | stage transition | stage, cycle, soc, vbat |
 | `FLAG` | first ITPOR / QMAX_UP / RES_UP / DSG_QUALIFIED | name, soc, vbat, current |
-| `EDV_SHIP` | before ship at EDV | cycle, soc, vbat |
+| `EDV_SHIP` | before ship at the EDV cutoff (rev 1 pre-emption) | cycle, soc, vbat |
+| `TARGET_SHIP` | before ship at `CycleDone` (discharge floor) | cycle, soc, vbat |
 | `VERIFY` | verify runs | all criteria + pass + failing reason + full Ra grid |
 | `RESULT` | terminal | stage + fail reason |
 
@@ -438,20 +456,27 @@ two gauges is resolved below them, either in the driver or in `PowerService`.
 | Concern | Board rev 1 (BQ27427) | Board rev 2.0 (BQ27742-G1) |
 |---|---|---|
 | Learning progress | `CONTROL_STATUS` QMAX_UP / RES_UP | Update Status byte, `0x04` → `0x05` → `0x06` |
+| OCV taken | `Flags()` bit 7 | `CONTROL_STATUS` bit 15; `Flags()` bit 7 is `CHG_SUS` |
+| `IT_ENABLE` | Update Status learning bits, set and cleared | sent once at cycle-1 entry; skipped when Update Status bit 2 is already set, never undone |
 | Qmax Cell 0 units | Q14 fraction of Design Capacity | mAh |
 | Seeding Qmax | left to the gauge | board writes Design Capacity while Update Status is 0 |
-| End of the discharge half | firmware EDV cutoff, which also ships the device | cell reaches `FG_LEARNING_DISCHARGE_END_MV` while the system stays up |
+| Rest floor after charge | 500 s (`FG_LEARNING_REST_MIN_MS`) | 2 h (`FG_LEARNING_REST_MIN_PROTECTED_MS`), the golden image is taken once so time is cheap |
+| End of the discharge half | firmware EDV cutoff at 2.9 V | cell reaches `FG_LEARNING_DISCHARGE_END_MV` (3.0 V); the run persists `CycleDone` and ships the same way |
 | Undervoltage cutoff | firmware at `EDV_SHIP_THRESHOLD_V` | firmware at `EDV_SHIP_THRESHOLD_PROTECTED_V`, with the gauge's UV Prot as backstop, see [`bq27742_capability.md`](bq27742_capability.md) |
+| Gauge current thresholds | Quit 80 mA, Dsg 120 mA (configured) | factory defaults, Quit 40 mA, Dsg 60 mA, Chg 75 mA (TRM subclass 81); firmware never writes them and the bench has not read them back |
 
 Two consequences are worth stating plainly.
 
 `PowerSnapshot::discharge_target_reached` is what the FSM reads, and
-`PowerService` derives it per variant from `Config::fg_has_protector`. `edv_cutoff_reached` still exists as the ship-mode trigger for
+`PowerService` derives it per variant from `Config::fg_has_protector`.
+`edv_cutoff_reached` still exists as the trigger for
 `FgLearningRunner::handle_edv_ship()`, and both variants can set it. On rev 2.0
 it sits at 2.85 V, below the 3.0 V floor the discharge half stops at, so a normal
-run reaches CycleDone first and the ship path is only the fallback for a run that
-somehow keeps draining.
+run reaches `CycleDone` first and the EDV path is only the fallback for a run
+that somehow keeps draining.
 
 The rev 2.0 discharge therefore ends 300 mV above the gauge's undervoltage trip
-rather than at it. That margin is what lets the run persist its stage and move
-into the rest phase instead of losing power at the cutoff.
+rather than at it. That margin is what lets the run persist its stage before
+shipping instead of losing power at the cutoff with nothing saved. The golden
+image is taken from this unit's data flash at Update Status `0x06`; the
+per-unit path is then a flash of that image, not a learning run.

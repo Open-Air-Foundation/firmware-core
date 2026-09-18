@@ -98,6 +98,7 @@ constexpr uint16_t QMAX_CELL0_MAX_MAH = 14500; // TRM Table 5-5
 // Update Status bits (TRM §5.5.3.2).
 constexpr uint8_t UPDATE_STATUS_QMAX_INITIAL = (1u << 0);
 constexpr uint8_t UPDATE_STATUS_QMAX_OPTIMISED = (1u << 1);
+constexpr uint8_t UPDATE_STATUS_IT_ENABLED = (1u << 2);
 constexpr uint8_t OFFSET_RA_FIRST = 2;
 
 constexpr size_t DF_BLOCK_SIZE = 32;
@@ -110,6 +111,7 @@ constexpr uint16_t RAW_FLAG_CHG_SUS = (1u << 7);  ///< low byte bit 7
 constexpr uint16_t RAW_FLAG_CHG_INH = (1u << 11); ///< high byte bit 3
 
 constexpr uint16_t CONTROL_STATUS_SS = (1u << 13);            // TRM Table 4-3, high byte bit 5
+constexpr uint16_t CONTROL_STATUS_OCVTAKEN = (1u << 15);      // TRM Table 4-3, high byte bit 7
 constexpr uint16_t SAFETY_STATUS_INV_PROT_CHKSUM = (1u << 7); // TRM Table 4-5, low byte bit 7
 
 constexpr uint32_t CONTROL_SETTLE_MS = 2;
@@ -439,6 +441,14 @@ bool BQ27742::set_update_status_learning(bool enable) {
   if (!enable) {
     return true; // IT cannot be disabled once enabled (TRM §4.1.1: QEN latches)
   }
+  // The learning run re-enters this on every cycle-1 boot.  IT_ENABLE is
+  // one-way, and the TRM does not say what re-sending it does to a run that is
+  // already under way, so only send it once.
+  uint8_t status = 0;
+  if (read_update_status(status) && (status & UPDATE_STATUS_IT_ENABLED)) {
+    ESP_LOGI(TAG, "IT already enabled, Update Status=0x%02X", status);
+    return true;
+  }
   if (!_unseal()) {
     return false;
   }
@@ -446,7 +456,6 @@ bool BQ27742::set_update_status_learning(bool enable) {
     return false;
   }
   RTOS::delay_ms(DF_SETTLE_MS);
-  uint8_t status = 0;
   if (read_update_status(status)) {
     ESP_LOGI(TAG, "IT ENABLE sent, Update Status=0x%02X", status);
   }
@@ -474,12 +483,17 @@ bool BQ27742::read_learning_progress(FgLearningProgress &out) {
   // Update Status walks 0x04 (IT enabled) -> 0x05 (initial Qmax, charge half
   // done) -> 0x06 (optimised Qmax + Ra, cycle done).  Bit 0 is cleared again at
   // 0x06, so "a Qmax was learned" is bit 0 or bit 1 (TRM SLUUAX0C §5.5.3.2).
+  // OCVTAKEN is not in Flags() on this part (that bit is CHG_SUS); it is
+  // CONTROL_STATUS high-byte bit 7, cleared on entry to RELAXATION and set when
+  // an OCV measurement is performed there (TRM Table 4-3).
   uint8_t status = 0;
-  if (!read_update_status(status)) {
+  uint16_t cs = 0;
+  if (!read_update_status(status) || !read_control_status(cs)) {
     return false;
   }
   out.qmax_updated = (status & (UPDATE_STATUS_QMAX_INITIAL | UPDATE_STATUS_QMAX_OPTIMISED)) != 0;
   out.ra_updated = (status & UPDATE_STATUS_QMAX_OPTIMISED) != 0;
+  out.ocv_taken = (cs & CONTROL_STATUS_OCVTAKEN) != 0;
   return true;
 }
 

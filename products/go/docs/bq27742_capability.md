@@ -131,7 +131,7 @@ Standard and extended commands the firmware uses (TRM Tables 4-1, 4-6):
 
 | Subcommand | Code | Sealed | Returns / effect |
 |---|---|---|---|
-| `CONTROL_STATUS` | `0x0000` | yes | status bits; low byte bit 0 = `QEN`, `SS` = sealed |
+| `CONTROL_STATUS` | `0x0000` | yes | status bits; high byte bit 7 = `OCVTAKEN`, `SS` = sealed, low byte bit 0 = `QEN` |
 | `DEVICE_TYPE` | `0x0001` | yes | `0x0742` |
 | `FW_VERSION` | `0x0002` | yes | `0x0103` on the bench units |
 | `HW_VERSION` | `0x0003` | yes | hardware revision |
@@ -522,8 +522,10 @@ Cell 0 and every protection field must be final before it is sent. Do not
 write Update Status by hand.
 
 Bench state: Update Status `0x00`, FCC 747 mAh, no learned data. SOC from
-this gauge is not meaningful until a learning cycle completes. The cycle
-procedure and the runner rewrite are tracked in the v2.0 bring-up plan.
+this gauge is not meaningful until a learning cycle completes. The runner now
+drives this part (see the Variant Differences section of
+[`fg_learning.md`](fg_learning.md)); the cycle procedure and the golden-image
+steps are in the v2.0 bring-up plan.
 
 ## Firmware Coverage
 
@@ -539,10 +541,10 @@ Board wiring: [`go_hardware_board.cpp`](../main/go_hardware_board.cpp).
 | Safety subclass | `read_protection_config()`, `write_protection_config()` | written at boot when different; U1 delay fields preserved; out-of-range rejected; read back and logged |
 | Cell config | `read_cell_config()`, `write_cell_config()` | written at boot when different (2600 / 9620 / 3000 / 50); no `RESET` |
 | Status | `read_safety_status()`, `read_protector_status()`, `read_protector_state()` | logged at boot |
-| Learning reads | `read_qmax_cell0()`, `read_ra_table()`, `read_update_status()`, `read_control_status()` | available; runner still targets BQ27427 |
-| `IT_ENABLE` | `set_update_status_learning(true)` | not sent on rev 2.0 |
+| Learning reads | `read_learning_progress()` (Update Status + `CONTROL_STATUS[OCVTAKEN]`), `read_qmax_mah()`, `read_ra_table()` | polled every 5 s by the learning runner |
+| `IT_ENABLE` | `set_update_status_learning(true)` | sent once by the learning runner at cycle-1 entry; skipped when Update Status bit 2 is already set |
 | `PROTECTOR_CHKSUM` subcommand | `control_subcommand(0x001A, …)` | used to verify the protector write |
-| Qmax Cell 0 write | none | not written |
+| Qmax Cell 0 write | `write_qmax_cell0()` | seeded with Design Capacity from `init_bms()` while Update Status is `0x00`; never overwrites a learned value |
 
 All three boot-time writes are idempotent: on the next boot the board logs
 "already correct — preserved" for each and does not touch flash.

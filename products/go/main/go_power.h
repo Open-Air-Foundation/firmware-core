@@ -70,7 +70,7 @@ enum FgLearningFlag : uint8_t {
   FG_LEARN_CHG = 1u << 1,       ///< Flags() CHG       (charging)
   FG_LEARN_DSG = 1u << 2,       ///< Flags() DSG       (discharging)
   FG_LEARN_ITPOR = 1u << 3,     ///< Flags() ITPOR     (POR wiped learning)
-  FG_LEARN_OCV_TAKEN = 1u << 4, ///< Flags() OCVTAKEN
+  FG_LEARN_OCV_TAKEN = 1u << 4, ///< FgLearningProgress::ocv_taken
   FG_LEARN_QMAX_UP = 1u << 5,   ///< FgLearningProgress::qmax_updated
   FG_LEARN_RES_UP = 1u << 6,    ///< FgLearningProgress::ra_updated
 };
@@ -248,6 +248,10 @@ public:
   /// external_input_present, edv_cutoff_reached). Used only by the factory
   /// FgLearningRunner so the normal field path pays no extra fuel-gauge reads.
   PowerSnapshot poll_bms_fg_learning(bool pm_invalid_hint = false);
+
+  /// Minimum rest after the charge half before the learning run may start
+  /// discharging, chosen per gauge variant (see FG_LEARNING_REST_MIN_*_MS).
+  uint32_t fg_learning_rest_min_ms() const;
 
   /// Lightweight charging-status-only poll
   /// Use on a fast timer to detect plug/unplug quickly without the cost
@@ -474,8 +478,17 @@ public:
   /// End of the discharge half of a learning cycle on a gauge that owns
   /// undervoltage itself (v2).  Set at the gauge's Terminate Voltage, which
   /// leaves 300 mV before its UV Prot opens the pack, so the run can persist
-  /// its stage and rest instead of losing power mid-cycle.
+  /// its stage and ship for the rest instead of losing power mid-cycle.
   static constexpr uint16_t FG_LEARNING_DISCHARGE_END_MV = 3000;
+
+  /// Floor on the rest after the charge half of a learning cycle.  The FSM
+  /// also waits for the gauge's own OCVTAKEN, but that bit only says an OCV
+  /// was measured, not that the cell had relaxed to the dV/dt < 1 uV/s the
+  /// gauge needs before it will use the point for Qmax (TRM SLUUAX0C §2.1).
+  /// Rev 1 keeps its short floor; the rev 2.0 run produces the golden image
+  /// for every unit, so it takes the 2 h relax TI's learning cycle asks for.
+  static constexpr uint32_t FG_LEARNING_REST_MIN_MS = 500000;
+  static constexpr uint32_t FG_LEARNING_REST_MIN_PROTECTED_MS = 2u * 60u * 60u * 1000u;
 
   // --- Battery temperature thresholds ---
   static constexpr int16_t CHARGE_MIN_TEMPERATURE_C = 0;

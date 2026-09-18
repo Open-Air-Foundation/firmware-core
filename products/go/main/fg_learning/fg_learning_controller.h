@@ -59,9 +59,11 @@ struct FgLearningAction {
   bool run_verify = false;                ///< runner reads FG + calls on_verify_result()
   bool active = false;                    ///< false in {Idle, Complete, Failed}
 };
-// Note: no commit_then_ship field. The EDV persist-then-ship ordering is owned
-// by FgLearningRunner::handle_edv_ship(), which is v1-only; the FSM transitions
-// Discharge -> CycleDone on discharge_target_reached, which both variants set.
+// Note: no commit_then_ship field. The FSM transitions Discharge -> CycleDone
+// on discharge_target_reached, which both variants set; FgLearningRunner owns
+// the persist-then-ship that follows (and the earlier v1 EDV pre-emption), so
+// the bottom rest happens powered off and the next boot's resume matrix
+// carries the run on.
 
 struct VerifyInputs {
   bool reads_ok = false;
@@ -76,13 +78,18 @@ class FgLearningController {
 public:
   static constexpr uint8_t CYCLE_TARGET = 2;          ///< fixed cycles before verify
   static constexpr uint8_t ITPOR_LOSS_CAP = 3;        ///< POR-loss restarts -> Failed
-  static constexpr uint32_t REST_TIMEOUT_MS = 500000; ///< min rest before discharge
+  /// Default floor on the rest before discharge; the runner injects the
+  /// per-variant value from PowerService::fg_learning_rest_min_ms().
+  static constexpr uint32_t REST_TIMEOUT_MS = PowerService::FG_LEARNING_REST_MIN_MS;
   static constexpr uint32_t CHARGE_TIMEOUT_MS = 8u * 60u * 60u * 1000u;
   static constexpr uint16_t CHARGE_CURRENT_MA = 1500;
 
   // Qmax accepted band, as a fraction of design capacity (verify criterion 3).
   static constexpr float QMAX_MIN_FRACTION = 0.7f;
   static constexpr float QMAX_MAX_FRACTION = 1.4f;
+
+  explicit FgLearningController(uint32_t rest_min_ms = REST_TIMEOUT_MS)
+      : _rest_min_ms(rest_min_ms) {}
 
   void load(FgLearningStage stage, uint8_t cycle, uint8_t itpor_losses);
   void start(); ///< arm a fresh run (stage=Charge, cycle=1)
@@ -110,6 +117,7 @@ private:
   // Derive the action for the current stage (without transition logic).
   FgLearningAction build_action() const;
 
+  const uint32_t _rest_min_ms; ///< Rest -> Discharge floor for this run
   FgLearningStage _stage = FgLearningStage::Idle;
   uint8_t _cycle = 0;
   uint8_t _itpor_losses = 0;

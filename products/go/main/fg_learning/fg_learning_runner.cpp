@@ -80,7 +80,8 @@ void busy_spin_ms(uint32_t ms) {
 
 } // namespace
 
-FgLearningRunner::FgLearningRunner(const Deps &deps) : _deps(deps) {}
+FgLearningRunner::FgLearningRunner(const Deps &deps)
+    : _controller(deps.power.fg_learning_rest_min_ms()), _deps(deps) {}
 
 void FgLearningRunner::run() {
   // Display first: init() sets up the u8g2 renderer + SPI driver and does the
@@ -142,6 +143,15 @@ void FgLearningRunner::run() {
     }
     _prev_stage = stage;
     _prev_stage_valid = true;
+
+    // The bottom rest (OCV2) has to happen powered off: a cell at the discharge
+    // floor cannot feed the system for the hours the gauge needs, and only the
+    // rev 1 EDV path used to reach ship mode.  Re-plug reboots into the resume
+    // matrix, which carries the run on from the persisted CycleDone.
+    if (stage == FgLearningStage::CycleDone) {
+      _journal.target_ship(_controller.cycle(), snap.fg_soc_percent, snap.fg_voltage_mv);
+      ship_after_cycle(snap); // does not return on target
+    }
 
     if (is_terminal(stage)) {
       handback_terminal(); // does not return
@@ -295,15 +305,18 @@ bool FgLearningRunner::handle_edv_ship(const PowerSnapshot &snap) {
   if (!snap.edv_cutoff_reached || _controller.stage() != FgLearningStage::Discharge) {
     return false;
   }
+  _journal.edv_ship(_controller.cycle(), snap.fg_soc_percent, snap.fg_voltage_mv);
+  ship_after_cycle(snap);
+  return true;
+}
 
-  // Battery safety beats resumability: stop draining first so the cell recovers
-  // above the 2.9 V cutoff.
+void FgLearningRunner::ship_after_cycle(const PowerSnapshot &snap) {
+  // Battery safety beats resumability: stop draining first so the cell
+  // recovers before the rest.
   set_discharge_load(false);
 
-  _journal.edv_ship(_controller.cycle(), snap.fg_soc_percent, snap.fg_voltage_mv);
-
   // Persist CycleDone, then ship regardless of the commit result — never linger
-  // discharging at the cutoff.
+  // discharging at the floor.
   for (int i = 0; i < EDV_COMMIT_RETRY_MAX; ++i) {
     if (save_fg_learning_state(_deps.config_store, FgLearningStage::CycleDone, _controller.cycle(),
                                _controller.itpor_losses())) {
@@ -314,7 +327,6 @@ bool FgLearningRunner::handle_edv_ship(const PowerSnapshot &snap) {
   _screen = Screen::DischargeComplete;
   refresh_dashboard(snap); // last frame shown before ship-off
   _deps.power.shutdown();  // ship mode — does not return
-  return true;
 }
 
 void FgLearningRunner::feed_ext_watchdog(uint32_t now) {

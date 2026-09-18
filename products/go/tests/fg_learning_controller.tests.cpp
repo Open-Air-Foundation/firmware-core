@@ -155,6 +155,22 @@ TEST_CASE("Rest needs both OCV taken and the rest timeout", "[fg]") {
   REQUIRE(c.stage() == FgLearningStage::Discharge);
 }
 
+TEST_CASE("Rest honours the floor the runner injects", "[fg]") {
+  // The floor is per variant (PowerService::fg_learning_rest_min_ms); the FSM
+  // only has to apply whatever it was constructed with.
+  constexpr uint32_t FLOOR_MS = 60000;
+  FgLearningController c(FLOOR_MS);
+  c.load(FgLearningStage::Rest, 1, 0);
+  c.tick(quiet_snapshot(), 0); // stamp entry
+
+  PowerSnapshot ocv = quiet_snapshot();
+  ocv.fg_learning_flags |= FG_LEARN_OCV_TAKEN;
+  c.tick(ocv, FLOOR_MS - 1);
+  REQUIRE(c.stage() == FgLearningStage::Rest);
+  c.tick(ocv, FLOOR_MS);
+  REQUIRE(c.stage() == FgLearningStage::Discharge);
+}
+
 TEST_CASE("Rest action is low-power with no charge", "[fg]") {
   FgLearningController c;
   c.load(FgLearningStage::Rest, 1, 0);
@@ -188,6 +204,19 @@ TEST_CASE("Discharge advances to CycleDone when the discharge target is reached"
   REQUIRE(c.stage() == FgLearningStage::CycleDone);
   REQUIRE(a.persist_stage);
   REQUIRE(a.screen == Screen::DischargeComplete);
+}
+
+TEST_CASE("CycleDone is a quiet stage with charge off", "[fg]") {
+  // The runner ships right after this stage is persisted, so the cell must
+  // already be unloaded for the powered-off rest that follows.
+  FgLearningController c;
+  c.load(FgLearningStage::CycleDone, 1, 0);
+  FgLearningAction a = c.tick(quiet_snapshot(), 0);
+  REQUIRE(a.active);
+  REQUIRE(a.low_power);
+  REQUIRE_FALSE(a.set_charge_enabled);
+  REQUIRE(a.screen == Screen::DischargeComplete);
+  REQUIRE(c.stage() == FgLearningStage::CycleDone); // no in-tick advance
 }
 
 TEST_CASE("Discharge holds while only the v1 EDV mirror is set", "[fg]") {

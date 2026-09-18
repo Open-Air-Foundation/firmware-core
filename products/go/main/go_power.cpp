@@ -376,11 +376,10 @@ PowerSnapshot PowerService::poll_bms_fg_learning(bool pm_invalid_hint) {
   if (status.fg_flags & FgFlags::ITPOR) {
     lf |= FG_LEARN_ITPOR;
   }
-  if (status.fg_flags & FgFlags::OCVTAKEN) {
-    lf |= FG_LEARN_OCV_TAKEN;
-  }
 
   // Learning progress and Design Capacity are the extra reads — learning only.
+  // OCVTAKEN comes from here too, not from Flags(): only the BQ27427 keeps it
+  // there, so the driver is the one place that knows which register to read.
   if (_fg != nullptr && _fg->ready()) {
     FgLearningProgress progress{};
     if (_fg->read_learning_progress(progress)) {
@@ -389,6 +388,9 @@ PowerSnapshot PowerService::poll_bms_fg_learning(bool pm_invalid_hint) {
       }
       if (progress.ra_updated) {
         lf |= FG_LEARN_RES_UP;
+      }
+      if (progress.ocv_taken) {
+        lf |= FG_LEARN_OCV_TAKEN;
       }
     }
     _fg->read_design_capacity_mah(status.fg_design_capacity_mah);
@@ -409,6 +411,10 @@ PowerSnapshot PowerService::poll_bms_fg_learning(bool pm_invalid_hint) {
                                         : status.edv_cutoff_reached;
 
   return status;
+}
+
+uint32_t PowerService::fg_learning_rest_min_ms() const {
+  return _config.fg_has_protector ? FG_LEARNING_REST_MIN_PROTECTED_MS : FG_LEARNING_REST_MIN_MS;
 }
 
 FgLearningVerifyReadout PowerService::read_fg_learning_verify() {
