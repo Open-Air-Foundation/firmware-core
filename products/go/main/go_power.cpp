@@ -235,8 +235,13 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
     _edv_count_seeded = true;
   }
 
-  if (on_battery && telemetry_ok && telemetry.is_battery_voltage_valid() &&
-      telemetry.battery_voltage < edv_threshold) {
+  // A failed read is not evidence that the cell recovered.  Zeroing the count
+  // on one would restart the debounce, and on the watch path it also reads as
+  // "a charger cleared it" and boots the whole system on an empty cell.
+  const bool reading_usable = status_ok && telemetry_ok && telemetry.is_battery_voltage_valid();
+  if (!reading_usable) {
+    AG_LOGW(TAG, "EDV: no usable reading this poll - holding count at %d", _edv_low_count);
+  } else if (on_battery && telemetry.battery_voltage < edv_threshold) {
     ++_edv_low_count;
   } else {
     _edv_low_count = 0;
@@ -313,10 +318,8 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
   // hot to charge.  The gauge's own flags are the only thing that separates
   // the two, so they decide what the rest of the firmware is told.
   status.charge_blocked_by_gauge = (status.fg_flags & (FgFlags::CHG_SUS | FgFlags::CHG_INH)) != 0;
-  if (status.charge_blocked_by_gauge &&
-      status.charging_status == BmsChargingState::ChargeTerminationDone) {
-    status.charging_status = BmsChargingState::NotCharging;
-  }
+  status.charging_status =
+      charging_state_when_blocked(status.charging_status, status.charge_blocked_by_gauge);
 
   // -------------------------------------------------------------------------
   // Full-charge pause — disable charging when battery is full + plugged

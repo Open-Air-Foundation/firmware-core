@@ -603,7 +603,12 @@ void Orchestrator::on_bms_status_timer() {
   if (_svc.power_service.poll_status(status)) {
     bool was_charging = is_bms_charging(_latest_power.charging_status);
     const BmsPowerSource previous_power_source = _latest_power.charger_status.power_source;
-    _latest_power.charging_status = status.charging_state;
+    // The status-only poll does not read the gauge, so carry the last full
+    // poll's verdict forward; otherwise this would undo the rewrite every 5 s
+    // and BLE would report a finished charge while the pack is too cold or hot
+    // to take one.
+    _latest_power.charging_status = PowerService::charging_state_when_blocked(
+        status.charging_state, _latest_power.charge_blocked_by_gauge);
     _latest_power.charger_status = status;
     bool now_charging = is_bms_charging(status.charging_state);
     if (was_charging != now_charging || previous_power_source != status.power_source) {

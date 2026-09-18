@@ -74,6 +74,7 @@ extern bool bms_polled;
 extern int bms_poll_count;
 extern bool state_saved;
 extern RtcAppState last_saved_state;
+extern uint8_t poll_writes_low_battery_polls;
 extern PowerSnapshot snapshot_to_return;
 extern PowerService::SleepDecision sleep_decision_to_return;
 extern bool enter_sleep_called;
@@ -1044,6 +1045,24 @@ TEST_CASE("execute_fast_path: exhausted BMS retries continue without BMS") {
   CHECK(board.call_index("power") >= 0);
   CHECK(board.call_index("sensors") >= 0);
   CHECK(board.call_index("storage") >= 0);
+}
+
+TEST_CASE("fast-path keeps the low-battery count poll_bms wrote to RTC") {
+  // The shutdown debounce spans deep sleeps, and the fast path is what a
+  // sleeping device runs.  Saving the boot-time copy of RTC state would
+  // discard the count every cycle and the debounce would never complete.
+  test_spy::reset();
+  test_spy::poll_writes_low_battery_polls = 1;
+
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  RtcAppState boot_state{}; // count 0 at boot, as after a fresh wake
+  access.run_fast_path(boot_state);
+
+  CHECK(test_spy::state_saved);
+  CHECK(test_spy::last_saved_state.low_battery_polls == 1);
 }
 
 TEST_CASE("fast-path promotion retries BMS for required interactive boot") {

@@ -782,6 +782,22 @@ TEST_CASE("init(PowerOn): default state with first measurement and BMS poll",
   REQUIRE(test_spy::bms_polled);
 }
 
+TEST_CASE("init: an over-discharge trip shuts down before interactive operation",
+          "[Orchestrator][init][edv]") {
+  // The low-battery count survives deep sleep, so the first poll of a boot can
+  // already be the one that trips.  Waiting for on_bms_timer() would run BLE,
+  // GPS and the sensors for another poll interval on an empty cell.
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverDischarge;
+
+  orch.init(WakeCause::PowerOn);
+
+  CHECK(test_spy::shutdown_called);
+  CHECK(f.ui_manager.current_screen() == Screen::ShutdownDischarge);
+  CHECK_FALSE(test_spy::ble_init_called);
+}
+
 TEST_CASE("init: temperature trip shuts down before interactive operation",
           "[Orchestrator][init][temperature]") {
   SECTION("over-temperature uses the overheated page") {

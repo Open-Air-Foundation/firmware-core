@@ -204,6 +204,7 @@ void GoApp::run_low_battery_watch_path(const RtcAppState &state) {
   AG_LOGI(TAG, "run_low_battery_watch_path: %u prior low reading(s)",
           static_cast<unsigned>(state.low_battery_polls));
 #ifndef TEST_HOST
+  _board.ulp_stop();
   _board.init_core();
   _board.init_fuel_gauge();
   if (!init_bms_with_retry()) {
@@ -213,9 +214,13 @@ void GoApp::run_low_battery_watch_path(const RtcAppState &state) {
     // loop, and let the next wake try again.
     AG_LOGE(TAG, "BMS unavailable on the low-battery watch; sleeping %lu ms instead of restarting",
             static_cast<unsigned long>(PowerService::LOW_BATTERY_WATCH_INTERVAL_MS));
+    _board.release_gpio_holds();
+    _board.ulp_start();
     _board.power().enter_sleep(PowerService::LOW_BATTERY_WATCH_INTERVAL_MS);
     return;
   }
+
+  _board.release_gpio_holds();
 
   // poll_bms() seeds its counter from RTC and writes the new one back, so the
   // decision here is only what to do with the verdict.
@@ -236,6 +241,7 @@ void GoApp::run_low_battery_watch_path(const RtcAppState &state) {
   _board.power().save_state(next);
   AG_LOGI(TAG, "low-battery watch: re-checking in %lu ms",
           static_cast<unsigned long>(PowerService::LOW_BATTERY_WATCH_INTERVAL_MS));
+  _board.ulp_start();
   _board.power().enter_sleep(PowerService::LOW_BATTERY_WATCH_INTERVAL_MS);
   // Never returns — CPU reboots on wake.
 #else
@@ -301,7 +307,11 @@ void GoApp::run_fast_path(const RtcAppState &state) {
   }
 
   if (result.outcome == FastPathResult::Outcome::Sleep) {
-    RtcAppState save = state;
+    // Start from what is in RTC now, not from the copy read at boot:
+    // poll_bms() has since written the low-battery count there, and saving the
+    // stale copy would throw it away every cycle, so the debounce would never
+    // complete on the path a sleeping device actually takes.
+    RtcAppState save = _board.power().load_state();
     save.sensors_warm = result.sensors_warm;
     _board.power().save_state(save);
 
@@ -489,7 +499,8 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     disp.init(values);
 
     uint32_t awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
-    auto decision = pwr.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, awake_ms);
+    auto decision = pwr.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, awake_ms,
+                                     pwr.edv_low_count() > 0);
 
     if (decision.type == PowerService::SleepType::Deep) {
       const bool warm = pwr.should_hold_pm_sensor(decision.duration_ms);

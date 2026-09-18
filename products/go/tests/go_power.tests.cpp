@@ -2298,6 +2298,63 @@ TEST_CASE("poll_bms_fg_learning: edv_cutoff_reached mirrors over-discharge ship 
   CHECK(snap.discharge_target_reached); // v1: the EDV cutoff is the discharge end
 }
 
+TEST_CASE("charging_state_when_blocked rewrites only a finished charge", "[PowerService][charge]") {
+  using PS = PowerService;
+  // Both pollers go through this, so a gauge-blocked charge cannot read as a
+  // finished one whichever of them last wrote the state.
+  CHECK(PS::charging_state_when_blocked(BmsChargingState::ChargeTerminationDone, true) ==
+        BmsChargingState::NotCharging);
+  CHECK(PS::charging_state_when_blocked(BmsChargingState::ChargeTerminationDone, false) ==
+        BmsChargingState::ChargeTerminationDone);
+
+  SECTION("states other than termination pass through untouched") {
+    for (auto state : {BmsChargingState::NotCharging, BmsChargingState::TrickleCharge,
+                       BmsChargingState::PreCharge, BmsChargingState::FastCharge,
+                       BmsChargingState::TaperCharge, BmsChargingState::Unknown}) {
+      CHECK(PS::charging_state_when_blocked(state, true) == state);
+      CHECK(PS::charging_state_when_blocked(state, false) == state);
+    }
+  }
+}
+
+TEST_CASE("poll_bms: an unusable reading holds the low-battery count", "[PowerService][edv]") {
+  MockBmsDevice mock_bms;
+  PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+  svc.save_state(RtcAppState{});
+
+  ALLOW_CALL(mock_bms, get_battery_percentage(trompeloeil::_)).SIDE_EFFECT(*_1 = 2.0f).RETURN(true);
+  ALLOW_CALL(mock_bms, read_status(trompeloeil::_))
+      .SIDE_EFFECT(_1.power_source = BmsPowerSource::None)
+      .RETURN(true);
+
+  auto low = NAMED_ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+                 .SIDE_EFFECT(_1.battery_voltage = 2.8f)
+                 .RETURN(true);
+  svc.poll_bms();
+  CHECK(svc.edv_low_count() == 1);
+  low.reset();
+
+  SECTION("a failed telemetry read is not a recovery") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_)).RETURN(false);
+    svc.poll_bms();
+    CHECK(svc.edv_low_count() == 1);
+  }
+
+  SECTION("a reading with no valid battery voltage is not a recovery either") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_)).RETURN(true); // leaves the sentinel
+    svc.poll_bms();
+    CHECK(svc.edv_low_count() == 1);
+  }
+
+  SECTION("a valid reading above the threshold does clear it") {
+    ALLOW_CALL(mock_bms, read_telemetry(trompeloeil::_))
+        .SIDE_EFFECT(_1.battery_voltage = 3.6f)
+        .RETURN(true);
+    svc.poll_bms();
+    CHECK(svc.edv_low_count() == 0);
+  }
+}
+
 TEST_CASE("poll_bms: a gauge blocking charge on temperature is not a finished charge",
           "[PowerService][fg][charge]") {
   MockBmsDevice mock_bms;

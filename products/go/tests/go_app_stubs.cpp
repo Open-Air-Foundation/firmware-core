@@ -37,6 +37,7 @@ namespace test_spy {
 
 // --- RTC state ---
 RtcAppState rtc_state{};
+uint8_t poll_writes_low_battery_polls = 0;
 RtcDisplaySnapshot rtc_snapshot{};
 bool rtc_snapshot_valid = false;
 
@@ -129,6 +130,7 @@ float bms_battery_pct = -1.0f;
 
 void reset() {
   rtc_state = RtcAppState{};
+  poll_writes_low_battery_polls = 0;
   rtc_snapshot = RtcDisplaySnapshot{};
   rtc_snapshot_valid = false;
 
@@ -471,6 +473,9 @@ void PowerService::set_fuel_gauge(FuelGaugeDevice * /*fg*/) {}
 PowerSnapshot PowerService::poll_bms(bool /*pm_invalid_hint*/) {
   test_spy::bms_polled = true;
   ++test_spy::bms_poll_count;
+  // The real poll_bms mirrors its low-battery count into RTC state; callers
+  // that save RTC afterwards must not write back a copy read before this.
+  test_spy::rtc_state.low_battery_polls = test_spy::poll_writes_low_battery_polls;
   return test_spy::snapshot_to_return;
 }
 

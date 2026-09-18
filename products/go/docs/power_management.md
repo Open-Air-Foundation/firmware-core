@@ -224,6 +224,29 @@ that trips. `Orchestrator::init()` therefore acts on every ship-mode reason
 rather than only the temperature ones; waiting for `on_bms_timer()` would run
 the whole system for another poll interval on an empty cell.
 
+Anything that writes RTC state after a poll has to start from what the poll
+left there. `run_fast_path` re-reads it with `load_state()` rather than saving
+the copy it was handed at boot, which would discard the count on every cycle of
+the path a sleeping device actually runs.
+
+A poll that could not read the charger holds the count where it is instead of
+clearing it. A failed read is not evidence the cell recovered, and on the watch
+path clearing it also reads as "a charger cleared it" and boots the whole
+system on an empty cell.
+
+### Behaviour changes for boards without a protector
+
+Two of these reach board rev 1 as well, and neither is only a rename:
+
+- The low-battery count now survives deep sleep there too, so a rev 1 board in
+  Offline sleep can reach its 2.9 V ship request after three readings. Before,
+  the count reset every boot and that path never completed.
+- The charger driver's ITERM and IPRECHG encoding was one step low for every
+  caller. A rev 1 board asking for 20 mA termination and 30 mA pre-charge was
+  getting 15 mA and 20 mA; it now gets what the config says. The configured
+  numbers did not change, what the chip does with them did.
+  `products/reference` is affected the same way.
+
 `select_boot_path()` routes a timer wake with a non-zero count to
 `BootPath::LowBatteryWatch`, ahead of the fast path. That path brings up the
 charger and gauge, calls `poll_bms()` once and goes straight back to sleep: no

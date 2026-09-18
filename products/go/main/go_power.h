@@ -312,6 +312,16 @@ public:
   /// RtcAppState by poll_bms() so it survives deep sleep.
   int edv_low_count() const { return _edv_low_count; }
 
+  /// The charger reports a charge it finished and one the gauge is blocking on
+  /// temperature identically, as ChargeTerminationDone.  Every reader of a
+  /// charging state goes through here so the two do not get confused, whether
+  /// the state came from a full poll or the faster status-only one.
+  static BmsChargingState charging_state_when_blocked(BmsChargingState state, bool blocked) {
+    return (blocked && state == BmsChargingState::ChargeTerminationDone)
+               ? BmsChargingState::NotCharging
+               : state;
+  }
+
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   void shutdown();
 
