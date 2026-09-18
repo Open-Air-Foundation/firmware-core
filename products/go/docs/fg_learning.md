@@ -434,7 +434,12 @@ frame, lights the result LED (green / red), and holds until the POWER press.
   `ITPOR_LOSS_CAP` (3) losses the run trips `Failed` for investigation.
 - **`FC` never latches** (chemistry / Taper-Voltage mismatch): `Charge` also
   advances when the BMS terminates charge after charging was actually observed,
-  so OCV1 is still captured at the relaxed top.
+  so OCV1 is still captured at the relaxed top. That fallback is **rev 1 only**,
+  because `ChargeTerminationDone` is produced by the rev 1 charger driver and
+  the rev 2.0 one has no state that means terminated. Rev 2.0 therefore depends
+  on `FC` alone, which is why the board programs the gauge's Charging Voltage to
+  match the charger: on TI's 4350 mV default the flag could never set and the
+  run sat in `Charge` until the 8 h timeout.
 - **Chemistry already correct:** `set_chemistry_4v2()` reads the Chem ID first
   and only writes when it differs — changing chemistry resets IT learning, so it
   must never run on an already-learned unit.
@@ -464,6 +469,7 @@ two gauges is resolved below them, either in the driver or in `PowerService`.
 | End of the discharge half | firmware EDV cutoff at 2.9 V | cell reaches `FG_LEARNING_DISCHARGE_END_MV` (3.0 V); the run persists `CycleDone` and ships the same way |
 | Undervoltage cutoff | firmware at `EDV_SHIP_THRESHOLD_V` | firmware at `EDV_SHIP_THRESHOLD_PROTECTED_V`, with the gauge's UV Prot as backstop, see [`bq27742_capability.md`](bq27742_capability.md) |
 | Gauge current thresholds | Quit 80 mA, Dsg 120 mA (configured) | factory defaults, Quit 40 mA, Dsg 60 mA, Chg 75 mA (TRM subclass 81); firmware never writes them and the bench has not read them back |
+| End of the charge half | `FC`, or the charger reporting termination | `FC` only; the board programs Charging Voltage 4200 mV so the flag can set |
 
 Two consequences are worth stating plainly.
 

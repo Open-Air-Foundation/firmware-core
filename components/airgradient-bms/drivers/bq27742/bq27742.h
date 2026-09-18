@@ -102,6 +102,13 @@ public:
   /// Sleep Current.  Unseals the gauge (idempotent; it stays unsealed).
   bool read_cell_config(FgCellConfig &out);
 
+  /// Charging Voltage (subclass 34 offset 0).  With Taper Voltage it sets the
+  /// level Voltage() must reach before the gauge will qualify a charge
+  /// termination and raise Flags()[FC] (TRM SLUUAX0C §2.6.4, §5.3.2.1), so it
+  /// has to match the charger's own regulation voltage.
+  bool read_charging_voltage_mv(uint16_t &out);
+  bool write_charging_voltage_mv(uint16_t mv); ///< range-checked, read back
+
   /// Data-flash read of the firmware-layer protection thresholds (Safety
   /// subclass).  Unseals the gauge (idempotent; it stays unsealed).
   bool read_protection_config(FgProtectionConfig &out);

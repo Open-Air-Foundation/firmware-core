@@ -253,6 +253,19 @@ Temperature ranges used by charge inhibit / suspend (TRM p.61, §2.6.1).
 | 6–12 | T1–T2 … T4–T5 Chg Voltage | I2 | 4350 / 4350 / 4300 / 4250 | mV | — |
 | 14–17 | T1–T2 … T4–T5 Chg Current | U1 | 50 / 80 / 80 / 80 | % | — |
 
+### Subclass 34 Charge
+
+| Offset | Field | Type | Min | Max | Default | Unit | Go v2.0 |
+|---|---|---|---|---|---|---|---|
+| 0 | Charging Voltage | I2 | 4000 | 5000 | 4350 | mV | **4200** |
+
+With Taper Voltage (subclass 36 offset 4, default 100 mV) this sets the level
+`Voltage()` must reach before the gauge will qualify a charge termination and
+raise `Flags()[FC]` (TRM p.35 §2.6.4, p.68 §5.3.2.1). The 4350 mV default puts
+that gate at 4250 mV, which the 4.20 V cell never reaches, so the board writes
+4200 to match the charger's own regulation voltage and leaves Taper Voltage at
+its default.
+
 ### Subclass 48 Data
 
 | Offset | Field | Type | Default | Unit | Go v2.0 |
@@ -540,13 +553,14 @@ Board wiring: [`go_hardware_board.cpp`](../main/go_hardware_board.cpp).
 | Average power | `read_average_power_mw()` derives V × I | `AveragePower()` `0x76` not used yet |
 | Safety subclass | `read_protection_config()`, `write_protection_config()` | written at boot when different; U1 delay fields preserved; out-of-range rejected; read back and logged |
 | Cell config | `read_cell_config()`, `write_cell_config()` | written at boot when different (2600 / 9620 / 3000 / 50); no `RESET` |
+| Charging Voltage | `read_charging_voltage_mv()`, `write_charging_voltage_mv()` | written at boot when different (4200); range-checked and read back |
 | Status | `read_safety_status()`, `read_protector_status()`, `read_protector_state()` | logged at boot |
 | Learning reads | `read_learning_progress()` (Update Status + `CONTROL_STATUS[OCVTAKEN]`), `read_qmax_mah()`, `read_ra_table()` | polled every 5 s by the learning runner |
 | `IT_ENABLE` | `set_update_status_learning(true)` | sent once by the learning runner at cycle-1 entry; skipped when Update Status bit 2 is already set |
 | `PROTECTOR_CHKSUM` subcommand | `control_subcommand(0x001A, …)` | used to verify the protector write |
 | Qmax Cell 0 write | `write_qmax_cell0()` | seeded with Design Capacity from `init_bms()` while Update Status is `0x00`; never overwrites a learned value |
 
-All three boot-time writes are idempotent: on the next boot the board logs
+All boot-time writes are idempotent: on the next boot the board logs
 "already correct — preserved" for each and does not touch flash.
 
 The protector write runs from `init_bms()`, not `init_fuel_gauge()`. Every

@@ -88,6 +88,14 @@ static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
     .sleep_current_ma = 50,
 };
 
+// Gauge-side reference for detecting the end of a charge.  Flags()[FC] is only
+// raised once Voltage() reaches Charging Voltage minus Taper Voltage (TRM
+// SLUUAX0C §2.6.4).  TI's 4350 mV default against the 100 mV Taper Voltage puts
+// that at 4250 mV, which a 4.20 V cell never reaches: FC could never set, the
+// full-charge pause never engaged, and the learning run had no way out of its
+// Charge stage.  Matched to the charger's own regulation voltage above.
+static constexpr uint16_t AGO_FG_CHARGING_VOLTAGE_MV_V2 = 4200;
+
 // Firmware-layer protection thresholds for the same cell.  TI's factory
 // defaults suit a generic cell that tolerates 4.35 V and 55 °C charging; the
 // Cowon INR18490NP is a 4.20 ± 0.05 V part rated 0–45 °C charge, −20–60 °C
@@ -532,6 +540,20 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
     AG_LOGI(TAG, "BQ27742 cell config already correct — preserved");
   } else {
     AG_LOGW(TAG, "BQ27742 cell config unreadable — left as-is");
+  }
+
+  uint16_t charging_voltage = 0;
+  if (!_fuel_gauge_v2->read_charging_voltage_mv(charging_voltage)) {
+    AG_LOGW(TAG, "BQ27742 Charging Voltage unreadable — left as-is");
+  } else if (charging_voltage != AGO_FG_CHARGING_VOLTAGE_MV_V2) {
+    AG_LOGI(TAG, "BQ27742 applying Charging Voltage %u → %u mV", charging_voltage,
+            AGO_FG_CHARGING_VOLTAGE_MV_V2);
+    if (!_fuel_gauge_v2->write_charging_voltage_mv(AGO_FG_CHARGING_VOLTAGE_MV_V2)) {
+      AG_LOGW(TAG, "BQ27742 write_charging_voltage_mv() failed — FC will not set");
+      df_ok = false;
+    }
+  } else {
+    AG_LOGI(TAG, "BQ27742 Charging Voltage already correct — preserved");
   }
 
   FgProtectionConfig prot_current{};

@@ -64,6 +64,7 @@ constexpr uint16_t UNSEAL_KEY_0 = 0x3672;
 constexpr uint8_t SUBCLASS_SAFETY = 2;     // OV/UV/OT protection thresholds
 constexpr uint8_t SUBCLASS_INTEGRITY = 57; // Prot Checksum @12
 constexpr uint8_t SUBCLASS_REGISTERS = 64; // Pack Config A-D @0-4, Prot OC/OV Config @5/6
+constexpr uint8_t SUBCLASS_CHARGE = 34;    // Charging Voltage @0
 constexpr uint8_t SUBCLASS_DATA = 48;      // Design Capacity @12, Design Energy @14
 constexpr uint8_t SUBCLASS_POWER = 68;     // Sleep Current @2
 constexpr uint8_t SUBCLASS_IT_CFG = 80;    // Terminate Voltage @64
@@ -87,6 +88,7 @@ constexpr uint8_t OFFSET_PROT_CHECKSUM = 12;
 constexpr uint8_t PACK_CONFIG_D_RSVD = 0x04;
 constexpr uint8_t PROT_OC_CONFIG_RSVD = 0xC0;
 constexpr uint8_t PROT_OV_CONFIG_RSVD = 0xF8;
+constexpr uint8_t OFFSET_CHARGING_VOLTAGE = 0;
 constexpr uint8_t OFFSET_DESIGN_CAPACITY = 12;
 constexpr uint8_t OFFSET_DESIGN_ENERGY = 14;
 constexpr uint8_t OFFSET_SLEEP_CURRENT = 2;
@@ -94,6 +96,10 @@ constexpr uint8_t OFFSET_TERMINATE_VOLTAGE = 64;
 constexpr uint8_t OFFSET_QMAX_CELL0 = 0;
 constexpr uint8_t OFFSET_UPDATE_STATUS = 2;
 constexpr uint16_t QMAX_CELL0_MAX_MAH = 14500; // TRM Table 5-5
+
+// Charging Voltage accepted range (TRM §5.3.2.1).
+constexpr uint16_t CHARGING_VOLTAGE_MIN_MV = 4000;
+constexpr uint16_t CHARGING_VOLTAGE_MAX_MV = 5000;
 
 // Update Status bits (TRM §5.5.3.2).
 constexpr uint8_t UPDATE_STATUS_QMAX_INITIAL = (1u << 0);
@@ -569,6 +575,39 @@ bool BQ27742::read_cell_config(FgCellConfig &out) {
     return false;
   }
   out.sleep_current_ma = unpack(OFFSET_SLEEP_CURRENT);
+  return true;
+}
+
+bool BQ27742::read_charging_voltage_mv(uint16_t &out) {
+  uint8_t block[DF_BLOCK_SIZE] = {};
+  if (!_read_df_block(SUBCLASS_CHARGE, 0, block)) {
+    return false;
+  }
+  out = (static_cast<uint16_t>(block[OFFSET_CHARGING_VOLTAGE]) << 8) |
+        block[OFFSET_CHARGING_VOLTAGE + 1];
+  return true;
+}
+
+bool BQ27742::write_charging_voltage_mv(uint16_t mv) {
+  if (!ready()) {
+    return false;
+  }
+  if (mv < CHARGING_VOLTAGE_MIN_MV || mv > CHARGING_VOLTAGE_MAX_MV) {
+    ESP_LOGE(TAG, "Charging Voltage %u mV outside %u..%u - refusing to write", mv,
+             CHARGING_VOLTAGE_MIN_MV, CHARGING_VOLTAGE_MAX_MV);
+    return false;
+  }
+  if (!_write_df_word(SUBCLASS_CHARGE, OFFSET_CHARGING_VOLTAGE, mv)) {
+    return false;
+  }
+
+  RTOS::delay_ms(50);
+  uint16_t verify = 0;
+  if (!read_charging_voltage_mv(verify) || verify != mv) {
+    ESP_LOGE(TAG, "Charging Voltage write did NOT stick - read back %u, wanted %u", verify, mv);
+    return false;
+  }
+  ESP_LOGI(TAG, "Charging Voltage set to %u mV", mv);
   return true;
 }
 
