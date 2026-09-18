@@ -957,6 +957,53 @@ TEST_CASE("on_sensor_data: first measurement shows Getting Started on a fresh fi
   CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
   CHECK(A::setup_session_active(orch));
   CHECK(A::lock_state(orch) == LockState::Unlocked);
+
+  SECTION("Short and double presses leave onboarding open") {
+    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+    A::on_input(orch, {InputSource::TouchEnter, InputType::DoublePress});
+    CHECK_FALSE(A::settings(orch).onboarding_done);
+    CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
+  }
+
+  SECTION("Long press completes onboarding; reopened Setup Guide keeps short-press Back") {
+    ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+    A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress});
+    CHECK(A::settings(orch).onboarding_done);
+    CHECK_FALSE(A::setup_session_active(orch));
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+    CHECK(A::lock_state(orch) == LockState::Unlocked);
+
+    f.ui_manager.show_getting_started(/*from_boot=*/false);
+    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+    CHECK(f.ui_manager.current_screen() == Screen::Settings);
+  }
+
+  SECTION("Failed save leaves onboarding available for another long press") {
+    ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    {
+      REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+      A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress});
+    }
+    CHECK_FALSE(A::settings(orch).onboarding_done);
+    CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
+
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+    A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress});
+    CHECK(A::settings(orch).onboarding_done);
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
 }
 
 TEST_CASE("on_sensor_data: splash transition is suppressed when setup session is active",

@@ -1271,7 +1271,7 @@ void Orchestrator::on_input(const InputEventData &input) {
     break;
   }
   case UIAction::AckOnboarding:
-    // "Start using": persist the flag and leave the session to Home.
+    // Enter held for "Start using": persist the flag and leave to Home.
     if (mark_onboarding_done()) {
       leave_session_to_home();
     } else {

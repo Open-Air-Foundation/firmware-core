@@ -184,6 +184,7 @@ Key points:
 - `provisioning_ap_ssid` (`const char *`): captive-portal AP SSID (`airgradient-<MAC>`) rendered as the Wi-Fi instruction line
 - `provisioning_ap_password` (`const char *`): captive-portal AP password rendered as the Wi-Fi instruction line (sourced from `UIManager::Config::ap_password`, matches `WifiService::Config::ap_password`)
 - `qr` (`const AirgradientProvisioning::QrCode *`): borrowed pointer to the QR matrix shown on the session screens that render one — the Provisioning page (UIManager re-encodes on session entry and transport switch: BleOnly → companion-app URL, WifiOnly → `WIFI:` join descriptor) and the Getting Started page (setup landing-page URL). Those screens are mutually exclusive, so one pointer serves both. Null or empty matrix skips the QR area
+- `getting_started_from_boot` (`bool`): renders bold `Start using` above the regular-weight `Hold Enter to start` hint inside one highlighted area on the first-boot guide, retaining `Or just use it right now` above the action; Settings → Setup Guide keeps its single-line `Back` action
 
 ## Architecture
 

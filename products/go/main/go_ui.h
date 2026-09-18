@@ -38,7 +38,7 @@ enum class UIAction : uint8_t {
   PlayMelody,                         ///< Accompanied by UIActionResult::melody.
   ConfirmSwitchProvisioningTransport, ///< User confirmed Yes on switch-transport overlay.
   ConfirmCancelProvisioning,          ///< User confirmed Yes on cancel-setup overlay.
-  AckOnboarding,                      ///< 'Start using' pressed on first-boot Getting Started.
+  AckOnboarding,                      ///< Enter held on first-boot Getting Started.
   ArmFgLearning,      ///< Confirmed: write factory state and reboot into FG learning.
   RunPeripheralTest,  ///< Start the guided actuator + AQ peripheral test flow.
   PeripheralStepPass, ///< Operator confirmed the current actuator step.
@@ -243,7 +243,7 @@ public:
   void set_provisioning_ui_state(ProvisioningUiState s);
 
   /// Enter the Getting Started guide. Encodes the setup QR; from_boot
-  /// selects "Start using" -> AckOnboarding vs "Back" -> Settings.
+  /// selects hold "Start using" -> AckOnboarding vs tap "Back" -> Settings.
   void show_getting_started(bool from_boot);
 
   /// Push the current peripheral-test view snapshot for Screen::PeripheralTest.

@@ -75,7 +75,7 @@ on-screen password line agree.
 | `set_provisioning_ui_state(s)` | Update the page status enum (`WaitingForCredentials`, `SwitchingTransport`, `Connecting`, `ConnectFailed`, `Connected`). Status text is derived from this plus the active transport. |
 | `set_provisioning_connected(ip)` | Latch the network-byte-order IP for the Provisioning success state. Non-zero flips the status to `Connected! a.b.c.d`; zero clears it (called from the session-leave helpers). |
 | `provisioning_transport()` | Read the active provisioning transport. |
-| `show_getting_started(from_boot)` | Enter `Screen::GettingStarted` (first-boot guide). Encodes the setup landing-page QR (`https://l.airgradient.net/GO`) on entry. `from_boot=true` (boot gate) sets the action row to `Start using` and the press emits `AckOnboarding`; `from_boot=false` (`Settings → Setup Guide`) sets it to `Back` and the press returns to `Settings`. |
+| `show_getting_started(from_boot)` | Enter `Screen::GettingStarted` (first-boot guide). Encodes the setup landing-page QR (`https://l.airgradient.net/GO`) on entry. `from_boot=true` (boot gate) sets the action row to `Start using` and an Enter long press emits `AckOnboarding`; `from_boot=false` (`Settings → Setup Guide`) sets it to `Back` and a short press returns to `Settings`. |
 
 ## UIAction Events
 
@@ -93,7 +93,7 @@ orchestrator what happened:
 | `SaveTag` | TagList: tag selected | `tag_index` + `tag_label` fields set (plumbing preserved, menu entry removed) |
 | `ConfirmSwitchProvisioningTransport` | ProvisioningConfirm: "Yes" on a switch-transport overlay | Orchestrator latches `SwitchingTransport`, renders + flushes, then calls `WifiService::switch_provisioning_transport()` |
 | `ConfirmCancelProvisioning` | ProvisioningConfirm: "Yes" on a cancel-setup overlay | Orchestrator routes to `leave_session_to_portable()` |
-| `AckOnboarding` | GettingStarted (boot gate): `Start using` press | Orchestrator calls `mark_onboarding_done()` then `leave_session_to_home()` |
+| `AckOnboarding` | GettingStarted (boot gate): Enter long press on `Start using` | Orchestrator calls `mark_onboarding_done()` then `leave_session_to_home()` if the save succeeds |
 
 Opening the main menu resets the active metric to `None`, clearing any
 hero/grid selection highlight behind the overlay.
@@ -166,7 +166,12 @@ to Settings on About Device. Setup Guide is Settings row 6 and reopens
 `Screen::GettingStarted` through `show_getting_started(false)`. It has a single
 Back action, which restores the Setup Guide row without changing
 `onboarding_done`. The boot-gate entry uses `show_getting_started(true)` and
-retains its Start using action.
+keeps `Or just use it right now` above a single highlighted area containing
+bold `Start using` and the regular-weight hint `Hold Enter to start` below it.
+Short presses and double taps do nothing; the default one-second Enter long
+press emits `AckOnboarding` while Enter is still held.
+The orchestrator persists onboarding before opening unlocked Home. A failed
+save keeps the guide open for another hold.
 
 Tag-list plumbing (`dispatch_tag_list`, `open_tag_list`, `SaveTag`) remains
 unreachable from the menu. Shutdown, PairingPasskey, Info, Provisioning, and
@@ -183,15 +188,16 @@ existing controls.
   `navigate_back()` is the single source of truth — the `Back` rows call it.
 - **Long-press** → `go_home()`: exit straight to Home from any depth.
 
-Both are no-ops on Home, the setup-session screens (Provisioning,
-ProvisioningConfirm, boot-gate GettingStarted), and non-interactive screens.
+Both are no-ops on Home, Provisioning, ProvisioningConfirm, and
+non-interactive screens. Boot-gate GettingStarted handles Enter separately:
+long press acknowledges onboarding, and double press does nothing.
 While locked they hit the orchestrator's "Unlock First" gate like any touch.
 
 `Screen::GettingStarted` is the simplified sibling of `Screen::Provisioning`
 — it reuses the same 128×250 canvas and QR pipeline but drops the
-connection-status band, helper text, and second action row. It has a single
+connection-status band and second action row. It has a single
 action row whose label and behavior depend on the entry source (boot gate
-`Start using` → `AckOnboarding`; `Settings → Setup Guide` `Back` →
+hold `Start using` → `AckOnboarding`; `Settings → Setup Guide` tap `Back` →
 `Settings`). TouchUp / TouchDown are no-ops; only TouchEnter is meaningful.
 
 `Screen::Info` has no interactive elements — every input is dropped by

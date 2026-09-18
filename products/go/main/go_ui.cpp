@@ -183,13 +183,15 @@ UIManager::UIManager(const Config &config) : _config(config) {
 // ---------------------------------------------------------------------------
 
 UIActionResult UIManager::handle_input(InputSource source, InputType type) {
+  if (_screen == Screen::GettingStarted && _getting_started_from_boot) {
+    return dispatch_getting_started(source, type);
+  }
   // TouchEnter (CH1) gestures: long-press exits the menu to Home, double-press
   // navigates back one level.  Both are no-ops outside the regular menu tree
   // (Home, setup sessions, non-interactive screens).
   if (source == InputSource::TouchEnter) {
     if (type == InputType::LongPress) {
-      const bool boot_onboarding = _screen == Screen::GettingStarted && _getting_started_from_boot;
-      if (is_on_menu_screen() && !boot_onboarding) {
+      if (is_on_menu_screen()) {
         go_home();
       }
       return {};
@@ -1416,15 +1418,16 @@ UIActionResult UIManager::dispatch_provisioning_confirm(InputSource source, Inpu
 }
 
 UIActionResult UIManager::dispatch_getting_started(InputSource source, InputType type) {
-  (void)type;
   UIActionResult result{};
 
   // Single action row — only TouchEnter acts.
   if (source == InputSource::TouchEnter) {
     if (_getting_started_from_boot) {
       // Orchestrator marks the flag and leaves to Home; keep _screen here.
-      result.action = UIAction::AckOnboarding;
-    } else {
+      if (type == InputType::LongPress) {
+        result.action = UIAction::AckOnboarding;
+      }
+    } else if (type == InputType::ShortPress) {
       // Back → Settings, cursor on Setup Guide (flag unchanged).
       navigate_back();
     }
@@ -1797,6 +1800,7 @@ void UIManager::populate_provisioning_confirm_rows(DisplayValues &v) const {
 }
 
 void UIManager::populate_getting_started_rows(DisplayValues &v) const {
+  v.getting_started_from_boot = _getting_started_from_boot;
   // Single action row; label depends on entry source.
   copy_row(v, 0, _getting_started_from_boot ? "Start using" : "Back", false);
   v.row_count = 1;
