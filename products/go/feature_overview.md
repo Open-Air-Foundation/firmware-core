@@ -271,7 +271,7 @@ This flow includes a QR code that points users to the Go setup guide.
 The Getting Started screen is shown until the user completes a first meaningful
 engagement, such as:
 
-- pressing `Start using`,
+- holding Enter for one second on `Start using`,
 - successfully pairing with the phone app, or
 - changing the operating mode.
 

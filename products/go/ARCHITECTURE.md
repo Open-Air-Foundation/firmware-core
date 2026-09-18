@@ -649,10 +649,13 @@ so the first boot screen is not replaced by an unlock / lock transition.
 non-blocking — the device is already measuring and BLE-discoverable while
 it shows. The boot-gate entry reuses the setup-session machinery
 (`begin_session_if_needed()` silent-unlock so the cold-boot Locked device
-can press the button). `onboarding_done` flips `true` via the idempotent
-`mark_onboarding_done()` on the first real engagement (`Start using`, a
-BLE pairing/bond, or any `change_mode()`), and the guide auto-shows only
-once. Factory reset clears the flag so refurbished units re-show it.
+can hold Enter). `Start using` requires the default one-second Enter long
+press; short presses and double taps leave the guide open. The action and
+its `Hold Enter to start` hint share one highlighted area, below
+`Or just use it right now`. `onboarding_done` flips `true` via the idempotent
+`mark_onboarding_done()` on the first real engagement (the `Start using`
+hold, a BLE pairing/bond, or any `change_mode()`), and the guide auto-shows
+only once. Factory reset clears the flag so refurbished units re-show it.
 
 Full composition also starts `SerialCommandService` before onboarding and parks
 its receive task when onboarding completes. See
