@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "menu-redesign-20260918-3",
+  "rev": "indicator-settings-20260918-1",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -33,7 +33,7 @@
       "sub_category": "Navigation and settings",
       "applies_to": ["V1"],
       "description": "Physical inputs navigate the UI and enforce manual locking",
-      "expected_result": "A Power press released before 2000 ms alternates Locked and Unlocked exactly once. While locked, each touch leaves the screen unchanged, shows \"Unlock First\", and flashes only its configured touch LED. While unlocked, left, right, and center touches perform Up, Down, and Enter; two center taps separated by no more than 250 ms go Back; holding center for at least 1000 ms returns Home. Main Menu lists Exit Menu, Start/Stop Tracking, Operating Mode, and Settings in that order. Settings lists Exit, Back, Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide, and About Device. Operations lists Measurement Interval (shown as Measure Int.), CO2 Calibration, GPS Mode (shown as GPS), and Buzzer; Display & Touch lists Temperature Unit, Altitude Unit, PM Display, Auto Lock, Display LED, AQI LED, and Touch LED. Hardware Test lists Peripheral Test, GPS Test, Accelerometer Test, Fuel Gauge Learning, and Play Melody. Every group begins with Exit and Back. Opening or reopening Settings selects Operations; Operations selects Measurement Interval, Display & Touch selects Temperature Unit, and Hardware Test selects Peripheral Test. Choice/value pages still select the saved value. All rows and current-value summaries fit on screen without clipping. Back and double-tap restore the parent selection, including after applying or canceling a setting; Exit and center hold return Home. Each gesture causes one action and each refresh leaves no stale rows or selection. Short Power during boot splash and Stationary setup leaves that session unchanged.",
+      "expected_result": "A Power press released before 2000 ms alternates Locked and Unlocked exactly once. While locked, each touch leaves the screen unchanged, shows \"Unlock First\", and flashes only its configured touch LED. While unlocked, left, right, and center touches perform Up, Down, and Enter; two center taps separated by no more than 250 ms go Back; holding center for at least 1000 ms returns Home. Main Menu lists Exit Menu, Start/Stop Tracking, Operating Mode, and Settings in that order. Settings lists Exit, Back, Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide, and About Device. Operations lists Measurement Interval (shown as Measure Int.), CO2 Calibration, GPS Mode (shown as GPS), and Buzzer; Display & Touch lists Temperature Unit, Altitude Unit, PM Display, Auto Lock, AQI LED, and Touch LED. Hardware Test lists Peripheral Test, GPS Test, Accelerometer Test, Fuel Gauge Learning, and Play Melody. Every group begins with Exit and Back. Opening or reopening Settings selects Operations; Operations selects Measurement Interval, Display & Touch selects Temperature Unit, and Hardware Test selects Peripheral Test. Choice/value pages still select the saved value. All rows and current-value summaries fit on screen without clipping. Back and double-tap restore the parent selection, including after applying or canceling a setting; Exit and center hold return Home. Each gesture causes one action and each refresh leaves no stale rows or selection. Short Power during boot splash and Stationary setup leaves that session unchanged.",
       "notes": "Enable touch feedback and visit Operating Mode, every Settings group, and About Device. Check wrapping from Exit to the last row and back. Apply and cancel one setting in each group; verify return selection. Separately reboot for the boot-splash check and enter Stationary setup for its suppression check. Auto-lock is covered in the timing-settings case."
     },
     {
@@ -95,9 +95,9 @@
       "category": "User Interface",
       "sub_category": "Indicator settings",
       "applies_to": ["V1"],
-      "description": "Front, rear AQI, and touch indicator settings control V1 hardware and persist",
-      "expected_result": "For front and rear indicators, Off emits no visible light and each step Dim > Mid > Bright increases observed intensity without changing the selected color. For touch indicators, Off emits no flash and Dim > Bright increases flash intensity; center, left, and right flashes correspond only to Enter, Up, and Down. Rear color matches the repository AQI category calculated from corrected PM2.5 and turns off by the next measurement when PM2.5 is unavailable. Front=Dim, rear=Mid, and touch=Bright survive cold reboot and match a BLE Config Read.",
-      "notes": "Open Settings > Display & Touch for Display LED, AQI LED, and Touch LED. Run in a dark room, observe every level in ascending order, and record the starting BLE Config values. Use the correction case to create a known AQI category. For unavailable PM, use a battery ship-mode cold boot and observe the rear LED before the first valid SPS30 result; do not disconnect hardware. Restore all three recorded levels."
+      "description": "Rear AQI and touch indicator settings control V1 hardware and persist",
+      "expected_result": "For rear indicators, Off emits no visible light and each step Dim > Mid > Bright increases observed intensity without changing the selected color. For touch indicators, Off emits no flash and Dim > Bright increases flash intensity; center, left, and right flashes correspond only to Enter, Up, and Down. Rear color matches the repository AQI category calculated from corrected PM2.5 and turns off by the next measurement when PM2.5 is unavailable. Rear=Mid and touch=Bright survive cold reboot and match a BLE Config Read.",
+      "notes": "Open Settings > Display & Touch for AQI LED and Touch LED. Run in a dark room, observe every level in ascending order, and record the starting BLE Config values. Use the correction case to create a known AQI category. For unavailable PM, use a battery ship-mode cold boot and observe the rear LED before the first valid SPS30 result; do not disconnect hardware. Restore both recorded levels."
     },
     {
       "id": "ui.settings.audio-and-melodies",
@@ -132,8 +132,8 @@
       "sub_category": "Peripheral Test",
       "applies_to": ["V1"],
       "description": "The guided Peripheral Test passes all fitted V1 actuators and air-quality sensor roles",
-      "expected_result": "Prompts occur in this order: front LEDs, rear red/green/blue, three touch LEDs, and buzzer. Select Pass only after the prompted actuator alone produces the requested light or sound. Within five minutes, the AQ summary marks temperature, humidity, CO2, PM, TVOC, NOx, and pressure valid. Every row is PASS; the summary drives green rear LEDs, plays the charge-done melody, and logs \"peripheral test: summary overall=PASS\". Exit logs hardware restoration and restores the recorded LED levels, buzzer value, and AQI color within one refresh.",
-      "notes": "Warm the unit for five minutes before entry and record front/rear/touch brightness, buzzer, and AQI color. Do not select Pass for an actuator that was not observed. Auto-lock must remain suppressed."
+      "expected_result": "Prompts occur in this order: rear red/green/blue, three touch LEDs, and buzzer. Select Pass only after the prompted actuator alone produces the requested light or sound. Within five minutes, the AQ summary marks temperature, humidity, CO2, PM, TVOC, NOx, and pressure valid. Every row is PASS; the summary drives green rear LEDs, plays the charge-done melody, and logs \"peripheral test: summary overall=PASS\". Exit logs hardware restoration and restores the recorded LED levels, buzzer value, and AQI color within one refresh.",
+      "notes": "Warm the unit for five minutes before entry and record rear/touch brightness, buzzer, and AQI color. Do not select Pass for an actuator that was not observed. Auto-lock must remain suppressed."
     },
     {
       "id": "diagnostics.peripheral.failure",
@@ -141,7 +141,7 @@
       "sub_category": "Peripheral Test",
       "applies_to": ["V1"],
       "description": "A deliberately failed Peripheral Test reports failure and restores recorded hardware state",
-      "expected_result": "At the front-LED prompt, observe the working LEDs but select Fail; select Pass for the later rear-LED, touch-LED, and buzzer prompts. Let the automatic AQ sweep complete and require its Temp/Hum, CO2, PM, TVOC/NOx, and Pressure rows to pass. The summary marks only front LEDs FAIL and overall FAIL, drives red rear LEDs, plays the alert melody, and logs \"peripheral test: summary overall=FAIL\". Within one refresh after exit, serial logs restoration and the recorded LED levels, buzzer value, and AQI color return.",
+      "expected_result": "At the rear-LED prompt, observe the working LEDs but select Fail; select Pass for the later touch-LED and buzzer prompts. Let the automatic AQ sweep complete and require its Temp/Hum, CO2, PM, TVOC/NOx, and Pressure rows to pass. The summary marks only Back LED FAIL and overall FAIL, drives red rear LEDs, plays the alert melody, and logs \"peripheral test: summary overall=FAIL\". Within one refresh after exit, serial logs restoration and the recorded LED levels, buzzer value, and AQI color return.",
       "notes": "Record LED/buzzer/AQI state before entry. This verifies the UI failure path; do not disconnect or damage hardware."
     },
     {
@@ -402,7 +402,7 @@
       "sub_category": "Local Server",
       "applies_to": ["V1"],
       "description": "Local Server Actions for LED and GPS tests are admitted and then physically confirmed",
-      "expected_result": "Local Server Action test-leds returns an empty HTTP 200 within 5 seconds; the device logs LED test start, displays the documented front/rear/touch sequence, logs finish, and restores the recorded LED levels/AQI color within one refresh. After that finishes, Local Server Action test-gps returns empty 200 within 5 seconds and opens GPS Test within 10 seconds. Exit GPS Test and confirm its finish log.",
+      "expected_result": "Local Server Action test-leds returns an empty HTTP 200 within 5 seconds; the device logs LED test start, displays the documented rear/touch sequence, logs finish, and restores the recorded LED levels/AQI color within one refresh. After that finishes, Local Server Action test-gps returns empty 200 within 5 seconds and opens GPS Test within 10 seconds. Exit GPS Test and confirm its finish log.",
       "notes": "Record LED state, run actions one at a time with no diagnostic active, and use products/go/tests/local-server-integration/test_actions.py for request formatting. HTTP confirms queue admission; screen and serial prove execution."
     },
     {
@@ -456,7 +456,7 @@
       "sub_category": "Cloud actions",
       "applies_to": ["V1"],
       "description": "Supported action flags from Cloud configuration GET run their observable device workflows",
-      "expected_result": "A Cloud configuration GET response with ledTestRequested=true and gpsTestRequested=true is received within 90 seconds. Serial logs LED test start and finish in that order; the documented LED sequence runs, and the recorded brightness/AQI state is restored before GPS Test opens. GPS Test opens within 10 seconds after LED finish and logs its start. Exit it and require the finish log plus restoration of the recorded GPS mode.",
+      "expected_result": "A Cloud configuration GET response with ledTestRequested=true and gpsTestRequested=true is received within 90 seconds. Serial logs LED test start and finish in that order; the documented rear/touch LED sequence runs, and the recorded brightness/AQI state is restored before GPS Test opens. GPS Test opens within 10 seconds after LED finish and logs its start. Exit it and require the finish log plus restoration of the recorded GPS mode.",
       "notes": "Enable Cloud and permit Cloud configuration GETs, record LED/GPS state, and ensure no Hardware Test is active. Capture the exact response from Cloud server logs and the serial timeline. CO2 calibration is covered separately."
     },
     {
