@@ -60,7 +60,7 @@ on-screen password line agree.
 | `build_values(ctx)` | Build a `DisplayValues` snapshot for the Display Service. |
 | `set_screen(screen)` | Force screen (Shutdown, deep-sleep restore). |
 | `current_screen()` | Read current screen. |
-| `is_on_menu_screen()` | True when the current screen is a menu-navigation screen (MainMenu, Settings, SettingsChoice, TagList, Confirm, About) or `GettingStarted`. Used by the orchestrator to suppress background display updates. |
+| `is_on_menu_screen()` | True when the current screen is a menu-navigation screen (MainMenu, Settings, Operations, DisplayTouch, SettingsChoice, TagList, Confirm, About) or `GettingStarted`. Used by the orchestrator to suppress background display updates. |
 | `show_snackbar(text)` | Show a 3-second snackbar message. Pass `nullptr` to clear (used by the session-entry preamble). Snackbars never render on `Info` / `Provisioning` / `ProvisioningConfirm`. |
 | `clear_expired_snackbar(now_ms)` | Expire stale snackbar. Call before `build_values`. |
 | `sync_settings(settings)` | Synchronise internal state from persisted `GoSettings`, retaining exact measurement-interval seconds. Called by the orchestrator on boot and after settings activation. |
@@ -86,10 +86,10 @@ orchestrator what happened:
 |---|---|---|
 | `StartTracking` | Menu: "Start Tracking" | |
 | `StopTracking` | Menu: "Stop Tracking" | |
-| `ChangeMode` | Settings: Mode choice | `new_mode` field set |
+| `ChangeMode` | Main Menu: Operating Mode choice | `new_mode` field set |
 | `SettingsChanged` | Settings: any other choice | |
-| `ClearData` | Confirm: "Yes" (from "Data: Clear Data") | |
-| `CalibrateCo2` | Confirm: "Yes" (from "CO2: Calibrate") | |
+| `ClearData` | Confirm: "Yes" (from "Clear Data") | |
+| `CalibrateCo2` | Confirm: "Yes" (from "CO2 Calibration") | |
 | `SaveTag` | TagList: tag selected | `tag_index` + `tag_label` fields set (plumbing preserved, menu entry removed) |
 | `ConfirmSwitchProvisioningTransport` | ProvisioningConfirm: "Yes" on a switch-transport overlay | Orchestrator latches `SwitchingTransport`, renders + flushes, then calls `WifiService::switch_provisioning_transport()` |
 | `ConfirmCancelProvisioning` | ProvisioningConfirm: "Yes" on a cancel-setup overlay | Orchestrator routes to `leave_session_to_portable()` |
@@ -107,58 +107,71 @@ partial failure).
 
 ```mermaid
 flowchart TD
-    Home["Home"]
-    MainMenu["MainMenu"]
-    Settings["Settings"]
-    SettingsChoice["SettingsChoice"]
-    Confirm["Confirm"]
-    About["About"]
-    TagList["TagList<br/>(plumbing only)"]
-    GettingStarted["GettingStarted<br/>(boot gate or Settings → Setup Guide)"]
-
-    Home -- enter --> MainMenu
+    Home --> MainMenu
     MainMenu -- Exit --> Home
+    MainMenu -- Operating Mode --> Mode["SettingsChoice: Portable / Stationary / Offline"]
+    Mode -- Back --> MainMenu
     MainMenu --> Settings
-    MainMenu --> About
-    Settings --> SettingsChoice
-    Settings --> Confirm
     Settings -- Back --> MainMenu
-    SettingsChoice -- Back --> Settings
-    Confirm -- Yes/No/Back --> Settings
-    About -- Back --> MainMenu
+    Settings --> Operations
+    Settings --> DisplayTouch["Display & Touch"]
+    Operations -- Back --> Settings
+    DisplayTouch -- Back --> Settings
+    Operations --> Choice["SettingsChoice"]
+    DisplayTouch --> Choice
+    Choice -- Apply or Back --> Owner["Owning group, source row selected"]
+    Operations -- CO2 Calibration --> Confirm
+    Settings -- Clear Data --> Confirm
+    Confirm -- No or Back --> Owner
+    Confirm -- Yes --> Home
+    Settings --> HardwareTest["Hardware Test"]
+    HardwareTest -- Back --> Settings
+    HardwareTest -- Play Melody --> Melody["SettingsChoice: Chime / Tetris"]
+    Melody -- Play or Back --> HardwareTest
+    HardwareTest -- Fuel Gauge Learning --> Confirm
+    Settings --> About["Existing About Device page"]
+    About -- Back --> Settings
     Settings -- Setup Guide --> GettingStarted
     GettingStarted -- Back --> Settings
-
-    Shutdown["Shutdown<br/>set by orchestrator on long-press power"]
-    PairingPasskey["PairingPasskey<br/>set by orchestrator on BLE pairing request"]
-    Info["Info<br/>set by GoApp / orchestrator"]
-    Provisioning["Provisioning<br/>set by orchestrator (open_provisioning)"]
-    ProvisioningConfirm["ProvisioningConfirm<br/>set by orchestrator (open_provisioning_confirm)"]
-
-    Provisioning -- TouchEnter row 0 or 1 --> ProvisioningConfirm
-    ProvisioningConfirm -- No --> Provisioning
-    ProvisioningConfirm -- Yes (kind 0) --> Provisioning
 ```
 
-MainMenu rows: Exit Menu (0), Start/Stop Tracking (1), Settings (2),
-About Device (3). "Add Tag" has been removed from the menu; tag list
-plumbing (`dispatch_tag_list`, `open_tag_list`, `SaveTag`) is preserved
-but not reachable from the menu.
+MainMenu rows are Exit Menu (0), Start/Stop Tracking (1), Operating Mode (2),
+and Settings (3). Operating Mode lists Portable, Stationary, and Offline in
+that order. Selecting a mode returns Home and emits `ChangeMode`; the existing
+Stationary connection/setup flow may then replace Home.
 
-Settings: "Setup Guide" is the first content item (index 2, right after
-Exit/Back). It re-opens the one-time first-boot guide as
-`Screen::GettingStarted` (via `show_getting_started(false)`); its action row
-reads `Back` and returns to `Settings` with the cursor on the Setup Guide
-row, leaving the `onboarding_done` flag unchanged. The boot-gate entry of
-the same screen is set by the orchestrator (`show_getting_started(true)`)
-after the splash and is not part of the user-navigable graph.
+Every ordinary list submenu starts with Exit (0) and Back (1). The content
+rows follow this order:
 
-Every screen has Exit (index 0) -> Home. Screens with a parent have Back
-(index 1) -> parent. Shutdown, PairingPasskey, Info, Provisioning, and
-ProvisioningConfirm are all set directly by the orchestrator (via
-`set_screen()`, `show_pairing_passkey()`, `show_info()`,
-`open_provisioning()`, `open_provisioning_confirm()`) and do not appear
-in the user-navigable graph above.
+| Menu | Content Rows |
+|---|---|
+| Settings | Setup Guide, Operations, Display & Touch, Clear Data, Hardware Test, About Device |
+| Operations | Measurement Interval, CO2 Calibration, GPS Mode, Buzzer |
+| Display & Touch | Temperature Unit, Altitude Unit, PM Display, Auto Lock, Display LED, AQI LED, Touch LED |
+| Hardware Test | Peripheral Test, GPS Test, Accelerometer Test, Fuel Gauge Learning, Play Melody |
+
+Settings and its groups fit on one page. Opening Settings selects Setup Guide;
+Operations selects Measurement Interval, Display & Touch selects Temperature
+Unit, and Hardware Test selects Peripheral Test. Reopening these menus resets
+the cursor to that first content row, skipping Exit and Back.
+Choice screens select the active value; applying an ordinary setting returns
+to its owning group on the source row. Back and double-press restore that
+same parent selection without applying a change. Play Melody also returns to
+its owning Hardware Test menu. Its choice screen retains ordinary auto-lock
+behavior; the Hardware Test menu and live diagnostic screens suppress
+inactivity auto-lock.
+
+About Device retains its existing rendering and identity fields. Back returns
+to Settings on About Device. Setup Guide is Settings row 2 and reopens
+`Screen::GettingStarted` through `show_getting_started(false)`. It has a single
+Back action, which restores the Setup Guide row without changing
+`onboarding_done`. The boot-gate entry uses `show_getting_started(true)` and
+retains its Start using action.
+
+Tag-list plumbing (`dispatch_tag_list`, `open_tag_list`, `SaveTag`) remains
+unreachable from the menu. Shutdown, PairingPasskey, Info, Provisioning, and
+ProvisioningConfirm are opened directly by the orchestrator and retain their
+existing controls.
 
 ### TouchEnter Gestures (Back / Exit)
 
@@ -191,11 +204,12 @@ returns to `Provisioning`, TouchEnter on `Yes` emits
 `ConfirmSwitchProvisioningTransport` or `ConfirmCancelProvisioning`
 depending on the stored kind.
 
-The Confirm screen is a shared confirmation dialog used by multiple
-settings actions ("CO2: Calibrate" and "Data: Clear Data"). The question
-text and the resulting `UIAction` are determined by `_confirm_source_setting`,
-which records which setting row opened the dialog. Back and No both return
-to the Settings screen with the cursor on the source row.
+The Confirm screen is shared by CO2 Calibration, Clear Data, and Fuel Gauge
+Learning. `_confirm_source_setting` holds a typed action identity and
+`_confirm_parent` records the owning menu. Back and No restore that menu's
+cursor; Yes returns Home and emits the action for the orchestrator to execute.
+The initial selection remains Back. Fuel Gauge Learning follows its existing
+factory-state write and reboot path.
 
 ## Navigation Patterns
 
@@ -203,7 +217,7 @@ to the Settings screen with the cursor on the source row.
 |---|---|---|---|
 | Home (metrics) | Circular cycle (5 entries: None, Pm25, Co2, Temp, Humidity) | Yes | N/A |
 | MainMenu | Circular (4 rows, all always enabled) | Yes | N/A |
-| Settings | Circular | Yes | Page-based (8 items) |
+| Settings / Operations / DisplayTouch / HardwareTest | Circular | Yes | None; at most 9 rows including Exit/Back |
 | SettingsChoice | Circular | Yes | Sliding window (8 items) |
 | TagList | Circular | Yes | Page-based (8 items) |
 | About | Circular | Yes | N/A (2 items) |
@@ -217,27 +231,32 @@ to the Settings screen with the cursor on the source row.
 
 ## Internal Settings State
 
-The UI Manager stores most settings as option indices internally. It stores the
-measurement interval as exact seconds so values supplied through firmware
+The UI Manager stores most settings as option indices internally. It stores
+operating mode as `OperatingMode` and the measurement interval as exact seconds so values supplied through firmware
 interfaces are not normalized to a display choice. This state drives the
 settings row labels and pre-selects the current value when opening a
-SettingsChoice screen.
+SettingsChoice screen. `SettingId` identities are independent of menu row
+positions. `_choice_parent` records the owning menu, whose cursor remains in
+place while a choice is open. Operating-mode choices use explicit enum/label
+pairs so display ordering cannot change persisted mode identities.
 
 | Setting ID | Label | Options |
 |---|---|---|
-| Setup Guide | `Setup Guide` (first content item) | Action row — opens `Screen::GettingStarted` |
+| Setup Guide | `Setup Guide` (Settings row 2) | Action row — opens `Screen::GettingStarted` |
 | Temperature Unit | `Temperature Unit: C / F` | C, F |
 | Altitude Unit | `Altitude Unit: m / ft` | m, ft |
 | PM Display | `PM Display: ug/m3 / USAQI` | ug/m3, USAQI |
 | Measure Interval | `Measure Int.: <value>` | Conditional `Custom (<seconds>s)`, then 3s, 10s, 30s, 60s, 5m, 15m, 1h |
-| GPS Mode | `GPS Mode: ...` | Always Off, On When Tracking, Always On |
-| Mode | `Mode: ...` | Stationary, Portable, Offline / Airplane Mode |
-| Auto Lock | `Auto Lock: ...` | Off, 10 Seconds, 30 Seconds, 60 Seconds |
+| GPS Mode | `GPS: ...` (summary uses `When tracking`) | Always Off, On When Tracking, Always On |
+| Mode | Main Menu: `Operating Mode` | Portable, Stationary, Offline |
+| Auto Lock | `Auto Lock: Off / 10s / 30s / 60s` | Off, 10 Seconds, 30 Seconds, 60 Seconds |
 | Display LED | `Display LED: ...` | Off, Dim, Mid, Bright |
 | AQI LED | `AQI LED: ...` | Off, Dim, Mid, Bright |
 | Touch LED | `Touch LED: ...` | Off, Dim, Bright |
-| CO2: Calibrate | Action row | Opens confirm dialog |
-| Data: Clear Data | Action row | Opens confirm dialog |
+| CO2 Calibration | Action row | Opens confirm dialog |
+| Clear Data | Action row | Opens confirm dialog |
+| Buzzer | `Buzzer: Off / On` | Off, On |
+| Play Melody | Hardware Test action row | Chime, Tetris |
 
 The orchestrator calls `sync_settings(const GoSettings &)` after loading or
 activating settings. A measurement interval that exactly matches a fixed choice

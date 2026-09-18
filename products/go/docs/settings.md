@@ -62,7 +62,7 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 The firmware persists every valid measurement interval from 1 through 3600
 seconds exactly. The on-device menu offers fixed choices of 3, 10, 30, 60, 300,
 900, and 3600 seconds. When an interface activates another valid value, the
-Settings summary shows the exact seconds and the interval submenu prepends a
+Settings > Operations summary shows the exact seconds and the interval submenu prepends a
 selected `Custom (<seconds>s)` row.
 
 Changing an unrelated UI setting preserves the custom interval. Selecting one
