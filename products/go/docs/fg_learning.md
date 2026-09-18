@@ -98,7 +98,7 @@ verifying once.
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
-    Idle --> Charge: arm (second manufacturing press)
+    Idle --> Charge: confirm in Hardware Test menu
     Charge --> Rest: FC flag or BMS charge terminated
     Charge --> Failed: charge timeout
     Rest --> Discharge: OCV taken and rest elapsed
@@ -371,13 +371,10 @@ dashboard as `FAIL: <reason>` under the banner, and written to the journal
 
 ### Arming
 
-Manufacturing mode is ephemeral (not persisted), so arming is a runtime gesture
-on a fresh unit (`onboarding_done == false`):
-
-```text
-1st boot short-press -> enter_manufacturing_mode (existing)
-2nd boot short-press -> save_factory_settings(Charge, cycle 1) + reboot
-```
+Start a run from **Settings → Hardware Test → Fuel Gauge Learning**, then choose
+**Yes** on the confirmation screen. This is the only entry point for a new run;
+it is available after onboarding as well. Confirmation saves
+`FactorySettings{Charge, cycle 1, losses 0}` and reboots.
 
 The reboot lands in `GoApp::run()`'s early branch, which routes into the factory
 path. The orchestrator owns none of the run — no tick, resume, verify, ship

@@ -156,7 +156,8 @@ The FG Learning row is a destructive action guarded by the shared `Confirm`
 screen ("Start FG Learning?"). On **Yes** the orchestrator writes
 `FactorySettings{ fg_learning_stage = Charge, cycle = 1, itpor_losses = 0 }` and
 reboots; the next boot routes into the existing `FgLearningRunner` unchanged.
-This supplements — does not replace — the manufacturing-mode BOOT gesture.
+This is the only entry point for a new learning run. BOOT short-presses only
+enter manufacturing mode before onboarding.
 
 See [`fg_learning.md`](fg_learning.md) for the runner.
 

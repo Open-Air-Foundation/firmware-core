@@ -17,10 +17,9 @@ pass/fail hardware validation with clear display feedback and buzzer cues.
 
 Today the Go firmware has **no user-reachable hardware test surface**:
 
-- The only factory-adjacent flow is fuel-gauge learning, which is a fully
-  separate boot path armed by an undiscoverable GPIO gesture (two BOOT
-  short-presses while in pre-onboarding manufacturing mode). It is invisible
-  from the normal UI and cannot be triggered from Settings.
+- Fuel-gauge learning uses a separate factory boot path. Arming it through
+  BOOT short-presses is easy to trigger accidentally during manufacturing;
+  starting a new run must require an explicit Settings confirmation.
 - There is **no way to confirm a peripheral works** from the device itself. AQ
   sensors are only validated implicitly by whether readings appear on the Home
   screen; a present-but-failing sensor is hard to distinguish from a warming-up
@@ -218,8 +217,9 @@ dialog that warns it is a multi-hour, ship-mode routine. On confirm, the
 orchestrator writes `FactorySettings{ fg_learning_stage = Charge, cycle = 1,
 itpor_losses = 0 }` and reboots. On the next boot, `GoApp::run()` sees a non-Idle
 stage and routes into the **existing `FgLearningRunner` unchanged**. This reuses
-the entire learning implementation; the menu is only an in-app arming trigger
-that supplements the current manufacturing-mode BOOT gesture.
+the entire learning implementation. The menu must be the only entry point for a
+new run. Remove learning from the manufacturing-mode BOOT gesture so repeated
+short presses leave the manufacturing session unchanged.
 
 ### Interface Sketches
 
