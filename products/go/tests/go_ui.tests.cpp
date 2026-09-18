@@ -339,6 +339,7 @@ TEST_CASE("UIManager: Getting Started via Settings -> Setup Guide", "[UIManager]
     DisplayValues v = ui.build_values(ctx);
     REQUIRE(v.row_count == 1);
     CHECK(std::string(v.rows[0].text) == "Back");
+    CHECK_FALSE(v.getting_started_from_boot);
     REQUIRE(v.qr != nullptr);
     CHECK(v.qr->size() > 0);
 
@@ -362,11 +363,18 @@ TEST_CASE("UIManager: Getting Started boot entry emits AckOnboarding", "[UIManag
   DisplayValues v = ui.build_values(ctx);
   REQUIRE(v.row_count == 1);
   CHECK(std::string(v.rows[0].text) == "Start using");
+  CHECK(v.getting_started_from_boot);
   REQUIRE(v.qr != nullptr);
 
-  // "Start using" press returns AckOnboarding; the orchestrator owns the
+  CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
+  CHECK(double_press(ui).action == UIAction::None);
+  CHECK(press(ui, InputSource::TouchUp).action == UIAction::None);
+  CHECK(press(ui, InputSource::TouchDown).action == UIAction::None);
+  CHECK(ui.current_screen() == Screen::GettingStarted);
+
+  // "Start using" hold returns AckOnboarding; the orchestrator owns the
   // subsequent screen transition, so the screen stays put here.
-  UIActionResult result = press(ui, InputSource::TouchEnter);
+  UIActionResult result = long_press(ui);
   CHECK(result.action == UIAction::AckOnboarding);
   CHECK(ui.current_screen() == Screen::GettingStarted);
 }
