@@ -37,8 +37,16 @@ static constexpr uint8_t MEASURE_INTERVAL_COUNT =
 static const char *const GPS_MODE_OPTIONS[] = {"Always Off", "On When Tracking", "Always On"};
 static constexpr uint8_t GPS_MODE_COUNT = 3;
 
-static const char *const MODE_OPTIONS[] = {"Stationary", "Portable", "Offline / Airplane Mode"};
-static constexpr uint8_t MODE_COUNT = 3;
+struct ModeOption {
+  OperatingMode mode;
+  const char *label;
+};
+static constexpr ModeOption MODE_OPTIONS[] = {
+    {OperatingMode::Portable, "Portable"},
+    {OperatingMode::Stationary, "Stationary"},
+    {OperatingMode::Offline, "Offline"},
+};
+static constexpr uint8_t MODE_COUNT = sizeof(MODE_OPTIONS) / sizeof(MODE_OPTIONS[0]);
 
 static const char *const AUTO_LOCK_OPTIONS[] = {"Off", "10 Seconds", "30 Seconds", "60 Seconds"};
 static constexpr uint8_t AUTO_LOCK_COUNT = 4;
@@ -64,27 +72,18 @@ static const char *const TAG_LABELS[] = {
 static constexpr uint8_t TAG_COUNT = 10;
 
 // ---------------------------------------------------------------------------
-// Settings row index constants
+// Menu row index constants (separate from SettingId)
 // ---------------------------------------------------------------------------
 
-static constexpr uint8_t SETTING_SETUP_GUIDE = 2;
-static constexpr uint8_t SETTING_UNITS = 3;
-static constexpr uint8_t SETTING_ALTITUDE_UNIT = 4;
-static constexpr uint8_t SETTING_PM_DISPLAY = 5;
-static constexpr uint8_t SETTING_MEASURE_INTERVAL = 6;
-static constexpr uint8_t SETTING_GPS_MODE = 7;
-static constexpr uint8_t SETTING_MODE = 8;
-static constexpr uint8_t SETTING_AUTO_LOCK = 9;
-static constexpr uint8_t SETTING_DISPLAY_LED = 10;
-static constexpr uint8_t SETTING_AQI_LED = 11;
-static constexpr uint8_t SETTING_TOUCH_LED = 12;
-static constexpr uint8_t SETTING_BUZZER = 13;
-static constexpr uint8_t SETTING_PLAY_MELODY = 14;
-static constexpr uint8_t SETTING_CO2_CALIBRATION = 15;
-static constexpr uint8_t SETTING_CLEAR_DATA = 16;
-static constexpr uint8_t SETTING_HARDWARE_TEST = 17; // navigation row -> Hardware Test submenu
-
-static constexpr uint8_t SETTINGS_TOTAL = 18;       // indices 0..17
+static constexpr uint8_t MENU_MODE = 2;
+static constexpr uint8_t MENU_SETTINGS = 3;
+static constexpr uint8_t SETTINGS_OPERATIONS = 2;
+static constexpr uint8_t SETTINGS_DISPLAY_TOUCH = 3;
+static constexpr uint8_t SETTINGS_HARDWARE_TEST = 4;
+static constexpr uint8_t SETTINGS_CLEAR_DATA = 5;
+static constexpr uint8_t SETTINGS_SETUP_GUIDE = 6;
+static constexpr uint8_t SETTINGS_ABOUT = 7;
+static constexpr uint8_t SETTINGS_TOTAL = 8;        // indices 0..7
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
@@ -93,18 +92,13 @@ static constexpr uint8_t ABOUT_SELECTABLE_ROWS = 2; // indices 0..1
 // ---------------------------------------------------------------------------
 // Hardware Test submenu
 // ---------------------------------------------------------------------------
-// Rows: Exit, Back, Peripheral, GPS, Accel, FG Learning. The Accel row sits
-// between GPS Test and FG Learning.
+// Rows: Exit, Back, Peripheral, GPS, Accel, FG Learning, Play Melody.
 static constexpr uint8_t HW_TEST_PERIPHERAL = 2;
 static constexpr uint8_t HW_TEST_GPS = 3;
 static constexpr uint8_t HW_TEST_ACCEL = 4;
 static constexpr uint8_t HW_TEST_FG_LEARNING = 5;
-static constexpr uint8_t HW_TEST_TOTAL = 6;
-
-/// Confirm-dialog source sentinel for the FG Learning arm. Kept outside the
-/// real Settings index range so the shared Confirm screen can route it back to
-/// the Hardware Test submenu instead of Settings.
-static constexpr uint8_t SETTING_FG_LEARNING = 200;
+static constexpr uint8_t HW_TEST_PLAY_MELODY = 6;
+static constexpr uint8_t HW_TEST_TOTAL = 7;
 
 /// Visible content items per page (excluding Exit/Back header rows).
 static constexpr uint8_t PAGE_SIZE = 8;
@@ -217,6 +211,9 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_menu(source, type);
   case Screen::Settings:
     return dispatch_settings(source, type);
+  case Screen::Operations:
+  case Screen::DisplayTouch:
+    return dispatch_settings_group(source, type);
   case Screen::SettingsChoice:
     return dispatch_settings_choice(source, type);
   case Screen::TagList:
@@ -310,6 +307,10 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     break;
   case Screen::Settings:
     populate_settings_rows(v);
+    break;
+  case Screen::Operations:
+  case Screen::DisplayTouch:
+    populate_settings_group_rows(v);
     break;
   case Screen::SettingsChoice:
     populate_settings_choice_rows(v);
@@ -411,6 +412,8 @@ bool UIManager::is_on_menu_screen() const {
   switch (_screen) {
   case Screen::MainMenu:
   case Screen::Settings:
+  case Screen::Operations:
+  case Screen::DisplayTouch:
   case Screen::SettingsChoice:
   case Screen::TagList:
   case Screen::Confirm:
@@ -470,8 +473,8 @@ void UIManager::sync_settings(const GoSettings &s) {
 
   _setting_measure_interval_seconds = s.measure_interval_seconds;
 
-  if (_screen == Screen::SettingsChoice && _editing_setting_id == SETTING_MEASURE_INTERVAL) {
-    _settings_choice_index = (uint8_t)(2 + setting_current_option(SETTING_MEASURE_INTERVAL));
+  if (_screen == Screen::SettingsChoice && _editing_setting_id == SettingId::MeasureInterval) {
+    _settings_choice_index = (uint8_t)(2 + setting_current_option(SettingId::MeasureInterval));
     sync_choice_scroll();
   }
 
@@ -488,18 +491,7 @@ void UIManager::sync_settings(const GoSettings &s) {
     break;
   }
 
-  // Operating mode
-  switch (s.operating_mode) {
-  case OperatingMode::Stationary:
-    _setting_mode = 0;
-    break;
-  case OperatingMode::Portable:
-    _setting_mode = 1;
-    break;
-  case OperatingMode::Offline:
-    _setting_mode = 2;
-    break;
-  }
+  _setting_mode = s.operating_mode;
 
   // Auto-lock: 0=Off, 10=1, 30=2, 60=3
   if (s.auto_lock_seconds <= 0)
@@ -542,21 +534,7 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
     break;
   }
 
-  // Operating mode
-  switch (_setting_mode) {
-  case 0:
-    settings.operating_mode = OperatingMode::Stationary;
-    break;
-  case 1:
-    settings.operating_mode = OperatingMode::Portable;
-    break;
-  case 2:
-    settings.operating_mode = OperatingMode::Offline;
-    break;
-  default:
-    settings.operating_mode = OperatingMode::Offline;
-    break;
-  }
+  settings.operating_mode = _setting_mode;
 
   // Auto-lock: index 0=Off(0s), 1=10s, 2=30s, 3=60s
   static constexpr int AUTO_LOCK_SECONDS[] = {0, 10, 30, 60};
@@ -732,30 +710,29 @@ void UIManager::navigate_back() {
     break;
   case Screen::Settings:
     _screen = Screen::MainMenu;
-    _menu_index = 2; // cursor on "Settings"
+    _menu_index = MENU_SETTINGS;
+    break;
+  case Screen::Operations:
+    _screen = Screen::Settings;
+    _settings_index = SETTINGS_OPERATIONS;
+    break;
+  case Screen::DisplayTouch:
+    _screen = Screen::Settings;
+    _settings_index = SETTINGS_DISPLAY_TOUCH;
     break;
   case Screen::SettingsChoice:
-    _screen = Screen::Settings;
+    _screen = _choice_parent;
     break;
   case Screen::About:
-    _screen = Screen::MainMenu;
-    _menu_index = 3; // cursor on "About Device"
+    _screen = Screen::Settings;
+    _settings_index = SETTINGS_ABOUT;
     break;
   case Screen::Confirm:
-    if (_confirm_source_setting == SETTING_FG_LEARNING) {
-      // FG Learning confirm lives under the Hardware Test submenu.
-      open_hardware_test();
-      _hardware_test_index = HW_TEST_FG_LEARNING;
-    } else {
-      _screen = Screen::Settings;
-      _settings_index = _confirm_source_setting;
-      _settings_scroll_start = page_scroll(_settings_index);
-    }
+    _screen = _confirm_parent;
     break;
   case Screen::HardwareTest:
     _screen = Screen::Settings;
-    _settings_index = SETTING_HARDWARE_TEST;
-    _settings_scroll_start = page_scroll(_settings_index);
+    _settings_index = SETTINGS_HARDWARE_TEST;
     break;
   case Screen::PeripheralTest:
     // Leave the flow → back to the Hardware Test submenu on the Peripheral row.
@@ -774,13 +751,12 @@ void UIManager::navigate_back() {
     break;
   case Screen::TagList:
     _screen = Screen::MainMenu;
-    _menu_index = 2;
+    _menu_index = MENU_SETTINGS;
     break;
   case Screen::GettingStarted:
     if (!_getting_started_from_boot) {
       _screen = Screen::Settings;
-      _settings_index = SETTING_SETUP_GUIDE;
-      _settings_scroll_start = page_scroll(_settings_index);
+      _settings_index = SETTINGS_SETUP_GUIDE;
     }
     break;
   default:
@@ -798,12 +774,17 @@ void UIManager::open_main_menu() {
 
 void UIManager::open_settings() {
   _screen = Screen::Settings;
-  _settings_index = 1;
-  _settings_scroll_start = 0;
+  _settings_index = FIRST_CONTENT_ROW;
 }
 
-void UIManager::open_settings_choice(uint8_t setting_id) {
+void UIManager::open_settings_group(Screen screen) {
+  _screen = screen;
+  _group_index = FIRST_CONTENT_ROW;
+}
+
+void UIManager::open_settings_choice(SettingId setting_id) {
   _editing_setting_id = setting_id;
+  _choice_parent = _screen;
   _screen = Screen::SettingsChoice;
   // Pre-select the currently active option.
   _settings_choice_index = (uint8_t)(2 + setting_current_option(setting_id));
@@ -821,15 +802,16 @@ void UIManager::open_tag_list() {
   _tag_scroll_start = 0;
 }
 
-void UIManager::open_confirm(uint8_t source_setting) {
+void UIManager::open_confirm(SettingId source_setting) {
   _confirm_source_setting = source_setting;
+  _confirm_parent = _screen;
   _screen = Screen::Confirm;
   _confirm_index = 1;
 }
 
 void UIManager::open_hardware_test() {
   _screen = Screen::HardwareTest;
-  _hardware_test_index = 1; // land on Back
+  _hardware_test_index = HW_TEST_PERIPHERAL;
 }
 
 void UIManager::open_peripheral_test() {
@@ -863,9 +845,8 @@ void UIManager::move_menu(int delta) {
 }
 
 void UIManager::move_settings(int delta) {
-  // Circular navigation, page-based scroll.
+  // All Settings rows fit on one page.
   _settings_index = (uint8_t)wrap((int)_settings_index + delta, SETTINGS_TOTAL);
-  _settings_scroll_start = page_scroll(_settings_index);
 }
 
 void UIManager::move_settings_choice(int delta) {
@@ -919,67 +900,92 @@ void UIManager::browse_metric(int delta) {
 // Settings choice helpers
 // ---------------------------------------------------------------------------
 
-uint8_t UIManager::setting_option_count(uint8_t setting_id) const {
+const UIManager::SettingId *UIManager::group_items(Screen screen, uint8_t &count) {
+  static constexpr SettingId OPERATIONS[] = {SettingId::MeasureInterval, SettingId::Co2Calibration,
+                                             SettingId::GpsMode, SettingId::Buzzer};
+  static constexpr SettingId DISPLAY_TOUCH[] = {
+      SettingId::Units,      SettingId::AltitudeUnit, SettingId::PmDisplay, SettingId::AutoLock,
+      SettingId::DisplayLed, SettingId::AqiLed,       SettingId::TouchLed};
+  static_assert(sizeof(OPERATIONS) / sizeof(OPERATIONS[0]) + 2 <= MAX_LIST_ROWS);
+  static_assert(sizeof(DISPLAY_TOUCH) / sizeof(DISPLAY_TOUCH[0]) + 2 <= MAX_LIST_ROWS);
+
+  if (screen == Screen::Operations) {
+    count = sizeof(OPERATIONS) / sizeof(OPERATIONS[0]);
+    return OPERATIONS;
+  }
+  if (screen == Screen::DisplayTouch) {
+    count = sizeof(DISPLAY_TOUCH) / sizeof(DISPLAY_TOUCH[0]);
+    return DISPLAY_TOUCH;
+  }
+  count = 0;
+  return nullptr;
+}
+
+uint8_t UIManager::setting_option_count(SettingId setting_id) const {
   switch (setting_id) {
-  case SETTING_UNITS:
+  case SettingId::Units:
     return UNITS_COUNT;
-  case SETTING_ALTITUDE_UNIT:
+  case SettingId::AltitudeUnit:
     return ALTITUDE_UNIT_COUNT;
-  case SETTING_PM_DISPLAY:
+  case SettingId::PmDisplay:
     return PM_DISPLAY_COUNT;
-  case SETTING_MEASURE_INTERVAL: {
+  case SettingId::MeasureInterval: {
     uint8_t option_count = MEASURE_INTERVAL_COUNT;
     if (is_custom_measure_interval(_setting_measure_interval_seconds))
       ++option_count;
     return option_count;
   }
-  case SETTING_GPS_MODE:
+  case SettingId::GpsMode:
     return GPS_MODE_COUNT;
-  case SETTING_MODE:
+  case SettingId::Mode:
     return MODE_COUNT;
-  case SETTING_AUTO_LOCK:
+  case SettingId::AutoLock:
     return AUTO_LOCK_COUNT;
-  case SETTING_DISPLAY_LED:
-  case SETTING_AQI_LED:
+  case SettingId::DisplayLed:
+  case SettingId::AqiLed:
     return LED_BRIGHTNESS_COUNT;
-  case SETTING_TOUCH_LED:
+  case SettingId::TouchLed:
     return TOUCH_LED_COUNT;
-  case SETTING_BUZZER:
+  case SettingId::Buzzer:
     return BUZZER_COUNT;
-  case SETTING_PLAY_MELODY:
+  case SettingId::PlayMelody:
     return MELODY_COUNT;
   default:
     return 0;
   }
 }
 
-uint8_t UIManager::setting_current_option(uint8_t setting_id) const {
+uint8_t UIManager::setting_current_option(SettingId setting_id) const {
   switch (setting_id) {
-  case SETTING_UNITS:
+  case SettingId::Units:
     return _setting_units;
-  case SETTING_ALTITUDE_UNIT:
+  case SettingId::AltitudeUnit:
     return _setting_altitude_unit;
-  case SETTING_PM_DISPLAY:
+  case SettingId::PmDisplay:
     return _setting_pm_display;
-  case SETTING_MEASURE_INTERVAL:
+  case SettingId::MeasureInterval:
     if (is_custom_measure_interval(_setting_measure_interval_seconds))
       return 0;
     return (uint8_t)measure_interval_option_index(_setting_measure_interval_seconds);
-  case SETTING_GPS_MODE:
+  case SettingId::GpsMode:
     return _setting_gps_mode;
-  case SETTING_MODE:
-    return _setting_mode;
-  case SETTING_AUTO_LOCK:
+  case SettingId::Mode:
+    for (uint8_t i = 0; i < MODE_COUNT; ++i) {
+      if (MODE_OPTIONS[i].mode == _setting_mode)
+        return i;
+    }
+    return 0;
+  case SettingId::AutoLock:
     return _setting_auto_lock;
-  case SETTING_DISPLAY_LED:
+  case SettingId::DisplayLed:
     return _setting_display_led;
-  case SETTING_AQI_LED:
+  case SettingId::AqiLed:
     return _setting_aqi_led;
-  case SETTING_TOUCH_LED:
+  case SettingId::TouchLed:
     return _setting_touch_led;
-  case SETTING_BUZZER:
+  case SettingId::Buzzer:
     return _setting_buzzer_volume;
-  case SETTING_PLAY_MELODY:
+  case SettingId::PlayMelody:
     return _setting_melody;
   default:
     return 0;
@@ -992,16 +998,16 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
   // reading back the new values and persisting to NVS.
 
   switch (_editing_setting_id) {
-  case SETTING_UNITS:
+  case SettingId::Units:
     _setting_units = option_index;
     break;
-  case SETTING_ALTITUDE_UNIT:
+  case SettingId::AltitudeUnit:
     _setting_altitude_unit = option_index;
     break;
-  case SETTING_PM_DISPLAY:
+  case SettingId::PmDisplay:
     _setting_pm_display = option_index;
     break;
-  case SETTING_MEASURE_INTERVAL:
+  case SettingId::MeasureInterval:
     if (is_custom_measure_interval(_setting_measure_interval_seconds)) {
       if (option_index == 0)
         break;
@@ -1010,39 +1016,40 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
     if (option_index < MEASURE_INTERVAL_COUNT)
       _setting_measure_interval_seconds = MEASURE_INTERVAL_OPTIONS[option_index].seconds;
     break;
-  case SETTING_GPS_MODE:
+  case SettingId::GpsMode:
     _setting_gps_mode = option_index;
     break;
-  case SETTING_MODE:
-    _setting_mode = option_index;
+  case SettingId::Mode:
+    if (option_index < MODE_COUNT)
+      _setting_mode = MODE_OPTIONS[option_index].mode;
     break;
-  case SETTING_AUTO_LOCK:
+  case SettingId::AutoLock:
     _setting_auto_lock = option_index;
     break;
-  case SETTING_DISPLAY_LED:
+  case SettingId::DisplayLed:
     _setting_display_led = option_index;
     break;
-  case SETTING_AQI_LED:
+  case SettingId::AqiLed:
     _setting_aqi_led = option_index;
     break;
-  case SETTING_TOUCH_LED:
+  case SettingId::TouchLed:
     _setting_touch_led = option_index;
     break;
-  case SETTING_BUZZER:
+  case SettingId::Buzzer:
     _setting_buzzer_volume = option_index;
     break;
-  case SETTING_PLAY_MELODY:
+  case SettingId::PlayMelody:
     _setting_melody = option_index;
     break;
   default:
     break;
   }
 
-  // Return to Settings screen.
-  _screen = Screen::Settings;
+  // The owning menu retains its cursor while the choice is open.
+  navigate_back();
   _settings_choice_index = 1;
   _settings_choice_scroll_start = 0;
-  _editing_setting_id = 0;
+  _editing_setting_id = SettingId::None;
 }
 
 void UIManager::sync_choice_scroll() {
@@ -1115,11 +1122,11 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
         result.action = UIAction::StartTracking;
       }
       break;
-    case 2: // Settings
-      open_settings();
+    case MENU_MODE:
+      open_settings_choice(SettingId::Mode);
       break;
-    case 3: // About Device
-      open_about();
+    case MENU_SETTINGS:
+      open_settings();
       break;
     default:
       break;
@@ -1133,8 +1140,6 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
 
 UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) {
   (void)type;
-  UIActionResult result{};
-
   switch (source) {
   case InputSource::TouchUp:
     move_settings(-1);
@@ -1143,34 +1148,72 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
     move_settings(1);
     break;
   case InputSource::TouchEnter:
-    if (_settings_index == 0) {
-      // Exit → Home
+    switch (_settings_index) {
+    case 0:
       go_home();
-    } else if (_settings_index == 1) {
-      // Back → MainMenu (cursor on "Settings")
+      break;
+    case 1:
       navigate_back();
-    } else if (_settings_index == SETTING_SETUP_GUIDE) {
-      // Setup Guide → Getting Started (Back returns here)
-      show_getting_started(/*from_boot=*/false);
-    } else if (_settings_index == SETTING_HARDWARE_TEST) {
-      // Hardware Test → submenu (Back returns here)
+      break;
+    case SETTINGS_OPERATIONS:
+      open_settings_group(Screen::Operations);
+      break;
+    case SETTINGS_DISPLAY_TOUCH:
+      open_settings_group(Screen::DisplayTouch);
+      break;
+    case SETTINGS_HARDWARE_TEST:
       open_hardware_test();
-    } else if (_settings_index == SETTING_CO2_CALIBRATION ||
-               _settings_index == SETTING_CLEAR_DATA) {
-      // Open confirm dialog for action items
-      open_confirm(_settings_index);
-    } else if (_settings_index == SETTING_PLAY_MELODY) {
-      // Open choice screen for Play Melody
-      open_settings_choice(_settings_index);
-    } else if (_settings_index >= SETTING_UNITS && _settings_index <= SETTING_BUZZER) {
-      // Open choice screen for this setting
-      open_settings_choice(_settings_index);
+      break;
+    case SETTINGS_CLEAR_DATA:
+      open_confirm(SettingId::ClearData);
+      break;
+    case SETTINGS_SETUP_GUIDE:
+      show_getting_started(/*from_boot=*/false);
+      break;
+    case SETTINGS_ABOUT:
+      open_about();
+      break;
+    default:
+      break;
     }
     break;
   default:
     break;
   }
-  return result;
+  return {};
+}
+
+UIActionResult UIManager::dispatch_settings_group(InputSource source, InputType type) {
+  (void)type;
+  uint8_t count = 0;
+  const SettingId *items = group_items(_screen, count);
+  if (items == nullptr)
+    return {};
+
+  switch (source) {
+  case InputSource::TouchUp:
+    _group_index = (uint8_t)wrap((int)_group_index - 1, count + 2);
+    break;
+  case InputSource::TouchDown:
+    _group_index = (uint8_t)wrap((int)_group_index + 1, count + 2);
+    break;
+  case InputSource::TouchEnter:
+    if (_group_index == 0) {
+      go_home();
+    } else if (_group_index == 1) {
+      navigate_back();
+    } else if (_group_index < count + 2) {
+      const SettingId setting = items[_group_index - 2];
+      if (setting == SettingId::Co2Calibration)
+        open_confirm(setting);
+      else
+        open_settings_choice(setting);
+    }
+    break;
+  default:
+    break;
+  }
+  return {};
 }
 
 UIActionResult UIManager::dispatch_settings_choice(InputSource source, InputType type) {
@@ -1189,37 +1232,26 @@ UIActionResult UIManager::dispatch_settings_choice(InputSource source, InputType
       // Exit → Home
       go_home();
     } else if (_settings_choice_index == 1) {
-      // Back → Settings
+      // Back → owning menu
       navigate_back();
     } else {
       // Apply chosen option
       uint8_t option_index = (uint8_t)(_settings_choice_index - 2);
 
-      if (_editing_setting_id == SETTING_PLAY_MELODY) {
+      if (_editing_setting_id == SettingId::PlayMelody) {
         // Play Melody is a transient action, not a persistent setting.
         // option_index 0 = Chime, 1 = Tetris -> MelodySelect 1, 2
         apply_setting_choice(option_index);
         result.action = UIAction::PlayMelody;
         result.melody = static_cast<MelodySelect>(option_index + 1);
-      } else if (_editing_setting_id == SETTING_MODE) {
+      } else if (_editing_setting_id == SettingId::Mode) {
         // Mode change has its own UIAction with the new mode.
         apply_setting_choice(option_index);
         // Exit to Home so the mode status icon updates in context.
         // Stationary entry overrides this with its Info screen.
         go_home();
         result.action = UIAction::ChangeMode;
-        switch (option_index) {
-        case 0:
-          result.new_mode = OperatingMode::Stationary;
-          break;
-        case 1:
-          result.new_mode = OperatingMode::Portable;
-          break;
-        case 2:
-        default:
-          result.new_mode = OperatingMode::Offline;
-          break;
-        }
+        result.new_mode = _setting_mode;
       } else {
         apply_setting_choice(option_index);
         result.action = UIAction::SettingsChanged;
@@ -1247,7 +1279,7 @@ UIActionResult UIManager::dispatch_about(InputSource source, InputType type) {
       // Exit → Home
       go_home();
     } else if (_about_index == 1) {
-      // Back → MainMenu (cursor on "About Device")
+      // Back → Settings (cursor on "About Device")
       navigate_back();
     }
     break;
@@ -1273,19 +1305,19 @@ UIActionResult UIManager::dispatch_confirm(InputSource source, InputType type) {
     case 0: // Exit → Home
       go_home();
       break;
-    case 1: // Back → Settings (cursor on source setting)
+    case 1: // Back → owning menu (cursor on source action)
       navigate_back();
       break;
-    case 3: // No → Settings (cursor on source setting)
+    case 3: // No → owning menu (cursor on source action)
       navigate_back();
       break;
     case 4: // Yes → perform action, go home
       go_home();
-      if (_confirm_source_setting == SETTING_CLEAR_DATA) {
+      if (_confirm_source_setting == SettingId::ClearData) {
         result.action = UIAction::ClearData;
-      } else if (_confirm_source_setting == SETTING_CO2_CALIBRATION) {
+      } else if (_confirm_source_setting == SettingId::Co2Calibration) {
         result.action = UIAction::CalibrateCo2;
-      } else if (_confirm_source_setting == SETTING_FG_LEARNING) {
+      } else if (_confirm_source_setting == SettingId::FgLearning) {
         // Orchestrator writes factory state and reboots into FG learning.
         result.action = UIAction::ArmFgLearning;
       }
@@ -1440,7 +1472,9 @@ UIActionResult UIManager::dispatch_hardware_test(InputSource source, InputType t
       result.action = UIAction::OpenAccelTest;
     } else if (_hardware_test_index == HW_TEST_FG_LEARNING) {
       // FG Learning → strong confirm dialog (Back/No return here).
-      open_confirm(SETTING_FG_LEARNING);
+      open_confirm(SettingId::FgLearning);
+    } else if (_hardware_test_index == HW_TEST_PLAY_MELODY) {
+      open_settings_choice(SettingId::PlayMelody);
     }
     break;
   default:
@@ -1523,44 +1557,47 @@ void UIManager::populate_menu_rows(DisplayValues &v) const {
   v.row_count = MAIN_MENU_TOTAL;
   copy_row(v, 0, "Exit Menu", false);
   copy_row(v, 1, _tracking_active ? "Stop Tracking" : "Start Tracking", false);
-  copy_row(v, 2, "Settings", false);
-  copy_row(v, 3, "About Device", false);
+  copy_row(v, MENU_MODE, "Operating Mode", false);
+  copy_row(v, MENU_SETTINGS, "Settings", false);
   v.selected_row = _menu_index;
 }
 
 void UIManager::populate_settings_rows(DisplayValues &v) const {
-  // Fixed header rows
+  copy_row(v, 0, "Exit", false);
+  copy_row(v, 1, "Back", false);
+  copy_row(v, SETTINGS_OPERATIONS, "Operations", false);
+  copy_row(v, SETTINGS_DISPLAY_TOUCH, "Display & Touch", false);
+  copy_row(v, SETTINGS_HARDWARE_TEST, "Hardware Test", false);
+  copy_row(v, SETTINGS_CLEAR_DATA, "Clear Data", false);
+  copy_row(v, SETTINGS_SETUP_GUIDE, "Setup Guide", false);
+  copy_row(v, SETTINGS_ABOUT, "About Device", false);
+  v.row_count = SETTINGS_TOTAL;
+  v.selected_row = _settings_index;
+  v.show_separator_after_back = true;
+}
+
+void UIManager::populate_settings_group_rows(DisplayValues &v) const {
   copy_row(v, 0, "Exit", false);
   copy_row(v, 1, "Back", false);
   v.show_separator_after_back = true;
 
-  // Compute page-based scroll
-  uint8_t scroll = page_scroll(_settings_index);
-
-  // Content items begin after the fixed Exit and Back rows.
-  static constexpr uint8_t CONTENT_COUNT = SETTINGS_TOTAL - 2;
-  uint8_t visible = 0;
-
-  for (uint8_t i = 0; i < PAGE_SIZE && (scroll + i) < CONTENT_COUNT; ++i) {
-    uint8_t item_index = (uint8_t)(SETTING_SETUP_GUIDE + scroll + i);
-    char label[48];
-
-    switch (item_index) {
-    case SETTING_SETUP_GUIDE:
-      (void)snprintf(label, sizeof(label), "Setup Guide");
-      break;
-    case SETTING_UNITS:
+  uint8_t count = 0;
+  const SettingId *items = group_items(_screen, count);
+  for (uint8_t i = 0; i < count; ++i) {
+    char label[48] = {};
+    switch (items[i]) {
+    case SettingId::Units:
       (void)snprintf(label, sizeof(label), "Temperature Unit: %s", UNITS_OPTIONS[_setting_units]);
       break;
-    case SETTING_ALTITUDE_UNIT:
+    case SettingId::AltitudeUnit:
       (void)snprintf(label, sizeof(label), "Altitude Unit: %s",
                      ALTITUDE_UNIT_OPTIONS[_setting_altitude_unit]);
       break;
-    case SETTING_PM_DISPLAY:
+    case SettingId::PmDisplay:
       (void)snprintf(label, sizeof(label), "PM Display: %s",
                      PM_DISPLAY_OPTIONS[_setting_pm_display]);
       break;
-    case SETTING_MEASURE_INTERVAL: {
+    case SettingId::MeasureInterval: {
       const int option_index = measure_interval_option_index(_setting_measure_interval_seconds);
       if (option_index >= 0) {
         (void)snprintf(label, sizeof(label), "Measure Int.: %s",
@@ -1570,51 +1607,38 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
                        _setting_measure_interval_seconds);
       }
     } break;
-    case SETTING_GPS_MODE:
-      (void)snprintf(label, sizeof(label), "GPS Mode: %s", GPS_MODE_OPTIONS[_setting_gps_mode]);
+    case SettingId::Co2Calibration:
+      (void)snprintf(label, sizeof(label), "CO2 Calibration");
       break;
-    case SETTING_MODE:
-      (void)snprintf(label, sizeof(label), "Mode: %s", MODE_OPTIONS[_setting_mode]);
-      break;
-    case SETTING_AUTO_LOCK:
-      (void)snprintf(label, sizeof(label), "Auto Lock: %s", AUTO_LOCK_OPTIONS[_setting_auto_lock]);
-      break;
-    case SETTING_DISPLAY_LED:
+    case SettingId::GpsMode: {
+      // Keep the longest summary within the 19-character list-row width.
+      static const char *const GPS_SUMMARIES[] = {"Always Off", "When tracking", "Always On"};
+      (void)snprintf(label, sizeof(label), "GPS: %s", GPS_SUMMARIES[_setting_gps_mode]);
+    } break;
+    case SettingId::AutoLock: {
+      static const char *const LOCK_SUMMARIES[] = {"Off", "10s", "30s", "60s"};
+      (void)snprintf(label, sizeof(label), "Auto Lock: %s", LOCK_SUMMARIES[_setting_auto_lock]);
+    } break;
+    case SettingId::DisplayLed:
       (void)snprintf(label, sizeof(label), "Display LED: %s",
                      LED_BRIGHTNESS_OPTIONS[_setting_display_led]);
       break;
-    case SETTING_AQI_LED:
+    case SettingId::AqiLed:
       (void)snprintf(label, sizeof(label), "AQI LED: %s", LED_BRIGHTNESS_OPTIONS[_setting_aqi_led]);
       break;
-    case SETTING_TOUCH_LED:
+    case SettingId::TouchLed:
       (void)snprintf(label, sizeof(label), "Touch LED: %s", TOUCH_LED_OPTIONS[_setting_touch_led]);
       break;
-    case SETTING_BUZZER:
+    case SettingId::Buzzer:
       (void)snprintf(label, sizeof(label), "Buzzer: %s", BUZZER_OPTIONS[_setting_buzzer_volume]);
       break;
-    case SETTING_PLAY_MELODY:
-      (void)snprintf(label, sizeof(label), "Play Melody");
-      break;
-    case SETTING_CO2_CALIBRATION:
-      (void)snprintf(label, sizeof(label), "CO2: Calibrate");
-      break;
-    case SETTING_CLEAR_DATA:
-      (void)snprintf(label, sizeof(label), "Data: Clear Data");
-      break;
-    case SETTING_HARDWARE_TEST:
-      (void)snprintf(label, sizeof(label), "Hardware Test");
-      break;
     default:
-      label[0] = '\0';
       break;
     }
-
-    copy_row(v, (uint8_t)(2 + visible), label, false);
-    ++visible;
+    copy_row(v, (uint8_t)(2 + i), label, false);
   }
-
-  v.row_count = (uint8_t)(2 + visible);
-  v.selected_row = display_row(_settings_index, scroll);
+  v.row_count = (uint8_t)(2 + count);
+  v.selected_row = _group_index;
 }
 
 void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
@@ -1622,7 +1646,7 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   copy_row(v, 1, "Back", false);
   v.show_separator_after_back = true;
 
-  if (_editing_setting_id == SETTING_MEASURE_INTERVAL) {
+  if (_editing_setting_id == SettingId::MeasureInterval) {
     populate_measure_interval_choice_rows(v);
     return;
   }
@@ -1631,35 +1655,38 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   const char *const *options = nullptr;
 
   switch (_editing_setting_id) {
-  case SETTING_UNITS:
+  case SettingId::Units:
     options = UNITS_OPTIONS;
     break;
-  case SETTING_ALTITUDE_UNIT:
+  case SettingId::AltitudeUnit:
     options = ALTITUDE_UNIT_OPTIONS;
     break;
-  case SETTING_PM_DISPLAY:
+  case SettingId::PmDisplay:
     options = PM_DISPLAY_OPTIONS;
     break;
-  case SETTING_GPS_MODE:
+  case SettingId::GpsMode:
     options = GPS_MODE_OPTIONS;
     break;
-  case SETTING_MODE:
-    options = MODE_OPTIONS;
-    break;
-  case SETTING_AUTO_LOCK:
+  case SettingId::Mode:
+    for (uint8_t i = 0; i < MODE_COUNT; ++i)
+      copy_row(v, (uint8_t)(2 + i), MODE_OPTIONS[i].label, false);
+    v.row_count = 2 + MODE_COUNT;
+    v.selected_row = _settings_choice_index;
+    return;
+  case SettingId::AutoLock:
     options = AUTO_LOCK_OPTIONS;
     break;
-  case SETTING_DISPLAY_LED:
-  case SETTING_AQI_LED:
+  case SettingId::DisplayLed:
+  case SettingId::AqiLed:
     options = LED_BRIGHTNESS_OPTIONS;
     break;
-  case SETTING_TOUCH_LED:
+  case SettingId::TouchLed:
     options = TOUCH_LED_OPTIONS;
     break;
-  case SETTING_BUZZER:
+  case SettingId::Buzzer:
     options = BUZZER_OPTIONS;
     break;
-  case SETTING_PLAY_MELODY:
+  case SettingId::PlayMelody:
     options = MELODY_OPTIONS;
     break;
   default:
@@ -1680,7 +1707,7 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
 
 void UIManager::populate_measure_interval_choice_rows(DisplayValues &v) const {
   const bool has_custom = is_custom_measure_interval(_setting_measure_interval_seconds);
-  const uint8_t option_count = setting_option_count(SETTING_MEASURE_INTERVAL);
+  const uint8_t option_count = setting_option_count(SettingId::MeasureInterval);
   uint8_t visible = 0;
 
   for (uint8_t i = 0; i < PAGE_SIZE && (_settings_choice_scroll_start + i) < option_count; ++i) {
@@ -1720,11 +1747,11 @@ void UIManager::populate_confirm_rows(DisplayValues &v) const {
   copy_row(v, 1, "Back", false);
 
   const char *question = "Confirm?";
-  if (_confirm_source_setting == SETTING_CLEAR_DATA) {
+  if (_confirm_source_setting == SettingId::ClearData) {
     question = "Clear Data?";
-  } else if (_confirm_source_setting == SETTING_CO2_CALIBRATION) {
+  } else if (_confirm_source_setting == SettingId::Co2Calibration) {
     question = "Calibrate CO2?";
-  } else if (_confirm_source_setting == SETTING_FG_LEARNING) {
+  } else if (_confirm_source_setting == SettingId::FgLearning) {
     question = "Start FG Learning?";
   }
   copy_row(v, 2, question, true); // non-selectable
@@ -1795,8 +1822,9 @@ void UIManager::populate_hardware_test_rows(DisplayValues &v) const {
   v.show_separator_after_back = true;
   copy_row(v, HW_TEST_PERIPHERAL, "Peripheral Test", false);
   copy_row(v, HW_TEST_GPS, "GPS Test", false);
-  copy_row(v, HW_TEST_ACCEL, "Accel Test", false);
-  copy_row(v, HW_TEST_FG_LEARNING, "FG Learning", false);
+  copy_row(v, HW_TEST_ACCEL, "Accelerometer Test", false);
+  copy_row(v, HW_TEST_FG_LEARNING, "Fuel Gauge Learning", false);
+  copy_row(v, HW_TEST_PLAY_MELODY, "Play Melody", false);
   v.row_count = HW_TEST_TOTAL;
   v.selected_row = _hardware_test_index;
 }

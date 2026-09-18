@@ -416,7 +416,8 @@ fresh failure of `resume_route()` on the next wake.
 ### change_mode()
 
 Updates `_mode`, persists it to NVS, and syncs `UIManager` so the
-Settings menu reflects the new mode. Tears down the outgoing radio
+Main Menu > Operating Mode choice reflects the new mode. Tears down the outgoing
+radio
 (BLE for Portable, Wi-Fi via `WifiService::shutdown()` for Stationary)
 and brings up the incoming radio (`init_ble_if_portable()` on entry to
 Portable, `enter_stationary()` on entry to Stationary). The PM bus is
@@ -438,7 +439,7 @@ Notifications are fire-and-forget (no completion signal), so the settle gives
 the queued notice a few connection intervals to drain to the client before the
 link drops. The wait is gated on `is_connected()`, so disconnected and
 non-Portable transitions add no delay. Because `change_mode()` is the single
-choke point for every leave-Portable path (`UserChangeMode` event, the Settings
+choke point for every leave-Portable path (`UserChangeMode` event, the Operating Mode
 menu `UIAction::ChangeMode`, and the BLE config-set), device- and BLE-initiated
 mode changes behave identically. An `op_mode` change produces **no** Config
 delta — the BLE config-set path skips its own `notify_config()` when the write
@@ -878,9 +879,9 @@ void Orchestrator::request_background_display_update() {
 }
 ```
 
-When the user is on any menu-navigation screen (MainMenu, Settings,
-SettingsChoice, TagList, Confirm, About) or anywhere inside the setup
-session (`Info`, `Provisioning`, `ProvisioningConfirm`), background
+When the user is on any menu-navigation screen (MainMenu, Settings, Operations,
+DisplayTouch, SettingsChoice, TagList, Confirm, About) or anywhere inside the
+setup session (`Info`, `Provisioning`, `ProvisioningConfirm`), background
 events still update data caches, send BLE notifications, etc. — only
 the e-paper refresh is skipped. The display catches up on the next
 user-initiated repaint (input, lock/unlock, returning to Home, or the

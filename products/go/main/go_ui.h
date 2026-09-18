@@ -188,8 +188,8 @@ public:
   /// Get the current screen (for orchestrator decisions).
   Screen current_screen() const;
 
-  /// True when the user is on any menu-navigation screen (MainMenu, Settings,
-  /// SettingsChoice, TagList, Confirm, About).  Used by the orchestrator to
+  /// True when the user is on any menu-navigation screen, including settings
+  /// groups, choices, confirmations, and About. Used by the orchestrator to
   /// suppress background display updates that would interrupt menu interaction.
   bool is_on_menu_screen() const;
 
@@ -244,7 +244,7 @@ public:
   void set_provisioning_ui_state(ProvisioningUiState s);
 
   /// Enter the Getting Started guide. Encodes the setup QR; from_boot
-  /// selects "Start using" -> AckOnboarding vs "Back" -> About.
+  /// selects "Start using" -> AckOnboarding vs "Back" -> Settings.
   void show_getting_started(bool from_boot);
 
   /// Push the current peripheral-test view snapshot for Screen::PeripheralTest.
@@ -283,6 +283,26 @@ public:
   void set_provisioning_connected(uint32_t ip);
 
 private:
+  // Setting/action identities are independent of their menu row positions.
+  enum class SettingId : uint8_t {
+    None,
+    Units,
+    AltitudeUnit,
+    PmDisplay,
+    MeasureInterval,
+    GpsMode,
+    Mode,
+    AutoLock,
+    DisplayLed,
+    AqiLed,
+    TouchLed,
+    Buzzer,
+    PlayMelody,
+    Co2Calibration,
+    ClearData,
+    FgLearning,
+  };
+
   Config _config;
 
   // Pre-formatted about screen text
@@ -294,28 +314,31 @@ private:
   Metric _active_metric = Metric::None;
 
   // Menu selection indices (per screen)
+  static constexpr uint8_t FIRST_CONTENT_ROW = 2; // Skip Exit and Back.
   uint8_t _menu_index = 0;
-  uint8_t _settings_index = 1;
+  uint8_t _settings_index = FIRST_CONTENT_ROW;
+  uint8_t _group_index = FIRST_CONTENT_ROW;
   uint8_t _settings_choice_index = 1;
   uint8_t _about_index = 1;
   uint8_t _confirm_index = 1;
   uint8_t _tag_list_index = 1;
-  uint8_t _hardware_test_index = 1;
+  uint8_t _hardware_test_index = FIRST_CONTENT_ROW;
   uint8_t _peripheral_index = 0; // Actuator step: 0 = Pass, 1 = Fail.
 
   // Peripheral test view snapshot (owned by the orchestrator flow).
   PeripheralTestView _peripheral_view = {};
 
   // Scroll state
-  uint8_t _settings_scroll_start = 0;
   uint8_t _settings_choice_scroll_start = 0;
   uint8_t _tag_scroll_start = 0;
 
   // Active settings choice context
-  uint8_t _editing_setting_id = 0;
+  SettingId _editing_setting_id = SettingId::None;
+  Screen _choice_parent = Screen::Settings;
 
   // Active confirm context (which setting opened the confirm dialog)
-  uint8_t _confirm_source_setting = 0;
+  SettingId _confirm_source_setting = SettingId::None;
+  Screen _confirm_parent = Screen::Settings;
 
   // Internal settings state.
   // Synced from GoSettings via sync_settings() at startup.
@@ -323,8 +346,8 @@ private:
   uint8_t _setting_altitude_unit = 0; // 0=m, 1=ft
   uint8_t _setting_pm_display = 0;    // 0=ug/m3, 1=USAQI
   int _setting_measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
-  uint8_t _setting_gps_mode = 1;      // 1="On When Tracking"
-  uint8_t _setting_mode = 1;          // 1="Portable"
+  uint8_t _setting_gps_mode = 1; // 1="On When Tracking"
+  OperatingMode _setting_mode = OperatingMode::Portable;
   uint8_t _setting_auto_lock = 0;     // 0="Off"
   uint8_t _setting_display_led = 0;   // 0="Off"
   uint8_t _setting_aqi_led = 0;       // 0="Off"
@@ -359,7 +382,7 @@ private:
   /// Re-encoded on screen entry / transport switch.
   AirgradientProvisioning::QrCode _qr = {};
 
-  // true = boot gate (Start using -> Home); false = About -> Setup Guide (Back).
+  // true = boot gate (Start using -> Home); false = Settings -> Setup Guide (Back).
   bool _getting_started_from_boot = false;
 
   // Info screen text (UIManager owns the storage; the renderer borrows
@@ -382,6 +405,7 @@ private:
   UIActionResult dispatch_home(InputSource source, InputType type);
   UIActionResult dispatch_menu(InputSource source, InputType type);
   UIActionResult dispatch_settings(InputSource source, InputType type);
+  UIActionResult dispatch_settings_group(InputSource source, InputType type);
   UIActionResult dispatch_settings_choice(InputSource source, InputType type);
   UIActionResult dispatch_about(InputSource source, InputType type);
   UIActionResult dispatch_confirm(InputSource source, InputType type);
@@ -402,10 +426,11 @@ private:
   void navigate_back();
   void open_main_menu();
   void open_settings();
-  void open_settings_choice(uint8_t setting_id);
+  void open_settings_group(Screen screen);
+  void open_settings_choice(SettingId setting_id);
   void open_about();
   void open_tag_list();
-  void open_confirm(uint8_t source_setting);
+  void open_confirm(SettingId source_setting);
   void open_hardware_test();
   void open_peripheral_test();
   void open_gps_test();
@@ -426,6 +451,7 @@ private:
   // --- Row population ---
   void populate_menu_rows(DisplayValues &v) const;
   void populate_settings_rows(DisplayValues &v) const;
+  void populate_settings_group_rows(DisplayValues &v) const;
   void populate_settings_choice_rows(DisplayValues &v) const;
   void populate_measure_interval_choice_rows(DisplayValues &v) const;
   void populate_about_rows(DisplayValues &v) const;
@@ -443,8 +469,9 @@ private:
   void populate_chart(DisplayValues &v, const MeasuresAGo *cache, uint8_t cache_count) const;
 
   // --- Settings choice helpers ---
-  uint8_t setting_option_count(uint8_t setting_id) const;
-  uint8_t setting_current_option(uint8_t setting_id) const;
+  static const SettingId *group_items(Screen screen, uint8_t &count);
+  uint8_t setting_option_count(SettingId setting_id) const;
+  uint8_t setting_current_option(SettingId setting_id) const;
   void apply_setting_choice(uint8_t option_index);
   void sync_choice_scroll();
 

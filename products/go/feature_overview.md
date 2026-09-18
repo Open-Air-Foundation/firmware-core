@@ -257,7 +257,7 @@ Buzzer and melody features:
 - Buzzer on/off setting.
 - Boot sound pattern.
 - First-time welcome chime.
-- Play Melody menu action.
+- Play Melody under Settings > Hardware Test.
 - Built-in melody choices such as Chime and Tetris.
 - Synchronized buzzer and LED effects for selected melodies.
 
@@ -280,6 +280,18 @@ Factory reset clears this state, so the setup guide can be shown again on a
 reset or refurbished unit.
 
 ## Configurable Settings
+
+The main menu offers Exit Menu, Start/Stop Tracking, Operating Mode, and
+Settings. Operating Mode lists Portable, Stationary, and Offline. Settings
+contains Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide,
+and the existing About Device page.
+
+Operations groups measurement interval, CO2 calibration, GPS mode, and buzzer.
+Display & Touch groups temperature/altitude units, PM display, auto-lock, and
+Display LED, AQI LED, and Touch LED brightness. Submenus keep Exit and Back;
+opening Settings or a submenu selects its first content item, while value
+choices select the saved value. Back restores the row that opened the child
+page.
 
 The Go stores user settings on the device, so they survive power cycles.
 

@@ -8,7 +8,9 @@ existing **FG Learning** factory routine. `UIManager` stays hardware-free — it
 renders the submenu and per-flow views from a pushed snapshot — while the
 orchestrator owns every hardware side effect, the flow state machines, and the
 buzzer / LED cues. All flows run in-app on already-initialised services; only
-FG Learning leaves the app (writes factory state and reboots).
+FG Learning leaves the app (writes factory state and reboots). The submenu also
+contains Play Melody, which previews Chime or Tetris using the existing
+synchronized buzzer/LED playback.
 
 ## Files
 
@@ -64,11 +66,12 @@ for full signatures.
 
 ### Navigation
 
-The **Hardware Test** row is the last Settings content row (mirrors
-**Setup Guide**) and opens `Screen::HardwareTest`. The submenu rows, in order:
+The **Hardware Test** row follows Display & Touch and precedes Clear Data in
+Settings. It opens `Screen::HardwareTest`. The submenu rows, in order:
 
 ```text
-Exit(0)  Back(1)  Peripheral Test(2)  GPS Test(3)  Accel Test(4)  FG Learning(5)
+Exit(0), Back(1), Peripheral Test(2), GPS Test(3), Accelerometer Test(4),
+Fuel Gauge Learning(5), Play Melody(6)
 ```
 
 Exit returns Home; Back returns to Settings on the Hardware Test row. Each live
@@ -76,6 +79,14 @@ screen exits back to the submenu on **any tap**, a **double-press Back**, or a
 **long-press Home** — the orchestrator snapshots `current_screen()` around
 `UIManager::handle_input()` and runs the flow's `finish_*` when the screen
 leaves, so no dedicated exit action is needed.
+
+### Play Melody
+
+Play Melody opens the existing Chime/Tetris choice screen. Applying a choice or
+using Back restores the Hardware Test menu on Play Melody. The orchestrator
+pauses input, temporarily enables the buzzer for playback, and restores the
+saved buzzer setting, rear brightness, and AQI state afterward. The choice
+screen retains ordinary settings auto-lock behavior.
 
 ### Peripheral Test
 
@@ -172,4 +183,5 @@ See [`fg_learning.md`](fg_learning.md) for the runner.
 - **Auto-lock suppressed.** The inactivity auto-lock is disabled on every
   Hardware Test screen (submenu and live flows), so an idle operator is never
   locked and returned Home mid-test. Auto-lock resumes once the surface is
-  exited.
+  exited. The Play Melody choice screen and FG Learning confirmation retain
+  ordinary auto-lock behavior.

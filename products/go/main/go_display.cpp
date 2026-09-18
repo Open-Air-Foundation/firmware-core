@@ -659,7 +659,8 @@ uint8_t u8x8_d_epd_128x250_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *
 bool is_home_like(Screen screen) { return screen == Screen::Home || screen == Screen::MainMenu; }
 
 bool is_list_screen(Screen screen) {
-  return screen == Screen::Settings || screen == Screen::SettingsChoice ||
+  return screen == Screen::Settings || screen == Screen::Operations ||
+         screen == Screen::DisplayTouch || screen == Screen::SettingsChoice ||
          screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About ||
          screen == Screen::HardwareTest || screen == Screen::PeripheralTest ||
          screen == Screen::GpsTest || screen == Screen::AccelTest;
@@ -1436,6 +1437,8 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     _draw_menu_overlay(v);
     break;
   case Screen::Settings:
+  case Screen::Operations:
+  case Screen::DisplayTouch:
   case Screen::SettingsChoice:
   case Screen::TagList:
   case Screen::Confirm:

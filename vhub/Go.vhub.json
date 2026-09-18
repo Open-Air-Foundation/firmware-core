@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "90c9dc9",
+  "rev": "menu-redesign-20260918-3",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -33,8 +33,8 @@
       "sub_category": "Navigation and settings",
       "applies_to": ["V1"],
       "description": "Physical inputs navigate the UI and enforce manual locking",
-      "expected_result": "A Power press released before 2000 ms alternates Locked and Unlocked exactly once. While locked, each touch leaves the screen unchanged, shows \"Unlock First\", and flashes only its configured touch LED. While unlocked, left, right, and center touches perform Up, Down, and Enter; two center taps separated by no more than 250 ms go Back; holding center for at least 1000 ms returns Home. The path Home > Menu > Settings > Hardware Test > Back > Setup Guide > Back > Home completes with one action per gesture and no title, row, or selection from the prior screen after each refresh. Short Power during boot splash and Stationary setup leaves that session unchanged.",
-      "notes": "Enable touch feedback. Execute the navigation path once, then separately reboot for the boot-splash check and enter Stationary setup for its suppression check. Auto-lock is covered in the timing-settings case."
+      "expected_result": "A Power press released before 2000 ms alternates Locked and Unlocked exactly once. While locked, each touch leaves the screen unchanged, shows \"Unlock First\", and flashes only its configured touch LED. While unlocked, left, right, and center touches perform Up, Down, and Enter; two center taps separated by no more than 250 ms go Back; holding center for at least 1000 ms returns Home. Main Menu lists Exit Menu, Start/Stop Tracking, Operating Mode, and Settings in that order. Settings lists Exit, Back, Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide, and About Device. Operations lists Measurement Interval (shown as Measure Int.), CO2 Calibration, GPS Mode (shown as GPS), and Buzzer; Display & Touch lists Temperature Unit, Altitude Unit, PM Display, Auto Lock, Display LED, AQI LED, and Touch LED. Hardware Test lists Peripheral Test, GPS Test, Accelerometer Test, Fuel Gauge Learning, and Play Melody. Every group begins with Exit and Back. Opening or reopening Settings selects Operations; Operations selects Measurement Interval, Display & Touch selects Temperature Unit, and Hardware Test selects Peripheral Test. Choice/value pages still select the saved value. All rows and current-value summaries fit on screen without clipping. Back and double-tap restore the parent selection, including after applying or canceling a setting; Exit and center hold return Home. Each gesture causes one action and each refresh leaves no stale rows or selection. Short Power during boot splash and Stationary setup leaves that session unchanged.",
+      "notes": "Enable touch feedback and visit Operating Mode, every Settings group, and About Device. Check wrapping from Exit to the last row and back. Apply and cancel one setting in each group; verify return selection. Separately reboot for the boot-splash check and enter Stationary setup for its suppression check. Auto-lock is covered in the timing-settings case."
     },
     {
       "id": "display.home.measurements-and-invalids",
@@ -69,7 +69,7 @@
       "sub_category": "Product information",
       "applies_to": ["V1"],
       "description": "About Device and the reopenable Setup Guide show consistent product identity and navigation",
-      "expected_result": "About Device shows the product title, serial number, firmware version, and Open Source Hardware text; serial and firmware match BLE Device Information and the flashed release. Settings > Setup Guide renders a scannable QR for https://l.airgradient.net/GO with only a Back action; Up/Down do not change the page and Enter returns to Settings on the Setup Guide row. Reopening the guide does not clear completed onboarding, and the next cold boot returns to Home without Getting Started.",
+      "expected_result": "Settings > About Device shows the product title, serial number, firmware version, and Open Source Hardware text; serial and firmware match BLE Device Information and the flashed release. About retains its existing layout; Back or double-tap returns to Settings with About Device selected. Settings > Setup Guide renders a scannable QR for https://l.airgradient.net/GO with only a Back action; Up/Down do not change the page and Enter returns to Settings on the Setup Guide row. Reopening the guide does not clear completed onboarding, and the next cold boot returns to Home without Getting Started.",
       "notes": "Scan the QR with a phone and compare identity against the unit label, serial log, and release manifest."
     },
     {
@@ -78,7 +78,7 @@
       "sub_category": "Units and presentation",
       "applies_to": ["V1"],
       "description": "Temperature, altitude, and PM presentation settings update labels, values, and persistence",
-      "expected_result": "Changing Temperature Unit from C to F updates the row label and Home value; changing back restores Celsius. Changing Altitude Unit from m to ft updates the row label and Home value; changing back restores meters. Changing Mass to USAQI updates the PM2.5 label and value. Changes made through either the UI or BLE are reflected in the Settings row, Home value, and BLE Config. Raw BLE temperature, altitude, and PM2.5 remain unchanged. All three choices persist after cold reboot.",
+      "expected_result": "Under Settings > Display & Touch, changing Temperature Unit from C to F updates the row label and Home value; changing back restores Celsius. Changing Altitude Unit from m to ft updates the row label and Home value; changing back restores meters. Changing Mass to USAQI updates the PM2.5 label and value. Changes made through either the UI or BLE are reflected in the Display & Touch row, Home value, and BLE Config. Raw BLE temperature, altitude, and PM2.5 remain unchanged. All three choices persist after cold reboot.",
       "notes": "Record the starting presentation settings and BLE values, verify each display change, then restore the original settings."
     },
     {
@@ -87,7 +87,7 @@
       "sub_category": "Timing and GPS",
       "applies_to": ["V1"],
       "description": "Measurement interval, GPS mode, and auto-lock settings represent fixed and custom values accurately",
-      "expected_result": "With a fixed interval active, the UI lists exactly 3s, 10s, 30s, 60s, 5m, 15m, and 1h without a Custom row. Set measurementInterval to 17 through Local Server Config and wait for GET convergence; Settings shows exactly Measure Int.: 17s, and the interval submenu shows selected Custom (17s) first followed by all seven fixed choices. Change GPS Mode to Always Off and confirm GET still reports measurementInterval 17. Cold reboot preserves the exact summary and selected custom row. Select fixed 3s and confirm Custom disappears, 3s is selected, and GET reports 3. The GPS menu lists Always Off, On When Tracking, and Always On; auto-lock lists Off, 10, 30, and 60 seconds. With 10-second auto-lock selected, lock and unlock using short Power presses, then provide no further input; the device locks 10 through 12 seconds after the accepted unlock input. Select Auto Lock Off, lock and unlock again, and provide no input for 70 seconds; the device remains unlocked throughout the observation window.",
+      "expected_result": "With a fixed interval active, the UI lists exactly 3s, 10s, 30s, 60s, 5m, 15m, and 1h without a Custom row. Set measurementInterval to 17 through Local Server Config and wait for GET convergence; Settings > Operations shows exactly Measure Int.: 17s, and the interval submenu shows selected Custom (17s) first followed by all seven fixed choices. Change GPS to Always Off under Operations and confirm GET still reports measurementInterval 17. Cold reboot preserves the exact summary and selected custom row. Select fixed 3s and confirm Custom disappears, 3s is selected, and GET reports 3. The Operations > GPS menu lists Always Off, On When Tracking, and Always On; Settings > Display & Touch > Auto Lock lists Off, 10, 30, and 60 seconds, with compact summaries such as Auto Lock: 10s. With 10-second auto-lock selected, lock and unlock using short Power presses, then provide no further input; the device locks 10 through 12 seconds after the accepted unlock input. Select Auto Lock Off, lock and unlock again, and provide no input for 70 seconds; the device remains unlocked throughout the observation window.",
       "notes": "Run in Stationary mode with Local Server writes permitted by local or both configuration control. Record the complete starting Local Server Config, including an exact custom interval if present, then restore it after the case. The fixed UI choices start at 3 seconds, while firmware interfaces accept 1 through 3600 seconds. GPS data gating and measurement cadence are separate cases."
     },
     {
@@ -97,7 +97,7 @@
       "applies_to": ["V1"],
       "description": "Front, rear AQI, and touch indicator settings control V1 hardware and persist",
       "expected_result": "For front and rear indicators, Off emits no visible light and each step Dim > Mid > Bright increases observed intensity without changing the selected color. For touch indicators, Off emits no flash and Dim > Bright increases flash intensity; center, left, and right flashes correspond only to Enter, Up, and Down. Rear color matches the repository AQI category calculated from corrected PM2.5 and turns off by the next measurement when PM2.5 is unavailable. Front=Dim, rear=Mid, and touch=Bright survive cold reboot and match a BLE Config Read.",
-      "notes": "Run in a dark room, observe every level in ascending order, and record the starting BLE Config values. Use the correction case to create a known AQI category. For unavailable PM, use a battery ship-mode cold boot and observe the rear LED before the first valid SPS30 result; do not disconnect hardware. Restore all three recorded levels."
+      "notes": "Open Settings > Display & Touch for Display LED, AQI LED, and Touch LED. Run in a dark room, observe every level in ascending order, and record the starting BLE Config values. Use the correction case to create a known AQI category. For unavailable PM, use a battery ship-mode cold boot and observe the rear LED before the first valid SPS30 result; do not disconnect hardware. Restore all three recorded levels."
     },
     {
       "id": "ui.settings.audio-and-melodies",
@@ -105,8 +105,8 @@
       "sub_category": "Audio feedback",
       "applies_to": ["V1"],
       "description": "Buzzer and melody settings control ordinary feedback and preview restoration",
-      "expected_result": "With Buzzer Off, an onboarded cold boot produces no ordinary boot sound; with Buzzer On, the same boot plays it. During each Chime and Tetris preview, every audible melody step has a rear-LED color step, and Up, Down, Enter, and short Power do not change the screen until playback ends. Within one display refresh after playback, the recorded buzzer setting, rear brightness, and AQI color are restored. The selected buzzer value matches a BLE Config Read after reboot.",
-      "notes": "Record buzzer, rear brightness, AQI color, and displayed screen before each preview. The first-use welcome is excluded because it overrides the persisted buzzer setting. Restore the recorded buzzer value."
+      "expected_result": "With Buzzer Off, an onboarded cold boot produces no ordinary boot sound; with Buzzer On, the same boot plays it. During each Chime and Tetris preview, every audible melody step has a rear-LED color step, and Up, Down, Enter, and short Power do not change the screen until playback ends. Within one display refresh after playback, the recorded buzzer setting, rear brightness, and AQI color are restored. The selected buzzer value matches a BLE Config Read after reboot. Opening Settings > Operations > Buzzer selects the current value and applying a choice returns to Operations on Buzzer. Opening Settings > Hardware Test > Play Melody lists Chime and Tetris; canceling or finishing playback returns to Hardware Test on Play Melody.",
+      "notes": "Use Operations for Buzzer and Hardware Test for Play Melody. Record buzzer, rear brightness, AQI color, and displayed screen before each preview. The first-use welcome is excluded because it overrides the persisted buzzer setting. Restore the recorded buzzer value."
     },
     {
       "id": "sensors.presentation.corrections-units-and-raw-boundaries",
@@ -213,7 +213,7 @@
       "sub_category": "Manual CO2 calibration",
       "applies_to": ["V1"],
       "description": "S12 and SCD4x production units complete manual CO2 calibration through each supported trigger",
-      "expected_result": "On both S12 and SCD4x units, UI No and Back return without a calibration-start log. UI Yes shows \"Calibrating CO2...\", then \"CO2 cal. done\" and \"CO2 calibration succeeded\" within 90 seconds. A BLE Config co2_cal command emits cmd_progress followed by one cmd_result ok=true within 90 seconds. Local Server Action calibrate-co2 returns empty 200 within 5 seconds, and a Cloud configuration GET with co2CalibrationRequested=true is admitted; each Stationary trigger is confirmed by the same success screen and serial log within 90 seconds.",
+      "expected_result": "On both S12 and SCD4x units, Settings > Operations > CO2 Calibration opens confirmation; No and Back return to Operations on CO2 Calibration without a calibration-start log. UI Yes shows \"Calibrating CO2...\", then \"CO2 cal. done\" and \"CO2 calibration succeeded\" within 90 seconds. A BLE Config co2_cal command emits cmd_progress followed by one cmd_result ok=true within 90 seconds. Local Server Action calibrate-co2 returns empty 200 within 5 seconds, and a Cloud configuration GET with co2CalibrationRequested=true is admitted; each Stationary trigger is confirmed by the same success screen and serial log within 90 seconds.",
       "notes": "Run the UI, BLE Config, Local Server Action, and Cloud configuration GET subruns one at a time on each sensor variant in outdoor air away from people, vehicles, and combustion. Keep SCD4x in periodic measurement for at least three minutes before every subrun. Wait for completion before the next request; results have no request ID. Restore authority and Cloud settings."
     },
     {
@@ -312,7 +312,7 @@
       "sub_category": "Clear Data",
       "applies_to": ["V1"],
       "description": "The on-device Clear Data action removes charts and routes without resetting user configuration",
-      "expected_result": "With at least five chart samples, two completed routes, and one active route, confirming Settings > Data > Clear Data stops tracking, shows \"Data cleared\" within 30 seconds, resets every Home chart to no samples, and makes Portable BLE History list return cnt=0. A BLE Status Read reports used_kb no greater than the pre-clear value. Complete BLE Config and saved Wi-Fi equal the recorded snapshots, and the bonded client reconnects without a passkey.",
+      "expected_result": "With at least five chart samples, two completed routes, and one active route, confirming Settings > Clear Data stops tracking, shows \"Data cleared\" within 30 seconds, resets every Home chart to no samples, and makes Portable BLE History list return cnt=0. A BLE Status Read reports used_kb no greater than the pre-clear value. Complete BLE Config and saved Wi-Fi equal the recorded snapshots, and the bonded client reconnects without a passkey.",
       "notes": "Use expendable data. Record complete BLE Config, saved SSID/static-IP/Cloud settings, bond, chart count, route IDs, active session, and used_kb before confirmation."
     },
     {

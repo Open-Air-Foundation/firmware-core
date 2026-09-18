@@ -17,6 +17,8 @@ enum class Screen : uint8_t {
   Home,
   MainMenu,
   Settings,
+  Operations,
+  DisplayTouch,
   SettingsChoice,
   TagList,
   About,
@@ -30,7 +32,7 @@ enum class Screen : uint8_t {
   ProvisioningConfirm,    ///< Yes/No confirmation overlay for Provisioning actions
   Info,                   ///< Generic single-text presentation surface (bring-up narration, etc.)
   GettingStarted,         ///< One-time first-boot guide (setup QR + single action row)
-  HardwareTest,           ///< Hardware Test submenu (peripheral/GPS/accel/FG-learning entry rows)
+  HardwareTest,           ///< Hardware Test submenu (diagnostics, FG learning, melody preview)
   PeripheralTest,         ///< Guided actuator steps + bulk AQ sensor test + summary
   GpsTest,                ///< Live GPS status: TTFF, fix, satellites, HDOP, position, UTC
   AccelTest,              ///< Live accelerometer: WHO_AM_I, X/Y/Z, magnitude, pass/fail

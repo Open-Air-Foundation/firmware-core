@@ -417,8 +417,9 @@ Session screens skip `_draw_status_bar()` and `_draw_snackbar()`:
 
 Background display updates are suppressed in two cases:
 
-- **Menu-navigation screens** (MainMenu, Settings, SettingsChoice,
-  TagList, Confirm, About). Background events — sensor data, BLE
+- **Menu-navigation screens** (MainMenu, Settings, Operations, DisplayTouch,
+  SettingsChoice, TagList, Confirm, About, and diagnostic menus/screens).
+  Background events — sensor data, BLE
   connect/disconnect/auth/config writes, BMS charging-status changes,
   and snackbar expiry — do not trigger display updates while the user
   is interacting with a menu.
@@ -466,8 +467,9 @@ Screen dispatch:
   128 px width. Logo removed from home page (kept for display-off only).
 - **MainMenu:** Home screen (metric cleared to None) + overlay at y=162.
   The 2 px-thick 1st grid divider is preserved as the menu top border.
-  Menu rows use full 128 px-wide selection rects.
-- **Settings/SettingsChoice/TagList/Confirm/About:** Full-screen list with
+  Menu rows use full 128 px-wide selection rects. The four rows are Exit Menu,
+  Start/Stop Tracking, Operating Mode, and Settings.
+- **Settings/Operations/DisplayTouch/SettingsChoice/TagList/Confirm/About:** Full-screen list with
   full 128 px-wide selection rects and vertically centered text. A
   separator line between the header rows (Exit/Back) and content rows
   uses a 2 px content offset to avoid touching.
