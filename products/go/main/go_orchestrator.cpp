@@ -1188,21 +1188,13 @@ void Orchestrator::on_input(const InputEventData &input) {
     return;
   }
 
-  // Arming: a second boot short-press while already in manufacturing mode
-  // persists a fuel-gauge learning run and reboots into the dedicated factory
-  // path. This is the orchestrator's ONLY learning touch point — no tick, no
-  // resume, no verify, no ship hook, no dashboard.
-  if (input.source == InputSource::ButtonBoot && input.type == InputType::ShortPress &&
-      _manufacturing_mode) {
-    arm_fg_learning(); // never returns on hardware
-    return;
-  }
-
   // Manufacturing: boot short-press before onboarding skips the guide and
-  // enters Stationary ephemerally, so production can re-test a fresh unit.
+  // enters Stationary ephemerally. Repeated presses leave the session alone.
   if (input.source == InputSource::ButtonBoot && input.type == InputType::ShortPress &&
       !_settings.onboarding_done) {
-    enter_manufacturing_mode();
+    if (!_manufacturing_mode) {
+      enter_manufacturing_mode();
+    }
     return;
   }
 

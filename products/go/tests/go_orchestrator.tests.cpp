@@ -1710,30 +1710,28 @@ TEST_CASE("manufacturing: boot short-press after onboarding does not enter Stati
   CHECK_FALSE(test_spy::wifi_try_fallback_called);
 }
 
-TEST_CASE("manufacturing: second boot short-press arms a fuel-gauge learning run",
+TEST_CASE("manufacturing: repeated boot short-presses do not arm fuel-gauge learning",
           "[Orchestrator][manufacturing][fg]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   test_spy::wifi_has_saved_networks = false;
 
+  FORBID_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_));
+  FORBID_CALL(f.mock_config, commit());
+
   // First press -> manufacturing mode (ephemeral, no commit).
   A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
   REQUIRE(A::manufacturing_mode(orch));
 
-  // Second press -> persist the learning run (stage=Charge, cycle=1) + reboot
-  // (reboot is a no-op under TEST_HOST).
-  std::map<std::string, int> writes;
-  std::map<std::string, int> *writes_ptr = &writes;
-  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
-      .SIDE_EFFECT((*writes_ptr)[std::string(_1)] = _2)
-      .RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
-
+  // Further presses must neither arm learning nor restart Stationary bring-up.
+  test_spy::wifi_try_fallback_called = false;
+  A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
   A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
 
-  CHECK(writes["fs_s"] == static_cast<int>(FgLearningStage::Charge));
-  CHECK(writes["fs_c"] == 1);
-  CHECK(writes["fs_i"] == 0);
+  CHECK(A::manufacturing_mode(orch));
+  CHECK(A::mode(orch) == OperatingMode::Stationary);
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+  CHECK_FALSE(test_spy::wifi_try_fallback_called);
 }
 
 TEST_CASE("manufacturing: shutdown resets settings while preserving corrections",

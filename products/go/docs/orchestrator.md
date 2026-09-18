@@ -312,12 +312,7 @@ Events are dispatched by type:
    device (battery-only hold-to-restart) — see
    [Power Management](power_management.md)
 2. **Long press ButtonBoot** — `factory_reset()`, then reboot on success
-3. **Short press ButtonBoot while `_manufacturing_mode`** (the _second_
-   press) — arm a fuel-gauge learning run: `save_factory_settings(Charge,
-   cycle 1)` then reboot. The next boot routes into the dedicated factory
-   path. This is the orchestrator's **only** learning touch point — no tick,
-   resume, verify, ship hook, or dashboard. See [`fg_learning.md`](fg_learning.md)
-4. **Short press ButtonBoot while `!onboarding_done`** —
+3. **Short press ButtonBoot while `!onboarding_done`** —
     `enter_manufacturing_mode()`: skip the Getting Started guide and enter
     Stationary ephemerally (`change_mode(Stationary, persist=false)`), so
     production can test a fresh unit without latching `onboarding_done`.
@@ -325,15 +320,20 @@ Events are dispatched by type:
     but clears all other Go settings, routes, and Wi-Fi credentials at
     `shutdown()`. BLE bond deletion is a safe no-op after Stationary has torn
     down the BLE host. Nothing else is persisted, so a reboot also returns to
-    fresh onboarding
-5. **Short press ButtonPower while `_setup_session_active` or
+    fresh onboarding.
+4. **Short press ButtonPower while `_setup_session_active` or
    `_boot_splash_active`** — suppressed (no lock toggle); the setup
    instructions or cold-boot splash stay visible
-6. **Short press ButtonPower** — toggle lock/unlock
-7. **Locked** — touch shows "Unlock First" snackbar; other inputs ignored
-8. **Unlocked** — forward to `UIManager::handle_input()`, then handle the
+5. **Short press ButtonPower** — toggle lock/unlock
+6. **Locked** — touch shows "Unlock First" snackbar; other inputs ignored
+7. **Unlocked** — forward to `UIManager::handle_input()`, then handle the
     returned `UIActionResult` (start/stop tracking, change mode,
     provisioning confirm-switch / confirm-cancel, etc.)
+
+Fuel-gauge learning starts only through **Settings → Hardware Test → Fuel Gauge
+Learning → Yes**. The `ArmFgLearning` UI action saves factory state (`Charge`,
+cycle 1) and reboots into the dedicated factory path. The orchestrator owns none
+of the learning run; see [`fg_learning.md`](fg_learning.md).
 
 The catch-all render at the tail of `on_input()` uses
 `update_display(/*wait=*/true)` for every input-driven render. Because
