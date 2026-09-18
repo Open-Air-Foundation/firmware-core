@@ -510,7 +510,7 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (17-key CBOR map)
+#### Payload (16-key CBOR map)
 
 | Key | Type | Description |
 |---|---|---|
@@ -521,7 +521,6 @@ Read the characteristic to receive the full device configuration.
 | `"gps_mode"` | text | GPS mode (see table below) |
 | `"auto_lock"` | uint | Auto-lock timeout (seconds) |
 | `"op_mode"` | text | Operating mode (see table below) |
-| `"fled"` | uint | Front (display) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
 | `"bled"` | uint | Back (AQI) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
 | `"tled"` | uint | Touch LED intensity: 0=Off, 1=Dim, 2=Bright |
 | `"buz"` | bool | Buzzer enabled |
@@ -573,7 +572,6 @@ them and persisted loading canonicalizes them.
   "gps_mode": "tracking",
   "auto_lock": 60,
   "op_mode": "portable",
-  "fled": 3,
   "bled": 3,
   "tled": 2,
   "buz": true,
@@ -620,7 +618,6 @@ silently ignored for backward compatibility. They do not modify any setting.
 | `"gps_mode"` | text | `"off"`, `"tracking"`, or `"always"` |
 | `"auto_lock"` | uint | |
 | `"op_mode"` | text | `"portable"`, `"stationary"`, or `"offline"` |
-| `"fled"` | uint | 0–3 (front LED brightness) |
 | `"bled"` | uint | 0–3 (back LED brightness) |
 | `"tled"` | uint | 0–2 (touch LED intensity) |
 | `"buz"` | bool | Buzzer enabled |
@@ -1621,7 +1618,7 @@ negotiated interval; only its speed is affected.
 
 ### Required MTUs by operation
 
-- **Config Read**: the full 17-key snapshot is bounded by a 512-byte
+- **Config Read**: the full 16-key snapshot is bounded by a 512-byte
   characteristic buffer. Use Read-Long / Read Blob and
   collect all fragments. Config Read does not require MTU 512, but it does
   require a client API that supports long reads.

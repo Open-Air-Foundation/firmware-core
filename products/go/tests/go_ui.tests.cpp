@@ -150,7 +150,7 @@ TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
   double_press(ui);
   open_row(ui, "Display & Touch");
   check_rows(ui, {"Exit", "Back", "Temperature Unit: C", "Altitude Unit: m", "PM Display: ug/m3",
-                  "Auto Lock: Off", "Display LED: Off", "AQI LED: Off", "Touch LED: Off"});
+                  "Auto Lock: Off", "AQI LED: Off", "Touch LED: Off"});
   double_press(ui);
   open_row(ui, "Hardware Test");
   check_rows(ui, {"Exit", "Back", "Peripheral Test", "GPS Test", "Accelerometer Test",
@@ -251,7 +251,6 @@ TEST_CASE("UIManager: group summaries fit the current list font",
     settings.use_feet = true;
     settings.gps_mode = GpsMode::OnWhenTracking;
     settings.auto_lock_seconds = 60;
-    settings.front_led_brightness = LedBrightness::Bright;
     settings.back_led_brightness = LedBrightness::Bright;
     settings.touch_led_intensity = TouchLedIntensity::Bright;
     ui.sync_settings(settings);
@@ -388,7 +387,7 @@ TEST_CASE("UIManager: grouped menus wrap and return to their parent",
   const MenuCase cases[] = {
       {nullptr, Screen::Settings, "Operations", "About Device", 8},
       {"Operations", Screen::Operations, "Measure Int.", "Buzzer: Off", 6},
-      {"Display & Touch", Screen::DisplayTouch, "Temperature Unit: C", "Touch LED: Off", 9},
+      {"Display & Touch", Screen::DisplayTouch, "Temperature Unit: C", "Touch LED: Off", 8},
       {"Hardware Test", Screen::HardwareTest, "Peripheral Test", "Play Melody", 7},
   };
   for (const auto &item : cases) {
@@ -745,25 +744,6 @@ TEST_CASE("UIManager: open interval choice resynchronizes fixed and custom value
 TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  SECTION("Display LED opens SettingsChoice and applies Dim") {
-    go_to_group(ui, "Display & Touch");
-    open_row(ui, "Display LED");
-
-    CHECK(ui.current_screen() == Screen::SettingsChoice);
-
-    // Default _setting_display_led=0 (Off), cursor at option 0 → logical 2.
-    // Navigate down to Dim (option 1, logical 3).
-    press(ui, InputSource::TouchDown); // Off→Dim
-    auto result = press(ui, InputSource::TouchEnter);
-
-    CHECK(result.action == UIAction::SettingsChanged);
-    CHECK(ui.current_screen() == Screen::DisplayTouch);
-
-    GoSettings s{};
-    ui.apply_to_settings(s);
-    CHECK(s.front_led_brightness == LedBrightness::Dim);
-  }
-
   SECTION("AQI LED opens SettingsChoice and applies Bright") {
     go_to_group(ui, "Display & Touch");
     open_row(ui, "AQI LED");
@@ -804,14 +784,12 @@ TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
 
   SECTION("sync_settings round-trips LED values") {
     GoSettings input{};
-    input.front_led_brightness = LedBrightness::Mid;
     input.back_led_brightness = LedBrightness::Off;
     input.touch_led_intensity = TouchLedIntensity::Dim;
     ui.sync_settings(input);
 
     GoSettings output{};
     ui.apply_to_settings(output);
-    CHECK(output.front_led_brightness == LedBrightness::Mid);
     CHECK(output.back_led_brightness == LedBrightness::Off);
     CHECK(output.touch_led_intensity == TouchLedIntensity::Dim);
   }
@@ -1250,6 +1228,7 @@ TEST_CASE("UIManager: Peripheral Test flow", "[UIManager][hwtest][peripheral]") 
     auto result = open_peripheral();
     CHECK(result.action == UIAction::RunPeripheralTest);
     CHECK(ui.current_screen() == Screen::PeripheralTest);
+    CHECK(std::string(ui.build_values(make_default_ctx()).rows[0].text) == "Back LED cycling?");
   }
 
   SECTION("actuator step emits Pass then Fail") {
@@ -1286,9 +1265,11 @@ TEST_CASE("UIManager: Peripheral Test flow", "[UIManager][hwtest][peripheral]") 
 
     auto ctx = make_default_ctx();
     DisplayValues dv = ui.build_values(ctx);
+    REQUIRE(dv.row_count == 9);
+    CHECK(std::string(dv.rows[1].text) == "Back LED: FAIL");
     CHECK(std::string(dv.rows[0].text) == "PASS - tap to exit");
-    CHECK(std::string(dv.rows[6].text) == "CO2: PASS");
-    CHECK(std::string(dv.rows[7].text) == "PM: FAIL");
+    CHECK(std::string(dv.rows[5].text) == "CO2: PASS");
+    CHECK(std::string(dv.rows[6].text) == "PM: FAIL");
 
     auto r = press(ui, InputSource::TouchEnter);
     CHECK(r.action == UIAction::PeripheralTestExit);

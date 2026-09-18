@@ -180,14 +180,12 @@ private:
   struct PeripheralTestState {
     bool active = false;
     enum class Step : uint8_t {
-      FrontLed,
       BackLed,
       TouchLed,
       Buzzer,
       Testing,
       Summary,
-    } step = Step::FrontLed;
-    bool front_led = false;
+    } step = Step::BackLed;
     bool back_led = false;
     bool touch_led = false;
     bool buzzer = false;

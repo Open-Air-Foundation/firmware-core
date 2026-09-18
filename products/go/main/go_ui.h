@@ -62,7 +62,6 @@ struct PeripheralTestView {
   const char *prompt = nullptr; ///< Actuator prompt (static string), Actuator kind only.
 
   // Summary results (Summary kind only). true = pass.
-  bool front_led = false;
   bool back_led = false;
   bool touch_led = false;
   bool buzzer = false;
@@ -293,7 +292,6 @@ private:
     GpsMode,
     Mode,
     AutoLock,
-    DisplayLed,
     AqiLed,
     TouchLed,
     Buzzer,
@@ -349,7 +347,6 @@ private:
   uint8_t _setting_gps_mode = 1; // 1="On When Tracking"
   OperatingMode _setting_mode = OperatingMode::Portable;
   uint8_t _setting_auto_lock = 0;     // 0="Off"
-  uint8_t _setting_display_led = 0;   // 0="Off"
   uint8_t _setting_aqi_led = 0;       // 0="Off"
   uint8_t _setting_touch_led = 0;     // 0="Off"
   uint8_t _setting_buzzer_volume = 0; // 0="Off"

@@ -121,7 +121,7 @@ CONFIG_READ_KEYS = {
     "gps_mode",
     "auto_lock",
     "op_mode",
-    "fled", "bled", "tled",
+    "bled", "tled",
     "buz", "abc", "tlo", "nlo",
     "pm25_corr", "temp_corr", "hum_corr",
 }
@@ -146,7 +146,6 @@ CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "gps_mode": (str,),
     "auto_lock": (int,),
     "op_mode": (str,),
-    "fled": (int,),
     "bled": (int,),
     "tled": (int,),
     "buz": (bool,),

@@ -147,7 +147,7 @@ rows follow this order:
 |---|---|
 | Settings | Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide, About Device |
 | Operations | Measurement Interval, CO2 Calibration, GPS Mode, Buzzer |
-| Display & Touch | Temperature Unit, Altitude Unit, PM Display, Auto Lock, Display LED, AQI LED, Touch LED |
+| Display & Touch | Temperature Unit, Altitude Unit, PM Display, Auto Lock, AQI LED, Touch LED |
 | Hardware Test | Peripheral Test, GPS Test, Accelerometer Test, Fuel Gauge Learning, Play Melody |
 
 Settings and its groups fit on one page. Opening Settings selects Operations;
@@ -250,7 +250,6 @@ pairs so display ordering cannot change persisted mode identities.
 | GPS Mode | `GPS: ...` (summary uses `When tracking`) | Always Off, On When Tracking, Always On |
 | Mode | Main Menu: `Operating Mode` | Portable, Stationary, Offline |
 | Auto Lock | `Auto Lock: Off / 10s / 30s / 60s` | Off, 10 Seconds, 30 Seconds, 60 Seconds |
-| Display LED | `Display LED: ...` | Off, Dim, Mid, Bright |
 | AQI LED | `AQI LED: ...` | Off, Dim, Mid, Bright |
 | Touch LED | `Touch LED: ...` | Off, Dim, Bright |
 | CO2 Calibration | Action row | Opens confirm dialog |
@@ -265,8 +264,8 @@ uses its compact label. A different valid value, such as 17 seconds, renders as
 Selecting a fixed choice replaces the custom value and removes the custom row.
 
 `apply_to_settings()` maps the internal state back to `GoSettings`, including
-the exact interval, `use_feet`, and the three LED fields
-(`front_led_brightness`, `back_led_brightness`, `touch_led_intensity`). Changing
+the exact interval, `use_feet`, and the two LED fields
+(`back_led_brightness`, `touch_led_intensity`). Changing
 an unrelated UI setting therefore preserves an active custom interval.
 
 ## Snackbar Lifecycle

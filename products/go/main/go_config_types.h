@@ -37,7 +37,7 @@ enum class GoConfigField : uint32_t {
   MeasurementInterval = 1U << 10,
   AltitudeUnit = 1U << 11,
   GpsMode = 1U << 12,
-  FrontLedBrightness = 1U << 13,
+  // Bit 13 is reserved.
   BackLedBrightness = 1U << 14,
   TouchLedIntensity = 1U << 15,
   BuzzerEnabled = 1U << 16,
@@ -96,7 +96,6 @@ struct GoConfigUpdate {
   ConfigurationControl configuration_control = ConfigurationControl::Both;
   int measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
   GpsMode gps_mode = GpsMode::OnWhenTracking;
-  LedBrightness front_led_brightness = LedBrightness::Off;
   LedBrightness back_led_brightness = LedBrightness::Off;
   TouchLedIntensity touch_led_intensity = TouchLedIntensity::Off;
   bool buzzer_enabled = false;

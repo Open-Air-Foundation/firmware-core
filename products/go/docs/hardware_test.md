@@ -92,12 +92,12 @@ screen retains ordinary settings auto-lock behavior.
 
 Operator-guided actuator steps (tap **Pass**, or toggle + tap **Fail**) run
 first, then the automatic AQ sweep, then a summary. Overall pass requires all
-four actuators **and** all five sensors.
+three actuators **and** all five sensor roles. The summary contains nine rows:
+one overall header, three actuator results, and five sensor results.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> FrontLed
-    FrontLed --> BackLed: tap confirms
+    [*] --> BackLed
     BackLed --> TouchLeds: tap confirms
     TouchLeds --> Buzzer: tap confirms
     Buzzer --> Testing: tap confirms

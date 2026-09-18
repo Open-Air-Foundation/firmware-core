@@ -246,7 +246,6 @@ variants, it also supports a buzzer.
 
 LED features:
 
-- Front indicator brightness setting.
 - Back AQI LED brightness setting.
 - Touch feedback LED setting.
 - AQI color display based on PM2.5.
@@ -288,7 +287,7 @@ and the existing About Device page.
 
 Operations groups measurement interval, CO2 calibration, GPS mode, and buzzer.
 Display & Touch groups temperature/altitude units, PM display, auto-lock, and
-Display LED, AQI LED, and Touch LED brightness. Submenus keep Exit and Back;
+AQI LED and Touch LED brightness. Submenus keep Exit and Back;
 opening Settings or a submenu selects its first content item, while value
 choices select the saved value. Back restores the row that opened the child
 page.
@@ -306,7 +305,6 @@ Common configurable settings include:
 - GPS mode: always off, on when tracking, or always on.
 - Operating mode: Portable, Stationary, or Offline.
 - Auto-lock timeout.
-- Front LED brightness.
 - AQI LED brightness.
 - Touch LED brightness.
 - Buzzer enabled or disabled.

@@ -52,7 +52,6 @@ constexpr const char *JSON_PM_STANDARD = "pmStandard";
 constexpr const char *JSON_TEMPERATURE_UNIT = "temperatureUnit";
 constexpr const char *JSON_MEASUREMENT_INTERVAL = "measurementInterval";
 constexpr const char *JSON_GPS_MODE = "gpsMode";
-constexpr const char *JSON_FRONT_LED_BRIGHTNESS = "frontLedBrightness";
 constexpr const char *JSON_BACK_LED_BRIGHTNESS = "backLedBrightness";
 constexpr const char *JSON_TOUCH_LED_INTENSITY = "touchLedIntensity";
 constexpr const char *JSON_BUZZER_ENABLED = "buzzerEnabled";
@@ -327,16 +326,6 @@ FetchConfigEventPayload parse_cloud_config(const char *buffer, size_t bytes) {
   }
 
   int led_value = 0;
-  const cJSON *front_led_brightness =
-      cJSON_GetObjectItemCaseSensitive(root, JSON_FRONT_LED_BRIGHTNESS);
-  if (front_led_brightness != nullptr &&
-      parse_int_range(front_led_brightness, JSON_FRONT_LED_BRIGHTNESS,
-                      static_cast<int>(LedBrightness::Off), static_cast<int>(LedBrightness::Bright),
-                      led_value)) {
-    update.front_led_brightness = static_cast<LedBrightness>(led_value);
-    update.update_mask |= static_cast<uint32_t>(GoConfigField::FrontLedBrightness);
-  }
-
   const cJSON *back_led_brightness =
       cJSON_GetObjectItemCaseSensitive(root, JSON_BACK_LED_BRIGHTNESS);
   if (back_led_brightness != nullptr &&

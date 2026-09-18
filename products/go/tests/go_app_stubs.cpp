@@ -913,8 +913,6 @@ LedService::~LedService() = default;
 bool LedService::init() { return true; }
 bool LedService::start() { return true; }
 
-void LedService::front_set_brightness(LedBrightness /*brightness*/) {}
-
 void LedService::back_solid(Rgb /*color*/) {}
 void LedService::back_blink(Rgb /*color*/, uint32_t /*period_ms*/) {}
 void LedService::back_breathe(Rgb /*color*/, uint32_t /*period_ms*/) {}
@@ -936,7 +934,6 @@ void LedService::_enqueue(const Cmd & /*cmd*/) {}
 void LedService::_process_cmd(const Cmd & /*cmd*/, uint32_t /*now_ms*/) {}
 void LedService::_tick_back(uint32_t /*now_ms*/) {}
 void LedService::_tick_touch(uint32_t /*now_ms*/) {}
-void LedService::_render_front() {}
 void LedService::_render_back() {}
 void LedService::_render_touch() {}
 bool LedService::_is_back_static() const { return true; }

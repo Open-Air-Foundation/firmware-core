@@ -840,7 +840,7 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_config produces 17 keys with compact device config") {
+TEST_CASE("BLE: encode_config produces 16 keys with compact device config") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   auto settings = make_default_settings();
@@ -850,7 +850,7 @@ TEST_CASE("BLE: encode_config produces 17 keys with compact device config") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 17);
+  CHECK(entries.size() == 16);
 
   CHECK(find_entry(entries, "meas_int") != nullptr);
   CHECK(find_entry(entries, "pm_int") == nullptr);
@@ -862,7 +862,6 @@ TEST_CASE("BLE: encode_config produces 17 keys with compact device config") {
   CHECK(find_entry(entries, "gps_mode") != nullptr);
   CHECK(find_entry(entries, "auto_lock") != nullptr);
   CHECK(find_entry(entries, "op_mode") != nullptr);
-  CHECK(find_entry(entries, "fled") != nullptr);
   CHECK(find_entry(entries, "bled") != nullptr);
   CHECK(find_entry(entries, "tled") != nullptr);
   CHECK(find_entry(entries, "buz") != nullptr);
@@ -1024,7 +1023,7 @@ TEST_CASE("BLE: notify_config sends altitude-unit-only changes") {
 
   const auto read_entries =
       decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 17);
+  CHECK(read_entries.size() == 16);
   CHECK(find_entry(read_entries, "alt_ft")->bool_val);
 
   const auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -1056,7 +1055,7 @@ TEST_CASE("BLE: notify_config sends delta and keeps READ as full snapshot") {
   REQUIRE(config_char.notify_count == 1);
 
   auto read_entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 17); // full snapshot, no "type"
+  CHECK(read_entries.size() == 16); // full snapshot, no "type"
   CHECK(find_entry(read_entries, "type") == nullptr);
 
   auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -1558,10 +1557,6 @@ TEST_CASE("BLE: decode_config_write rejects invalid requested config values") {
     len = encode_set_uint(buf, sizeof(buf), "meas_int", MEASURE_INTERVAL_SECONDS_MIN - 1);
   }
   SECTION("GPS mode") { len = encode_set_text(buf, sizeof(buf), "gps_mode", "sometimes"); }
-  SECTION("front LED") {
-    len =
-        encode_set_uint(buf, sizeof(buf), "fled", static_cast<uint64_t>(LedBrightness::Bright) + 1);
-  }
   SECTION("back LED") {
     len =
         encode_set_uint(buf, sizeof(buf), "bled", static_cast<uint64_t>(LedBrightness::Bright) + 1);
@@ -1586,7 +1581,6 @@ TEST_CASE("BLE: decode_config_write rejects invalid requested config values") {
   CHECK(result.has_invalid_config_values);
   CHECK(settings.measure_interval_seconds == original.measure_interval_seconds);
   CHECK(settings.gps_mode == original.gps_mode);
-  CHECK(settings.front_led_brightness == original.front_led_brightness);
   CHECK(settings.back_led_brightness == original.back_led_brightness);
   CHECK(settings.touch_led_intensity == original.touch_led_intensity);
   CHECK(settings.buzzer_enabled == original.buzzer_enabled);

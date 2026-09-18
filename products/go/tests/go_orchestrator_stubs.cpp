@@ -66,9 +66,6 @@ bool input_started = false;
 bool input_stopped = false;
 
 // --- LedService ---
-uint32_t led_front_brightness_count = 0;
-LedBrightness led_last_front_brightness = LedBrightness::Off;
-bool led_front_bright_seen = false;
 uint32_t led_back_brightness_count = 0;
 LedBrightness led_last_back_brightness = LedBrightness::Off;
 bool led_back_bright_seen = false;
@@ -277,9 +274,6 @@ void reset() {
   input_started = false;
   input_stopped = false;
 
-  led_front_brightness_count = 0;
-  led_last_front_brightness = LedBrightness::Off;
-  led_front_bright_seen = false;
   led_back_brightness_count = 0;
   led_last_back_brightness = LedBrightness::Off;
   led_back_bright_seen = false;
@@ -1238,12 +1232,6 @@ LedService::~LedService() = default;
 bool LedService::init() { return true; }
 bool LedService::start() { return true; }
 
-void LedService::front_set_brightness(LedBrightness brightness) {
-  ++test_spy::led_front_brightness_count;
-  test_spy::led_last_front_brightness = brightness;
-  test_spy::led_front_bright_seen |= brightness == LedBrightness::Bright;
-}
-
 void LedService::back_solid(Rgb /*color*/) {}
 void LedService::back_blink(Rgb /*color*/, uint32_t /*period_ms*/) {}
 void LedService::back_breathe(Rgb /*color*/, uint32_t /*period_ms*/) {}
@@ -1286,7 +1274,6 @@ void LedService::_enqueue(const Cmd & /*cmd*/) {}
 void LedService::_process_cmd(const Cmd & /*cmd*/, uint32_t /*now_ms*/) {}
 void LedService::_tick_back(uint32_t /*now_ms*/) {}
 void LedService::_tick_touch(uint32_t /*now_ms*/) {}
-void LedService::_render_front() {}
 void LedService::_render_back() {}
 void LedService::_render_touch() {}
 bool LedService::_is_back_static() const { return true; }

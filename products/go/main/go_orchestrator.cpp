@@ -123,10 +123,6 @@ static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource sou
     candidate.gps_mode = update.gps_mode;
     has_update = true;
   }
-  if (has_go_config_field(update.update_mask, GoConfigField::FrontLedBrightness)) {
-    candidate.front_led_brightness = update.front_led_brightness;
-    has_update = true;
-  }
   if (has_go_config_field(update.update_mask, GoConfigField::BackLedBrightness)) {
     candidate.back_led_brightness = update.back_led_brightness;
     has_update = true;
@@ -275,7 +271,6 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   }
 
   // --- LED brightness from settings ---
-  _svc.led_service.front_set_brightness(_settings.front_led_brightness);
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
 
@@ -1491,7 +1486,6 @@ void Orchestrator::run_led_test() {
   static constexpr uint32_t LED_TEST_DURATION_MS = LED_TEST_STEP_COUNT * COLOR_HOLD_MS;
 
   AG_LOGI(TAG, "LED test started");
-  _svc.led_service.front_set_brightness(LedBrightness::Bright);
   _svc.led_service.back_set_brightness(LedBrightness::Bright);
   _svc.led_service.touch_set_intensity(TouchLedIntensity::Bright);
   _svc.led_service.touch_set_all(true);
@@ -1499,7 +1493,6 @@ void Orchestrator::run_led_test() {
   RTOS::delay_ms(LED_TEST_DURATION_MS);
 
   _svc.led_service.touch_set_all(false);
-  _svc.led_service.front_set_brightness(_settings.front_led_brightness);
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
   if (_corrected_measures.pm_a.is_pm_25_valid()) {
@@ -1518,7 +1511,7 @@ void Orchestrator::start_peripheral_test() {
   AG_LOGI(TAG, "peripheral test: start");
   _periph = PeripheralTestState{};
   _periph.active = true;
-  _periph.step = PeripheralTestState::Step::FrontLed;
+  _periph.step = PeripheralTestState::Step::BackLed;
   drive_peripheral_actuator();
 }
 
@@ -1529,10 +1522,6 @@ void Orchestrator::drive_peripheral_actuator() {
   view.kind = PeripheralTestView::Kind::Actuator;
 
   switch (_periph.step) {
-  case Step::FrontLed:
-    _svc.led_service.front_set_brightness(LedBrightness::Bright);
-    view.prompt = "Front LED on?";
-    break;
   case Step::BackLed: {
     // Cycle red -> green -> blue so the operator sees the RGB channels.
     static constexpr BackStep BACK_LED_CYCLE[] = {
@@ -1570,11 +1559,6 @@ void Orchestrator::peripheral_step_result(bool pass) {
   using Step = PeripheralTestState::Step;
 
   switch (_periph.step) {
-  case Step::FrontLed:
-    _periph.front_led = pass;
-    _periph.step = Step::BackLed;
-    drive_peripheral_actuator();
-    break;
   case Step::BackLed:
     _periph.back_led = pass;
     _periph.step = Step::TouchLed;
@@ -1611,8 +1595,8 @@ void Orchestrator::on_sensor_test_done(const SensorTestResults &results) {
   _periph.sensors = results;
   _periph.step = PeripheralTestState::Step::Summary;
 
-  const bool overall = _periph.front_led && _periph.back_led && _periph.touch_led &&
-                       _periph.buzzer && results.all_pass();
+  const bool overall =
+      _periph.back_led && _periph.touch_led && _periph.buzzer && results.all_pass();
   AG_LOGI(TAG, "peripheral test: summary overall=%s", overall ? "PASS" : "FAIL");
 
   // Overall pass/fail cue (buzzer + back LED colour).
@@ -1627,7 +1611,6 @@ void Orchestrator::on_sensor_test_done(const SensorTestResults &results) {
 
   PeripheralTestView view{};
   view.kind = PeripheralTestView::Kind::Summary;
-  view.front_led = _periph.front_led;
   view.back_led = _periph.back_led;
   view.touch_led = _periph.touch_led;
   view.buzzer = _periph.buzzer;
@@ -1652,7 +1635,6 @@ void Orchestrator::finish_peripheral_test() {
 
   // Restore LED/buzzer to persisted settings + live AQI.
   _svc.led_service.touch_set_all(false); // clear any steady touch LEDs
-  _svc.led_service.front_set_brightness(_settings.front_led_brightness);
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
   _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
@@ -1938,9 +1920,6 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
     }
   }
 
-  if (previous_settings.front_led_brightness != _settings.front_led_brightness) {
-    _svc.led_service.front_set_brightness(_settings.front_led_brightness);
-  }
   if (previous_settings.back_led_brightness != _settings.back_led_brightness) {
     _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   }
