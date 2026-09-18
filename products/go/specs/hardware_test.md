@@ -39,7 +39,7 @@ result.
 
 - Add one **Hardware Test** sub-screen reachable from Settings, visible to all
   users, that lists every test flow.
-- **Peripheral test:** run one item at a time, actuators first (front LED, back
+- **Peripheral test:** run one item at a time, actuators first (back
   LED, touch LEDs, buzzer) then AQ sensors (SHT40, SGP41, SPS30, DPS368, CO2),
   showing on the display what is currently under test.
 - Actuator steps are **operator-guided** (show the effect, operator taps to
@@ -126,8 +126,7 @@ always shows the current item; the buzzer beeps pass/fail on the sensor steps.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> FrontLed
-    FrontLed --> BackLed: tap confirms
+    [*] --> BackLed
     BackLed --> TouchLeds: tap confirms
     TouchLeds --> BuzzerTone: tap confirms
     BuzzerTone --> AqSweep: tap confirms
@@ -136,9 +135,9 @@ stateDiagram-v2
 ```
 
 **Actuator steps (operator-guided).** Each step drives the effect and shows a
-prompt such as _"Front LED — do you see it?"_ with a Pass/Fail choice. The
+prompt such as _"Back LED cycling?"_ with a Pass/Fail choice. The
 operator taps to confirm Pass or marks Fail, then the flow advances. Steps:
-front LED brightness on, back LED colour cycle, touch LED flash, buzzer tone.
+back LED colour cycle, touch LED flash, buzzer tone.
 
 **AQ sweep (automatic).** Runs one sensor at a time. For each attached sensor
 the sequence is:
@@ -277,7 +276,7 @@ Each step is small enough to land as a focused commit.
    sweep and streams `SensorTestReport`s back via the event queue, then resumes
    normal posting.
 3. **Peripheral test flow.** Add the orchestrator flow state machine: guided
-   actuator steps (front LED, back LED, touch LEDs, buzzer) with tap-to-confirm,
+   actuator steps (back LED, touch LEDs, buzzer) with tap-to-confirm,
    then the AQ sweep, then the summary screen, with buzzer pass/fail cues.
 4. **Display renderers.** Add renderers for the peripheral step, per-sensor
    result, and summary screens.

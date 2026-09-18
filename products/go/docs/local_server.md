@@ -148,7 +148,6 @@ objects from the same subset. Device behavior fields are:
 | `altitudeUnit` | `m`, `ft` | Select product display altitude unit; raw GPS and stored route altitude remain in meters |
 | `measurementInterval` | Integer 1 .. 3600 | Set the exact measurement interval in seconds; non-fixed UI values appear as custom |
 | `gpsMode` | `off`, `tracking`, `always` | Disable GPS, run it only while tracking, or keep it active |
-| `frontLedBrightness` | Integer 0 .. 3 | Set front LED brightness: off, dim, mid, or bright |
 | `backLedBrightness` | Integer 0 .. 3 | Set AQI LED brightness: off, dim, mid, or bright |
 | `touchLedIntensity` | Integer 0 .. 2 | Set touch LED intensity: off, dim, or bright |
 | `buzzerEnabled` | Boolean | Enable or disable buzzer playback |
@@ -232,7 +231,7 @@ UI and BLE result path; no completion is returned to the HTTP client.
 
 `POST /api/v1/actions/test-leds` uses the same admission path and returns empty
 `200` once queued. The orchestrator later blocks its own task for three seconds
-while the LED worker exercises the front, back, and touch groups, then restores
+while the LED worker exercises the back and touch groups, then restores
 the configured levels and current AQI state. The success response confirms only
 queue admission. If an interactive hardware-test screen owns the LEDs when the
 request is consumed, the diagnostic is ignored.

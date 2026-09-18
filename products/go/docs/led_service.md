@@ -2,8 +2,8 @@
 
 Product-specific LED service for AirGradient Go. Drives the LP5036
 36-channel I2C LED controller on the mobile-display sub-PCB through an
-adaptive render loop. The service manages three independent LED groups
-(front indicators, back AQI, touch feedback) and supports time-evolving
+adaptive render loop. The service manages two independent LED groups
+(back AQI and touch feedback) and supports time-evolving
 effects such as blink, breathe, fade, chase, and sequenced animations.
 Active on board variant V1; inert on Prototype.
 
@@ -57,12 +57,6 @@ variant.
 | `init()` | `bool` | Init driver, create queue. Cached: second call returns first result. |
 | `start()` | `bool` | Spawn worker task. Idempotent. |
 
-### Front (Static)
-
-| Method | Purpose |
-|---|---|
-| `front_set_brightness(b)` | Set front indicator LEDs (OUT30, OUT31) to Off/Dim/Mid/Bright |
-
 ### Back (Animated)
 
 | Method | Purpose |
@@ -99,21 +93,10 @@ variant.
 | LED7 | OUT18/19/20 | Back (index 3) |
 | LED9 | OUT24/25/26 | Back (index 4) |
 | LED10 | OUT27/28/29 | Touch Select |
-| LED25 | OUT30 | Front indicator |
-| LED26 | OUT31 | Front indicator |
 
 LED8 (OUT21/22/23) is reserved for a future follow-up.
 
 ## Brightness and PWM Tables
-
-### Front PWM
-
-| `LedBrightness` | PWM |
-|---|---:|
-| Off | 0 |
-| Dim | 5 |
-| Mid | 13 |
-| Bright | 26 |
 
 ### Back Scale
 
@@ -139,7 +122,7 @@ Output per channel: `(effect_value * scale) / 255`.
 ### Composite LED Test
 
 The orchestrator provides a blocking diagnostic that exercises every mapped
-LED group. Both front indicators and all three touch LEDs remain bright while
+LED group. All three touch LEDs remain bright while
 the five back LEDs show red, green, and blue for one second each. After three
 seconds, the orchestrator restores the configured group levels and the latest
 valid AQI color, or clears the back LEDs when PM2.5 is invalid.
@@ -287,7 +270,6 @@ the orchestrator sets the AQI color when the first measurement arrives.
 
 | Setting | NVS Key | BLE Key | Enum | Valid Range | Default |
 |---|---|---|---|---:|---|
-| Front brightness | `lb` | `fled` | `LedBrightness` | 0..3 | Off |
 | Back brightness | `blb` | `bled` | `LedBrightness` | 0..3 | Off |
 | Touch intensity | `tlb` | `tled` | `TouchLedIntensity` | 0..2 | Off |
 

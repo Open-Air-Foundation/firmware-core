@@ -23,7 +23,7 @@ sleep cycle.
 | `StorageService` | product (`go_storage.h`) | Cache measurements, persist route data |
 | `PowerService` | product (`go_power.h`) | BMS polling, sleep entry, RTC state, shutdown |
 | `UIManager` | product (`go_ui.h`) | Screen navigation, input dispatch, display value building |
-| `LedService` | product (`led/go_led.h`) | Front/back/touch LED brightness, AQI color, touch flash, animations |
+| `LedService` | product (`led/go_led.h`) | Back/touch LED brightness, AQI color, touch flash, animations |
 | `BleService` | product (`go_ble.h`) | Portable BLE peripheral; initialised on Portable entry, torn down on leave |
 | `WifiService` | product (`go_wifi.h`) | Stationary Wi-Fi lifecycle: saved-credentials connect, factory fallback, provisioning, disconnect routing |
 | `GoLocalApiService` | product (`go_local_api.h`) | Cached local HTTP snapshots, request admission, and FIFO config/action handoff |
