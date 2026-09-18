@@ -504,7 +504,6 @@ void UIManager::sync_settings(const GoSettings &s) {
     _setting_auto_lock = 3;
 
   // LED settings — enum values map directly to option indices
-  _setting_display_led = static_cast<uint8_t>(s.front_led_brightness);
   _setting_aqi_led = static_cast<uint8_t>(s.back_led_brightness);
   _setting_touch_led = static_cast<uint8_t>(s.touch_led_intensity);
   _setting_buzzer_volume = s.buzzer_enabled ? 1 : 0;
@@ -541,7 +540,6 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
   settings.auto_lock_seconds = (_setting_auto_lock < 4) ? AUTO_LOCK_SECONDS[_setting_auto_lock] : 0;
 
   // LED settings — option indices map directly to enum values
-  settings.front_led_brightness = static_cast<LedBrightness>(_setting_display_led);
   settings.back_led_brightness = static_cast<LedBrightness>(_setting_aqi_led);
   settings.touch_led_intensity = static_cast<TouchLedIntensity>(_setting_touch_led);
   settings.buzzer_enabled = (_setting_buzzer_volume == 1);
@@ -820,7 +818,7 @@ void UIManager::open_peripheral_test() {
   // Sensible default until the orchestrator pushes the first step view.
   _peripheral_view = PeripheralTestView{};
   _peripheral_view.kind = PeripheralTestView::Kind::Actuator;
-  _peripheral_view.prompt = "Front LED on?";
+  _peripheral_view.prompt = "Back LED cycling?";
 }
 
 void UIManager::set_peripheral_test_view(const PeripheralTestView &view) {
@@ -903,9 +901,9 @@ void UIManager::browse_metric(int delta) {
 const UIManager::SettingId *UIManager::group_items(Screen screen, uint8_t &count) {
   static constexpr SettingId OPERATIONS[] = {SettingId::MeasureInterval, SettingId::Co2Calibration,
                                              SettingId::GpsMode, SettingId::Buzzer};
-  static constexpr SettingId DISPLAY_TOUCH[] = {
-      SettingId::Units,      SettingId::AltitudeUnit, SettingId::PmDisplay, SettingId::AutoLock,
-      SettingId::DisplayLed, SettingId::AqiLed,       SettingId::TouchLed};
+  static constexpr SettingId DISPLAY_TOUCH[] = {SettingId::Units,     SettingId::AltitudeUnit,
+                                                SettingId::PmDisplay, SettingId::AutoLock,
+                                                SettingId::AqiLed,    SettingId::TouchLed};
   static_assert(sizeof(OPERATIONS) / sizeof(OPERATIONS[0]) + 2 <= MAX_LIST_ROWS);
   static_assert(sizeof(DISPLAY_TOUCH) / sizeof(DISPLAY_TOUCH[0]) + 2 <= MAX_LIST_ROWS);
 
@@ -941,7 +939,6 @@ uint8_t UIManager::setting_option_count(SettingId setting_id) const {
     return MODE_COUNT;
   case SettingId::AutoLock:
     return AUTO_LOCK_COUNT;
-  case SettingId::DisplayLed:
   case SettingId::AqiLed:
     return LED_BRIGHTNESS_COUNT;
   case SettingId::TouchLed:
@@ -977,8 +974,6 @@ uint8_t UIManager::setting_current_option(SettingId setting_id) const {
     return 0;
   case SettingId::AutoLock:
     return _setting_auto_lock;
-  case SettingId::DisplayLed:
-    return _setting_display_led;
   case SettingId::AqiLed:
     return _setting_aqi_led;
   case SettingId::TouchLed:
@@ -1025,9 +1020,6 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
     break;
   case SettingId::AutoLock:
     _setting_auto_lock = option_index;
-    break;
-  case SettingId::DisplayLed:
-    _setting_display_led = option_index;
     break;
   case SettingId::AqiLed:
     _setting_aqi_led = option_index;
@@ -1619,10 +1611,6 @@ void UIManager::populate_settings_group_rows(DisplayValues &v) const {
       static const char *const LOCK_SUMMARIES[] = {"Off", "10s", "30s", "60s"};
       (void)snprintf(label, sizeof(label), "Auto Lock: %s", LOCK_SUMMARIES[_setting_auto_lock]);
     } break;
-    case SettingId::DisplayLed:
-      (void)snprintf(label, sizeof(label), "Display LED: %s",
-                     LED_BRIGHTNESS_OPTIONS[_setting_display_led]);
-      break;
     case SettingId::AqiLed:
       (void)snprintf(label, sizeof(label), "AQI LED: %s", LED_BRIGHTNESS_OPTIONS[_setting_aqi_led]);
       break;
@@ -1676,7 +1664,6 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   case SettingId::AutoLock:
     options = AUTO_LOCK_OPTIONS;
     break;
-  case SettingId::DisplayLed:
   case SettingId::AqiLed:
     options = LED_BRIGHTNESS_OPTIONS;
     break;
@@ -1857,16 +1844,15 @@ void UIManager::populate_peripheral_test_rows(DisplayValues &v) const {
       (void)snprintf(buf, sizeof(buf), "%s: %s", name, pass ? "PASS" : "FAIL");
       copy_row(v, i, buf, false);
     };
-    row(1, "Front LED", pv.front_led);
-    row(2, "Back LED", pv.back_led);
-    row(3, "Touch LED", pv.touch_led);
-    row(4, "Buzzer", pv.buzzer);
-    row(5, "Temp/Hum", pv.temp_hum);
-    row(6, "CO2", pv.co2);
-    row(7, "PM", pv.pm);
-    row(8, "TVOC/NOx", pv.tvoc_nox);
-    row(9, "Pressure", pv.pressure);
-    v.row_count = 10;
+    row(1, "Back LED", pv.back_led);
+    row(2, "Touch LED", pv.touch_led);
+    row(3, "Buzzer", pv.buzzer);
+    row(4, "Temp/Hum", pv.temp_hum);
+    row(5, "CO2", pv.co2);
+    row(6, "PM", pv.pm);
+    row(7, "TVOC/NOx", pv.tvoc_nox);
+    row(8, "Pressure", pv.pressure);
+    v.row_count = 9;
     v.selected_row = 0; // header disabled; any tap exits
     break;
   }

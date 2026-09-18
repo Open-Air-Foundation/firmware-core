@@ -389,7 +389,6 @@ GoLocalApiService::make_active_config(const GoSettings &settings) {
   active.configuration_control = settings.configuration_control;
   active.measure_interval_seconds = settings.measure_interval_seconds;
   active.gps_mode = settings.gps_mode;
-  active.front_led_brightness = settings.front_led_brightness;
   active.back_led_brightness = settings.back_led_brightness;
   active.touch_led_intensity = settings.touch_led_intensity;
   active.buzzer_enabled = settings.buzzer_enabled;
@@ -408,7 +407,6 @@ LocalServerConfig GoLocalApiService::map_config(const ActiveConfigSnapshot &acti
   config.altitude_unit = active.use_feet ? ALTITUDE_UNIT_FEET : ALTITUDE_UNIT_METERS;
   config.cloud_connection = !active.disable_cloud;
   config.measurement_interval_seconds = active.measure_interval_seconds;
-  config.front_led_brightness = static_cast<int>(active.front_led_brightness);
   config.back_led_brightness = static_cast<int>(active.back_led_brightness);
   config.touch_led_intensity = static_cast<int>(active.touch_led_intensity);
   config.buzzer_enabled = active.buzzer_enabled;
@@ -451,6 +449,9 @@ LocalServerConfig GoLocalApiService::map_config(const ActiveConfigSnapshot &acti
 }
 
 ConfigFieldId GoLocalApiService::first_unsupported_field(const LocalServerConfig &partial) {
+  if (partial.front_led_brightness.has_value()) {
+    return ConfigFieldId::FrontLedBrightness;
+  }
   if (partial.country.has_value()) {
     return ConfigFieldId::CountryCode;
   }
@@ -552,14 +553,6 @@ ConfigSubmitResult GoLocalApiService::translate_config(const LocalServerConfig &
       return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::GpsMode};
     }
     update.update_mask |= static_cast<uint32_t>(GoConfigField::GpsMode);
-  }
-
-  if (partial.front_led_brightness.has_value()) {
-    if (!is_led_brightness_valid(*partial.front_led_brightness)) {
-      return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::FrontLedBrightness};
-    }
-    update.front_led_brightness = static_cast<LedBrightness>(*partial.front_led_brightness);
-    update.update_mask |= static_cast<uint32_t>(GoConfigField::FrontLedBrightness);
   }
 
   if (partial.back_led_brightness.has_value()) {

@@ -62,9 +62,6 @@ extern bool input_started;
 extern bool input_stopped;
 
 // --- LedService ---
-extern uint32_t led_front_brightness_count;
-extern LedBrightness led_last_front_brightness;
-extern bool led_front_bright_seen;
 extern uint32_t led_back_brightness_count;
 extern LedBrightness led_last_back_brightness;
 extern bool led_back_bright_seen;
@@ -3174,7 +3171,6 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
       static_cast<uint32_t>(GoConfigField::HumidityCorrection) |
       static_cast<uint32_t>(GoConfigField::MeasurementInterval) |
       static_cast<uint32_t>(GoConfigField::GpsMode) |
-      static_cast<uint32_t>(GoConfigField::FrontLedBrightness) |
       static_cast<uint32_t>(GoConfigField::BackLedBrightness) |
       static_cast<uint32_t>(GoConfigField::TouchLedIntensity) |
       static_cast<uint32_t>(GoConfigField::BuzzerEnabled);
@@ -3184,7 +3180,6 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   evt.fetch_config.update.configuration_control = ConfigurationControl::Local;
   evt.fetch_config.update.measure_interval_seconds = 30;
   evt.fetch_config.update.gps_mode = GpsMode::AlwaysOn;
-  evt.fetch_config.update.front_led_brightness = LedBrightness::Dim;
   evt.fetch_config.update.back_led_brightness = LedBrightness::Mid;
   evt.fetch_config.update.touch_led_intensity = TouchLedIntensity::Bright;
   evt.fetch_config.update.buzzer_enabled = true;
@@ -3208,7 +3203,6 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   CHECK(A::settings(orch).configuration_control == ConfigurationControl::Both);
   CHECK(A::settings(orch).measure_interval_seconds == 30);
   CHECK(A::settings(orch).gps_mode == GpsMode::AlwaysOn);
-  CHECK(A::settings(orch).front_led_brightness == LedBrightness::Dim);
   CHECK(A::settings(orch).back_led_brightness == LedBrightness::Mid);
   CHECK(A::settings(orch).touch_led_intensity == TouchLedIntensity::Bright);
   CHECK(A::settings(orch).buzzer_enabled);
@@ -3956,10 +3950,9 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   CHECK(writes["fs_i"] == 0);
 }
 
-TEST_CASE("LED test exercises every mapped group and restores configured state",
+TEST_CASE("LED test exercises back and touch LEDs and restores configured state",
           "[Orchestrator][led-test]") {
   TestFixture f;
-  f.settings.front_led_brightness = LedBrightness::Dim;
   f.settings.back_led_brightness = LedBrightness::Mid;
   f.settings.touch_led_intensity = TouchLedIntensity::Dim;
   auto orch = f.make_orchestrator();
@@ -3972,9 +3965,6 @@ TEST_CASE("LED test exercises every mapped group and restores configured state",
   REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000));
   A::run_led_test(orch);
 
-  CHECK(test_spy::led_front_brightness_count == 2);
-  CHECK(test_spy::led_front_bright_seen);
-  CHECK(test_spy::led_last_front_brightness == LedBrightness::Dim);
   CHECK(test_spy::led_back_brightness_count == 2);
   CHECK(test_spy::led_back_bright_seen);
   CHECK(test_spy::led_last_back_brightness == LedBrightness::Mid);
@@ -4025,7 +4015,6 @@ TEST_CASE("LED test does not interrupt an interactive hardware test",
 
   A::run_led_test(orch);
 
-  CHECK(test_spy::led_front_brightness_count == 0);
   CHECK(test_spy::led_back_brightness_count == 0);
   CHECK(test_spy::led_back_play_count == 0);
   CHECK(test_spy::led_touch_intensity_count == 0);
@@ -4047,11 +4036,18 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   open_ui_row(f, orch, "Peripheral Test");
   REQUIRE(f.ui_manager.current_screen() == Screen::PeripheralTest);
 
-  // Four operator-guided actuator confirms (Pass). The AQ sweep must not
-  // start until all actuators are done.
+  const auto first_view = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(std::string(first_view.rows[0].text) == "Back LED cycling?");
+  bool back_pass = true;
+  SECTION("all actuators pass") {}
+  SECTION("back LED failure fails the overall result") {
+    back_pass = false;
+    A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress});
+  }
+
+  // Three actuator confirmations precede the AQ sweep.
   CHECK_FALSE(test_spy::self_test_requested);
-  A::on_input(orch, touch_enter); // Front LED pass
-  A::on_input(orch, touch_enter); // Back LED pass
+  A::on_input(orch, touch_enter); // Back LED result
   A::on_input(orch, touch_enter); // Touch LED pass
   CHECK_FALSE(test_spy::self_test_requested);
   A::on_input(orch, touch_enter); // Buzzer pass → triggers AQ sweep
@@ -4064,6 +4060,13 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   evt.sensor_test_results = SensorTestResults{true, true, true, true, true};
   A::dispatch(orch, evt);
   CHECK(f.ui_manager.current_screen() == Screen::PeripheralTest);
+  const auto summary = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(summary.row_count == 9);
+  CHECK(std::string(summary.rows[0].text) ==
+        (back_pass ? "PASS - tap to exit" : "FAIL - tap to exit"));
+  CHECK(std::string(summary.rows[1].text) == (back_pass ? "Back LED: PASS" : "Back LED: FAIL"));
+  CHECK(std::string(summary.rows[2].text) == "Touch LED: PASS");
+  CHECK(std::string(summary.rows[3].text) == "Buzzer: PASS");
 
   // Tap on the summary exits back to the Hardware Test submenu.
   A::on_input(orch, touch_enter);

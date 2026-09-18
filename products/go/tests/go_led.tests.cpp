@@ -1,7 +1,7 @@
 /**
  * AirGradient Go -- LedService unit tests
  *
- * Tests the LedService effect engine, touch flash manager, front writes,
+ * Tests the LedService effect engine, touch flash manager,
  * sequence playback, auto-restore, AQI convenience, and render-loop
  * efficiency with a mocked LedDriver.
  *
@@ -116,36 +116,10 @@ TEST_CASE("LedService: lifecycle", "[LedService][lifecycle]") {
     CHECK(svc.start());
 
     // No crash, no driver calls
-    svc.front_set_brightness(LedBrightness::Bright);
     svc.back_solid({255, 0, 0});
     svc.back_off();
     svc.touch_flash(TouchPad::Select);
     svc.pump_for_test(0);
-  }
-}
-
-// ============================================================================
-// Front LED
-// ============================================================================
-
-TEST_CASE("LedService: front brightness", "[LedService][front]") {
-  TestFixture f;
-  f.build();
-
-  SECTION("Off writes 0 to OUT30 and OUT31") {
-    f.svc->front_set_brightness(LedBrightness::Off);
-
-    REQUIRE_CALL(f.driver, set_channel(30, 0)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_channel(31, 0)).RETURN(true);
-    f.svc->pump_for_test(0);
-  }
-
-  SECTION("Bright writes 26 to OUT30 and OUT31") {
-    f.svc->front_set_brightness(LedBrightness::Bright);
-
-    REQUIRE_CALL(f.driver, set_channel(30, 26)).RETURN(true);
-    REQUIRE_CALL(f.driver, set_channel(31, 26)).RETURN(true);
-    f.svc->pump_for_test(0);
   }
 }
 

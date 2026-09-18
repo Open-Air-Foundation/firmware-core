@@ -1821,9 +1821,6 @@ static void enc_auto_lock(CborEncoder &m, const GoSettings &s) {
 static void enc_op_mode(CborEncoder &m, const GoSettings &s) {
   cbor_encode_text_stringz(&m, operating_mode_to_wire(s.operating_mode));
 }
-static void enc_fled(CborEncoder &m, const GoSettings &s) {
-  cbor_encode_uint(&m, static_cast<uint64_t>(s.front_led_brightness));
-}
 static void enc_bled(CborEncoder &m, const GoSettings &s) {
   cbor_encode_uint(&m, static_cast<uint64_t>(s.back_led_brightness));
 }
@@ -1874,9 +1871,6 @@ static bool dif_auto_lock(const GoSettings &a, const GoSettings &b) {
 static bool dif_op_mode(const GoSettings &a, const GoSettings &b) {
   return a.operating_mode != b.operating_mode;
 }
-static bool dif_fled(const GoSettings &a, const GoSettings &b) {
-  return a.front_led_brightness != b.front_led_brightness;
-}
 static bool dif_bled(const GoSettings &a, const GoSettings &b) {
   return a.back_led_brightness != b.back_led_brightness;
 }
@@ -1919,7 +1913,6 @@ static const ConfigField CONFIG_FIELDS[] = {
     {BLE_KEY_GPS_MODE, enc_gps_mode, dif_gps_mode},
     {BLE_KEY_AUTO_LOCK, enc_auto_lock, dif_auto_lock},
     {BLE_KEY_OP_MODE, enc_op_mode, dif_op_mode},
-    {BLE_KEY_FRONT_LED, enc_fled, dif_fled},
     {BLE_KEY_BACK_LED, enc_bled, dif_bled},
     {BLE_KEY_TOUCH_LED, enc_tled, dif_tled},
     {BLE_KEY_BUZZER, enc_buz, dif_buz},
@@ -2211,17 +2204,6 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError) {
         settings.auto_lock_seconds = static_cast<uint32_t>(v);
-      }
-      handled = true;
-    } else if (key_is(BLE_KEY_FRONT_LED)) {
-      cbor_value_advance(&it);
-      result.recognized_config_key_count++;
-      uint64_t v = 0;
-      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
-          v <= static_cast<uint64_t>(LedBrightness::Bright)) {
-        settings.front_led_brightness = static_cast<LedBrightness>(v);
-      } else {
-        result.has_invalid_config_values = true;
       }
       handled = true;
     } else if (key_is(BLE_KEY_BACK_LED)) {

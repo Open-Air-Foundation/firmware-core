@@ -476,7 +476,7 @@ TEST_CASE("FETCH parses supported root scalars and ignores local-only fields",
           "[CloudService][fetch][config]") {
   CloudFixture f;
   const char body[] =
-      R"({"pmStandard":"us-aqi","temperatureUnit":"f","altitudeUnit":"ft","measurementInterval":3600,"gpsMode":"always","frontLedBrightness":0,"backLedBrightness":3,"touchLedIntensity":2,"buzzerEnabled":true,"co2CalibrationRequested":true,"ledTestRequested":true,"gpsTestRequested":true,"disableCloudConnection":true,"configurationControl":"local","corrections":[]})";
+      R"({"pmStandard":"us-aqi","temperatureUnit":"f","altitudeUnit":"ft","measurementInterval":3600,"gpsMode":"always","backLedBrightness":3,"touchLedIntensity":2,"buzzerEnabled":true,"co2CalibrationRequested":true,"ledTestRequested":true,"gpsTestRequested":true,"disableCloudConnection":true,"configurationControl":"local","corrections":[]})";
   cloud_spy::fetch_body_to_write = body;
   cloud_spy::fetch_bytes_to_write = std::strlen(body);
 
@@ -492,7 +492,6 @@ TEST_CASE("FETCH parses supported root scalars and ignores local-only fields",
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::AltitudeUnit));
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::MeasurementInterval));
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::GpsMode));
-  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::FrontLedBrightness));
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::BackLedBrightness));
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TouchLedIntensity));
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::BuzzerEnabled));
@@ -503,7 +502,6 @@ TEST_CASE("FETCH parses supported root scalars and ignores local-only fields",
   REQUIRE_FALSE(update.use_feet);
   REQUIRE(update.measure_interval_seconds == MEASURE_INTERVAL_SECONDS_MAX);
   REQUIRE(update.gps_mode == GpsMode::AlwaysOn);
-  REQUIRE(update.front_led_brightness == LedBrightness::Off);
   REQUIRE(update.back_led_brightness == LedBrightness::Bright);
   REQUIRE(update.touch_led_intensity == TouchLedIntensity::Bright);
   REQUIRE(update.buzzer_enabled);
@@ -529,7 +527,7 @@ TEST_CASE("FETCH rejects malformed device settings independently",
           "[CloudService][fetch][config]") {
   CloudFixture f;
   const char body[] =
-      R"({"temperatureUnit":"c","measurementInterval":0,"gpsMode":"ALWAYS","frontLedBrightness":4,"backLedBrightness":-1,"touchLedIntensity":3,"buzzerEnabled":"true","co2CalibrationRequested":"true","ledTestRequested":1,"gpsTestRequested":"true"})";
+      R"({"temperatureUnit":"c","measurementInterval":0,"gpsMode":"ALWAYS","backLedBrightness":-1,"touchLedIntensity":3,"buzzerEnabled":"true","co2CalibrationRequested":"true","ledTestRequested":1,"gpsTestRequested":"true"})";
   cloud_spy::fetch_body_to_write = body;
   cloud_spy::fetch_bytes_to_write = std::strlen(body);
 
@@ -543,7 +541,6 @@ TEST_CASE("FETCH rejects malformed device settings independently",
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TemperatureUnit));
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::MeasurementInterval));
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::GpsMode));
-  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::FrontLedBrightness));
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::BackLedBrightness));
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::TouchLedIntensity));
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::BuzzerEnabled));
