@@ -3,7 +3,7 @@
  *
  * Covers the host-testable surface of UIManager (pure state machine):
  *
- * Navigation      — Home → MainMenu → Settings / About / TagList / Confirm,
+ * Navigation      — Home → MainMenu → Settings groups / About / Confirm,
  *                   Back/Exit transitions, cursor positions after return.
  *
  * Metric cycling  — browse_metric via TouchUp/Down on Home screen, wrapping
@@ -28,6 +28,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <string>
+#include <initializer_list>
 
 #include "go_ui.h"
 
@@ -80,25 +81,185 @@ static UIActionResult double_press(UIManager &ui) {
   return ui.handle_input(InputSource::TouchEnter, InputType::DoublePress);
 }
 
-/// Home -> MainMenu -> Settings (cursor at 1 = Back).
+/// Select a visible row by label prefix without depending on its position.
+static void select_row(UIManager &ui, const std::string &prefix) {
+  for (uint8_t step = 0; step < MAX_LIST_ROWS; ++step) {
+    const auto values = ui.build_values(make_default_ctx());
+    REQUIRE(values.selected_row < values.row_count);
+    if (std::string(values.rows[values.selected_row].text).rfind(prefix, 0) == 0)
+      return;
+    press(ui, InputSource::TouchDown);
+  }
+  FAIL("Menu row not found: " << prefix);
+}
+
+static UIActionResult open_row(UIManager &ui, const std::string &prefix) {
+  select_row(ui, prefix);
+  return press(ui, InputSource::TouchEnter);
+}
+
+/// Home -> MainMenu -> Settings (cursor at Setup Guide).
 static void go_to_settings(UIManager &ui) {
-  press(ui, InputSource::TouchEnter); // Home → MainMenu
-  press(ui, InputSource::TouchDown);  // 0→1
-  press(ui, InputSource::TouchDown);  // 1→2 (Settings)
-  press(ui, InputSource::TouchEnter); // → Settings
+  REQUIRE(ui.current_screen() == Screen::Home);
+  press(ui, InputSource::TouchEnter);
+  open_row(ui, "Settings");
+  REQUIRE(ui.current_screen() == Screen::Settings);
 }
 
-/// Navigate to the Measurement Interval row without opening its choice screen.
-static void go_to_measure_interval(UIManager &ui) {
+static void go_to_group(UIManager &ui, const char *group) {
   go_to_settings(ui);
-  for (int i = 0; i < 5; ++i)
-    press(ui, InputSource::TouchDown); // Back → Measurement Interval
+  open_row(ui, group);
 }
 
-/// Navigate to and open the Measurement Interval choice screen.
+static void go_to_measure_interval(UIManager &ui) {
+  go_to_group(ui, "Operations");
+  select_row(ui, "Measure Int.");
+}
+
 static void open_measure_interval_choice(UIManager &ui) {
   go_to_measure_interval(ui);
   press(ui, InputSource::TouchEnter);
+}
+
+static void check_rows(UIManager &ui, std::initializer_list<const char *> expected) {
+  const auto values = ui.build_values(make_default_ctx());
+  REQUIRE(values.row_count == expected.size());
+  uint8_t row = 0;
+  for (const char *text : expected)
+    CHECK(std::string(values.rows[row++].text) == text);
+}
+
+TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  press(ui, InputSource::TouchEnter);
+  check_rows(ui, {"Exit Menu", "Start Tracking", "Operating Mode", "Settings"});
+  open_row(ui, "Operating Mode");
+  check_rows(ui, {"Exit", "Back", "Portable", "Stationary", "Offline"});
+  double_press(ui);
+  CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
+  open_row(ui, "Settings");
+  check_rows(ui, {"Exit", "Back", "Setup Guide", "Operations", "Display & Touch", "Clear Data",
+                  "Hardware Test", "About Device"});
+  open_row(ui, "Operations");
+  auto values = ui.build_values(make_default_ctx());
+  REQUIRE(values.row_count == 6);
+  CHECK(std::string(values.rows[2].text).rfind("Measure Int.: ", 0) == 0);
+  CHECK(std::string(values.rows[3].text) == "CO2 Calibration");
+  CHECK(std::string(values.rows[4].text) == "GPS: When tracking");
+  CHECK(std::string(values.rows[5].text) == "Buzzer: Off");
+  double_press(ui);
+  open_row(ui, "Display & Touch");
+  check_rows(ui, {"Exit", "Back", "Temperature Unit: C", "Altitude Unit: m", "PM Display: ug/m3",
+                  "Auto Lock: Off", "Display LED: Off", "AQI LED: Off", "Touch LED: Off"});
+  double_press(ui);
+  open_row(ui, "Hardware Test");
+  check_rows(ui, {"Exit", "Back", "Peripheral Test", "GPS Test", "Accelerometer Test",
+                  "Fuel Gauge Learning", "Play Melody"});
+}
+
+TEST_CASE("UIManager: mode choices preserve identities across every transition",
+          "[UIManager][settings][mode]") {
+  const OperatingMode modes[] = {OperatingMode::Portable, OperatingMode::Stationary,
+                                 OperatingMode::Offline};
+  const char *labels[] = {"Portable", "Stationary", "Offline"};
+  for (uint8_t from = 0; from < 3; ++from) {
+    for (uint8_t to = 0; to < 3; ++to) {
+      UIManager ui(DEFAULT_UI_CONFIG);
+      GoSettings settings{};
+      settings.operating_mode = modes[from];
+      settings.measure_interval_seconds = 17;
+      ui.sync_settings(settings);
+      press(ui, InputSource::TouchEnter);
+      open_row(ui, "Operating Mode");
+      const auto values = ui.build_values(make_default_ctx());
+      CHECK(std::string(values.rows[values.selected_row].text) == labels[from]);
+      const auto result = open_row(ui, labels[to]);
+      CHECK(result.action == UIAction::ChangeMode);
+      CHECK(result.new_mode == modes[to]);
+      CHECK(ui.current_screen() == Screen::Home);
+      ui.apply_to_settings(settings);
+      CHECK(settings.operating_mode == modes[to]);
+      CHECK(settings.measure_interval_seconds == 17);
+    }
+  }
+}
+
+TEST_CASE("UIManager: group choice returns and exit gestures", "[UIManager][nav][redesign]") {
+  struct ChoiceCase {
+    const char *group;
+    const char *setting;
+    const char *option;
+    Screen parent;
+  };
+  const ChoiceCase choices[] = {
+      {"Operations", "Measure Int.", "10s", Screen::Operations},
+      {"Operations", "GPS:", "Always On", Screen::Operations},
+      {"Operations", "Buzzer:", "On", Screen::Operations},
+      {"Display & Touch", "PM Display:", "USAQI", Screen::DisplayTouch},
+      {"Display & Touch", "Auto Lock:", "60 Seconds", Screen::DisplayTouch},
+  };
+  for (const auto &choice : choices) {
+    DYNAMIC_SECTION(choice.setting) {
+      UIManager ui(DEFAULT_UI_CONFIG);
+      go_to_group(ui, choice.group);
+      open_row(ui, choice.setting);
+      const auto result = open_row(ui, choice.option);
+      CHECK(result.action == UIAction::SettingsChanged);
+      CHECK(ui.current_screen() == choice.parent);
+      const auto values = ui.build_values(make_default_ctx());
+      CHECK(std::string(values.rows[values.selected_row].text).rfind(choice.setting, 0) == 0);
+      press(ui, InputSource::TouchEnter);
+      const auto selected = ui.build_values(make_default_ctx());
+      CHECK(std::string(selected.rows[selected.selected_row].text) == choice.option);
+      CHECK(open_row(ui, "Back").action == UIAction::None);
+      CHECK(ui.current_screen() == choice.parent);
+      CHECK(long_press(ui).action == UIAction::None);
+      CHECK(ui.current_screen() == Screen::Home);
+    }
+  }
+}
+
+TEST_CASE("UIManager: Play Melody belongs to Hardware Test", "[UIManager][hwtest][melody]") {
+  for (const char *melody : {"Chime", "Tetris"}) {
+    UIManager ui(DEFAULT_UI_CONFIG);
+    go_to_group(ui, "Hardware Test");
+    open_row(ui, "Play Melody");
+    check_rows(ui, {"Exit", "Back", "Chime", "Tetris"});
+    CHECK_FALSE(ui.is_hardware_test_screen()); // retain ordinary choice auto-lock policy
+    const auto result = open_row(ui, melody);
+    CHECK(result.action == UIAction::PlayMelody);
+    CHECK(result.melody ==
+          (std::string(melody) == "Chime" ? MelodySelect::Chime : MelodySelect::Tetris));
+    REQUIRE(ui.current_screen() == Screen::HardwareTest);
+    const auto values = ui.build_values(make_default_ctx());
+    CHECK(std::string(values.rows[values.selected_row].text) == "Play Melody");
+    press(ui, InputSource::TouchEnter);
+    CHECK(double_press(ui).action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+  }
+}
+
+TEST_CASE("UIManager: group summaries fit the current list font",
+          "[UIManager][settings][display]") {
+  // 128 px canvas, 10 px text inset, and 6 px per character.
+  static constexpr size_t MAX_VISIBLE_LABEL_CHARS = 19;
+  for (const char *group : {"Operations", "Display & Touch", "Hardware Test"}) {
+    UIManager ui(DEFAULT_UI_CONFIG);
+    GoSettings settings{};
+    settings.measure_interval_seconds = 3599;
+    settings.use_fahrenheit = true;
+    settings.use_feet = true;
+    settings.gps_mode = GpsMode::OnWhenTracking;
+    settings.auto_lock_seconds = 60;
+    settings.front_led_brightness = LedBrightness::Bright;
+    settings.back_led_brightness = LedBrightness::Bright;
+    settings.touch_led_intensity = TouchLedIntensity::Bright;
+    ui.sync_settings(settings);
+    go_to_group(ui, group);
+    const auto values = ui.build_values(make_default_ctx());
+    for (uint8_t row = 0; row < values.row_count; ++row)
+      CHECK(std::string(values.rows[row].text).size() <= MAX_VISIBLE_LABEL_CHARS);
+  }
 }
 
 // ============================================================================
@@ -124,55 +285,40 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
   }
 
   SECTION("Settings from MainMenu") {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    // Navigate to Settings (index 2): 0→1→2
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
-    press(ui, InputSource::TouchEnter); // 2 → Settings
-
+    go_to_settings(ui);
     CHECK(ui.current_screen() == Screen::Settings);
   }
 
-  SECTION("About Device from MainMenu") {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2
-    press(ui, InputSource::TouchDown);  // 2→3 (About Device)
-    press(ui, InputSource::TouchEnter); // → About
-
+  SECTION("About Device from Settings reuses the existing page") {
+    go_to_group(ui, "About Device");
     CHECK(ui.current_screen() == Screen::About);
+    const auto values = ui.build_values(make_default_ctx());
+    CHECK(std::string(values.about_title) == "AirGradient Go");
+    CHECK(std::string(values.about_firmware) == "Firmware 0.1.0");
+    CHECK(std::string(values.about_serial) == "Serial AABBCCDDEEFF");
+    CHECK(std::string(values.about_hardware) == "Open Source Hardware");
   }
 
   SECTION("Back from Settings goes to MainMenu") {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2
-    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
-    press(ui, InputSource::TouchEnter); // Back → MainMenu
-
+    go_to_settings(ui);
+    open_row(ui, "Back");
     CHECK(ui.current_screen() == Screen::MainMenu);
+    const auto values = ui.build_values(make_default_ctx());
+    CHECK(std::string(values.rows[values.selected_row].text) == "Settings");
   }
 
   SECTION("Exit from Settings goes to Home") {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2
-    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
-    press(ui, InputSource::TouchUp);    // 1→0 (Exit)
-    press(ui, InputSource::TouchEnter); // → Home
-
+    go_to_settings(ui);
+    open_row(ui, "Exit");
     CHECK(ui.current_screen() == Screen::Home);
   }
 
-  SECTION("Back from About goes to MainMenu") {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2
-    press(ui, InputSource::TouchDown);  // 2→3
-    press(ui, InputSource::TouchEnter); // → About (cursor at 1 = Back)
-    press(ui, InputSource::TouchEnter); // Back → MainMenu
-
-    CHECK(ui.current_screen() == Screen::MainMenu);
+  SECTION("Back from About goes to Settings") {
+    go_to_group(ui, "About Device");
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::Settings);
+    const auto values = ui.build_values(make_default_ctx());
+    CHECK(std::string(values.rows[values.selected_row].text) == "About Device");
   }
 }
 
@@ -183,18 +329,9 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
 TEST_CASE("UIManager: Getting Started via Settings -> Setup Guide", "[UIManager][onboarding]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  // Home -> MainMenu -> Settings (cursor at 1 = Back).
-  auto go_to_settings = [&]() {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
-    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
-  };
-
   SECTION("Setup Guide row opens Getting Started; Back returns to Settings") {
-    go_to_settings();
-    press(ui, InputSource::TouchDown);  // 1→2 (Setup Guide, first content item)
-    press(ui, InputSource::TouchEnter); // → Getting Started
+    go_to_settings(ui);
+    open_row(ui, "Setup Guide");
 
     CHECK(ui.current_screen() == Screen::GettingStarted);
 
@@ -239,51 +376,50 @@ TEST_CASE("UIManager: Getting Started boot entry emits AckOnboarding", "[UIManag
 // Wrap-around navigation
 // ============================================================================
 
-TEST_CASE("UIManager: Settings wrap-around navigation", "[UIManager][nav][settings]") {
-  UIManager ui(DEFAULT_UI_CONFIG);
-
-  // Navigate to Settings: Home → MainMenu → Settings (cursor starts at 1 = Back).
-  // Settings has 18 indices: Exit(0), Back(1), items(2..17).
-  auto go_to_settings = [&]() {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
-    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
+TEST_CASE("UIManager: grouped menus wrap and return to their parent",
+          "[UIManager][nav][settings]") {
+  struct MenuCase {
+    const char *group;
+    Screen screen;
+    const char *first;
+    const char *last;
+    uint8_t count;
   };
-
-  SECTION("Down past last item wraps to Exit") {
-    go_to_settings(); // cursor at 1 (Back)
-
-    // Navigate down from index 1 to index 17 (last item): 16 presses.
-    for (int i = 0; i < 16; ++i) {
-      press(ui, InputSource::TouchDown);
+  const MenuCase cases[] = {
+      {nullptr, Screen::Settings, "Setup Guide", "About Device", 8},
+      {"Operations", Screen::Operations, "Measure Int.", "Buzzer: Off", 6},
+      {"Display & Touch", Screen::DisplayTouch, "Temperature Unit: C", "Touch LED: Off", 9},
+      {"Hardware Test", Screen::HardwareTest, "Peripheral Test", "Play Melody", 7},
+  };
+  for (const auto &item : cases) {
+    DYNAMIC_SECTION(item.last) {
+      UIManager ui(DEFAULT_UI_CONFIG);
+      go_to_settings(ui);
+      if (item.group != nullptr)
+        open_row(ui, item.group);
+      REQUIRE(ui.current_screen() == item.screen);
+      auto values = ui.build_values(make_default_ctx());
+      REQUIRE(values.row_count == item.count);
+      CHECK(values.selected_row == 2);
+      CHECK(std::string(values.rows[values.selected_row].text).rfind(item.first, 0) == 0);
+      CHECK(ui.is_on_menu_screen());
+      press(ui, InputSource::TouchUp); // First content row -> Back
+      press(ui, InputSource::TouchUp); // Back -> Exit
+      press(ui, InputSource::TouchUp); // Exit -> last item
+      values = ui.build_values(make_default_ctx());
+      CHECK(std::string(values.rows[values.selected_row].text) == item.last);
+      press(ui, InputSource::TouchDown); // last -> Exit
+      CHECK(ui.build_values(make_default_ctx()).selected_row == 0);
+      press(ui, InputSource::TouchDown); // Exit -> Back
+      CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
+      CHECK(ui.current_screen() == (item.group ? Screen::Settings : Screen::MainMenu));
+      values = ui.build_values(make_default_ctx());
+      CHECK(std::string(values.rows[values.selected_row].text) ==
+            (item.group ? item.group : "Settings"));
+      press(ui, InputSource::TouchEnter); // Reopening resets to the first content row.
+      CHECK(ui.current_screen() == item.screen);
+      CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
     }
-
-    press(ui, InputSource::TouchDown); // 17→0 (wrap to Exit)
-
-    auto ctx = make_default_ctx();
-    DisplayValues v = ui.build_values(ctx);
-    CHECK(v.selected_row == 0); // Exit row
-  }
-
-  SECTION("Up past Exit wraps to last item") {
-    go_to_settings(); // cursor at 1 (Back)
-
-    press(ui, InputSource::TouchUp); // 1→0 (Exit)
-    auto ctx = make_default_ctx();
-    DisplayValues v = ui.build_values(ctx);
-    CHECK(v.selected_row == 0); // confirm we're on Exit
-
-    press(ui, InputSource::TouchUp); // 0→17 (wrap to last item)
-
-    v = ui.build_values(ctx);
-    // After wrapping to index 17, scroll resets to page_scroll(17).
-    CHECK(ui.current_screen() == Screen::Settings);
-    // Pressing Enter on Exit would go Home; instead, press Down to verify we
-    // advance to 0 (confirming we were at 17).
-    press(ui, InputSource::TouchDown); // 17→0 (Exit)
-    v = ui.build_values(ctx);
-    CHECK(v.selected_row == 0);
   }
 }
 
@@ -411,14 +547,8 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
   SECTION("changing temperature unit returns SettingsChanged") {
-    // Navigate: Home → MainMenu → Settings → Temperature Unit → select "F"
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
-    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
-    press(ui, InputSource::TouchDown);  // 1→2 (Setup Guide)
-    press(ui, InputSource::TouchDown);  // 2→3 (Temperature Unit)
-    press(ui, InputSource::TouchEnter); // → SettingsChoice for Temperature Unit
+    go_to_group(ui, "Display & Touch");
+    open_row(ui, "Temperature Unit");
 
     CHECK(ui.current_screen() == Screen::SettingsChoice);
 
@@ -429,7 +559,7 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
     auto result = press(ui, InputSource::TouchEnter); // Apply "F"
 
     CHECK(result.action == UIAction::SettingsChanged);
-    CHECK(ui.current_screen() == Screen::Settings);
+    CHECK(ui.current_screen() == Screen::DisplayTouch);
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
@@ -437,11 +567,8 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
   }
 
   SECTION("changing altitude unit returns SettingsChanged") {
-    go_to_settings(ui);
-    press(ui, InputSource::TouchDown);  // 1→2 (Setup Guide)
-    press(ui, InputSource::TouchDown);  // 2→3 (Temperature Unit)
-    press(ui, InputSource::TouchDown);  // 3→4 (Altitude Unit)
-    press(ui, InputSource::TouchEnter); // → SettingsChoice
+    go_to_group(ui, "Display & Touch");
+    open_row(ui, "Altitude Unit");
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
@@ -454,7 +581,7 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
     const auto result = press(ui, InputSource::TouchEnter);
 
     CHECK(result.action == UIAction::SettingsChanged);
-    CHECK(ui.current_screen() == Screen::Settings);
+    CHECK(ui.current_screen() == Screen::DisplayTouch);
 
     GoSettings settings;
     ui.apply_to_settings(settings);
@@ -465,23 +592,10 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
   }
 
   SECTION("changing mode returns ChangeMode with new mode") {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2
-    press(ui, InputSource::TouchEnter); // → Settings (cursor 1 = Back)
-
-    // Navigate down to Mode (index 8)
-    for (int i = 0; i < 7; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→3→4→5→6→7→8
-
-    press(ui, InputSource::TouchEnter); // → SettingsChoice for Mode
-
-    CHECK(ui.current_screen() == Screen::SettingsChoice);
-
-    // Default _setting_mode=1 (Portable), cursor at option index 1 → logical index 3.
-    // Navigate up to Stationary (option 0, logical index 2).
-    press(ui, InputSource::TouchUp);
-    auto result = press(ui, InputSource::TouchEnter);
+    press(ui, InputSource::TouchEnter);
+    open_row(ui, "Operating Mode");
+    REQUIRE(ui.current_screen() == Screen::SettingsChoice);
+    const auto result = open_row(ui, "Stationary");
 
     CHECK(result.action == UIAction::ChangeMode);
     CHECK(result.new_mode == OperatingMode::Stationary);
@@ -529,11 +643,9 @@ TEST_CASE("UIManager: unrelated setting preserves custom measurement interval",
   settings.measure_interval_seconds = 17;
   ui.sync_settings(settings);
 
-  go_to_settings(ui);
-  press(ui, InputSource::TouchDown);  // Back → Setup Guide
-  press(ui, InputSource::TouchDown);  // Setup Guide → Temperature Unit
-  press(ui, InputSource::TouchEnter); // Open Temperature Unit
-  press(ui, InputSource::TouchDown);  // C → F
+  go_to_group(ui, "Display & Touch");
+  open_row(ui, "Temperature Unit");
+  press(ui, InputSource::TouchDown); // C → F
   const auto result = press(ui, InputSource::TouchEnter);
 
   REQUIRE(result.action == UIAction::SettingsChanged);
@@ -633,22 +745,10 @@ TEST_CASE("UIManager: open interval choice resynchronizes fixed and custom value
 TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  // Helper: navigate to Settings screen
-  auto go_to_settings = [&]() {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2 (Settings)
-    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1 = Back)
-  };
-
   SECTION("Display LED opens SettingsChoice and applies Dim") {
-    go_to_settings();
+    go_to_group(ui, "Display & Touch");
+    open_row(ui, "Display LED");
 
-    // Navigate to Display LED (index 10) — 9 presses from Back (1)
-    for (int i = 0; i < 9; ++i)
-      press(ui, InputSource::TouchDown);
-
-    press(ui, InputSource::TouchEnter);
     CHECK(ui.current_screen() == Screen::SettingsChoice);
 
     // Default _setting_display_led=0 (Off), cursor at option 0 → logical 2.
@@ -657,7 +757,7 @@ TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
     auto result = press(ui, InputSource::TouchEnter);
 
     CHECK(result.action == UIAction::SettingsChanged);
-    CHECK(ui.current_screen() == Screen::Settings);
+    CHECK(ui.current_screen() == Screen::DisplayTouch);
 
     GoSettings s{};
     ui.apply_to_settings(s);
@@ -665,13 +765,9 @@ TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
   }
 
   SECTION("AQI LED opens SettingsChoice and applies Bright") {
-    go_to_settings();
+    go_to_group(ui, "Display & Touch");
+    open_row(ui, "AQI LED");
 
-    // Navigate to AQI LED (index 11) — 10 presses from Back (1)
-    for (int i = 0; i < 10; ++i)
-      press(ui, InputSource::TouchDown);
-
-    press(ui, InputSource::TouchEnter);
     CHECK(ui.current_screen() == Screen::SettingsChoice);
 
     // Default _setting_aqi_led=0 (Off), cursor at option 0 → logical 2.
@@ -689,13 +785,9 @@ TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
   }
 
   SECTION("Touch LED opens SettingsChoice and applies Dim") {
-    go_to_settings();
+    go_to_group(ui, "Display & Touch");
+    open_row(ui, "Touch LED");
 
-    // Navigate to Touch LED (index 12) — 11 presses from Back (1)
-    for (int i = 0; i < 11; ++i)
-      press(ui, InputSource::TouchDown);
-
-    press(ui, InputSource::TouchEnter);
     CHECK(ui.current_screen() == Screen::SettingsChoice);
 
     // Default _setting_touch_led=0 (Off), cursor at option 0 → logical 2.
@@ -788,11 +880,7 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
 
     ui.sync_settings(s);
 
-    // Navigate to Settings screen to verify labels in build_values.
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2
-    press(ui, InputSource::TouchEnter); // → Settings
+    go_to_settings(ui);
 
     CHECK(ui.current_screen() == Screen::Settings);
   }
@@ -960,18 +1048,7 @@ TEST_CASE("UIManager: clear data confirm dialog", "[UIManager][confirm]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
   // Helper: navigate to Settings → Clear Data → Confirm
-  auto navigate_to_clear_data_confirm = [&]() {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2
-    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
-
-    // Navigate to "Clear Data" (index 16)
-    for (int i = 0; i < 15; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→16
-
-    press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
-  };
+  auto navigate_to_clear_data_confirm = [&]() { go_to_group(ui, "Clear Data"); };
 
   SECTION("Yes in confirm returns ClearData") {
     navigate_to_clear_data_confirm();
@@ -995,6 +1072,17 @@ TEST_CASE("UIManager: clear data confirm dialog", "[UIManager][confirm]") {
     CHECK(std::string(v.rows[2].text) == "Clear Data?");
     CHECK(v.rows[2].disabled == true);
   }
+
+  SECTION("cancel returns to Clear Data without emitting an action") {
+    for (const char *cancel : {"Back", "No"}) {
+      ui.reset_to_home();
+      navigate_to_clear_data_confirm();
+      CHECK(open_row(ui, cancel).action == UIAction::None);
+      CHECK(ui.current_screen() == Screen::Settings);
+      const auto values = ui.build_values(make_default_ctx());
+      CHECK(std::string(values.rows[values.selected_row].text) == "Clear Data");
+    }
+  }
 }
 
 // ============================================================================
@@ -1004,18 +1092,10 @@ TEST_CASE("UIManager: clear data confirm dialog", "[UIManager][confirm]") {
 TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  // Helper: navigate to Settings → CO2: Calibrate → Confirm
+  // Helper: navigate to Settings → Operations → CO2 Calibration → Confirm
   auto navigate_to_co2_confirm = [&]() {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2
-    press(ui, InputSource::TouchEnter); // → Settings (cursor at 1)
-
-    // Navigate to "CO2: Calibrate" (index 15)
-    for (int i = 0; i < 14; ++i)
-      press(ui, InputSource::TouchDown); // 1→2→...→15
-
-    press(ui, InputSource::TouchEnter); // → Confirm (cursor at 1 = Back)
+    go_to_group(ui, "Operations");
+    open_row(ui, "CO2 Calibration");
   };
 
   SECTION("Yes in confirm returns CalibrateCo2") {
@@ -1032,7 +1112,7 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
     CHECK(ui.current_screen() == Screen::Home);
   }
 
-  SECTION("No in confirm returns to Settings on CO2 row") {
+  SECTION("No in confirm returns to Operations on CO2 row") {
     navigate_to_co2_confirm();
     CHECK(ui.current_screen() == Screen::Confirm);
 
@@ -1041,17 +1121,21 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
     press(ui, InputSource::TouchDown); // 2→3 (No)
     press(ui, InputSource::TouchEnter);
 
-    CHECK(ui.current_screen() == Screen::Settings);
+    CHECK(ui.current_screen() == Screen::Operations);
+    const auto values = ui.build_values(make_default_ctx());
+    CHECK(std::string(values.rows[values.selected_row].text) == "CO2 Calibration");
   }
 
-  SECTION("Back in confirm returns to Settings on CO2 row") {
+  SECTION("Back in confirm returns to Operations on CO2 row") {
     navigate_to_co2_confirm();
     CHECK(ui.current_screen() == Screen::Confirm);
 
     // Cursor starts on Back (index 1)
     press(ui, InputSource::TouchEnter);
 
-    CHECK(ui.current_screen() == Screen::Settings);
+    CHECK(ui.current_screen() == Screen::Operations);
+    const auto values = ui.build_values(make_default_ctx());
+    CHECK(std::string(values.rows[values.selected_row].text) == "CO2 Calibration");
   }
 
   SECTION("confirm shows Calibrate CO2? question") {
@@ -1071,14 +1155,7 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
 TEST_CASE("UIManager: Hardware Test submenu navigation", "[UIManager][hwtest]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  // Settings → "Hardware Test" is the last content row (index 17).  From the
-  // Settings entry cursor (index 1 = Back), 16 downs land on it.
-  auto navigate_to_hardware_test = [&]() {
-    go_to_settings(ui); // cursor at 1
-    for (int i = 0; i < 16; ++i)
-      press(ui, InputSource::TouchDown);
-    press(ui, InputSource::TouchEnter); // → Hardware Test submenu
-  };
+  auto navigate_to_hardware_test = [&]() { go_to_group(ui, "Hardware Test"); };
 
   SECTION("Settings row opens the Hardware Test submenu") {
     navigate_to_hardware_test();
@@ -1090,15 +1167,15 @@ TEST_CASE("UIManager: Hardware Test submenu navigation", "[UIManager][hwtest]") 
     CHECK(std::string(v.rows[1].text) == "Back");
     CHECK(std::string(v.rows[2].text) == "Peripheral Test");
     CHECK(std::string(v.rows[3].text) == "GPS Test");
-    CHECK(std::string(v.rows[4].text) == "Accel Test");
-    CHECK(std::string(v.rows[5].text) == "FG Learning");
-    CHECK(v.row_count == 6);
+    CHECK(std::string(v.rows[4].text) == "Accelerometer Test");
+    CHECK(std::string(v.rows[5].text) == "Fuel Gauge Learning");
+    CHECK(std::string(v.rows[6].text) == "Play Melody");
+    CHECK(v.row_count == 7);
   }
 
   SECTION("Back returns to Settings on the Hardware Test row") {
     navigate_to_hardware_test();
-    // Cursor lands on Back (index 1) on entry.
-    press(ui, InputSource::TouchEnter);
+    open_row(ui, "Back");
     CHECK(ui.current_screen() == Screen::Settings);
 
     auto ctx = make_default_ctx();
@@ -1117,15 +1194,8 @@ TEST_CASE("UIManager: FG Learning arm confirm dialog", "[UIManager][hwtest][fg]"
   UIManager ui(DEFAULT_UI_CONFIG);
 
   auto navigate_to_fg_confirm = [&]() {
-    go_to_settings(ui);
-    for (int i = 0; i < 16; ++i)
-      press(ui, InputSource::TouchDown); // → Hardware Test row
-    press(ui, InputSource::TouchEnter);  // → Hardware Test submenu (cursor 1)
-    press(ui, InputSource::TouchDown);   // 1→2 (Peripheral Test)
-    press(ui, InputSource::TouchDown);   // 2→3 (GPS Test)
-    press(ui, InputSource::TouchDown);   // 3→4 (Accel Test)
-    press(ui, InputSource::TouchDown);   // 4→5 (FG Learning)
-    press(ui, InputSource::TouchEnter);  // → Confirm
+    go_to_group(ui, "Hardware Test");
+    open_row(ui, "Fuel Gauge Learning");
   };
 
   SECTION("FG Learning row opens the confirm dialog with a strong question") {
@@ -1157,7 +1227,7 @@ TEST_CASE("UIManager: FG Learning arm confirm dialog", "[UIManager][hwtest][fg]"
     CHECK(ui.current_screen() == Screen::HardwareTest);
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[v.selected_row].text) == "FG Learning");
+    CHECK(std::string(v.rows[v.selected_row].text) == "Fuel Gauge Learning");
   }
 
   SECTION("Back returns to the Hardware Test submenu") {
@@ -1172,12 +1242,8 @@ TEST_CASE("UIManager: Peripheral Test flow", "[UIManager][hwtest][peripheral]") 
   UIManager ui(DEFAULT_UI_CONFIG);
 
   auto open_peripheral = [&]() {
-    go_to_settings(ui);
-    for (int i = 0; i < 16; ++i)
-      press(ui, InputSource::TouchDown);       // → Hardware Test row
-    press(ui, InputSource::TouchEnter);        // → submenu (cursor 1)
-    press(ui, InputSource::TouchDown);         // 1→2 (Peripheral Test)
-    return press(ui, InputSource::TouchEnter); // → RunPeripheralTest
+    go_to_group(ui, "Hardware Test");
+    return open_row(ui, "Peripheral Test");
   };
 
   SECTION("selecting the row starts the flow") {
@@ -1234,13 +1300,8 @@ TEST_CASE("UIManager: GPS Test screen", "[UIManager][hwtest][gps]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
   auto open_gps = [&]() {
-    go_to_settings(ui);
-    for (int i = 0; i < 16; ++i)
-      press(ui, InputSource::TouchDown);       // → Hardware Test row
-    press(ui, InputSource::TouchEnter);        // → submenu (cursor 1)
-    press(ui, InputSource::TouchDown);         // 1→2 (Peripheral Test)
-    press(ui, InputSource::TouchDown);         // 2→3 (GPS Test)
-    return press(ui, InputSource::TouchEnter); // → OpenGpsTest
+    go_to_group(ui, "Hardware Test");
+    return open_row(ui, "GPS Test");
   };
 
   SECTION("selecting the row opens the live screen and emits OpenGpsTest") {
@@ -1305,14 +1366,8 @@ TEST_CASE("UIManager: Accel Test screen", "[UIManager][hwtest][accel]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
   auto open_accel = [&]() {
-    go_to_settings(ui);
-    for (int i = 0; i < 16; ++i)
-      press(ui, InputSource::TouchDown);       // → Hardware Test row
-    press(ui, InputSource::TouchEnter);        // → submenu (cursor 1)
-    press(ui, InputSource::TouchDown);         // 1→2 (Peripheral Test)
-    press(ui, InputSource::TouchDown);         // 2→3 (GPS Test)
-    press(ui, InputSource::TouchDown);         // 3→4 (Accel Test)
-    return press(ui, InputSource::TouchEnter); // → OpenAccelTest
+    go_to_group(ui, "Hardware Test");
+    return open_row(ui, "Accelerometer Test");
   };
 
   SECTION("selecting the row opens the live screen and emits OpenAccelTest") {
@@ -1365,7 +1420,7 @@ TEST_CASE("UIManager: Accel Test screen", "[UIManager][hwtest][accel]") {
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[v.selected_row].text) == "Accel Test");
+    CHECK(std::string(v.rows[v.selected_row].text) == "Accelerometer Test");
   }
 }
 
@@ -1472,27 +1527,24 @@ TEST_CASE("UIManager: TouchEnter gestures (back / exit to home)", "[UIManager][i
     CHECK(ui.current_screen() == Screen::MainMenu);
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(v.selected_row == 2); // cursor restored to "Settings"
+    CHECK(v.selected_row == 3); // cursor restored to "Settings"
   }
 
-  SECTION("Double-press from SettingsChoice goes back to Settings") {
-    ui.set_screen(Screen::SettingsChoice);
+  SECTION("Double-press from SettingsChoice goes back to its group") {
+    go_to_group(ui, "Display & Touch");
+    open_row(ui, "Temperature Unit");
+    double_press(ui);
+    CHECK(ui.current_screen() == Screen::DisplayTouch);
+    const auto values = ui.build_values(make_default_ctx());
+    CHECK(std::string(values.rows[values.selected_row].text) == "Temperature Unit: C");
+  }
+
+  SECTION("Double-press from About goes back to Settings on About") {
+    go_to_group(ui, "About Device");
     double_press(ui);
     CHECK(ui.current_screen() == Screen::Settings);
-  }
-
-  SECTION("Double-press from About goes back to MainMenu (cursor on About)") {
-    press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0→1
-    press(ui, InputSource::TouchDown);  // 1→2
-    press(ui, InputSource::TouchDown);  // 2→3 (About Device)
-    press(ui, InputSource::TouchEnter); // → About
-    double_press(ui);
-
-    CHECK(ui.current_screen() == Screen::MainMenu);
-    auto ctx = make_default_ctx();
-    DisplayValues v = ui.build_values(ctx);
-    CHECK(v.selected_row == 3); // cursor restored to "About Device"
+    const auto values = ui.build_values(make_default_ctx());
+    CHECK(std::string(values.rows[values.selected_row].text) == "About Device");
   }
 
   SECTION("Long-press from a deep screen exits straight to Home") {

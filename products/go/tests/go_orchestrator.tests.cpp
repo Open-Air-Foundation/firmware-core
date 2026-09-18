@@ -698,6 +698,33 @@ private:
 // 1. Pure Logic — is_gps_active
 // ============================================================================
 
+// Drive the actual input path while avoiding fixed menu row offsets.
+static void open_ui_row(TestFixture &f, Orchestrator &orch, const std::string &prefix) {
+  for (uint8_t step = 0; step < MAX_LIST_ROWS; ++step) {
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    REQUIRE(values.selected_row < values.row_count);
+    if (std::string(values.rows[values.selected_row].text).rfind(prefix, 0) == 0) {
+      A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+      return;
+    }
+    A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress});
+  }
+  FAIL("Menu row not found: " << prefix);
+}
+
+static void enter_settings(TestFixture &f, Orchestrator &orch) {
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+  A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+  open_ui_row(f, orch, "Settings");
+  REQUIRE(f.ui_manager.current_screen() == Screen::Settings);
+}
+
+static void enter_hardware_test(TestFixture &f, Orchestrator &orch) {
+  enter_settings(f, orch);
+  open_ui_row(f, orch, "Hardware Test");
+  REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
+}
+
 TEST_CASE("is_gps_active: GpsMode determines GPS activity", "[Orchestrator][pure]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -3871,21 +3898,11 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
   A::unlock(orch);
   test_spy::reset();
 
-  // Navigate: Home → MainMenu → Settings → CO2: Calibrate → Confirm → Yes
-  // This triggers UIAction::CalibrateCo2 through the UI state machine.
   InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
   InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
-
-  A::on_input(orch, touch_enter); // Home → MainMenu
-  A::on_input(orch, touch_down);  // 0→1
-  A::on_input(orch, touch_down);  // 1→2
-  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-
-  // Navigate to CO2: Calibrate (index 15) — 14 down presses from Back (1)
-  for (int i = 0; i < 14; ++i)
-    A::on_input(orch, touch_down);
-
-  A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
+  enter_settings(f, orch);
+  open_ui_row(f, orch, "Operations");
+  open_ui_row(f, orch, "CO2 Calibration");
   CHECK(f.ui_manager.current_screen() == Screen::Confirm);
 
   // Navigate to Yes (index 4): 3 down presses from Back (1)
@@ -3912,22 +3929,10 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
 
   // Home → MainMenu → Settings
-  A::on_input(orch, touch_enter); // Home → MainMenu
-  A::on_input(orch, touch_down);  // 0→1
-  A::on_input(orch, touch_down);  // 1→2
-  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-
-  // Hardware Test is the last content row (index 17): 16 downs from Back (1).
-  for (int i = 0; i < 16; ++i)
-    A::on_input(orch, touch_down);
-  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
+  enter_hardware_test(f, orch);
   REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
 
-  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
-  A::on_input(orch, touch_down);  // 2→3 (GPS Test)
-  A::on_input(orch, touch_down);  // 3→4 (Accel Test)
-  A::on_input(orch, touch_down);  // 4→5 (FG Learning)
-  A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
+  open_ui_row(f, orch, "Fuel Gauge Learning");
   REQUIRE(f.ui_manager.current_screen() == Screen::Confirm);
 
   // Navigate to Yes (index 4): 3 downs from Back (1).
@@ -4036,18 +4041,10 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   test_spy::reset();
 
   InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
-  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
 
   // Home → MainMenu → Settings → Hardware Test → Peripheral Test.
-  A::on_input(orch, touch_enter); // Home → MainMenu
-  A::on_input(orch, touch_down);  // 0→1
-  A::on_input(orch, touch_down);  // 1→2
-  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 16; ++i)
-    A::on_input(orch, touch_down);
-  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
-  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
-  A::on_input(orch, touch_enter); // → RunPeripheralTest
+  enter_hardware_test(f, orch);
+  open_ui_row(f, orch, "Peripheral Test");
   REQUIRE(f.ui_manager.current_screen() == Screen::PeripheralTest);
 
   // Four operator-guided actuator confirms (Pass). The AQ sweep must not
@@ -4081,19 +4078,10 @@ TEST_CASE("Peripheral Test: double-press back mid-flow restores and exits",
   A::unlock(orch);
   test_spy::reset();
 
-  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
-  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
   InputEventData double_back{InputSource::TouchEnter, InputType::DoublePress};
 
-  A::on_input(orch, touch_enter); // Home → MainMenu
-  A::on_input(orch, touch_down);
-  A::on_input(orch, touch_down);
-  A::on_input(orch, touch_enter); // → Settings
-  for (int i = 0; i < 16; ++i)
-    A::on_input(orch, touch_down);
-  A::on_input(orch, touch_enter); // → Hardware Test submenu
-  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
-  A::on_input(orch, touch_enter); // → RunPeripheralTest
+  enter_hardware_test(f, orch);
+  open_ui_row(f, orch, "Peripheral Test");
   REQUIRE(f.ui_manager.current_screen() == Screen::PeripheralTest);
 
   // Double-press Back mid-flow leaves the screen; the orchestrator's guard
@@ -4104,19 +4092,8 @@ TEST_CASE("Peripheral Test: double-press back mid-flow restores and exits",
 
 // Navigate Home → Settings → Hardware Test → GPS Test (leaves cursor on GpsTest).
 static void enter_gps_test(TestFixture &f, Orchestrator &orch) {
-  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
-  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
-
-  A::on_input(orch, touch_enter); // Home → MainMenu
-  A::on_input(orch, touch_down);  // 0→1
-  A::on_input(orch, touch_down);  // 1→2
-  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 16; ++i)
-    A::on_input(orch, touch_down);
-  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
-  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
-  A::on_input(orch, touch_down);  // 2→3 (GPS Test)
-  A::on_input(orch, touch_enter); // → OpenGpsTest
+  enter_hardware_test(f, orch);
+  open_ui_row(f, orch, "GPS Test");
   REQUIRE(f.ui_manager.current_screen() == Screen::GpsTest);
 }
 
@@ -4191,20 +4168,8 @@ TEST_CASE("GPS Test: AlwaysOn leaves the receiver running on entry and exit",
 
 // Navigate Home → Settings → Hardware Test → Accel Test (cursor on AccelTest).
 static void enter_accel_test(TestFixture &f, Orchestrator &orch) {
-  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
-  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
-
-  A::on_input(orch, touch_enter); // Home → MainMenu
-  A::on_input(orch, touch_down);  // 0→1
-  A::on_input(orch, touch_down);  // 1→2
-  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 16; ++i)
-    A::on_input(orch, touch_down);
-  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
-  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
-  A::on_input(orch, touch_down);  // 2→3 (GPS Test)
-  A::on_input(orch, touch_down);  // 3→4 (Accel Test)
-  A::on_input(orch, touch_enter); // → OpenAccelTest
+  enter_hardware_test(f, orch);
+  open_ui_row(f, orch, "Accelerometer Test");
   REQUIRE(f.ui_manager.current_screen() == Screen::AccelTest);
 }
 
@@ -4822,17 +4787,37 @@ TEST_CASE("background suppression: sensor data on MainMenu does not update displ
   CHECK(DisplayService::spy_update_count == 0);
 }
 
-TEST_CASE("background suppression: sensor data on Settings does not update display",
+TEST_CASE("background suppression: settings groups do not update display",
           "[Orchestrator][display][suppression]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  f.ui_manager.set_screen(Screen::Settings);
+  for (Screen screen : {Screen::Settings, Screen::Operations, Screen::DisplayTouch}) {
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    f.ui_manager.set_screen(screen);
 
-  DisplayService::spy_update_count = 0;
-  MeasuresAGo data{};
-  A::on_sensor_data(orch, data);
+    DisplayService::spy_update_count = 0;
+    MeasuresAGo data{};
+    A::on_sensor_data(orch, data);
 
-  CHECK(DisplayService::spy_update_count == 0);
+    CHECK(DisplayService::spy_update_count == 0);
+  }
+}
+
+TEST_CASE("settings groups and moved melody choices retain inactivity lock",
+          "[Orchestrator][timers][menu]") {
+  for (const char *group : {"Operations", "Display & Touch", "Hardware Test"}) {
+    TestFixture f;
+    f.settings.auto_lock_seconds = 10;
+    auto orch = f.make_orchestrator();
+    A::unlock(orch);
+    enter_settings(f, orch);
+    open_ui_row(f, orch, group);
+    if (std::string(group) == "Hardware Test")
+      open_ui_row(f, orch, "Play Melody");
+    ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
+    A::check_timers(orch);
+    CHECK(A::lock_state(orch) == LockState::Locked);
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
 }
 
 TEST_CASE("background suppression: BLE connect on MainMenu does not update display",
