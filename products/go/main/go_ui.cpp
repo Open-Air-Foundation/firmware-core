@@ -77,11 +77,11 @@ static constexpr uint8_t TAG_COUNT = 10;
 
 static constexpr uint8_t MENU_MODE = 2;
 static constexpr uint8_t MENU_SETTINGS = 3;
-static constexpr uint8_t SETTINGS_SETUP_GUIDE = 2;
-static constexpr uint8_t SETTINGS_OPERATIONS = 3;
-static constexpr uint8_t SETTINGS_DISPLAY_TOUCH = 4;
+static constexpr uint8_t SETTINGS_OPERATIONS = 2;
+static constexpr uint8_t SETTINGS_DISPLAY_TOUCH = 3;
+static constexpr uint8_t SETTINGS_HARDWARE_TEST = 4;
 static constexpr uint8_t SETTINGS_CLEAR_DATA = 5;
-static constexpr uint8_t SETTINGS_HARDWARE_TEST = 6;
+static constexpr uint8_t SETTINGS_SETUP_GUIDE = 6;
 static constexpr uint8_t SETTINGS_ABOUT = 7;
 static constexpr uint8_t SETTINGS_TOTAL = 8;        // indices 0..7
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
@@ -774,7 +774,7 @@ void UIManager::open_main_menu() {
 
 void UIManager::open_settings() {
   _screen = Screen::Settings;
-  _settings_index = SETTINGS_SETUP_GUIDE;
+  _settings_index = FIRST_CONTENT_ROW;
 }
 
 void UIManager::open_settings_group(Screen screen) {
@@ -1155,20 +1155,20 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
     case 1:
       navigate_back();
       break;
-    case SETTINGS_SETUP_GUIDE:
-      show_getting_started(/*from_boot=*/false);
-      break;
     case SETTINGS_OPERATIONS:
       open_settings_group(Screen::Operations);
       break;
     case SETTINGS_DISPLAY_TOUCH:
       open_settings_group(Screen::DisplayTouch);
       break;
+    case SETTINGS_HARDWARE_TEST:
+      open_hardware_test();
+      break;
     case SETTINGS_CLEAR_DATA:
       open_confirm(SettingId::ClearData);
       break;
-    case SETTINGS_HARDWARE_TEST:
-      open_hardware_test();
+    case SETTINGS_SETUP_GUIDE:
+      show_getting_started(/*from_boot=*/false);
       break;
     case SETTINGS_ABOUT:
       open_about();
@@ -1565,11 +1565,11 @@ void UIManager::populate_menu_rows(DisplayValues &v) const {
 void UIManager::populate_settings_rows(DisplayValues &v) const {
   copy_row(v, 0, "Exit", false);
   copy_row(v, 1, "Back", false);
-  copy_row(v, SETTINGS_SETUP_GUIDE, "Setup Guide", false);
   copy_row(v, SETTINGS_OPERATIONS, "Operations", false);
   copy_row(v, SETTINGS_DISPLAY_TOUCH, "Display & Touch", false);
-  copy_row(v, SETTINGS_CLEAR_DATA, "Clear Data", false);
   copy_row(v, SETTINGS_HARDWARE_TEST, "Hardware Test", false);
+  copy_row(v, SETTINGS_CLEAR_DATA, "Clear Data", false);
+  copy_row(v, SETTINGS_SETUP_GUIDE, "Setup Guide", false);
   copy_row(v, SETTINGS_ABOUT, "About Device", false);
   v.row_count = SETTINGS_TOTAL;
   v.selected_row = _settings_index;

@@ -66,7 +66,7 @@ for full signatures.
 
 ### Navigation
 
-The **Hardware Test** row follows Clear Data and precedes About Device in
+The **Hardware Test** row follows Display & Touch and precedes Clear Data in
 Settings. It opens `Screen::HardwareTest`. The submenu rows, in order:
 
 ```text

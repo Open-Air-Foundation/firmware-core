@@ -145,12 +145,12 @@ rows follow this order:
 
 | Menu | Content Rows |
 |---|---|
-| Settings | Setup Guide, Operations, Display & Touch, Clear Data, Hardware Test, About Device |
+| Settings | Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide, About Device |
 | Operations | Measurement Interval, CO2 Calibration, GPS Mode, Buzzer |
 | Display & Touch | Temperature Unit, Altitude Unit, PM Display, Auto Lock, Display LED, AQI LED, Touch LED |
 | Hardware Test | Peripheral Test, GPS Test, Accelerometer Test, Fuel Gauge Learning, Play Melody |
 
-Settings and its groups fit on one page. Opening Settings selects Setup Guide;
+Settings and its groups fit on one page. Opening Settings selects Operations;
 Operations selects Measurement Interval, Display & Touch selects Temperature
 Unit, and Hardware Test selects Peripheral Test. Reopening these menus resets
 the cursor to that first content row, skipping Exit and Back.
@@ -162,7 +162,7 @@ behavior; the Hardware Test menu and live diagnostic screens suppress
 inactivity auto-lock.
 
 About Device retains its existing rendering and identity fields. Back returns
-to Settings on About Device. Setup Guide is Settings row 2 and reopens
+to Settings on About Device. Setup Guide is Settings row 6 and reopens
 `Screen::GettingStarted` through `show_getting_started(false)`. It has a single
 Back action, which restores the Setup Guide row without changing
 `onboarding_done`. The boot-gate entry uses `show_getting_started(true)` and
@@ -242,7 +242,7 @@ pairs so display ordering cannot change persisted mode identities.
 
 | Setting ID | Label | Options |
 |---|---|---|
-| Setup Guide | `Setup Guide` (Settings row 2) | Action row — opens `Screen::GettingStarted` |
+| Setup Guide | `Setup Guide` (Settings row 6) | Action row — opens `Screen::GettingStarted` |
 | Temperature Unit | `Temperature Unit: C / F` | C, F |
 | Altitude Unit | `Altitude Unit: m / ft` | m, ft |
 | PM Display | `PM Display: ug/m3 / USAQI` | ug/m3, USAQI |

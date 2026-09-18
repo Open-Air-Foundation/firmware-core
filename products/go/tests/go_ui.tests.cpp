@@ -98,7 +98,7 @@ static UIActionResult open_row(UIManager &ui, const std::string &prefix) {
   return press(ui, InputSource::TouchEnter);
 }
 
-/// Home -> MainMenu -> Settings (cursor at Setup Guide).
+/// Home -> MainMenu -> Settings (cursor at Operations).
 static void go_to_settings(UIManager &ui) {
   REQUIRE(ui.current_screen() == Screen::Home);
   press(ui, InputSource::TouchEnter);
@@ -138,8 +138,8 @@ TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
   double_press(ui);
   CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
   open_row(ui, "Settings");
-  check_rows(ui, {"Exit", "Back", "Setup Guide", "Operations", "Display & Touch", "Clear Data",
-                  "Hardware Test", "About Device"});
+  check_rows(ui, {"Exit", "Back", "Operations", "Display & Touch", "Hardware Test", "Clear Data",
+                  "Setup Guide", "About Device"});
   open_row(ui, "Operations");
   auto values = ui.build_values(make_default_ctx());
   REQUIRE(values.row_count == 6);
@@ -348,7 +348,7 @@ TEST_CASE("UIManager: Getting Started via Settings -> Setup Guide", "[UIManager]
     CHECK(result.action == UIAction::None);
     CHECK(ui.current_screen() == Screen::Settings);
     v = ui.build_values(ctx);
-    CHECK(v.selected_row == 2); // Setup Guide row
+    CHECK(v.selected_row == 6); // Setup Guide row
   }
 }
 
@@ -386,7 +386,7 @@ TEST_CASE("UIManager: grouped menus wrap and return to their parent",
     uint8_t count;
   };
   const MenuCase cases[] = {
-      {nullptr, Screen::Settings, "Setup Guide", "About Device", 8},
+      {nullptr, Screen::Settings, "Operations", "About Device", 8},
       {"Operations", Screen::Operations, "Measure Int.", "Buzzer: Off", 6},
       {"Display & Touch", Screen::DisplayTouch, "Temperature Unit: C", "Touch LED: Off", 9},
       {"Hardware Test", Screen::HardwareTest, "Peripheral Test", "Play Melody", 7},

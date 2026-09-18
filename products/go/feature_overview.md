@@ -283,7 +283,7 @@ reset or refurbished unit.
 
 The main menu offers Exit Menu, Start/Stop Tracking, Operating Mode, and
 Settings. Operating Mode lists Portable, Stationary, and Offline. Settings
-contains Setup Guide, Operations, Display & Touch, Clear Data, Hardware Test,
+contains Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide,
 and the existing About Device page.
 
 Operations groups measurement interval, CO2 calibration, GPS mode, and buzzer.
