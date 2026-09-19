@@ -77,6 +77,7 @@ static constexpr uint8_t TAG_COUNT = 10;
 
 static constexpr uint8_t MENU_TRACKING = 1;
 static constexpr uint8_t TRACKING_MENU_TOTAL = 4;
+static constexpr uint8_t TRACKING_BACK = 1;
 static constexpr uint8_t TRACKING_PAUSE_RESUME = 2;
 static constexpr uint8_t TRACKING_STOP = 3;
 static constexpr uint8_t MENU_MODE = 2;
@@ -1124,7 +1125,7 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
     case MENU_TRACKING:
       if (tracking_session_active(_tracking_state)) {
         _screen = Screen::TrackingMenu;
-        _tracking_menu_index = TRACKING_PAUSE_RESUME;
+        _tracking_menu_index = TRACKING_BACK;
       } else {
         go_home();
         result.action = UIAction::StartTracking;
@@ -1584,7 +1585,7 @@ UIActionResult UIManager::dispatch_tracking_menu(InputSource source, InputType /
     case 0:
       go_home();
       break;
-    case 1:
+    case TRACKING_BACK:
       navigate_back();
       break;
     case TRACKING_PAUSE_RESUME:
@@ -1604,7 +1605,7 @@ UIActionResult UIManager::dispatch_tracking_menu(InputSource source, InputType /
 void UIManager::populate_tracking_rows(DisplayValues &v) const {
   v.row_count = TRACKING_MENU_TOTAL;
   copy_row(v, 0, "Exit", false);
-  copy_row(v, 1, "Back", false);
+  copy_row(v, TRACKING_BACK, "Back", false);
   copy_row(v, TRACKING_PAUSE_RESUME,
            _tracking_state == TrackingState::Paused ? "Resume Tracking" : "Pause Tracking", false);
   copy_row(v, TRACKING_STOP, "Stop Tracking", false);

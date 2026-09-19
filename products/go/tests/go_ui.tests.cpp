@@ -532,14 +532,15 @@ TEST_CASE("UIManager: tracking start/stop", "[UIManager][tracking]") {
   }
 
   SECTION("Stop Tracking returns UIAction::StopTracking") {
-    // First, start tracking by building with tracking_active=true
+    // Cache the Recording state before opening the menu.
     auto ctx = make_default_ctx();
     ctx.tracking_state = TrackingState::Recording;
-    ui.build_values(ctx); // caches _tracking_active = true
+    ui.build_values(ctx);
 
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0 → 1 (Tracking)
-    press(ui, InputSource::TouchEnter); // Tracking submenu, Pause selected
+    press(ui, InputSource::TouchEnter); // Tracking submenu, Back selected
+    press(ui, InputSource::TouchDown);  // Pause
     press(ui, InputSource::TouchDown);  // Stop
     auto result = press(ui, InputSource::TouchEnter);
 
@@ -564,8 +565,15 @@ TEST_CASE("UIManager: tracking submenu preserves four main rows and pause naviga
   CHECK(ui.is_on_menu_screen());
   auto menu = ui.build_values(ctx);
   CHECK(menu.row_count == 4);
-  CHECK(menu.selected_row == 2);
+  CHECK(menu.selected_row == 1);
+  CHECK(std::string(menu.rows[menu.selected_row].text) == "Back");
+  CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
+  CHECK(ui.current_screen() == Screen::MainMenu);
+  CHECK(ui.build_values(ctx).selected_row == 1);
+  press(ui, InputSource::TouchEnter); // Reopen with Back selected.
+  CHECK(ui.build_values(ctx).selected_row == 1);
   CHECK(std::string(menu.rows[2].text) == "Pause Tracking");
+  press(ui, InputSource::TouchDown);
   CHECK(press(ui, InputSource::TouchEnter).action == UIAction::PauseTracking);
   CHECK(ui.current_screen() == Screen::Home);
 
@@ -575,16 +583,17 @@ TEST_CASE("UIManager: tracking submenu preserves four main rows and pause naviga
   press(ui, InputSource::TouchDown);
   press(ui, InputSource::TouchEnter);
   menu = ui.build_values(ctx);
+  CHECK(menu.selected_row == 1);
   CHECK(std::string(menu.rows[2].text) == "Resume Tracking");
   CHECK(menu.tracking_state == TrackingState::Paused);
 
   SECTION("Resume returns to Home") {
+    press(ui, InputSource::TouchDown);
     CHECK(press(ui, InputSource::TouchEnter).action == UIAction::ResumeTracking);
     CHECK(ui.current_screen() == Screen::Home);
   }
   SECTION("Back restores Tracking selection") {
-    press(ui, InputSource::TouchUp);
-    press(ui, InputSource::TouchEnter);
+    CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
     CHECK(ui.current_screen() == Screen::MainMenu);
     CHECK(ui.build_values(ctx).selected_row == 1);
   }

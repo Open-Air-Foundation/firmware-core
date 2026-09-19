@@ -295,9 +295,9 @@ Data, Setup Guide, and the existing About Device page.
 Operations groups measurement interval, CO2 calibration, GPS mode, and buzzer.
 Display & Touch groups temperature/altitude units, PM display, auto-lock, and
 AQI LED and Touch LED brightness. Submenus keep Exit and Back;
-opening Settings or a submenu selects its first content item, while value
-choices select the saved value. Back restores the row that opened the child
-page.
+opening Tracking selects Back to avoid an accidental Pause or Resume. Settings
+and its list submenus select their first content item, while value choices
+select the saved value. Back restores the row that opened the child page.
 
 The Go stores user settings on the device, so they survive power cycles.
 

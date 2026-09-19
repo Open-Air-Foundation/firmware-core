@@ -144,9 +144,9 @@ flowchart TD
 MainMenu rows are Exit Menu (0), Start Tracking / Tracking (1), Operating Mode
 (2), and Settings (3). When Idle, Start Tracking starts a session and returns
 Home. When Recording or Paused, Tracking opens `Screen::TrackingMenu` with Exit,
-Back, Pause Tracking / Resume Tracking, and Stop Tracking. The Pause/Resume row
-is selected on entry. Back returns to MainMenu with Tracking selected; Exit and
-the action rows return Home.
+Back, Pause Tracking / Resume Tracking, and Stop Tracking. Back is selected on
+every entry, so pressing Enter again returns to MainMenu with Tracking selected
+without pausing or resuming. Exit and the action rows return Home.
 
 `sync_tracking_state()` keeps the menu aligned with BLE and other state changes.
 If a remote Stop ends the session while TrackingMenu is open, it returns to
