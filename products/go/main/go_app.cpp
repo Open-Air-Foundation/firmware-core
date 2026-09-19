@@ -171,8 +171,8 @@ void GoApp::run() {
           "tracking=%d session=%u warm=%d",
           static_cast<int>(esp_reset_reason()), static_cast<int>(cause),
           static_cast<int>(state.mode), static_cast<int>(state.behavior),
-          static_cast<int>(state.lock_state), state.gps_enabled, state.tracking_active,
-          state.tracking_session_id, state.sensors_warm);
+          static_cast<int>(state.lock_state), state.gps_enabled,
+          static_cast<int>(state.tracking_state), state.tracking_session_id, state.sensors_warm);
 
   BootPath path = select_boot_path(cause, state);
 
@@ -360,7 +360,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   GpsData gps{};
   const bool gps_active = is_gps_active_at_boot(settings, state);
 
-  if (!promote && state.tracking_active && gps_active) {
+  if (!promote && tracking_session_active(state.tracking_state) && gps_active) {
     auto *gps_driver = _board.new_gps_driver();
     gps = gps_read_once(*gps_driver, GPS_BAUD, GPS_FAST_PATH_READ_TIMEOUT_MS, button_pressed);
     AG_LOGI(TAG, "fast-path: gps fix_type=%d sat=%d lat=%.6f lon=%.6f alt=%.1f hdop=%.1f",
@@ -374,7 +374,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   // --- Storage + cache ---
   // `storage_failure_promote` records that promotion happened BEFORE the
   // display block, so the handoff builder knows the display was not
-  // painted. tracking_active is left intact in RTC so the orchestrator's
+  // painted. tracking_state is left intact in RTC so the orchestrator's
   // init() retries resume_route() and surfaces persistent faults there.
   bool storage_failure_promote = false;
   bool power_polled = false;
@@ -383,8 +383,8 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     StorageService &stor = _board.storage();
     stor.cache_measurement(ago);
 
-    if (state.tracking_active) {
-      // Fast path can only resume — only prepare_for_sleep sets tracking_active.
+    if (state.tracking_state == TrackingState::Recording) {
+      // Fast path can only resume — only prepare_for_sleep sets tracking_state.
       if (!stor.resume_route(state.tracking_session_id)) {
         AG_LOGW(TAG, "fast-path: resume_route failed → promote");
         promote = true;
@@ -417,7 +417,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
 
     DisplayService &disp = _board.display();
     DisplayValues values =
-        build_fast_path_display(ago, gps, power_snapshot, settings, state.tracking_active);
+        build_fast_path_display(ago, gps, power_snapshot, settings, state.tracking_state);
     if (power_snapshot.ship_mode_request == ShipModeRequest::OverTemperature ||
         power_snapshot.ship_mode_request == ShipModeRequest::UnderTemperature) {
       values.screen = power_snapshot.ship_mode_request == ShipModeRequest::UnderTemperature
@@ -516,8 +516,8 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
           snapshot_valid, snapshot.co2_ppm, snapshot.pm25_ugm3, snapshot.temperature_c,
           snapshot.humidity_pct, snapshot.tvoc_index, snapshot.nox_index, snapshot.pressure_hpa,
           snapshot.altitude_m, snapshot.battery_pct, snapshot.is_battery_charging,
-          snapshot.gps_enabled, snapshot.gps_fix, snapshot.tracking_active, snapshot.ble_enabled,
-          snapshot.use_fahrenheit, snapshot.use_feet, snapshot.pm_use_usaqi);
+          snapshot.gps_enabled, snapshot.gps_fix, static_cast<int>(snapshot.tracking_state),
+          snapshot.ble_enabled, snapshot.use_fahrenheit, snapshot.use_feet, snapshot.pm_use_usaqi);
 
   DisplayValues wake_values = build_wake_values(snapshot, snapshot_valid);
 
@@ -936,7 +936,8 @@ BootPath select_boot_path(WakeCause cause, const RtcAppState &state) {
 
 bool is_gps_active_at_boot(const GoSettings &settings, const RtcAppState &state) {
   return (settings.gps_mode == GpsMode::AlwaysOn) ||
-         (settings.gps_mode == GpsMode::OnWhenTracking && state.tracking_active);
+         (settings.gps_mode == GpsMode::OnWhenTracking &&
+          tracking_session_active(state.tracking_state));
 }
 
 MeasuresAGo measures_to_ago(const Measures &m) {
@@ -952,7 +953,7 @@ MeasuresAGo measures_to_ago(const Measures &m) {
 
 DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData &gps,
                                       const PowerSnapshot &bms, const GoSettings &settings,
-                                      bool tracking_active) {
+                                      TrackingState tracking_state) {
   const MeasuresAGo corrected = apply_measurement_corrections(measures, settings.corrections);
   DisplayValues v{};
 
@@ -991,7 +992,7 @@ DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData
 
   v.locked = true;
   v.screen = Screen::Home;
-  v.tracking_active = tracking_active;
+  v.tracking_state = tracking_state;
 
   v.use_fahrenheit = settings.use_fahrenheit;
   v.use_feet = settings.use_feet;
@@ -1026,7 +1027,7 @@ DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapsho
     v.is_battery_charging = snapshot.is_battery_charging;
     v.gps_enabled = snapshot.gps_enabled;
     v.gps_fix = snapshot.gps_fix;
-    v.tracking_active = snapshot.tracking_active;
+    v.tracking_state = snapshot.tracking_state;
     v.ble_enabled = snapshot.ble_enabled;
     v.use_fahrenheit = snapshot.use_fahrenheit;
     v.use_feet = snapshot.use_feet;

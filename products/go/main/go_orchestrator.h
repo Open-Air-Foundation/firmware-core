@@ -107,7 +107,7 @@ private:
   Behavior _behavior = Behavior::Idle;
   LockState _lock_state = LockState::Locked;
   bool _gps_enabled = true;
-  bool _tracking_active = false;
+  TrackingState _tracking_state = TrackingState::Idle;
   uint32_t _tracking_session_id = 0;
 
   // --- Cached data ---
@@ -279,6 +279,8 @@ private:
   /// Begin a new tracking session. Returns false on session-id exhaustion
   /// or storage-open failure; the snackbar + BLE notify fire inline first.
   bool start_tracking();
+  bool pause_tracking();
+  bool resume_tracking();
   void stop_tracking();
   /// persist=false skips onboarding + settings writes (manufacturing path).
   void change_mode(OperatingMode new_mode, bool persist = true);
@@ -435,8 +437,7 @@ private:
   bool is_gps_active() const;
   void deactivate_gps();
 
-  /// User intent AND file actually open. Drives every BLE status push so
-  /// the wire never reports tracking when no file is open.
+  /// Recording requires an open route; Paused retains only the session ID.
   bool is_recording() const;
 
   /// Random 5-digit ID with bounded collision retry. Returns 0 on

@@ -166,7 +166,8 @@ public:
 
   /// Finish the current route tracking session.  Flushes and closes the
   /// route file.  Safe to call when no route is active (no-op).
-  void end_route();
+  /// Returns false on final sync/close failure; the file is closed either way.
+  bool end_route();
 
   /// Returns true if a route file is currently open.
   bool is_route_active() const;

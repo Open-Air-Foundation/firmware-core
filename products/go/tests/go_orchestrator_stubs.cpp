@@ -107,6 +107,7 @@ bool clear_routes_result = true;
 bool create_route_result = true;
 bool resume_route_result = true;
 bool append_route_point_result = true;
+bool end_route_result = true;
 
 // Session IDs that should appear "already on NAND" to the orchestrator's
 // session-ID collision retry probe. Tests pre-populate this set to force
@@ -122,6 +123,7 @@ bool ble_connected = false;
 bool ble_authenticated = false;
 bool ble_notify_measures_called = false;
 MeasuresAGo ble_last_measures{};
+TrackingState ble_tracking_state = TrackingState::Idle;
 bool ble_update_status_called = false;
 bool ble_notify_tracking_status_called = false;
 uint32_t ble_notify_tracking_status_count = 0;
@@ -306,6 +308,7 @@ void reset() {
   create_route_result = true;
   resume_route_result = true;
   append_route_point_result = true;
+  end_route_result = true;
   existing_route_session_ids.clear();
 
   ble_init_called = false;
@@ -315,6 +318,7 @@ void reset() {
   ble_authenticated = false;
   ble_notify_measures_called = false;
   ble_last_measures = MeasuresAGo{};
+  ble_tracking_state = TrackingState::Idle;
   ble_update_status_called = false;
   ble_notify_tracking_status_called = false;
   ble_notify_tracking_status_count = 0;
@@ -606,12 +610,13 @@ bool StorageService::append_route_point(const RoutePoint &point) {
   return test_spy::append_route_point_result;
 }
 
-void StorageService::end_route() {
+bool StorageService::end_route() {
   if (!test_spy::route_file_open) {
-    return; // no-op, same as real end_route() when _route_file == nullptr
+    return true; // no-op, same as real end_route() when _route_file == nullptr
   }
   test_spy::route_file_open = false;
   test_spy::route_ended = true;
+  return test_spy::end_route_result;
 }
 
 bool StorageService::is_route_active() const { return test_spy::route_file_open; }
@@ -814,25 +819,28 @@ void BleService::notify_measures(const MeasuresAGo &m, const GpsData & /*gps*/, 
   test_spy::ble_last_measures = m;
 }
 void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
-                               bool tracking, uint32_t session_id) {
+                               uint32_t session_id, TrackingState tracking_state) {
+  test_spy::ble_tracking_state = tracking_state;
   test_spy::ble_update_status_called = true;
-  test_spy::ble_last_status_tracking = tracking;
+  test_spy::ble_last_status_tracking = tracking_session_active(tracking_state);
   test_spy::ble_last_status_session = session_id;
 }
 
 void BleService::notify_tracking_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
-                                        bool tracking, uint32_t session_id) {
+                                        uint32_t session_id, TrackingState tracking_state) {
+  test_spy::ble_tracking_state = tracking_state;
   test_spy::ble_notify_tracking_status_called = true;
   ++test_spy::ble_notify_tracking_status_count;
-  test_spy::ble_last_status_tracking = tracking;
+  test_spy::ble_last_status_tracking = tracking_session_active(tracking_state);
   test_spy::ble_last_status_session = session_id;
 }
 
 void BleService::notify_charging_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
-                                        bool tracking, uint32_t session_id) {
+                                        uint32_t session_id, TrackingState tracking_state) {
+  test_spy::ble_tracking_state = tracking_state;
   test_spy::ble_notify_charging_status_called = true;
   ++test_spy::ble_notify_charging_status_count;
-  test_spy::ble_last_status_tracking = tracking;
+  test_spy::ble_last_status_tracking = tracking_session_active(tracking_state);
   test_spy::ble_last_status_session = session_id;
 }
 
@@ -926,7 +934,7 @@ size_t BleService::encode_measures(uint8_t * /*buf*/, size_t /*sz*/, const Measu
   return 0;
 }
 size_t BleService::encode_status(uint8_t * /*buf*/, size_t /*sz*/, const PowerSnapshot & /*p*/,
-                                 const GpsData & /*g*/, bool /*t*/, uint32_t /*s*/) {
+                                 const GpsData & /*g*/, uint32_t /*s*/, TrackingState /*state*/) {
   return 0;
 }
 size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSettings & /*s*/) {

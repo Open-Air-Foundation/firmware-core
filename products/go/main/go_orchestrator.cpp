@@ -202,9 +202,9 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   // --- Restore RTC state for wake-from-sleep cases ---
   if (cause != WakeCause::PowerOn) {
     RtcAppState state = _svc.power_service.load_state();
-    _behavior = state.behavior;
+    _behavior = tracking_session_active(state.tracking_state) ? Behavior::Tracking : Behavior::Idle;
     _gps_enabled = state.gps_enabled;
-    _tracking_active = state.tracking_active;
+    _tracking_state = state.tracking_state;
     _tracking_session_id = state.tracking_session_id;
   }
 
@@ -260,10 +260,10 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   // --- Resume route if tracking was active before sleep ---
   // BLE isn't up yet, so the snackbar is the only inline signal; clients
   // observe the cleared state via Read on connect.
-  if (_tracking_active) {
+  if (_tracking_state == TrackingState::Recording) {
     if (!_svc.storage_service.resume_route(_tracking_session_id)) {
       AG_LOGE(TAG, "init: resume_route failed for session %" PRIu32, _tracking_session_id);
-      _tracking_active = false;
+      _tracking_state = TrackingState::Idle;
       _tracking_session_id = 0;
       _behavior = Behavior::Idle;
       _svc.ui_manager.show_snackbar("Tracking stopped — storage");
@@ -585,8 +585,8 @@ void Orchestrator::on_bms_timer() {
 
   // Steady-state Status refresh (value only; urgent transitions push via notify_tracking_status()).
   if (_svc.ble_service.is_initialized()) {
-    _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(),
-                                   _tracking_session_id);
+    _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_session_id,
+                                   _tracking_state);
   }
 }
 
@@ -610,8 +610,8 @@ void Orchestrator::on_bms_status_timer() {
       // Push the charging delta so clients reflect the change without polling
       // (also refreshes the full Status snapshot).
       if (_svc.ble_service.is_initialized()) {
-        _svc.ble_service.notify_charging_status(_latest_power, _latest_gps, is_recording(),
-                                                _tracking_session_id);
+        _svc.ble_service.notify_charging_status(_latest_power, _latest_gps, _tracking_session_id,
+                                                _tracking_state);
       }
 
       // Fire-once edge: block the paint so a worker-busy drop can't leave the
@@ -701,6 +701,12 @@ void Orchestrator::dispatch(const Event &event) {
   // UI action events (reserved for future programmatic triggers)
   case EventType::UserStartTracking:
     start_tracking();
+    break;
+  case EventType::UserPauseTracking:
+    pause_tracking();
+    break;
+  case EventType::UserResumeTracking:
+    resume_tracking();
     break;
   case EventType::UserStopTracking:
     stop_tracking();
@@ -1014,7 +1020,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   // Unconditional — snapshot is ready for the next Stationary arm.
   _svc.cloud.update_measures_snapshot(_raw_measures);
 
-  if (_tracking_active) {
+  if (is_recording()) {
     RoutePoint p{};
     p.timestamp = time(nullptr);
     p.gps = _latest_gps;
@@ -1233,6 +1239,12 @@ void Orchestrator::on_input(const InputEventData &input) {
   case UIAction::StartTracking:
     start_tracking();
     break;
+  case UIAction::PauseTracking:
+    pause_tracking();
+    break;
+  case UIAction::ResumeTracking:
+    resume_tracking();
+    break;
   case UIAction::StopTracking:
     stop_tracking();
     break;
@@ -1371,7 +1383,7 @@ void Orchestrator::unlock() {
 }
 
 bool Orchestrator::start_tracking() {
-  if (_tracking_active) {
+  if (tracking_session_active(_tracking_state)) {
     return false; // caller treats as "already tracking"
   }
 
@@ -1384,13 +1396,14 @@ bool Orchestrator::start_tracking() {
     AG_LOGE(TAG, "start_tracking: failed to open route (session=%" PRIu32 ")", session_id);
     _svc.ui_manager.show_snackbar("Storage error — can't track");
     update_display();
-    _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, is_recording(),
-                                            _svc.storage_service.current_route_session_id());
+    _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps,
+                                            _svc.storage_service.current_route_session_id(),
+                                            _tracking_state);
     return false;
   }
 
   _tracking_session_id = session_id;
-  _tracking_active = true;
+  _tracking_state = TrackingState::Recording;
   _behavior = Behavior::Tracking;
 
   if (!was_gps_active && is_gps_active()) {
@@ -1401,13 +1414,54 @@ bool Orchestrator::start_tracking() {
   (void)snprintf(msg, sizeof(msg), "Tracking start = %05" PRIu32, _tracking_session_id);
   _svc.ui_manager.show_snackbar(msg);
   update_display();
-  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, is_recording(),
-                                          _tracking_session_id);
+  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, _tracking_session_id,
+                                          _tracking_state);
+  return true;
+}
+
+bool Orchestrator::pause_tracking() {
+  if (_tracking_state == TrackingState::Paused) {
+    return true;
+  }
+  if (_tracking_state != TrackingState::Recording) {
+    return false;
+  }
+
+  AG_LOGI(TAG, "pause_tracking: session %" PRIu32, _tracking_session_id);
+  _tracking_state = TrackingState::Paused;
+  const bool saved = _svc.storage_service.end_route();
+  _svc.ui_manager.show_snackbar(saved ? "Tracking paused" : "Paused - storage sync failed");
+  update_display();
+  // Keep the legacy active-session fields while notifying the new state.
+  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, _tracking_session_id,
+                                          _tracking_state);
+  return saved;
+}
+
+bool Orchestrator::resume_tracking() {
+  if (_tracking_state == TrackingState::Recording) {
+    return true;
+  }
+  if (_tracking_state != TrackingState::Paused) {
+    return false;
+  }
+  if (!_svc.storage_service.resume_route(_tracking_session_id)) {
+    _svc.ui_manager.show_snackbar("Can't resume - storage error");
+    update_display();
+    return false;
+  }
+
+  AG_LOGI(TAG, "resume_tracking: session %" PRIu32, _tracking_session_id);
+  _tracking_state = TrackingState::Recording;
+  _svc.ui_manager.show_snackbar("Tracking resumed");
+  update_display();
+  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, _tracking_session_id,
+                                          _tracking_state);
   return true;
 }
 
 void Orchestrator::stop_tracking() {
-  if (!_tracking_active) {
+  if (!tracking_session_active(_tracking_state)) {
     return;
   }
 
@@ -1415,7 +1469,7 @@ void Orchestrator::stop_tracking() {
   const bool was_gps_active = is_gps_active();
   const uint32_t ended_session_id = _tracking_session_id;
   _svc.storage_service.end_route();
-  _tracking_active = false;
+  _tracking_state = TrackingState::Idle;
   _tracking_session_id = 0;
   _behavior = Behavior::Idle;
 
@@ -1427,8 +1481,8 @@ void Orchestrator::stop_tracking() {
   (void)snprintf(msg, sizeof(msg), "Tracking stop = %05" PRIu32, ended_session_id);
   _svc.ui_manager.show_snackbar(msg);
   update_display();
-  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, is_recording(),
-                                          _tracking_session_id);
+  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, _tracking_session_id,
+                                          _tracking_state);
 }
 
 bool Orchestrator::mark_onboarding_done() {
@@ -1887,9 +1941,9 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
     _svc.serial_command.stop_receiving();
   }
 
-  const bool was_gps_active =
-      previous_settings.gps_mode == GpsMode::AlwaysOn ||
-      (previous_settings.gps_mode == GpsMode::OnWhenTracking && _tracking_active);
+  const bool was_gps_active = previous_settings.gps_mode == GpsMode::AlwaysOn ||
+                              (previous_settings.gps_mode == GpsMode::OnWhenTracking &&
+                               tracking_session_active(_tracking_state));
 
   reschedule_sensor_timer(previous_settings);
 
@@ -1950,7 +2004,7 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
 }
 
 bool Orchestrator::clear_data() {
-  if (_tracking_active) {
+  if (tracking_session_active(_tracking_state)) {
     stop_tracking();
   }
 
@@ -1958,8 +2012,8 @@ bool Orchestrator::clear_data() {
   const bool routes_cleared = _svc.storage_service.clear_routes();
 
   if (_svc.ble_service.is_connected()) {
-    _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(),
-                                   _tracking_session_id);
+    _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_session_id,
+                                   _tracking_state);
   }
 
   _svc.ui_manager.show_snackbar(routes_cleared ? "Data cleared" : "Data clear failed");
@@ -2004,7 +2058,7 @@ bool Orchestrator::factory_reset(bool preserve_corrections) {
 
   _behavior = Behavior::Idle;
   _lock_state = LockState::Locked;
-  _tracking_active = false;
+  _tracking_state = TrackingState::Idle;
   _tracking_session_id = 0;
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
@@ -2060,7 +2114,7 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
   _svc.display_service.flush();
 
   // 2. Persist state.
-  if (_tracking_active) {
+  if (tracking_session_active(_tracking_state)) {
     stop_tracking();
   }
   _svc.storage_service.backup_cache();
@@ -2089,7 +2143,7 @@ void Orchestrator::on_ble_connected() {
 
   // Seed characteristics for the new client (Read is authoritative on connect).
   _svc.ble_service.notify_measures(_raw_measures, _latest_gps, time(nullptr));
-  _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
+  _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_session_id, _tracking_state);
   _svc.ble_service.update_config(_settings);
 
   request_background_display_update(/*wait=*/true);
@@ -2215,7 +2269,7 @@ void Orchestrator::on_ble_config_write() {
       }
     } break;
     case BleCommand::StartTracking: {
-      if (_tracking_active) {
+      if (tracking_session_active(_tracking_state)) {
         _svc.ble_service.notify_command_result(result.cmd, false, BLE_VAL_ERR_ALREADY_TRACKING);
         break;
       }
@@ -2226,10 +2280,25 @@ void Orchestrator::on_ble_config_write() {
                                              ok ? nullptr : BLE_VAL_ERR_FLASH_ERROR);
     } break;
     case BleCommand::StopTracking: {
-      const bool was_tracking = _tracking_active;
+      const bool was_tracking = tracking_session_active(_tracking_state);
       stop_tracking();
       _svc.ble_service.notify_command_result(result.cmd, was_tracking,
                                              was_tracking ? nullptr : BLE_VAL_ERR_NOT_TRACKING);
+    } break;
+    case BleCommand::PauseTracking:
+    case BleCommand::ResumeTracking: {
+      if (!tracking_session_active(_tracking_state)) {
+        _svc.ble_service.notify_command_result(result.cmd, false, BLE_VAL_ERR_NOT_TRACKING);
+        break;
+      }
+      bool ok = false;
+      if (result.cmd == BleCommand::PauseTracking) {
+        ok = pause_tracking();
+      } else {
+        ok = resume_tracking();
+      }
+      _svc.ble_service.notify_command_result(result.cmd, ok,
+                                             ok ? nullptr : BLE_VAL_ERR_FLASH_ERROR);
     } break;
     case BleCommand::SetAiding: {
       const bool has_time = has_aiding_time(result.aiding);
@@ -2298,12 +2367,12 @@ void Orchestrator::on_ble_history_write() {
     break;
   case BleHistoryOp::Delete:
     AG_LOGI(TAG, "BLE history: delete session %" PRIu32, result.session_id);
-    if (_tracking_active && _tracking_session_id == result.session_id) {
+    if (tracking_session_active(_tracking_state) && _tracking_session_id == result.session_id) {
       _svc.ble_service.notify_history_error(BLE_VAL_ERR_SESSION_ACTIVE);
     } else {
       _svc.ble_service.handle_history_delete(result.session_id);
-      _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(),
-                                     _tracking_session_id);
+      _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_session_id,
+                                     _tracking_state);
     }
     break;
   case BleHistoryOp::Invalid:
@@ -2935,6 +3004,7 @@ void Orchestrator::exit_ota(const char *snackbar) {
 void Orchestrator::update_display() { update_display(false); }
 
 void Orchestrator::update_display(bool wait) {
+  _svc.ui_manager.sync_tracking_state(_tracking_state);
   uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
   _svc.ui_manager.clear_expired_snackbar(now_ms);
   BuildContext ctx = build_context();
@@ -3016,7 +3086,7 @@ BuildContext Orchestrator::build_context() const {
       .wifi_connected = (_mode == OperatingMode::Stationary) && _svc.wifi.is_online(),
       .gps_enabled = is_gps_active(),
       .gps_fix = is_fix_valid(_latest_gps.fix),
-      .tracking_active = _tracking_active,
+      .tracking_state = _tracking_state,
       .display_off = false,
       .use_fahrenheit = _settings.use_fahrenheit,
       .use_feet = _settings.use_feet,
@@ -3130,11 +3200,11 @@ bool Orchestrator::is_gps_active() const {
     return true;
   }
   // GpsMode::OnWhenTracking
-  return _tracking_active;
+  return tracking_session_active(_tracking_state);
 }
 
 bool Orchestrator::is_recording() const {
-  return _tracking_active && _svc.storage_service.is_route_active();
+  return _tracking_state == TrackingState::Recording && _svc.storage_service.is_route_active();
 }
 
 uint32_t Orchestrator::generate_session_id() {
@@ -3158,7 +3228,7 @@ RtcAppState Orchestrator::snapshot_state() const {
       .behavior = _behavior,
       .lock_state = _lock_state,
       .gps_enabled = _gps_enabled,
-      .tracking_active = _tracking_active,
+      .tracking_state = _tracking_state,
       .tracking_session_id = _tracking_session_id,
   };
 }

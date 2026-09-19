@@ -429,11 +429,12 @@ bool StorageService::append_route_point(const RoutePoint &point) {
   return test_spy::append_route_point_result;
 }
 
-void StorageService::end_route() {
+bool StorageService::end_route() {
   if (!test_spy::route_file_open)
-    return;
+    return true;
   test_spy::route_file_open = false;
   test_spy::route_ended = true;
+  return true;
 }
 
 bool StorageService::is_route_active() const { return test_spy::route_file_open; }
@@ -565,9 +566,9 @@ bool BleService::is_authenticated() const { return false; }
 void BleService::notify_measures(const MeasuresAGo & /*m*/, const GpsData & /*gps*/,
                                  time_t /*ts*/) {}
 void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
-                               bool /*tracking*/, uint32_t /*session_id*/) {}
+                               uint32_t /*session_id*/, TrackingState /*state*/) {}
 void BleService::notify_charging_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
-                                        bool /*tracking*/, uint32_t /*session_id*/) {}
+                                        uint32_t /*session_id*/, TrackingState /*state*/) {}
 void BleService::notify_disconnect(BleDiscReason /*reason*/) {}
 void BleService::update_config(const GoSettings & /*settings*/) {}
 void BleService::notify_config(const GoSettings & /*prev*/, const GoSettings & /*cur*/) {}
@@ -607,7 +608,7 @@ size_t BleService::encode_measures(uint8_t * /*buf*/, size_t /*sz*/, const Measu
   return 0;
 }
 size_t BleService::encode_status(uint8_t * /*buf*/, size_t /*sz*/, const PowerSnapshot & /*p*/,
-                                 const GpsData & /*g*/, bool /*t*/, uint32_t /*s*/) {
+                                 const GpsData & /*g*/, uint32_t /*s*/, TrackingState /*state*/) {
   return 0;
 }
 size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSettings & /*s*/) {

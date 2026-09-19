@@ -55,7 +55,7 @@ static BuildContext make_default_ctx() {
       .wifi_connected = false,
       .gps_enabled = true,
       .gps_fix = false,
-      .tracking_active = false,
+      .tracking_state = TrackingState::Idle,
       .display_off = false,
       .use_fahrenheit = false,
       .use_feet = false,
@@ -534,15 +534,63 @@ TEST_CASE("UIManager: tracking start/stop", "[UIManager][tracking]") {
   SECTION("Stop Tracking returns UIAction::StopTracking") {
     // First, start tracking by building with tracking_active=true
     auto ctx = make_default_ctx();
-    ctx.tracking_active = true;
+    ctx.tracking_state = TrackingState::Recording;
     ui.build_values(ctx); // caches _tracking_active = true
 
     press(ui, InputSource::TouchEnter); // Home → MainMenu
-    press(ui, InputSource::TouchDown);  // 0 → 1 (Stop Tracking)
+    press(ui, InputSource::TouchDown);  // 0 → 1 (Tracking)
+    press(ui, InputSource::TouchEnter); // Tracking submenu, Pause selected
+    press(ui, InputSource::TouchDown);  // Stop
     auto result = press(ui, InputSource::TouchEnter);
 
     CHECK(result.action == UIAction::StopTracking);
     CHECK(ui.current_screen() == Screen::Home);
+  }
+}
+
+TEST_CASE("UIManager: tracking submenu preserves four main rows and pause navigation",
+          "[UIManager][tracking][pause]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  auto ctx = make_default_ctx();
+  ctx.tracking_state = TrackingState::Recording;
+  ui.build_values(ctx);
+  press(ui, InputSource::TouchEnter);
+  press(ui, InputSource::TouchDown);
+  auto main = ui.build_values(ctx);
+  CHECK(main.row_count == 4);
+  CHECK(std::string(main.rows[1].text) == "Tracking");
+  press(ui, InputSource::TouchEnter);
+  REQUIRE(ui.current_screen() == Screen::TrackingMenu);
+  CHECK(ui.is_on_menu_screen());
+  auto menu = ui.build_values(ctx);
+  CHECK(menu.row_count == 4);
+  CHECK(menu.selected_row == 2);
+  CHECK(std::string(menu.rows[2].text) == "Pause Tracking");
+  CHECK(press(ui, InputSource::TouchEnter).action == UIAction::PauseTracking);
+  CHECK(ui.current_screen() == Screen::Home);
+
+  ctx.tracking_state = TrackingState::Paused;
+  ui.build_values(ctx);
+  press(ui, InputSource::TouchEnter);
+  press(ui, InputSource::TouchDown);
+  press(ui, InputSource::TouchEnter);
+  menu = ui.build_values(ctx);
+  CHECK(std::string(menu.rows[2].text) == "Resume Tracking");
+  CHECK(menu.tracking_state == TrackingState::Paused);
+
+  SECTION("Resume returns to Home") {
+    CHECK(press(ui, InputSource::TouchEnter).action == UIAction::ResumeTracking);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
+  SECTION("Back restores Tracking selection") {
+    press(ui, InputSource::TouchUp);
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::MainMenu);
+    CHECK(ui.build_values(ctx).selected_row == 1);
+  }
+  SECTION("remote Stop closes the obsolete submenu") {
+    ui.sync_tracking_state(TrackingState::Idle);
+    CHECK(ui.current_screen() == Screen::MainMenu);
   }
 }
 

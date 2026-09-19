@@ -486,7 +486,7 @@ TEST_CASE("is_gps_active_at_boot: AlwaysOff -> false") {
   GoSettings s{};
   s.gps_mode = GpsMode::AlwaysOff;
   RtcAppState state{};
-  state.tracking_active = true;
+  state.tracking_state = TrackingState::Recording;
   CHECK(is_gps_active_at_boot(s, state) == false);
 }
 
@@ -494,7 +494,7 @@ TEST_CASE("is_gps_active_at_boot: OnWhenTracking + tracking -> true") {
   GoSettings s{};
   s.gps_mode = GpsMode::OnWhenTracking;
   RtcAppState state{};
-  state.tracking_active = true;
+  state.tracking_state = TrackingState::Recording;
   CHECK(is_gps_active_at_boot(s, state) == true);
 }
 
@@ -502,7 +502,7 @@ TEST_CASE("is_gps_active_at_boot: OnWhenTracking + idle -> false") {
   GoSettings s{};
   s.gps_mode = GpsMode::OnWhenTracking;
   RtcAppState state{};
-  state.tracking_active = false;
+  state.tracking_state = TrackingState::Idle;
   CHECK(is_gps_active_at_boot(s, state) == false);
 }
 
@@ -585,7 +585,7 @@ TEST_CASE("build_fast_path_display: valid sensors -> values populated") {
   settings.use_feet = true;
   settings.pm_use_usaqi = true;
 
-  DisplayValues v = build_fast_path_display(m, gps, bms, settings, true);
+  DisplayValues v = build_fast_path_display(m, gps, bms, settings, TrackingState::Recording);
 
   CHECK(v.co2_ppm == 600);
   CHECK(v.pm25_ugm3 == 15.0f);
@@ -593,7 +593,7 @@ TEST_CASE("build_fast_path_display: valid sensors -> values populated") {
   CHECK(v.humidity_pct == 60.0f);
   CHECK(v.battery_pct == 75);
   CHECK(v.locked == true);
-  CHECK(v.tracking_active == true);
+  CHECK(v.tracking_state == TrackingState::Recording);
   CHECK(v.use_fahrenheit == true);
   CHECK(v.use_feet == true);
   CHECK(v.pm_use_usaqi == true);
@@ -615,7 +615,7 @@ TEST_CASE("build_fast_path_display: invalid sensors -> sentinels preserved") {
   bms.battery_percentage = -1.0f; // no data
   GoSettings settings{};
 
-  DisplayValues v = build_fast_path_display(m, gps, bms, settings, false);
+  DisplayValues v = build_fast_path_display(m, gps, bms, settings, TrackingState::Idle);
 
   // Invalid sensor data should NOT overwrite DisplayValues defaults
   CHECK(v.co2_ppm == MeasuresInvalid::CO2);
@@ -628,7 +628,7 @@ TEST_CASE("build_fast_path_display: invalid sensors -> sentinels preserved") {
   CHECK(v.altitude_m == MeasuresInvalid::ALTITUDE);
   CHECK(v.battery_pct == 0xFF); // no battery data
   CHECK(v.gps_fix == false);
-  CHECK(v.tracking_active == false);
+  CHECK(v.tracking_state == TrackingState::Idle);
   CHECK(v.use_fahrenheit == false);
   CHECK(v.use_feet == false);
   CHECK(v.pm_use_usaqi == false);
@@ -649,7 +649,7 @@ TEST_CASE("build_fast_path_display: applies persisted corrections only to presen
   settings.corrections.temperature.intercept = -1.0f;
 
   const DisplayValues values =
-      build_fast_path_display(m, GpsData{}, PowerSnapshot{}, settings, false);
+      build_fast_path_display(m, GpsData{}, PowerSnapshot{}, settings, TrackingState::Idle);
 
   CHECK(values.pm25_ugm3 == 21.0f);
   CHECK(values.temperature_c == 29.0f);
@@ -844,7 +844,7 @@ TEST_CASE("execute_fast_path: tracking + GPS active -> route point stored") {
 
   RtcAppState state{};
   state.sensors_warm = true;
-  state.tracking_active = true;
+  state.tracking_state = TrackingState::Recording;
   state.tracking_session_id = 12345;
   volatile bool button = false;
 
@@ -862,6 +862,32 @@ TEST_CASE("execute_fast_path: tracking + GPS active -> route point stored") {
   CHECK(board.new_gps_driver_called == true);
 }
 
+TEST_CASE("execute_fast_path: paused session keeps GPS and display but writes no route") {
+  test_spy::reset();
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+  MockBoard board;
+  board.settings.gps_mode = GpsMode::OnWhenTracking;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+  RtcAppState state{};
+  state.sensors_warm = true;
+  state.tracking_state = TrackingState::Paused;
+  state.tracking_session_id = 12345;
+  volatile bool button = false;
+  CHECK(is_gps_active_at_boot(board.settings, state));
+  auto result = access.execute_fast_path(state, button);
+  CHECK(result.outcome == GoAppTestAccess::Outcome::Sleep);
+  CHECK_FALSE(test_spy::route_resumed);
+  CHECK_FALSE(test_spy::route_started);
+  CHECK_FALSE(test_spy::route_point_appended);
+  CHECK(board.new_gps_driver_called);
+  CHECK(state.tracking_state == TrackingState::Paused);
+  CHECK(state.tracking_session_id == 12345);
+  const auto display = build_fast_path_display(MeasuresAGo{}, GpsData{}, PowerSnapshot{},
+                                               board.settings, state.tracking_state);
+  CHECK(display.tracking_state == TrackingState::Paused);
+}
+
 TEST_CASE("execute_fast_path: degraded route uses fuel-gauge battery snapshot") {
   test_spy::reset();
   test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
@@ -875,7 +901,7 @@ TEST_CASE("execute_fast_path: degraded route uses fuel-gauge battery snapshot") 
 
   RtcAppState state{};
   state.sensors_warm = true;
-  state.tracking_active = true;
+  state.tracking_state = TrackingState::Recording;
   state.tracking_session_id = 12345;
   volatile bool button = false;
 
@@ -900,7 +926,7 @@ TEST_CASE("execute_fast_path: resume_route failure -> promote, no display painte
 
   RtcAppState state{};
   state.sensors_warm = true;
-  state.tracking_active = true;
+  state.tracking_state = TrackingState::Recording;
   state.tracking_session_id = 12345;
   volatile bool button = false;
 
@@ -909,7 +935,7 @@ TEST_CASE("execute_fast_path: resume_route failure -> promote, no display painte
   CHECK(result.outcome == GoAppTestAccess::Outcome::Promote);
   // tracking_active stays set in the inbound state so the orchestrator
   // retries the resume during init() and surfaces the failure there.
-  CHECK(state.tracking_active == true);
+  CHECK(state.tracking_state == TrackingState::Recording);
   CHECK(result.handoff.initial_lock_state == LockState::Locked);
   // Storage failed before the display block — display was NOT painted.
   CHECK(result.handoff.display_painted == false);
@@ -929,14 +955,14 @@ TEST_CASE("execute_fast_path: append_route_point failure -> promote, no display 
 
   RtcAppState state{};
   state.sensors_warm = true;
-  state.tracking_active = true;
+  state.tracking_state = TrackingState::Recording;
   state.tracking_session_id = 12345;
   volatile bool button = false;
 
   auto result = access.execute_fast_path(state, button);
 
   CHECK(result.outcome == GoAppTestAccess::Outcome::Promote);
-  CHECK(state.tracking_active == true);
+  CHECK(state.tracking_state == TrackingState::Recording);
   CHECK(result.handoff.initial_lock_state == LockState::Locked);
   CHECK(result.handoff.display_painted == false);
   // Resume succeeded; end_route still ran as best-effort close.
@@ -956,7 +982,7 @@ TEST_CASE("execute_fast_path: tracking + GPS off -> no GPS read") {
 
   RtcAppState state{};
   state.sensors_warm = true;
-  state.tracking_active = true;
+  state.tracking_state = TrackingState::Recording;
   volatile bool button = false;
 
   auto result = access.execute_fast_path(state, button);
@@ -975,7 +1001,7 @@ TEST_CASE("execute_fast_path: no tracking -> no route") {
 
   RtcAppState state{};
   state.sensors_warm = true;
-  state.tracking_active = false;
+  state.tracking_state = TrackingState::Idle;
   volatile bool button = false;
 
   auto result = access.execute_fast_path(state, button);

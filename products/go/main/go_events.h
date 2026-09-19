@@ -56,12 +56,14 @@ enum class EventType : uint8_t {
 
   // --- UI action events ---
   UserStartTracking, // no payload
-  UserStopTracking,  // no payload
-  UserChangeMode,    // payload: OperatingMode
-  UserToggleGps,     // payload: bool
-  SettingsChanged,   // no payload
-  ClearData,         // no payload
-  SaveTag,           // payload: tag_index (uint8_t)
+  UserPauseTracking,
+  UserResumeTracking,
+  UserStopTracking, // no payload
+  UserChangeMode,   // payload: OperatingMode
+  UserToggleGps,    // payload: bool
+  SettingsChanged,  // no payload
+  ClearData,        // no payload
+  SaveTag,          // payload: tag_index (uint8_t)
 };
 
 // --- Event payload structs ---

@@ -69,7 +69,7 @@ MeasuresAGo measures_to_ago(const Measures &m);
 /// Build DisplayValues for the fast-path locked dashboard.
 DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData &gps,
                                       const PowerSnapshot &bms, const GoSettings &settings,
-                                      bool tracking_active);
+                                      TrackingState tracking_state);
 
 /// Build DisplayValues for button-wake early paint (snapshot-based).
 DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapshot_valid);

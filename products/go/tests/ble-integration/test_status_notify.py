@@ -1,10 +1,10 @@
 """Tests for Status characteristic NOTIFY semantics.
 
 The device pushes a Status notification on every urgent tracking state
-transition (start success, manual stop). These tests verify the contract
+transition (start, stop, pause, resume). These tests verify the contract
 the AGo BLE Client Spec exposes to the phone app.
 
-BLE-issued start/stop produces two notifications per transition: one on
+BLE-issued tracking commands produce two notifications per transition: one on
 Status (state change) and one on Config (cmd_result). Both are checked.
 """
 
@@ -82,7 +82,7 @@ class TestStatusNotify:
                 response=True,
             )
 
-            # Status NOTIFY: tracking transition DELTA — only {tracking, session}.
+            # Status NOTIFY: tracking transition delta — {tracking, session, trk}.
             status_raw = await status_notifications.wait_for(
                 timeout=ago_notify_timeout
             )
@@ -101,8 +101,10 @@ class TestStatusNotify:
             assert isinstance(status["session"], int) and status["session"] > 0, (
                 f"Status NOTIFY session id invalid: {status['session']!r}"
             )
+            assert type(status["trk"]) is int
+            assert status["trk"] == proto.TRACKING_STATES["recording"]
 
-            # READ remains the full 9-key snapshot.
+            # READ remains the full 10-key snapshot.
             read_back = await _read_status(ago_client)
             assert set(read_back.keys()) == proto.STATUS_ALL_KEYS, (
                 f"Status READ is not the full snapshot.\n"
@@ -111,6 +113,8 @@ class TestStatusNotify:
             )
             assert read_back["tracking"] is True
             assert read_back["session"] == status["session"]
+            assert type(read_back["trk"]) is int
+            assert read_back["trk"] == proto.TRACKING_STATES["recording"]
 
             # Config cmd_result: command acknowledgement on the issuer's
             # characteristic. Distinct event, distinct characteristic.
@@ -173,13 +177,18 @@ class TestStatusNotify:
             assert status["session"] == 0, (
                 f"Status NOTIFY did not clear session: {status['session']!r}"
             )
+            assert type(status["trk"]) is int
+            assert status["trk"] == proto.TRACKING_STATES["idle"]
 
-            # READ remains the full 9-key snapshot.
+            # READ remains the full 10-key snapshot.
             read_back = await _read_status(ago_client)
             assert set(read_back.keys()) == proto.STATUS_ALL_KEYS, (
                 f"Status READ is not the full snapshot: {set(read_back.keys())}"
             )
             assert read_back["tracking"] is False
+            assert read_back["session"] == 0
+            assert type(read_back["trk"]) is int
+            assert read_back["trk"] == proto.TRACKING_STATES["idle"]
 
             cmd_raw = await config_notifications.wait_for(
                 timeout=ago_notify_timeout
@@ -188,6 +197,60 @@ class TestStatusNotify:
             assert cmd.get("type") == "cmd_result"
             assert cmd.get("cmd") == "stop_tracking"
             assert cmd.get("ok") is True, f"cmd_result not ok: {cmd!r}"
+        finally:
+            await _ensure_tracking_idle(ago_client)
+
+    async def test_pause_resume_preserves_session(
+        self,
+        ago_client: BleakClient,
+        ago_notify_timeout: float,
+        status_notifications: NotificationCollector,
+        config_notifications: NotificationCollector,
+    ):
+        """Pause/resume changes trk while keeping tracking=true and the same ID."""
+        await _ensure_tracking_idle(ago_client)
+        status_notifications.drain()
+        config_notifications.drain()
+        session_id = None
+
+        try:
+            for command, state in (
+                ("start_tracking", proto.TRACKING_STATES["recording"]),
+                ("pause_tracking", proto.TRACKING_STATES["paused"]),
+                ("resume_tracking", proto.TRACKING_STATES["recording"]),
+            ):
+                await ago_client.write_gatt_char(
+                    proto.CHAR_CONFIG_UUID,
+                    proto.encode_command(command),
+                    response=True,
+                )
+                status_raw = await status_notifications.wait_for(
+                    timeout=ago_notify_timeout
+                )
+                status = proto.decode_cbor(status_raw)
+                assert set(status.keys()) == proto.STATUS_NOTIFY_KEYS
+                assert status["tracking"] is True
+                assert type(status["trk"]) is int and status["trk"] == state
+                assert type(status["session"]) is int and status["session"] > 0
+                if session_id is None:
+                    session_id = status["session"]
+                assert status["session"] == session_id, (
+                    f"Session changed after {command}: {status!r}"
+                )
+
+                read_back = await _read_status(ago_client)
+                assert set(read_back.keys()) == proto.STATUS_ALL_KEYS
+                assert read_back["tracking"] is True
+                assert type(read_back["trk"]) is int and read_back["trk"] == state
+                assert read_back["session"] == session_id
+
+                cmd_raw = await config_notifications.wait_for(
+                    timeout=ago_notify_timeout
+                )
+                cmd = proto.decode_cbor(cmd_raw)
+                assert cmd.get("type") == "cmd_result"
+                assert cmd.get("cmd") == command
+                assert cmd.get("ok") is True, f"cmd_result not ok: {cmd!r}"
         finally:
             await _ensure_tracking_idle(ago_client)
 

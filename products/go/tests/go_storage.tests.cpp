@@ -799,6 +799,29 @@ TEST_CASE("Route: durability budget", "[StorageService][route][durability]") {
   svc.set_test_seam(&seam);
   s_fake_rtos.set(0);
 
+  SECTION("pause close reports sync failure but releases the route") {
+    REQUIRE(svc.create_route(40001));
+    seam.fsync_return = -1;
+    CHECK_FALSE(svc.end_route());
+    CHECK_FALSE(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == 0);
+    CHECK(svc.route_file_exists(40001));
+    seam.fsync_return = 0;
+    REQUIRE(svc.resume_route(40001));
+    CHECK(svc.end_route());
+    CHECK(svc.end_route());
+  }
+
+  SECTION("pause close reports fflush failure and allows a later resume") {
+    REQUIRE(svc.create_route(40001));
+    seam.fflush_return = -1;
+    CHECK_FALSE(svc.end_route());
+    CHECK_FALSE(svc.is_route_active());
+    seam.fflush_return = 0;
+    CHECK(svc.resume_route(40001));
+    CHECK(svc.end_route());
+  }
+
   SECTION("empty-file fsync: create_route flushes + fsyncs before returning") {
     REQUIRE(svc.create_route(40001));
     // Pre-append: counts must already reflect the create-time sync.
