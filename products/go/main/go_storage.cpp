@@ -262,7 +262,15 @@ bool StorageService::append_route_point(const RoutePoint &point) {
     return false;
   }
 
-  const size_t written = fwrite(&point, sizeof(RoutePoint), 1, _route_file);
+  RoutePoint stored_point = point;
+  if (!is_fix_valid(stored_point.gps.fix)) {
+    // The GPS driver can retain coordinates after losing its fix.
+    stored_point.gps.position.latitude = GPS_LATITUDE_INVALID;
+    stored_point.gps.position.longitude = GPS_LONGITUDE_INVALID;
+    stored_point.gps.altitude_m = GPS_ALTITUDE_INVALID;
+  }
+
+  const size_t written = fwrite(&stored_point, sizeof(RoutePoint), 1, _route_file);
   if (written != 1) {
     AG_LOGE(TAG, "append_route_point: fwrite failed (errno=%d)", errno);
     return false;

@@ -73,6 +73,17 @@ Each route file is a flat sequence of `RoutePoint` structs with no header:
 Fixed struct size allows O(1) seeks to the Nth point during off-device
 processing.
 
+Before writing a point, `append_route_point()` checks `is_fix_valid()`. If the
+fix is `NoFix`, it stores `GPS_LATITUDE_INVALID`, `GPS_LONGITUDE_INVALID`, and
+`GPS_ALTITUDE_INVALID` instead of any coordinates retained by the GPS driver.
+The timestamp, sensor readings, battery, and GPS fix metadata are preserved.
+Valid 2D/3D fixes keep their coordinates. This applies to both interactive
+recording and timer-wake recording through their shared storage path.
+
+Existing records are unchanged. BLE History continues exporting stored fields
+through its existing encoder; newly written no-fix points contain invalid
+coordinates on disk.
+
 ## CacheField Enum
 
 Used with `read_cached_field()` to identify which measurement field to
