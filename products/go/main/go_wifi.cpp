@@ -28,10 +28,11 @@ static constexpr const char *TAG = "WifiService";
 // transient missed sweep at bring-up.
 static constexpr uint8_t STATIONARY_MAX_RETRY_COUNT = 3;
 
-static void disable_stationary_power_save(WifiManager &wifi) {
-  const WifiStatus status = wifi.set_power_save(WifiPowerSave::None);
+// Enable Minimal Wifi Power Saving --> MinModem (Wake at AP's DTIM interval, beacons, etc...)
+static void enable_stationary_minimum_power_save(WifiManager &wifi) {
+  const WifiStatus status = wifi.set_power_save(WifiPowerSave::MinModem);
   if (status != WifiStatus::Ok) {
-    AG_LOGW(TAG, "failed to disable Stationary Wi-Fi power save: %u",
+    AG_LOGW(TAG, "failed to enable minimum Stationary Wi-Fi power save: %u",
             static_cast<unsigned>(status));
   }
 }
@@ -90,7 +91,7 @@ void WifiService::_connect_saved_internal(const WifiStaticIpConfig *static_ip,
   }
 
   _wifi.set_mode(WifiMode::Sta);
-  disable_stationary_power_save(_wifi);
+  enable_stationary_minimum_power_save(_wifi);
 
   WifiStaConfig sta{}; // empty ssid = auto-connect from saved networks
   sta.max_retry_count = STATIONARY_MAX_RETRY_COUNT;
@@ -136,7 +137,7 @@ void WifiService::_connect_fallback_internal(bool reset_online_latches, bool arm
   }
   _wifi.clear_static_ip();
   _wifi.set_mode(WifiMode::Sta);
-  disable_stationary_power_save(_wifi);
+  enable_stationary_minimum_power_save(_wifi);
 
   WifiStaConfig sta{};
   std::strncpy(sta.ssid, _cfg.fallback_ssid, sizeof(sta.ssid) - 1);

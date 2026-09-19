@@ -17,6 +17,8 @@
 #include "led/go_led_types.h"
 #ifndef TEST_HOST
 #include "board_config.h"
+// For ESP DFS and Auto Light Sleep (via FreeRTOS)
+#include "esp_pm.h"
 #include <esp_system.h>
 #else
 // Minimal pin/bus constants for host test compilation.
@@ -118,6 +120,10 @@ PortableWifiProvisioner::Config make_portable_prov_config(const char *serial,
 }
 } // namespace
 
+#ifndef TEST_HOST
+static esp_err_t configure_esp_power_management();
+#endif
+
 // ===========================================================================
 // Construction
 // ===========================================================================
@@ -147,6 +153,17 @@ bool GoApp::init_bms_with_retry() {
 // ===========================================================================
 
 void GoApp::run() {
+  // Immediately after boot is complete, configure power management.
+  // No need to print success, pm does that for us.
+#ifndef TEST_HOST
+  esp_err_t pm_stat = configure_esp_power_management();
+  if (pm_stat != ESP_OK) {
+    AG_LOGE(TAG,
+            "Failed to configure power management (err=0x%x); "
+            "attempting to run at default clock.",
+            pm_stat);
+  }
+#endif
   retained_uptime::init();
   RTOS::delay_ms(100);
   log_heap(TAG, "boot:run-entry");
@@ -1040,3 +1057,19 @@ DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapsho
 
   return v;
 }
+
+#ifndef TEST_HOST
+static esp_err_t configure_esp_power_management(void) {
+
+  esp_pm_config_t esp_pm = {
+      .max_freq_mhz = max_esp32c5_cpu,
+      .min_freq_mhz = min_esp32c5_cpu,
+      .light_sleep_enable = false,
+  };
+
+  AG_LOGI(TAG, "Applying PM config: max=%d MHz, min=%d MHz", esp_pm.max_freq_mhz,
+          esp_pm.min_freq_mhz);
+
+  return esp_pm_configure(&esp_pm);
+}
+#endif
