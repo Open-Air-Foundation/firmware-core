@@ -60,17 +60,23 @@ The default mode on a fresh device is Portable.
 
 ## Tracking And Route Logging
 
-Tracking is one of the key Go features. When tracking is active, the device
+Tracking is one of the key Go features. While recording, the device
 combines air quality readings with GPS information and stores them as a route.
 
 Tracking supports:
 
-- Starting and stopping from the device menu.
-- Starting and stopping from the connected phone app.
+- Starting, pausing, resuming, and stopping from the device menu.
+- The same commands through the existing BLE Config characteristic.
 - GPS plus sensor data stored together as route points.
 - A unique session ID for each tracking session.
 - Continuing the same session across deep sleep wake-ups.
 - Exporting stored route history to the phone over BLE.
+
+Pause stops new sensor/GPS route points while retaining the session. Resume
+continues the same route without filling in the paused interval. Live readings,
+charts, GPS, and existing data export continue; Stationary cloud upload and
+configuration polling also continue. The display replaces the recording dot
+with a pause icon. A paused route must be stopped before it can be deleted.
 
 The device also keeps a short temporary measurement history for on-device charts.
 This chart data is separate from the persistent route log.
@@ -120,7 +126,7 @@ Main BLE features:
 - GPS data while tracking or when GPS is enabled.
 - Battery, charging, tracking, GPS, and storage status.
 - Reading and changing device settings.
-- Starting and stopping tracking.
+- Starting, pausing, resuming, and stopping tracking.
 - Clearing data.
 - Factory reset.
 - CO2 calibration command.
@@ -280,10 +286,11 @@ reset or refurbished unit.
 
 ## Configurable Settings
 
-The main menu offers Exit Menu, Start/Stop Tracking, Operating Mode, and
-Settings. Operating Mode lists Portable, Stationary, and Offline. Settings
-contains Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide,
-and the existing About Device page.
+The main menu offers Exit Menu, Start Tracking / Tracking, Operating Mode, and
+Settings. During a session, Tracking opens Exit, Back, Pause Tracking / Resume
+Tracking, and Stop Tracking. Operating Mode lists Portable, Stationary, and
+Offline. Settings contains Operations, Display & Touch, Hardware Test, Clear
+Data, Setup Guide, and the existing About Device page.
 
 Operations groups measurement interval, CO2 calibration, GPS mode, and buzzer.
 Display & Touch groups temperature/altitude units, PM display, auto-lock, and

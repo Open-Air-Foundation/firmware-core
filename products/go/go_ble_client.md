@@ -196,10 +196,10 @@ structure.
 - **Missing keys**: If a sensor reading is unavailable or invalid, the key
   is omitted entirely. A missing key means "data not available" — not zero.
 - **Numeric types**:
-  - Unsigned integers (`uint`): CO2, TVOC, NOx, timestamps, counts.
+  - Unsigned integers (`uint`): CO2, TVOC, NOx, timestamps, counts, `trk` state.
   - Float32 (`float`): Temperature, humidity, PM, pressure, altitude.
   - Float64 (`double`): GPS latitude and longitude (for precision).
-  - Boolean: Config toggles, tracking state.
+  - Boolean: Config toggles, legacy `tracking` active-session flag.
   - Text string: Enum values (charging state, GPS mode, etc.).
 
 ### Payload Sizes and Transport
@@ -219,7 +219,8 @@ full snapshot.
 | Characteristic | Typical Size | Max/Limit | Transport |
 |---|---:|---:|---|
 | Measures | ~120 B | ~135 B | One notification when MTU is at least 138 |
-| Status Read | ~95 B | ~115 B | Read; notifications carry small deltas |
+| Status Read | ~100 B | ~120 B | Read; notifications carry small deltas |
+| Status Tracking Notify | 27–29 B while active | 29 B | One notification carrying `tracking`, `session`, and `trk` |
 | Config Read | ~205 B | <512 B | Read-Long / Read Blob |
 | Config Notify | — | <180 B | One notification when MTU is at least 185 |
 | History control | ~40 B | ~180 B | One notification per response |
@@ -290,8 +291,9 @@ CBOR map. All keys are optional except `"ts"`.
 ### GPS Field Rules
 
 GPS fields (`"lat"`, `"lon"`, `"alt"`, `"fix"`, `"sat"`) are only included
-when the device has a valid GPS fix. If the device is idle (not tracking) or
-has no GPS fix, all GPS keys are absent.
+when the device has a valid GPS fix. Pausing tracking does not stop live GPS
+updates; GPS remains enabled according to `gps_mode`, including `"tracking"`
+while the session is paused. Without a valid fix, all GPS keys are absent.
 
 When GPS is included:
 
@@ -355,7 +357,7 @@ A Status **NOTIFY carries only a delta** — never the full snapshot. There are
 **three delta shapes**, distinguished by which keys are present (there is **no**
 `"type"` discriminator on Status notifications):
 
-- **Tracking transition** — `{"tracking": <bool>, "session": <uint>}`.
+- **Tracking transition** — `{"tracking": <bool>, "session": <uint>, "trk": <uint>}`.
 - **Charging transition** — `{"charging": <text>, "bat_pct": <uint>, "bat_v":
   <float32>}`, pushed when the user plugs in, unplugs, or the battery finishes
   charging.
@@ -364,14 +366,16 @@ A Status **NOTIFY carries only a delta** — never the full snapshot. There are
 
 The shapes have **disjoint keys**, so just **merge whichever keys arrive** into
 your local model. A notification is a single ATT PDU and is kept bounded by
-sending only what changed. The **Read** value remains the full 9-key snapshot
+sending the relevant state fields. The **Read** value remains the full 10-key snapshot
 (see Payload); re-read Status for the full state on connect.
 
 | Event | NOTIFY? | Payload reflects |
 |---|---|---|
-| `start_tracking` succeeded | Yes | `tracking: true`, `session: N` |
-| `start_tracking` failed at storage open | Yes | `tracking: false`, `session: 0` |
-| `stop_tracking` (manual) | Yes | `tracking: false`, `session: 0` |
+| `start_tracking` succeeded | Yes | `tracking: true`, `session: N`, `trk: 1` |
+| `start_tracking` failed at storage open | Yes | `tracking: false`, `session: 0`, `trk: 0` |
+| `pause_tracking` from Recording | Yes, including sync/close failure | `tracking: true`, same `session: N`, `trk: 2` |
+| `resume_tracking` from Paused succeeded | Yes | `tracking: true`, same `session: N`, `trk: 1` |
+| `stop_tracking` from Recording or Paused | Yes | `tracking: false`, `session: 0`, `trk: 0` |
 | Charging transition (plug in / unplug / charge complete) | Yes | `charging`, `bat_pct`, `bat_v` |
 | Device about to drop the link (shutdown / leaving Portable) | Yes | `disc` |
 | Resume-after-sleep failed in firmware init | No | BLE is not up yet; client picks it up via Read on the next connect |
@@ -406,23 +410,28 @@ the CCCD, and notifications can be lost in transit. Treat Status NOTIFY
 as best-effort. Clients that just connected MUST issue a Read on Status
 before relying on subsequent notifies to learn the current state.
 
-#### Tracking started via BLE produces two notifications
+#### Tracking Commands And Notifications
 
-When the client issues `{"op":"cmd","cmd":"start_tracking"}` (or
-`"stop_tracking"`), it will receive **two** notifications on different
-characteristics for the same logical event:
+When a BLE command starts, pauses, resumes, or stops a session and changes its
+state, it produces **two** notifications on different characteristics:
 
 1. **Status NOTIFY** (this characteristic) — broadcasts the state change
-   (`tracking`, `session`).
+   (`tracking`, `session`, `trk`).
 2. **Config NOTIFY** (`type: "cmd_result"`) — the response to the issued
    command, carrying `ok` and optionally `err`.
 
 The two are distinct protocol events on distinct characteristics, not
 redundant transport. Handle them in their own listeners.
 
-#### Reconciling unexpected `tracking: true -> false`
+Repeated Pause while already Paused and Resume while already Recording return
+`ok: true` without another Status notification. Resume failure keeps the session
+Paused and sends only the failed Config result. Pause sync/close failure still
+changes the state to Paused and sends both the Status delta and a failed Config
+result.
 
-If you receive a NOTIFY with `tracking: false` that did **not** follow
+#### Reconciling An Unexpected Session End
+
+If you receive a NOTIFY with `trk: 0` that did **not** follow
 a client-issued `stop_tracking` command, treat it as "session ended on
 device" and refresh local state from the device (re-list History,
 re-read Status). Do not try to infer the cause from the payload — the
@@ -432,7 +441,7 @@ fault at the storage layer.
 
 ### Payload
 
-The **Read** value is a CBOR map with **all 9 keys always present**. A **NOTIFY**
+The **Read** value is a CBOR map with **all 10 keys always present**. A **NOTIFY**
 payload carries only one of the delta shapes (tracking transition, charging
 transition, or the NOTIFY-only `disc` notice); every snapshot key is available
 via Read. The `disc` key is never part of the Read snapshot.
@@ -444,10 +453,23 @@ via Read. The `disc` key is never part of the Read snapshot.
 | `"bat_pct"` | uint | Yes (charging delta) | Battery percentage, 0–100 |
 | `"bat_v"` | float32 | Yes (charging delta) | Battery voltage in Volts |
 | `"charging"` | text | Yes (charging delta) | Charging state (see table below) |
-| `"tracking"` | bool | Yes (tracking delta) | `true` if a tracking session is active |
-| `"session"` | uint | Yes (tracking delta) | Current tracking session ID (0 if not tracking) |
+| `"tracking"` | bool | Yes (tracking delta) | Legacy flag: `true` while Recording or Paused; will be deprecated soon |
+| `"session"` | uint | Yes (tracking delta) | Current session ID, retained while Paused; 0 when Idle |
+| `"trk"` | uint | Yes (tracking delta) | Tracking state: `0` = Idle, `1` = Recording, `2` = Paused |
 | `"flash_kb"` | uint | No (Read-only) | Total flash storage capacity in KB |
 | `"used_kb"` | uint | No (Read-only) | Used flash storage in KB |
+
+**Upcoming deprecation:** the BLE `tracking` field will be deprecated soon.
+Clients should use `trk` for tracking state. `tracking` remains in the current
+Read and notification payloads for compatibility; it is `true` for both
+Recording and Paused and `false` for Idle. Clients should tolerate unknown map
+keys. When supporting older firmware without `trk`, use `tracking` as a fallback;
+that firmware cannot report Paused.
+
+Pause stops new sensor/GPS route-point writes, retains the session ID, and
+flushes/closes its file. Live readings, charts, GPS, and BLE Measures continue.
+Resume appends to the same file. Paused data can be exported through History,
+but the retained session cannot be deleted until it is stopped.
 
 The firmware version is **not** in this payload. Read it from the Device
 Information Service Firmware Revision characteristic (`0x2A26`, see §9).
@@ -487,6 +509,7 @@ promptly via the charging-transition NOTIFY, so they do not require polling.
   "charging": "none",
   "tracking": true,
   "session": 10042,
+  "trk": 1,
   "flash_kb": 262144,
   "used_kb": 8192
 }
@@ -550,7 +573,7 @@ them and persisted loading canonicalizes them.
 | Value | Meaning |
 |---|---|
 | `"off"` | GPS always off |
-| `"tracking"` | GPS on only during tracking |
+| `"tracking"` | GPS on while a session is Recording or Paused |
 | `"always"` | GPS always on |
 
 #### Operating Mode Values
@@ -699,7 +722,19 @@ Write a CBOR map to execute a device command.
 | `"factory_rst"` | Reset to factory defaults: clears data, restores default settings, deletes BLE bonds, and reboots the device |
 | `"start_tracking"` | Begin GPS + sensor route logging session |
 | `"stop_tracking"` | End the current route logging session |
+| `"pause_tracking"` | Stop route-point writes while retaining the current session |
+| `"resume_tracking"` | Resume recording into the retained session |
 | `"set_aiding"` | Inject A-GNSS aiding data (position and/or time) to speed up GPS fix |
+
+Tracking commands use the existing Config characteristic. Encode each JSON map
+below separately as CBOR; Start and Stop are unchanged from the legacy protocol:
+
+```json
+{"op": "cmd", "cmd": "start_tracking"}
+{"op": "cmd", "cmd": "stop_tracking"}
+{"op": "cmd", "cmd": "pause_tracking"}
+{"op": "cmd", "cmd": "resume_tracking"}
+```
 
 #### Response
 
@@ -712,8 +747,9 @@ Treat `cmd_progress` only as acknowledgement that the command was accepted. Keep
 the command pending until a `cmd_result` arrives; the GATT write response and
 progress notification are not completion signals.
 
-Other commands (`"start_tracking"`, `"stop_tracking"`, `"set_aiding"`) respond
-with a command result notification only (no progress notification).
+Other commands (`"start_tracking"`, `"stop_tracking"`, `"pause_tracking"`,
+`"resume_tracking"`, `"set_aiding"`) respond with a command result notification
+only (no progress notification).
 
 **Notes**:
 
@@ -721,17 +757,18 @@ with a command result notification only (no progress notification).
   drop, and all bond information is erased. The phone will need to re-pair on
   the next connection.
 - `"start_tracking"` fails with `"err": "already_tracking"` if a tracking
-  session is already active, or with `"err": "flash_error"` if the storage
+  session is Recording or Paused, or with `"err": "flash_error"` if the storage
   layer cannot open the route file (NAND unmounted, session-id space
   exhausted, or fsync failure on the empty file). The device additionally
   surfaces this on-screen via a `"Storage error — can't track"` snackbar.
-- `"stop_tracking"` fails with `"err": "not_tracking"` if no tracking
-  session is active.
-- After a successful `"start_tracking"` or `"stop_tracking"`, the device
-  also pushes a **Status NOTIFY** with the new `"tracking"` / `"session"`
-  values. Clients subscribed to Status will therefore see two
-  notifications per tracking transition: one Config `cmd_result` and one
-  Status NOTIFY (see §6).
+- `"stop_tracking"`, `"pause_tracking"`, and `"resume_tracking"` fail with
+  `"err": "not_tracking"` when Idle. Stop accepts both Recording and Paused.
+- Pause reports `"err": "flash_error"` if the final sync/close fails; it still
+  enters Paused. Resume reports the same error if reopening fails and remains
+  Paused. Both retain the session ID.
+- Tracking state changes also push **Status NOTIFY** with `tracking`, `session`,
+  and `trk`. Repeated Pause/Resume in the requested state succeeds without a
+  Status push (see §6).
 - `"set_aiding"` accepts optional position and/or time fields (see below).
   At least one useful piece of data must be present; otherwise the command
   fails with `"err": "no_aiding_data"`.
@@ -885,9 +922,9 @@ description is available.
 | `"calibration_failed"` | `co2_cal` | CO2 calibration procedure failed |
 | `"clear_failed"` | `clear_data` | Route data erase did not complete fully |
 | `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |
-| `"already_tracking"` | `start_tracking` | Tracking session was already active |
-| `"flash_error"` | `start_tracking` | Storage layer could not open the route file: NAND unmounted, session-id collision exhaustion, or fsync failure. Device shows `"Storage error — can't track"` on-screen. |
-| `"not_tracking"` | `stop_tracking` | No tracking session was active |
+| `"already_tracking"` | `start_tracking` | Session was already Recording or Paused |
+| `"flash_error"` | `start_tracking`, `pause_tracking`, `resume_tracking` | Start could not create the route; Pause failed to sync/close; Resume could not reopen the route. Read `trk` to reconcile state. |
+| `"not_tracking"` | `stop_tracking`, `pause_tracking`, `resume_tracking` | No tracking session was active |
 | `"no_aiding_data"` | `set_aiding` | No valid position or time data in the payload |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
 | `"unknown_config_key"` | `set` | Config write contained an unrecognised key (or an aiding key under `op:"set"`); entire write rejected |
@@ -984,7 +1021,7 @@ Signal that the download is complete. Cleans up server-side state.
 Delete a single route session from the device's flash storage. The
 `"session"` value is a session ID obtained from the session list.
 
-The device rejects deletion of the currently active tracking session
+The device rejects deletion of the current Recording or Paused session
 (returns `"session_active"` error). If the session is currently being
 downloaded, the device silently ends the export before deleting.
 
@@ -1229,8 +1266,8 @@ Phone                              Device
 7. **End download** with `{"op": "end"}` when all data is received.
 8. **Delete sessions** with `{"op": "delete", "session": <id>}` to remove
    individual route files from the device. Check the Status characteristic's
-   `"tracking"` and `"session"` fields first to avoid attempting to delete
-   the active tracking session.
+   `"trk"` and `"session"` fields first to avoid deleting the current Recording
+   (`trk: 1`) or Paused (`trk: 2`) session.
 
 **Gap detection**: Compare the expected set of indices `[0, total-1]` with
 the indices actually received. Each binary notification's `point_index` tells

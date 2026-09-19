@@ -433,6 +433,11 @@ RTC_DATA_ATTR static bool s_rtc_state_valid = false;
 - `load_state()` — returns a copy of `s_rtc_state` if valid; otherwise returns
   a default-constructed `RtcAppState` (safe starting point for fresh power-on).
 
+The saved `tracking_state` enum and `tracking_session_id` preserve Recording or
+Paused across deep sleep. A Recording wake reopens the route for append; a
+Paused wake keeps it closed while continuing measurement, display, and configured
+GPS behavior. Only an explicit Resume returns a paused session to Recording.
+
 Under `TEST_HOST`, `RTC_DATA_ATTR` is defined away so the variables become
 ordinary statics — `save_state()` / `load_state()` work identically.
 

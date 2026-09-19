@@ -88,8 +88,9 @@ each dimension of boot state.
 
 ### RTC State Restoration
 
-RTC state (`_behavior`, `_gps_enabled`, `_tracking_active`,
-`_tracking_session_id`) is restored for all non-PowerOn wake causes:
+RTC state (`_gps_enabled`, `_tracking_state`, `_tracking_session_id`) is restored
+for all non-PowerOn wake causes. `_behavior` is derived from the restored
+tracking state: Recording and Paused both use `Behavior::Tracking`.
 
 ```cpp
 if (cause != WakeCause::PowerOn) {
@@ -158,23 +159,28 @@ on the next event loop iteration.
 
 ### Route Resumption
 
-If `_tracking_active` is true after RTC state restoration, the orchestrator
+If `_tracking_state` is `Recording` after RTC state restoration, the orchestrator
 calls `storage.resume_route(_tracking_session_id)` to reopen the route file
 in append mode. The helper truncates any torn trailing record from a prior
 boot before opening so the next append lands on a clean record boundary.
 
 On a persistent NAND fault the call returns `false`; `init()` then clears
-`_tracking_active` / `_tracking_session_id` and shows the
+the session ID, sets `_tracking_state` to `Idle`, and shows the
 `"Tracking stopped — storage"` snackbar inline. BLE is not yet up at that
 point in init(); the on-connect `update_status()` carries the same value, so
 a late-joining client reads the post-failure state via the Status
 characteristic without missing the transition.
 
+A restored Paused session keeps its ID and leaves the route closed. Sensor
+readings, display, and GPS continue according to their existing settings; route
+writes resume only after an explicit Resume action.
+
 ### Fast-path storage-failure promotion
 
 The fast path (`go_app.cpp`) uses `storage.resume_route()` only — it never
-starts a new session because `state.tracking_active` is set exclusively by
-the orchestrator's `prepare_for_sleep`. On `resume_route()` or
+starts a new session. It reopens and appends only when the saved
+`state.tracking_state` is `Recording`; Paused keeps the route closed.
+On `resume_route()` or
 `append_route_point()` failure the fast path forces a promotion to
 interactive mode rather than handling the failure itself: there is no UI or
 BLE service active in the fast path to surface the error, and the
@@ -206,7 +212,7 @@ The orchestrator owns the authoritative application state:
 | `_behavior` | `Behavior` | `Idle` | Tracking / Idle / Shutdown |
 | `_lock_state` | `LockState` | `Locked` | Locked / Unlocked |
 | `_gps_enabled` | `bool` | `true` | Whether GPS data is used (derived from `GpsMode` setting) |
-| `_tracking_active` | `bool` | `false` | True while a route is being logged |
+| `_tracking_state` | `TrackingState` | `Idle` | Idle (0), Recording (1), or Paused (2); Paused retains the session |
 | `_tracking_session_id` | `uint32_t` | `0` | 5-digit session ID; 0 = no active session |
 | `_provisioning_sensitive_services_paused` | `bool` | `false` | True while sensor producer / GPS / PM rail are paused for the active provisioning transport; gates sensor / BMS / PM / snackbar-refresh deadlines |
 | `_local_api_activation_retry_deadline_ms` | `uint32_t` | `0` | Absolute 5 s retry deadline for local HTTP or mDNS activation; 0 when inactive |
@@ -279,6 +285,8 @@ Events are dispatched by type:
 | `GpsFixUpdate` | `on_gps_fix()` — cache GPS if `is_gps_active()` |
 | `InputPress` | `on_input()` — touch flash on touch events, shutdown, lock/unlock, forward to UIManager |
 | `UserStartTracking` | `start_tracking()` |
+| `UserPauseTracking` | `pause_tracking()` |
+| `UserResumeTracking` | `resume_tracking()` |
 | `UserStopTracking` | `stop_tracking()` |
 | `UserChangeMode` | `change_mode()` |
 | `UserToggleGps` | Set `_gps_enabled` |
@@ -367,7 +375,7 @@ eligibility is evaluated on the next main loop iteration.
 Sets `LockState::Unlocked`, resets the inactivity timer, requests a quick
 single-iteration measurement, and updates the display.
 
-### start_tracking() / stop_tracking()
+### Tracking Lifecycle
 
 Manages route lifecycle through `StorageService`. `start_tracking()`
 returns `bool` so the BLE `StartTracking` command-result reports the real
@@ -375,7 +383,7 @@ outcome instead of the pre-spec "was-idle" heuristic.
 
 `start_tracking()`:
 
-1. Returns `false` immediately if `_tracking_active` is already true.
+1. Returns `false` immediately if a session is Recording or Paused.
 2. Generates a 5-digit session ID (10000–99999) via `generate_session_id()`,
    which probes each random candidate against
    `storage.route_file_exists()` and retries up to 5 times on collision.
@@ -383,35 +391,54 @@ outcome instead of the pre-spec "was-idle" heuristic.
    order of `1.7×10⁻¹⁰`; on exhaustion the helper returns 0.
 3. Calls `storage.create_route(session_id)`. On `session_id == 0` or
    open-failure, shows the `"Storage error — can't track"` snackbar
-   inline, pushes a BLE Status notify with `tracking=false`, and returns
-   `false` without touching `_tracking_active` or `_behavior`.
-4. On success sets `_tracking_active = true`, `_behavior = Tracking`,
+   inline, pushes a BLE Status notify with `tracking=false`, `session=0`,
+   `trk=0`, and returns `false` while remaining Idle.
+4. On success sets `_tracking_state = Recording`, `_behavior = Tracking`,
    brings up GPS if the `GpsMode` requires it, shows the
    `"Tracking start = NNNNN"` snackbar, and pushes a BLE Status notify
-   with `tracking=true`.
+   with `tracking=true`, the new session ID, and `trk=1`.
 
-`stop_tracking()` runs the symmetric teardown: `end_route()` on the
-storage, clear tracking state, deactivate GPS if no longer needed,
-`"Tracking stop = NNNNN"` snackbar, and a BLE Status notify with
-`tracking=false`. It stays `void` — a best-effort `end_route()` cannot
-fail in a way the phone needs to know about.
+`pause_tracking()` changes Recording to Paused, flushes/closes the route with
+`end_route()`, and retains the session ID. It shows `"Tracking paused"` on success
+or `"Paused - storage sync failed"` on failure and publishes `trk=2`. A failed
+sync/close returns `false` but still leaves the session Paused with its file
+closed. Repeating Pause while Paused succeeds without another state notification.
+
+`resume_tracking()` reopens the retained file through `resume_route()` before
+changing Paused to Recording. Failure leaves the session Paused and shows
+`"Can't resume - storage error"`; success shows `"Tracking resumed"` and publishes
+`trk=1`. Repeating Resume while Recording succeeds without another state
+notification. Pause and Resume both return `false` when Idle.
+
+Pause and Resume keep GPS running according to `GpsMode`, including
+`OnWhenTracking`. Live measurements, chart cache, BLE Measures, Stationary cloud
+upload/config polling, and existing History export continue. Paused sessions
+remain protected from History deletion until stopped.
+
+`stop_tracking()` accepts Recording or Paused. It calls `end_route()`, sets Idle,
+clears the session ID, deactivates GPS if no longer needed, and shows
+`"Tracking stop = NNNNN"`. Status reports `tracking=false`, `session=0`, `trk=0`.
+The stop path remains best-effort and does not propagate close errors.
 
 The "actually recording" state is derived, not stored:
 
 ```cpp
 bool Orchestrator::is_recording() const {
-    return _tracking_active && _svc.storage_service.is_route_active();
+    return _tracking_state == TrackingState::Recording && _svc.storage_service.is_route_active();
 }
 ```
 
-All BLE Status writes (set-value and notify) pass `is_recording()` so the
-wire never reports tracking when no file is actually open.
+`on_sensor_data()` uses `is_recording()` to gate route writes. BLE Status APIs
+receive the enum and session ID, and derive the legacy `tracking` flag as true
+for Recording or Paused. That BLE field will be deprecated soon; clients should
+use `trk` to distinguish the three states.
 
 `on_sensor_data()` calls `storage.append_route_point()` but discards the
 return — the storage layer logs the underlying error, and the session
 keeps running so subsequent appends can retry against a recovered NAND.
-The session ends only on manual `stop_tracking()`, deep sleep, or a
-fresh failure of `resume_route()` on the next wake.
+Deep sleep closes an open file but preserves the session state and ID. A failed
+Recording restore on wake clears the session; a failed explicit Resume keeps
+the session Paused so the user can retry or Stop.
 
 ### change_mode()
 
@@ -855,7 +882,8 @@ from the cached `MeasuresAGo` each time `build_context()` is called.
 Display-update call sites are split into two categories:
 
 **User-initiated** — call `update_display()` directly (always repaint):
-`on_input()`, `lock()`, `unlock()`, `start_tracking()`, `stop_tracking()`,
+`on_input()`, `lock()`, `unlock()`, `start_tracking()`, `pause_tracking()`,
+`resume_tracking()`, `stop_tracking()`,
 `change_mode()`, `clear_data()`, `factory_reset()`, `save_tag()`,
 `shutdown()`, `on_co2_calibration_done()`, `on_ble_pairing_request()`.
 
@@ -949,10 +977,10 @@ after `stop()` to ensure the worker task is no longer using the SPI bus.
 |---|---|
 | `AlwaysOff` | `false` |
 | `AlwaysOn` | `true` |
-| `OnWhenTracking` | `_tracking_active` |
+| `OnWhenTracking` | `tracking_session_active(_tracking_state)` — Recording or Paused |
 
-GPS hardware is always powered on and the GPS task always runs. This method
-only controls whether `GpsFixUpdate` events update the cached GPS data.
+This method gates cached GPS updates and the start/stop decisions for the
+receiver. Pause and Resume leave the receiver and cached fix intact.
 
 ## Sensor Scheduling
 
@@ -1050,8 +1078,8 @@ all timer logic for host testability.
 The primary path for UI actions (start tracking, change mode, etc.) is
 through `UIManager::handle_input()` returning `UIActionResult`. The
 `EventType` enum values for these actions also serve as programmatic
-triggers — for example, BLE `start_tracking` / `stop_tracking` commands
-dispatch through the same `start_tracking()` / `stop_tracking()` methods.
+triggers — BLE Start, Pause, Resume, and Stop dispatch through the same tracking
+lifecycle methods as the UI actions.
 
 ### Invalid Sentinel Initialization
 
