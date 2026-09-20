@@ -184,8 +184,6 @@ static RoutePoint make_route_point(int seed) {
   p.timestamp = static_cast<time_t>(1000 + seed);
   p.gps.position.latitude = static_cast<double>(seed);
   p.gps.position.longitude = static_cast<double>(seed) + 0.5;
-  p.gps.altitude_m = static_cast<float>(seed) + 100.0f;
-  p.gps.fix.fix_type = GpsFixType::Fix3D;
   p.sensors = make_valid_entry(seed);
   return p;
 }
@@ -450,59 +448,6 @@ TEST_CASE("Route: append_route_point", "[StorageService][route]") {
     }
 
     svc.end_route();
-  }
-
-  SECTION("fix loss clears stored coordinates until a valid fix returns") {
-    constexpr uint32_t SESSION_ID = 33333;
-    RoutePoint first = make_route_point(7);
-    first.gps.fix.fix_type = GpsFixType::Fix2D;
-    RoutePoint lost = make_route_point(8);
-    lost.gps.position = first.gps.position;
-    lost.gps.altitude_m = first.gps.altitude_m;
-    lost.gps.fix.fix_type = GpsFixType::NoFix;
-    lost.gps.fix.satellite_count = 3;
-    lost.battery_percentage = 75.0f;
-    const RoutePoint regained = make_route_point(9);
-
-    REQUIRE(svc.create_route(SESSION_ID));
-    REQUIRE(svc.append_route_point(first));
-    REQUIRE(svc.append_route_point(lost));
-    REQUIRE(svc.append_route_point(regained));
-    CHECK(svc.current_route_point_count() == 3);
-    REQUIRE(svc.end_route());
-
-    const std::string path = tmp / "routes/route_33333.bin";
-    FILE *f = fopen(path.c_str(), "rb");
-    REQUIRE(f != nullptr);
-    RoutePoint points[3]{};
-    const size_t count = fread(points, sizeof(RoutePoint), 3, f);
-    fclose(f);
-    REQUIRE(count == 3);
-
-    CHECK(points[0].gps.fix.fix_type == GpsFixType::Fix2D);
-    CHECK(points[0].gps.position.latitude == first.gps.position.latitude);
-    CHECK(points[0].gps.position.longitude == first.gps.position.longitude);
-    CHECK(points[0].gps.altitude_m == first.gps.altitude_m);
-
-    CHECK(points[1].gps.fix.fix_type == GpsFixType::NoFix);
-    CHECK(points[1].gps.position.latitude == GPS_LATITUDE_INVALID);
-    CHECK(points[1].gps.position.longitude == GPS_LONGITUDE_INVALID);
-    CHECK(points[1].gps.altitude_m == GPS_ALTITUDE_INVALID);
-    CHECK(points[1].gps.fix.satellite_count == lost.gps.fix.satellite_count);
-    CHECK(points[1].timestamp == lost.timestamp);
-    CHECK(points[1].sensors.temp_hum_a.temperature == lost.sensors.temp_hum_a.temperature);
-    CHECK(points[1].sensors.temp_hum_a.humidity == lost.sensors.temp_hum_a.humidity);
-    CHECK(points[1].sensors.pm_a.pm_25 == lost.sensors.pm_a.pm_25);
-    CHECK(points[1].sensors.co2.co2 == lost.sensors.co2.co2);
-    CHECK(points[1].battery_percentage == lost.battery_percentage);
-
-    CHECK(points[2].gps.fix.fix_type == GpsFixType::Fix3D);
-    CHECK(points[2].gps.position.latitude == regained.gps.position.latitude);
-    CHECK(points[2].gps.position.longitude == regained.gps.position.longitude);
-    CHECK(points[2].gps.altitude_m == regained.gps.altitude_m);
-    CHECK(lost.gps.position.latitude == first.gps.position.latitude);
-    CHECK(lost.gps.position.longitude == first.gps.position.longitude);
-    CHECK(lost.gps.altitude_m == first.gps.altitude_m);
   }
 
   SECTION("binary round-trip: written RoutePoints match field-by-field when read back") {

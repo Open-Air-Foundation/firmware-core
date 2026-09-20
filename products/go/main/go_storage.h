@@ -161,8 +161,6 @@ public:
   bool route_file_exists(uint32_t session_id) const;
 
   /// Append one data point to the current route file.
-  /// Without a valid GPS fix, store invalid position/altitude sentinels.
-  /// The caller's point and all other fields are preserved.
   /// Returns false if no route is active or the write fails.
   [[nodiscard]] bool append_route_point(const RoutePoint &point);
 
