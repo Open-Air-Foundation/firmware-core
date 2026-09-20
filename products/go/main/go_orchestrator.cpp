@@ -305,6 +305,18 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   if (_settings.operating_mode == OperatingMode::Stationary) {
     enter_stationary();
   }
+
+  // The first-use guide needs no readings. Open it once initialization is
+  // complete, while the sensor producer warms up. An active Stationary
+  // session owns its screen and must keep it.
+  if (_boot_splash_active && !_settings.onboarding_done && !_setup_session_active &&
+      _svc.ui_manager.current_screen() == Screen::Info) {
+    _boot_splash_active = false;
+    begin_session_if_needed(); // Silent unlock; sensors and BLE keep running.
+    _svc.ui_manager.show_getting_started(/*from_boot=*/true);
+    AG_LOGI(TAG, "first-boot guide ready; first measurement pending");
+    update_display(/*wait=*/true);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -995,21 +1007,13 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     }
   }
 
-  // Hand off the "Booting..." splash. Skip if a setup session owns Info
-  // (Stationary drives its own Info -> Home). First-boot gate diverts to
-  // the guide until onboarding is acked.
+  // Onboarded devices keep the splash until readings arrive. Fresh devices
+  // already left it for the guide in init(). Stationary owns its Info -> Home
+  // transition, so a measurement must not replace that session's screen.
   if (_boot_splash_active) {
     _boot_splash_active = false;
     if (!_setup_session_active && _svc.ui_manager.current_screen() == Screen::Info) {
-      if (!_settings.onboarding_done) {
-        // begin_session_if_needed() silent-unlocks so the Locked device can
-        // press "Start using"; sensors/BLE keep running (no service pause).
-        begin_session_if_needed();
-        _svc.ui_manager.show_getting_started(/*from_boot=*/true);
-        update_display(/*wait=*/true);
-      } else {
-        _svc.ui_manager.reset_to_home();
-      }
+      _svc.ui_manager.reset_to_home();
     }
   }
 
@@ -1283,7 +1287,7 @@ void Orchestrator::on_input(const InputEventData &input) {
     break;
   }
   case UIAction::AckOnboarding:
-    // Enter held for "Start using": persist the flag and leave to Home.
+    // Enter held on the first-boot guide: persist the flag and leave to Home.
     if (mark_onboarding_done()) {
       leave_session_to_home();
     } else {
@@ -2172,7 +2176,7 @@ void Orchestrator::on_ble_auth_complete(bool success) {
       leave_session_to_home();
     } else {
       // Back to the first-boot guide (session is boot-originated); keep the
-      // session so a retry can succeed or "Start using" can dismiss.
+      // session so a retry can succeed or an Enter hold can dismiss.
       _svc.ui_manager.show_getting_started(/*from_boot=*/true);
       update_display(/*wait=*/true);
     }

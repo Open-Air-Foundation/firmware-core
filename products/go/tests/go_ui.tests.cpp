@@ -358,11 +358,11 @@ TEST_CASE("UIManager: Getting Started boot entry emits AckOnboarding", "[UIManag
   ui.show_getting_started(/*from_boot=*/true);
   CHECK(ui.current_screen() == Screen::GettingStarted);
 
-  // Boot entry: action row reads "Start using".
+  // Boot entry: action row names the hold gesture.
   auto ctx = make_default_ctx();
   DisplayValues v = ui.build_values(ctx);
   REQUIRE(v.row_count == 1);
-  CHECK(std::string(v.rows[0].text) == "Start using");
+  CHECK(std::string(v.rows[0].text) == "Hold Enter to start");
   CHECK(v.getting_started_from_boot);
   REQUIRE(v.qr != nullptr);
 
@@ -372,7 +372,7 @@ TEST_CASE("UIManager: Getting Started boot entry emits AckOnboarding", "[UIManag
   CHECK(press(ui, InputSource::TouchDown).action == UIAction::None);
   CHECK(ui.current_screen() == Screen::GettingStarted);
 
-  // "Start using" hold returns AckOnboarding; the orchestrator owns the
+  // Enter hold returns AckOnboarding; the orchestrator owns the
   // subsequent screen transition, so the screen stays put here.
   UIActionResult result = long_press(ui);
   CHECK(result.action == UIAction::AckOnboarding);

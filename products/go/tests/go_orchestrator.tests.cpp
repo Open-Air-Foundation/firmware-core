@@ -23,6 +23,7 @@
 #include <map>
 #include <string>
 
+#include "go_app.h"
 #include "go_ble_protocol.h"
 #include "go_board.h"
 #include "go_local_api.h"
@@ -819,30 +820,35 @@ TEST_CASE("init: temperature trip shuts down before interactive operation",
     TestFixture f;
     auto orch = f.make_orchestrator();
     test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverTemperature;
+    f.ui_manager.show_info(BOOT_SPLASH_TEXT);
 
     orch.init(WakeCause::PowerOn);
 
     CHECK(test_spy::shutdown_called);
     CHECK(f.ui_manager.current_screen() == Screen::ShutdownTemperature);
     CHECK_FALSE(test_spy::ble_init_called);
+    CHECK_FALSE(A::setup_session_active(orch));
   }
 
   SECTION("under-temperature uses the low-temperature page") {
     TestFixture f;
     auto orch = f.make_orchestrator();
     test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::UnderTemperature;
+    f.ui_manager.show_info(BOOT_SPLASH_TEXT);
 
     orch.init(WakeCause::PowerOn);
 
     CHECK(test_spy::shutdown_called);
     CHECK(f.ui_manager.current_screen() == Screen::ShutdownTemperatureLow);
     CHECK_FALSE(test_spy::ble_init_called);
+    CHECK_FALSE(A::setup_session_active(orch));
   }
 }
 
-TEST_CASE("init(PowerOn): cold-boot splash flag set when UIManager is on Screen::Info",
+TEST_CASE("init(PowerOn): onboarded device keeps cold-boot splash until first measurement",
           "[Orchestrator][init][boot-splash]") {
   TestFixture f;
+  f.settings.onboarding_done = true;
   auto orch = f.make_orchestrator();
 
   ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
@@ -909,6 +915,7 @@ TEST_CASE("init: splash flag not set when boot already completed a measurement",
 TEST_CASE("on_sensor_data: first measurement clears splash and resets to Home when onboarded",
           "[Orchestrator][events][boot-splash]") {
   TestFixture f;
+  f.settings.onboarding_done = true;
   auto orch = f.make_orchestrator();
 
   ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
@@ -921,7 +928,6 @@ TEST_CASE("on_sensor_data: first measurement clears splash and resets to Home wh
   f.ui_manager.show_info("Booting...");
   orch.init(WakeCause::PowerOn);
   // Onboarding already acknowledged — the gate hands off straight to Home.
-  A::settings(orch).onboarding_done = true;
   REQUIRE(A::boot_splash_active(orch));
   REQUIRE(f.ui_manager.current_screen() == Screen::Info);
 
@@ -934,8 +940,8 @@ TEST_CASE("on_sensor_data: first measurement clears splash and resets to Home wh
   CHECK(f.ui_manager.current_screen() == Screen::Home);
 }
 
-TEST_CASE("on_sensor_data: first measurement shows Getting Started on a fresh first boot",
-          "[Orchestrator][events][boot-splash][onboarding]") {
+TEST_CASE("init(PowerOn): Getting Started is usable before the first measurement",
+          "[Orchestrator][init][boot-splash][onboarding]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
@@ -946,33 +952,53 @@ TEST_CASE("on_sensor_data: first measurement shows Getting Started on a fresh fi
   ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
-  f.ui_manager.show_info("Booting...");
+  f.ui_manager.show_info(BOOT_SPLASH_TEXT);
   orch.init(WakeCause::PowerOn);
   // Fresh unbox — onboarding_done defaults false.
   REQUIRE_FALSE(A::settings(orch).onboarding_done);
-  REQUIRE(A::boot_splash_active(orch));
-  REQUIRE(f.ui_manager.current_screen() == Screen::Info);
-
-  MeasuresAGo data{};
-  data.co2.co2 = 420;
-  A::on_sensor_data(orch, data);
-
-  CHECK(A::first_measurement_done(orch));
-  CHECK_FALSE(A::boot_splash_active(orch));
+  REQUIRE_FALSE(A::first_measurement_done(orch));
+  REQUIRE_FALSE(A::boot_splash_active(orch));
   // Gate diverts to the one-time guide; the boot-gate session silent-unlocks
-  // so the "Start using" button is pressable on the cold-boot Locked device.
-  CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
-  CHECK(A::setup_session_active(orch));
-  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  // so Enter can be held on the cold-boot Locked device.
+  REQUIRE(f.ui_manager.current_screen() == Screen::GettingStarted);
+  REQUIRE(A::setup_session_active(orch));
+  REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+  CHECK(DisplayService::spy_last_screen == Screen::GettingStarted);
+  CHECK(DisplayService::spy_update_count == 1);
+  CHECK(test_spy::ble_initialized);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_iterations == 1);
+  CHECK(test_spy::last_groups == SensorGroup::All);
+  CHECK_FALSE(A::sensitive_services_paused(orch));
+  CHECK_FALSE(test_spy::sensor_stopped);
+  CHECK_FALSE(test_spy::cache_measurement_called);
 
-  SECTION("Short and double presses leave onboarding open") {
+  SECTION("Short, double, and power presses leave onboarding open") {
     A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
     A::on_input(orch, {InputSource::TouchEnter, InputType::DoublePress});
+    A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
     CHECK_FALSE(A::settings(orch).onboarding_done);
+    CHECK_FALSE(A::first_measurement_done(orch));
+    CHECK(A::lock_state(orch) == LockState::Unlocked);
     CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
   }
 
-  SECTION("Long press completes onboarding; reopened Setup Guide keeps short-press Back") {
+  SECTION("First measurement updates data without dismissing or repainting the guide") {
+    const auto update_count = DisplayService::spy_update_count;
+    MeasuresAGo data{};
+    data.co2.co2 = 420;
+    A::on_sensor_data(orch, data);
+
+    CHECK(A::first_measurement_done(orch));
+    CHECK(test_spy::last_cached_measurement.co2.co2 == 420);
+    CHECK(test_spy::ble_last_measures.co2.co2 == 420);
+    CHECK_FALSE(A::settings(orch).onboarding_done);
+    CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
+    CHECK(A::setup_session_active(orch));
+    CHECK(DisplayService::spy_update_count == update_count);
+  }
+
+  SECTION("Long press completes onboarding before the first measurement") {
     ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
         .RETURN(ConfigStoreResult::OK);
     ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_))
@@ -986,10 +1012,45 @@ TEST_CASE("on_sensor_data: first measurement shows Getting Started on a fresh fi
     CHECK_FALSE(A::setup_session_active(orch));
     CHECK(f.ui_manager.current_screen() == Screen::Home);
     CHECK(A::lock_state(orch) == LockState::Unlocked);
+    CHECK_FALSE(A::first_measurement_done(orch));
+    CHECK_FALSE(A::raw_measures(orch).co2.is_valid());
+    CHECK_FALSE(A::raw_measures(orch).pm_a.is_pm_25_valid());
+    CHECK_FALSE(A::raw_measures(orch).temp_hum_a.is_temp_valid());
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(values.co2_ppm == MeasuresInvalid::CO2);
+    CHECK(values.pm25_ugm3 == MeasuresInvalid::PM);
 
-    f.ui_manager.show_getting_started(/*from_boot=*/false);
-    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
-    CHECK(f.ui_manager.current_screen() == Screen::Settings);
+    SECTION("First measurement fills Home") {
+      MeasuresAGo data{};
+      data.co2.co2 = 420;
+      A::on_sensor_data(orch, data);
+
+      CHECK(A::first_measurement_done(orch));
+      CHECK(f.ui_manager.current_screen() == Screen::Home);
+      const auto home = f.ui_manager.build_values(A::build_context(orch));
+      CHECK(home.co2_ppm == 420);
+    }
+
+    SECTION("First measurement preserves a menu opened during warmup") {
+      A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+      REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
+      const auto update_count = DisplayService::spy_update_count;
+      const auto selected_row = f.ui_manager.build_values(A::build_context(orch)).selected_row;
+      MeasuresAGo data{};
+      data.co2.co2 = 420;
+      A::on_sensor_data(orch, data);
+
+      CHECK(A::first_measurement_done(orch));
+      CHECK(f.ui_manager.current_screen() == Screen::MainMenu);
+      CHECK(f.ui_manager.build_values(A::build_context(orch)).selected_row == selected_row);
+      CHECK(DisplayService::spy_update_count == update_count);
+    }
+
+    SECTION("Reopened Setup Guide keeps short-press Back") {
+      f.ui_manager.show_getting_started(/*from_boot=*/false);
+      A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+      CHECK(f.ui_manager.current_screen() == Screen::Settings);
+    }
   }
 
   SECTION("Failed save leaves onboarding available for another long press") {
@@ -1006,10 +1067,64 @@ TEST_CASE("on_sensor_data: first measurement shows Getting Started on a fresh fi
     CHECK_FALSE(A::settings(orch).onboarding_done);
     CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
 
+    // A measurement arriving between attempts must not complete onboarding.
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
+    CHECK_FALSE(A::settings(orch).onboarding_done);
+
     REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
     A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress});
     CHECK(A::settings(orch).onboarding_done);
     CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
+
+  SECTION("BLE authentication completes onboarding during warmup") {
+    ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+    f.ui_manager.show_pairing_passkey(123456);
+
+    A::on_ble_auth_complete(orch, true);
+
+    CHECK(A::settings(orch).onboarding_done);
+    CHECK_FALSE(A::first_measurement_done(orch));
+    CHECK_FALSE(A::setup_session_active(orch));
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
+
+  SECTION("First measurement preserves pairing; failed authentication returns to the guide") {
+    f.ui_manager.show_pairing_passkey(123456);
+    const auto update_count = DisplayService::spy_update_count;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(f.ui_manager.current_screen() == Screen::PairingPasskey);
+    CHECK(DisplayService::spy_update_count == update_count);
+
+    A::on_ble_auth_complete(orch, false);
+
+    CHECK_FALSE(A::settings(orch).onboarding_done);
+    CHECK(A::setup_session_active(orch));
+    CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
+  }
+
+  SECTION("Manufacturing shortcut during warmup retains Stationary ownership") {
+    A::on_input(orch, {InputSource::ButtonBoot, InputType::ShortPress});
+    REQUIRE(A::manufacturing_mode(orch));
+    REQUIRE(A::mode(orch) == OperatingMode::Stationary);
+    CHECK_FALSE(A::first_measurement_done(orch));
+    CHECK_FALSE(A::settings(orch).onboarding_done);
+    CHECK(f.ui_manager.current_screen() == Screen::Info);
+
+    A::on_sensor_data(orch, MeasuresAGo{});
+
+    CHECK(f.ui_manager.current_screen() == Screen::Info);
+    CHECK(A::setup_session_active(orch));
+    CHECK_FALSE(A::settings(orch).onboarding_done);
   }
 }
 
@@ -1038,9 +1153,35 @@ TEST_CASE("on_sensor_data: splash transition is suppressed when setup session is
   CHECK(f.ui_manager.current_screen() == Screen::Info);
 }
 
+TEST_CASE("init(PowerOn): Stationary connection owns the screen before the first measurement",
+          "[Orchestrator][init][boot-splash][onboarding]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Stationary;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.show_info(BOOT_SPLASH_TEXT);
+  test_spy::wifi_has_saved_networks = true;
+
+  orch.init(WakeCause::PowerOn);
+
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+  CHECK_FALSE(A::first_measurement_done(orch));
+  CHECK(A::setup_session_active(orch));
+  CHECK(A::bring_up_pending(orch));
+  CHECK(test_spy::wifi_connect_saved_called);
+  CHECK(f.ui_manager.current_screen() == Screen::Info);
+  const auto values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(std::string(values.info_text) == "Connecting to saved Wi-Fi...");
+
+  A::on_sensor_data(orch, MeasuresAGo{});
+
+  CHECK(f.ui_manager.current_screen() == Screen::Info);
+  CHECK(A::bring_up_pending(orch));
+}
+
 TEST_CASE("on_input: ButtonPower short press is silent during cold-boot splash",
           "[Orchestrator][input][boot-splash]") {
   TestFixture f;
+  f.settings.onboarding_done = true;
   auto orch = f.make_orchestrator();
 
   ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
@@ -3874,10 +4015,10 @@ TEST_CASE("dispatch: BleAuthComplete failure in setup session returns to boot gu
   CHECK(A::setup_session_active(orch));
   CHECK_FALSE(A::settings(orch).onboarding_done);
 
-  // Boot variant: action row reads "Start using" (not "Back").
+  // Boot variant: action row names the hold gesture (not "Back").
   DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
   REQUIRE(v.row_count == 1);
-  CHECK(std::string(v.rows[0].text) == "Start using");
+  CHECK(std::string(v.rows[0].text) == "Hold Enter to start");
 }
 
 TEST_CASE("dispatch: BleAuthComplete is no-op when not on passkey screen", "[Orchestrator][ble]") {

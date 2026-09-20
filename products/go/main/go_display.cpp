@@ -2034,7 +2034,7 @@ void DisplayService::_draw_provisioning_confirm(const DisplayValues &v) {
 
 void DisplayService::_draw_getting_started(const DisplayValues &v) {
   // Simplified sibling of _draw_provisioning with its own layout: a
-  // chunkier 3px QR and a single action, with its hold hint inside on first boot.
+  // chunkier 3px QR and a single hold instruction on first boot.
   // Title -> QR -> caption -> instruction -> action.
   constexpr int TITLE_L1_Y = 44;
   constexpr int TITLE_L2_Y = 64;
@@ -2045,9 +2045,8 @@ void DisplayService::_draw_getting_started(const DisplayValues &v) {
   constexpr int ACTION_ROW_Y = 204;
   constexpr int ACTION_X = 12;
   constexpr int ACTION_W = SCREEN_W - 2 * ACTION_X;
-  constexpr int HOLD_ACTION_H = 29;
-  constexpr int HOLD_ACTION_LABEL_Y = 216;
-  constexpr int HOLD_HINT_Y = 229;
+  constexpr int HOLD_ACTION_H = 24;
+  constexpr int HOLD_ACTION_LABEL_Y = 220;
 
   // --- Title (same font as the Provisioning page) ---
   u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
@@ -2059,7 +2058,7 @@ void DisplayService::_draw_getting_started(const DisplayValues &v) {
 
   // --- QR caption ---
   u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
-  draw_centered_text(&_u8g2, SCREEN_W / 2, QR_CAPTION_Y, "Scan to set up");
+  draw_centered_text(&_u8g2, SCREEN_W / 2, QR_CAPTION_Y, "Scan for guide");
 
   // --- Instruction (names the button action) ---
   u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
@@ -2072,8 +2071,6 @@ void DisplayService::_draw_getting_started(const DisplayValues &v) {
     u8g2_SetDrawColor(&_u8g2, 1);
     u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
     draw_centered_text(&_u8g2, SCREEN_W / 2, HOLD_ACTION_LABEL_Y, row0);
-    u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
-    draw_centered_text(&_u8g2, SCREEN_W / 2, HOLD_HINT_Y, "Hold Enter to start");
     u8g2_SetDrawColor(&_u8g2, 0);
   } else {
     draw_provisioning_action_row(&_u8g2, row0, ACTION_ROW_Y, /*selected=*/true);

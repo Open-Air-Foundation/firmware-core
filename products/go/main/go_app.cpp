@@ -841,8 +841,8 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       .serial_number = serial.c_str(),
   });
 
-  // Seed UI state after the early splash paint, so Orchestrator retains the
-  // splash until the first completed measurement.
+  // Seed UI state after the early splash paint. Orchestrator opens the guide
+  // during init for fresh devices; onboarded devices wait for a measurement.
   if (boot_splash_requested) {
     ui_manager->show_info(BOOT_SPLASH_TEXT);
   }
