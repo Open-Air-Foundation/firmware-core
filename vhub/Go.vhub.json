@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "pause-tracking-20260920-3",
+  "rev": "route-gps-fix-loss-20260920-3",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -278,6 +278,15 @@
       "description": "Pause preserves the route and live readings; Resume appends to the same session",
       "expected_result": "Start a route and record at least three points. Pause from Tracking > Pause Tracking: Home shows two pause bars and \"Tracking paused\", and serial logs the paused session ID and route closure. Record the closed point count. Over at least three further completed measurements, live readings and Home charts continue updating while History export contains the same points. Attempting to delete the paused route is rejected and leaves it intact. Resume through the BLE client: Home shows \"Tracking resumed\" and the recording dot, and serial logs the same session ID. After three further measurements, export contains the unchanged earlier points followed by new points, with no samples from the paused interval and no second session. In a second cycle, pause through BLE and resume through the menu with the same results. Finally pause and Stop from the menu: the pause icon clears, the menu offers Start Tracking, and the completed route can be exported and deleted.",
       "notes": "Use bonded Portable BLE, a client that can pause/resume tracking and export History, open sky, GPS On When Tracking, and a recorded 3- or 10-second cadence. Capture the session ID, point count after Pause closes the file, measurement timestamps, and exports before and after Resume. End each History export before the next command. Restore the original settings and delete the test route."
+    },
+    {
+      "id": "tracking.route.gps-fix-loss",
+      "category": "Tracking & Storage",
+      "sub_category": "Route lifecycle",
+      "applies_to": ["V1"],
+      "description": "GPS fix loss does not save stale coordinates",
+      "expected_result": "Start tracking outdoors with a GPS fix. Move indoors until the GPS icon disappears, then return outdoors until it returns. Stop and download the route. Readings from the gap are still recorded, but their location is invalid instead of repeating the last known position. Points before and after the gap have valid locations.",
+      "notes": "Use Portable mode and GPS On When Tracking. Allow at least one measurement in each state and note when the icon disappears and returns. In the raw export, invalid location means latitude 91, longitude 181, and altitude -10000."
     },
     {
       "id": "portable.history.download-success",
