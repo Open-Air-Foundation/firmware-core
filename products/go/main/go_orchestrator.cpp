@@ -1003,7 +1003,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     if (!_setup_session_active && _svc.ui_manager.current_screen() == Screen::Info) {
       if (!_settings.onboarding_done) {
         // begin_session_if_needed() silent-unlocks so the Locked device can
-        // press "Start using"; sensors/BLE keep running (no service pause).
+        // hold Enter to start; sensors/BLE keep running (no service pause).
         begin_session_if_needed();
         _svc.ui_manager.show_getting_started(/*from_boot=*/true);
         update_display(/*wait=*/true);
@@ -1283,7 +1283,7 @@ void Orchestrator::on_input(const InputEventData &input) {
     break;
   }
   case UIAction::AckOnboarding:
-    // Enter held for "Start using": persist the flag and leave to Home.
+    // Enter held on the first-boot guide: persist the flag and leave to Home.
     if (mark_onboarding_done()) {
       leave_session_to_home();
     } else {
@@ -2172,7 +2172,7 @@ void Orchestrator::on_ble_auth_complete(bool success) {
       leave_session_to_home();
     } else {
       // Back to the first-boot guide (session is boot-originated); keep the
-      // session so a retry can succeed or "Start using" can dismiss.
+      // session so a retry can succeed or an Enter hold can dismiss.
       _svc.ui_manager.show_getting_started(/*from_boot=*/true);
       update_display(/*wait=*/true);
     }

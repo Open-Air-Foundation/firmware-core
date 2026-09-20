@@ -960,7 +960,7 @@ TEST_CASE("on_sensor_data: first measurement shows Getting Started on a fresh fi
   CHECK(A::first_measurement_done(orch));
   CHECK_FALSE(A::boot_splash_active(orch));
   // Gate diverts to the one-time guide; the boot-gate session silent-unlocks
-  // so the "Start using" button is pressable on the cold-boot Locked device.
+  // so Enter can be held on the cold-boot Locked device.
   CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
   CHECK(A::setup_session_active(orch));
   CHECK(A::lock_state(orch) == LockState::Unlocked);
@@ -3874,10 +3874,10 @@ TEST_CASE("dispatch: BleAuthComplete failure in setup session returns to boot gu
   CHECK(A::setup_session_active(orch));
   CHECK_FALSE(A::settings(orch).onboarding_done);
 
-  // Boot variant: action row reads "Start using" (not "Back").
+  // Boot variant: action row names the hold gesture (not "Back").
   DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
   REQUIRE(v.row_count == 1);
-  CHECK(std::string(v.rows[0].text) == "Start using");
+  CHECK(std::string(v.rows[0].text) == "Hold Enter to start");
 }
 
 TEST_CASE("dispatch: BleAuthComplete is no-op when not on passkey screen", "[Orchestrator][ble]") {

@@ -191,7 +191,7 @@ struct DisplayValues {
   /// Borrowed; UIManager re-encodes on entry. Null/empty skips the QR area.
   const AirgradientProvisioning::QrCode *qr = nullptr;
 
-  /// First-boot guide shows the timed Enter-hold hint below Start using.
+  /// First-boot guide shows a single bold Enter-hold instruction.
   bool getting_started_from_boot = false;
 
   // --- Fuel-gauge learning dashboard (factory path) ---

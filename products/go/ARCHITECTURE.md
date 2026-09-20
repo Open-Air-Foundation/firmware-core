@@ -649,20 +649,21 @@ run while the display refreshes; `GoApp` flushes that refresh before mounting
 NAND storage. The orchestrator keeps the splash until the first
 `SensorDataReady` event, then runs the first-boot gate: when the durable
 `onboarding_done` NVS flag is unset it shows the one-time
-`Screen::GettingStarted` guide (setup QR + `Start using`), otherwise it resets
-the UI to Home. A short press on Button 1 is ignored while the splash is active
+`Screen::GettingStarted` guide (usage-guide QR + `Hold Enter to start`), otherwise
+it resets the UI to Home. A short press on Button 1 is ignored while the splash is active
 so the first boot screen is not replaced by an unlock / lock transition.
 
 **First-boot onboarding.** The Getting Started guide is informational and
 non-blocking — the device is already measuring and BLE-discoverable while
 it shows. The boot-gate entry reuses the setup-session machinery
 (`begin_session_if_needed()` silent-unlock so the cold-boot Locked device
-can hold Enter). `Start using` requires the default one-second Enter long
-press; short presses and double taps leave the guide open. The action and
-its `Hold Enter to start` hint share one highlighted area, below
-`Or just use it right now`. `onboarding_done` flips `true` via the idempotent
-`mark_onboarding_done()` on the first real engagement (the `Start using`
-hold, a BLE pairing/bond, or any `change_mode()`), and the guide auto-shows
+can hold Enter). Leaving the guide requires the default one-second Enter long
+press; short presses and double taps leave the guide open. The QR caption reads
+`Scan for guide`, and a single bold `Hold Enter to start` instruction appears
+inside the highlighted action, below `Or just use it right now`. The screen
+does not display a hold duration. `onboarding_done` flips `true` via the idempotent
+`mark_onboarding_done()` on the first real engagement (the Enter hold,
+a BLE pairing/bond, or any `change_mode()`), and the guide auto-shows
 only once. Factory reset clears the flag so refurbished units re-show it.
 
 Full composition also starts `SerialCommandService` before onboarding and parks

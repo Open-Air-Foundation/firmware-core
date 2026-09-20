@@ -1868,7 +1868,7 @@ void UIManager::populate_provisioning_confirm_rows(DisplayValues &v) const {
 void UIManager::populate_getting_started_rows(DisplayValues &v) const {
   v.getting_started_from_boot = _getting_started_from_boot;
   // Single action row; label depends on entry source.
-  copy_row(v, 0, _getting_started_from_boot ? "Start using" : "Back", false);
+  copy_row(v, 0, _getting_started_from_boot ? "Hold Enter to start" : "Back", false);
   v.row_count = 1;
   v.selected_row = 0;
 }

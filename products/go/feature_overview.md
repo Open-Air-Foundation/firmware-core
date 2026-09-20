@@ -272,12 +272,13 @@ hardware may not include every indicator supported by V1 hardware.
 ## First-Time Setup
 
 On a fresh device, the Go shows a first-time Getting Started flow after boot.
-This flow includes a QR code that points users to the Go setup guide.
+This flow includes a QR code labeled `Scan for guide` that points users to the
+Go usage guide. The device can be used without following the guide.
 
 The Getting Started screen is shown until the user completes a first meaningful
 engagement, such as:
 
-- holding Enter for one second on `Start using`,
+- holding Enter on `Hold Enter to start`,
 - successfully pairing with the phone app, or
 - changing the operating mode.
 

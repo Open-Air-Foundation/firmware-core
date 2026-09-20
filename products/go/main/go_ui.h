@@ -246,7 +246,7 @@ public:
   void set_provisioning_ui_state(ProvisioningUiState s);
 
   /// Enter the Getting Started guide. Encodes the setup QR; from_boot
-  /// selects hold "Start using" -> AckOnboarding vs tap "Back" -> Settings.
+  /// selects Enter hold -> AckOnboarding vs tap "Back" -> Settings.
   void show_getting_started(bool from_boot);
 
   /// Push the current peripheral-test view snapshot for Screen::PeripheralTest.
@@ -383,7 +383,7 @@ private:
   /// Re-encoded on screen entry / transport switch.
   AirgradientProvisioning::QrCode _qr = {};
 
-  // true = boot gate (Start using -> Home); false = Settings -> Setup Guide (Back).
+  // true = boot gate (Enter hold -> Home); false = Settings -> Setup Guide (Back).
   bool _getting_started_from_boot = false;
 
   // Info screen text (UIManager owns the storage; the renderer borrows
