@@ -646,16 +646,17 @@ On a fresh interactive power-on with no RTC snapshot and no fast-path
 measurement, `GoApp` initializes SPI and starts a deferred `Screen::Info`
 `Getting Ready` splash before core initialization. Core and I2C initialization
 run while the display refreshes; `GoApp` flushes that refresh before mounting
-NAND storage. The orchestrator keeps the splash until the first
-`SensorDataReady` event, then runs the first-boot gate: when the durable
-`onboarding_done` NVS flag is unset it shows the one-time
-`Screen::GettingStarted` guide (usage-guide QR + `Hold Enter to start`), otherwise
-it resets the UI to Home. A short press on Button 1 is ignored while the splash is active
-so the first boot screen is not replaced by an unlock / lock transition.
+NAND storage. At the end of initialization, the orchestrator replaces the splash
+with the one-time `Screen::GettingStarted` guide when the durable
+`onboarding_done` NVS flag is unset. Sensors warm up in the background.
+Onboarded devices keep the splash until the first `SensorDataReady` event,
+then enter Home. Stationary connection screens retain control of their own
+transition to Home. A short press on Button 1 is ignored while the splash is
+active so it is not replaced by an unlock / lock transition.
 
 **First-boot onboarding.** The Getting Started guide is informational and
-non-blocking — the device is already measuring and BLE-discoverable while
-it shows. The boot-gate entry reuses the setup-session machinery
+non-blocking — sensor warmup and measurements continue, and Portable BLE is
+discoverable while it shows. The boot-gate entry reuses the setup-session machinery
 (`begin_session_if_needed()` silent-unlock so the cold-boot Locked device
 can hold Enter). Leaving the guide requires the default one-second Enter long
 press; short presses and double taps leave the guide open. The QR caption reads
@@ -665,6 +666,11 @@ does not display a hold duration. `onboarding_done` flips `true` via the idempot
 `mark_onboarding_done()` on the first real engagement (the Enter hold,
 a BLE pairing/bond, or any `change_mode()`), and the guide auto-shows
 only once. Factory reset clears the flag so refurbished units re-show it.
+
+The Enter hold works before the first measurement. Home shows dashes until
+readings arrive, and `_first_measurement_done` stays false until then, preserving
+the sleep gate. A measurement updates cached data without dismissing the guide
+or replacing a menu or pairing screen the user has opened.
 
 Full composition also starts `SerialCommandService` before onboarding and parks
 its receive task when onboarding completes. See

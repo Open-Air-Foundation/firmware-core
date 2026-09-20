@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "getting-started-guide-copy-20260920-1",
+  "rev": "getting-started-early-20260920-1",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -24,8 +24,8 @@
       "sub_category": "First use",
       "applies_to": ["V1"],
       "description": "A one-second Enter hold completes the first-use Getting Started flow",
-      "expected_result": "A factory-reset cold boot shows the Getting Started QR captioned \"Scan for guide\" and \"Or just use it right now\" above one highlighted area containing a single bold \"Hold Enter to start\" line. The action fits without clipping and has balanced padding. No hold duration is displayed. The device plays the complete welcome Chime with a rear-LED color step for each melody step, logs at least two completed sensor measurements while the page remains open, and remains discoverable in a 30-second BLE scan. #AG GET_SERIAL returns the unit's 12-character serial before completing onboarding. A short Enter press, double tap, and hold released before one second all leave the guide open. Holding Enter for at least one second triggers the transition to unlocked Home without requiring release and disables #AG responses; continuing to hold through the display refresh and then releasing causes no further navigation. The next cold boot goes directly to onboarded Home after the boot splash and does not replay Getting Started.",
-      "notes": "Start with onboarding incomplete and no client connected. Scan for the advertisement for 30 seconds before completing the Enter hold. Allow the e-paper refresh to complete after the one-second threshold. Pairing completion is verified separately."
+      "expected_result": "A factory-reset cold boot shows Getting Started before sensor warmup finishes, with the QR captioned \"Scan for guide\" and \"Or just use it right now\" above one highlighted area containing a single bold \"Hold Enter to start\" line. The action fits without clipping and has balanced padding. No hold duration is displayed. The device plays the complete welcome Chime with a rear-LED color step for each melody step, logs at least two completed sensor measurements while the page remains open, and remains discoverable in a 30-second BLE scan. #AG GET_SERIAL returns the unit's 12-character serial before completing onboarding. A short Enter press, double tap, and hold released before one second all leave the guide open. Holding Enter for at least one second triggers the transition to unlocked Home without requiring release and disables #AG responses; continuing to hold through the display refresh and then releasing causes no further navigation. Entering Home during warmup shows dashes until the first measurement arrives. The next cold boot goes directly to onboarded Home after the boot splash and does not replay Getting Started.",
+      "notes": "Start with onboarding incomplete and no client connected. Scan for the advertisement for 30 seconds before completing the Enter hold. Allow the e-paper refresh to complete after the one-second threshold. Pairing completion is verified separately. Repeat from factory reset, holding Enter as soon as the guide appears to check Home during warmup."
     },
     {
       "id": "ui.navigation.lock-and-settings",

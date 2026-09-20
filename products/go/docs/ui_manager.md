@@ -188,8 +188,10 @@ shows `Scan for guide` under the usage-guide QR and keeps
 one bold `Hold Enter to start` line. The screen does not display a hold duration.
 Short presses and double taps do nothing; the default one-second Enter long
 press emits `AckOnboarding` while Enter is still held.
-The orchestrator persists onboarding before opening unlocked Home. A failed
-save keeps the guide open for another hold.
+The guide is available after initialization while sensors warm up. The
+orchestrator persists onboarding before opening unlocked Home, which shows
+dashes if readings are not ready yet. A failed save keeps the guide open for
+another hold. Sensor events do not dismiss the guide or a pairing screen.
 
 Tag-list plumbing (`dispatch_tag_list`, `open_tag_list`, `SaveTag`) remains
 unreachable from the menu. Shutdown, PairingPasskey, Info, Provisioning, and

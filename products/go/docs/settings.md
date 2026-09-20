@@ -198,8 +198,8 @@ Factory reset writes default settings (`disable_cloud=false`,
 ## First-Boot Onboarding Field
 
 `onboarding_done` is the durable latch for the one-time Getting Started
-guide. It defaults to `false`, so a fresh unbox shows the guide once after
-the boot splash hands off on the first `SensorDataReady`. The orchestrator
+guide. It defaults to `false`, so a fresh unbox shows the guide once when
+orchestrator initialization finishes, while sensors warm up. The orchestrator
 flips it to `true` through the idempotent `mark_onboarding_done()` helper on
 the first real engagement:
 

@@ -271,7 +271,9 @@ hardware may not include every indicator supported by V1 hardware.
 
 ## First-Time Setup
 
-On a fresh device, the Go shows a first-time Getting Started flow after boot.
+On a fresh device, the Go shows Getting Started after initialization while
+sensors warm up. Holding Enter opens Home immediately; readings show dashes
+until the first measurement arrives.
 This flow includes a QR code labeled `Scan for guide` that points users to the
 Go usage guide. The device can be used without following the guide.
 

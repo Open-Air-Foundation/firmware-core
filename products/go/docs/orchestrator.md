@@ -121,16 +121,22 @@ The display hasn't been painted yet or shows stale content. `init()` calls
 
 **`initial_lock_state == Locked` (default):**
 
-No lock state change. Device stays locked.
+The initial state is locked. Opening the first-use guide or a Stationary
+session later in `init()` silently unlocks the device.
 
 **Cold-boot splash:**
 
-When `GoApp` already painted `Screen::Info` with `Booting...` and the boot
+When `GoApp` already painted `Screen::Info` with `Getting Ready` and the boot
 handoff does not contain a completed measurement, `init()` arms
-`_boot_splash_active`. The splash remains visible until the first
-`SensorDataReady` event. If Stationary setup takes ownership of
-`Screen::Info` before that event, the flag is cleared without resetting the
-session page.
+`_boot_splash_active`. After the initial power checks and service initialization,
+an un-onboarded device clears that flag and opens `GettingStarted` through a
+silently unlocked session. Sensor warmup continues independently, and Enter
+can open Home before readings are available; Home shows dashes until they arrive.
+`_first_measurement_done` remains false until actual sensor data is received.
+
+Onboarded devices retain the splash until the first `SensorDataReady` event.
+An active Stationary session keeps its connection screen. Sensor events update
+cached data without dismissing the guide, menus, or pairing screen.
 
 ### Raw and Corrected Measures
 
@@ -216,9 +222,9 @@ The orchestrator owns the authoritative application state:
 | `_tracking_session_id` | `uint32_t` | `0` | 5-digit session ID; 0 = no active session |
 | `_provisioning_sensitive_services_paused` | `bool` | `false` | True while sensor producer / GPS / PM rail are paused for the active provisioning transport; gates sensor / BMS / PM / snackbar-refresh deadlines |
 | `_local_api_activation_retry_deadline_ms` | `uint32_t` | `0` | Absolute 5 s retry deadline for local HTTP or mDNS activation; 0 when inactive |
-| `_setup_session_active` | `bool` | `false` | True between Stationary setup entry (`Screen::Info` or pre-online `Screen::Provisioning`) and the leave-to-Home / leave-to-Portable boundary; gates power-button short-press, auto-lock, and background-render suppression |
+| `_setup_session_active` | `bool` | `false` | True between first-use guide or Stationary setup entry (`Screen::Info` or pre-online `Screen::Provisioning`) and the leave-to-Home / leave-to-Portable boundary; gates power-button short-press, auto-lock, and background-render suppression |
 | `_bring_up_pending` | `bool` | `false` | True while `Screen::Info` is showing the STA-attempt narration; lets `on_wifi_connected()` distinguish the on-Info success path from the post-online reconnect path |
-| `_boot_splash_active` | `bool` | `false` | True while cold boot is showing `Booting...` on `Screen::Info`; cleared by first sensor data and suppresses ButtonPower short-press lock toggles |
+| `_boot_splash_active` | `bool` | `false` | Tracks the cold-boot `Getting Ready` splash on `Screen::Info`; cleared when `init()` opens the first-use guide or when first sensor data arrives. Suppresses ButtonPower short-press lock toggles |
 | `_last_ota_check_ms` | `uint32_t` | `0` | Unified OTA poll-timer baseline: 2 s BLE `is_ble_active()` poll (Portable), 1 h WiFi check (Stationary). See [Firmware Update (OTA)](#firmware-update-ota) |
 | `_ota_committed` | `bool` | `false` | True once a transfer committed (full quiesce + "Updating firmware…" paint ran). Gates `exit_ota()`'s full-resume + queue-drain vs the lightweight cloud re-arm |
 
