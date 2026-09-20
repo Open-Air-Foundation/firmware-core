@@ -305,6 +305,18 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   if (_settings.operating_mode == OperatingMode::Stationary) {
     enter_stationary();
   }
+
+  // The first-use guide needs no readings. Open it once initialization is
+  // complete, while the sensor producer warms up. An active Stationary
+  // session owns its screen and must keep it.
+  if (_boot_splash_active && !_settings.onboarding_done && !_setup_session_active &&
+      _svc.ui_manager.current_screen() == Screen::Info) {
+    _boot_splash_active = false;
+    begin_session_if_needed(); // Silent unlock; sensors and BLE keep running.
+    _svc.ui_manager.show_getting_started(/*from_boot=*/true);
+    AG_LOGI(TAG, "first-boot guide ready; first measurement pending");
+    update_display(/*wait=*/true);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -995,21 +1007,13 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
     }
   }
 
-  // Hand off the "Booting..." splash. Skip if a setup session owns Info
-  // (Stationary drives its own Info -> Home). First-boot gate diverts to
-  // the guide until onboarding is acked.
+  // Onboarded devices keep the splash until readings arrive. Fresh devices
+  // already left it for the guide in init(). Stationary owns its Info -> Home
+  // transition, so a measurement must not replace that session's screen.
   if (_boot_splash_active) {
     _boot_splash_active = false;
     if (!_setup_session_active && _svc.ui_manager.current_screen() == Screen::Info) {
-      if (!_settings.onboarding_done) {
-        // begin_session_if_needed() silent-unlocks so the Locked device can
-        // hold Enter to start; sensors/BLE keep running (no service pause).
-        begin_session_if_needed();
-        _svc.ui_manager.show_getting_started(/*from_boot=*/true);
-        update_display(/*wait=*/true);
-      } else {
-        _svc.ui_manager.reset_to_home();
-      }
+      _svc.ui_manager.reset_to_home();
     }
   }
 
