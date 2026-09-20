@@ -30,6 +30,8 @@ enum class UIAction : uint8_t {
   None,
   StartTracking,
   StopTracking,
+  PauseTracking,
+  ResumeTracking,
   ChangeMode,      ///< Accompanied by UIActionResult::new_mode.
   SettingsChanged, ///< UI Manager updated internal settings state.
   ClearData,
@@ -112,7 +114,7 @@ struct BuildContext {
   bool wifi_connected;
   bool gps_enabled;
   bool gps_fix;
-  bool tracking_active;
+  TrackingState tracking_state;
 
   // Settings-derived flags
   bool display_off;
@@ -183,6 +185,7 @@ public:
   /// Force the screen to a specific value. Used by the orchestrator
   /// for Shutdown and for restoring state after deep sleep wake.
   void set_screen(Screen screen);
+  void sync_tracking_state(TrackingState state);
 
   /// Get the current screen (for orchestrator decisions).
   Screen current_screen() const;
@@ -314,6 +317,7 @@ private:
   // Menu selection indices (per screen)
   static constexpr uint8_t FIRST_CONTENT_ROW = 2; // Skip Exit and Back.
   uint8_t _menu_index = 0;
+  uint8_t _tracking_menu_index = 0;
   uint8_t _settings_index = FIRST_CONTENT_ROW;
   uint8_t _group_index = FIRST_CONTENT_ROW;
   uint8_t _settings_choice_index = 1;
@@ -396,11 +400,12 @@ private:
   mutable float _chart_buf[UI_CHART_BUF_SIZE] = {};
 
   // Cached from last build_values call (mutable for const correctness)
-  mutable bool _tracking_active = false;
+  mutable TrackingState _tracking_state = TrackingState::Idle;
 
   // --- Input dispatch (per screen) ---
   UIActionResult dispatch_home(InputSource source, InputType type);
   UIActionResult dispatch_menu(InputSource source, InputType type);
+  UIActionResult dispatch_tracking_menu(InputSource source, InputType type);
   UIActionResult dispatch_settings(InputSource source, InputType type);
   UIActionResult dispatch_settings_group(InputSource source, InputType type);
   UIActionResult dispatch_settings_choice(InputSource source, InputType type);
@@ -447,6 +452,7 @@ private:
 
   // --- Row population ---
   void populate_menu_rows(DisplayValues &v) const;
+  void populate_tracking_rows(DisplayValues &v) const;
   void populate_settings_rows(DisplayValues &v) const;
   void populate_settings_group_rows(DisplayValues &v) const;
   void populate_settings_choice_rows(DisplayValues &v) const;

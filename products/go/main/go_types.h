@@ -17,6 +17,17 @@ enum class Behavior : uint8_t {
   Shutdown,
 };
 
+// Values are also exposed by the BLE Status trk field.
+enum class TrackingState : uint8_t {
+  Idle = 0,
+  Recording = 1,
+  Paused = 2,
+};
+
+constexpr bool tracking_session_active(TrackingState state) {
+  return state == TrackingState::Recording || state == TrackingState::Paused;
+}
+
 enum class LockState : uint8_t {
   Locked,
   Unlocked,
@@ -59,7 +70,7 @@ struct RtcAppState {
   Behavior behavior = Behavior::Idle;
   LockState lock_state = LockState::Locked;
   bool gps_enabled = true;
-  bool tracking_active = false;
+  TrackingState tracking_state = TrackingState::Idle;
   uint32_t tracking_session_id = 0; ///< 5-digit session ID; 0 = no active session
   bool sensors_warm = false;        ///< Sensors kept powered during last deep sleep
 };

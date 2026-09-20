@@ -91,11 +91,13 @@ MEASURES_FIELD_TYPES: dict[str, tuple[type, ...]] = {
 # only the transition delta (STATUS_NOTIFY_KEYS); the other keys come via Read.
 STATUS_ALL_KEYS = {
     "gps_fix", "gps_sat", "bat_pct", "bat_v", "charging",
-    "tracking", "session", "flash_kb", "used_kb",
+    "tracking", "session", "trk", "flash_kb", "used_kb",
 }
 
-# Status NOTIFY carries only the two keys that change on a tracking transition.
-STATUS_NOTIFY_KEYS = {"tracking", "session"}
+# Tracking Status NOTIFY carries the session and its current state.
+STATUS_NOTIFY_KEYS = {"tracking", "session", "trk"}
+
+TRACKING_STATES = {"idle": 0, "recording": 1, "paused": 2}
 
 STATUS_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "gps_fix": (int,),
@@ -105,6 +107,7 @@ STATUS_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "charging": (str,),
     "tracking": (bool,),
     "session": (int,),
+    "trk": (int,),
     "flash_kb": (int,),
     "used_kb": (int,),
 }
@@ -178,7 +181,10 @@ CMD_PROGRESS_KEYS = {"type", "cmd"}
 CMD_RESULT_KEYS_SUCCESS = {"type", "cmd", "ok"}
 CMD_RESULT_KEYS_FAILURE = {"type", "cmd", "ok", "err"}
 
-COMMANDS = {"co2_cal", "clear_data", "factory_rst", "start_tracking", "stop_tracking"}
+COMMANDS = {
+    "co2_cal", "clear_data", "factory_rst",
+    "start_tracking", "stop_tracking", "pause_tracking", "resume_tracking",
+}
 
 # Config "set" rejection error strings (cmd_result err values).
 ERR_SINGLE_FIELD_ONLY = "single_field_only"

@@ -81,6 +81,8 @@ enum class BleCommand : uint8_t {
   FactoryReset,   ///< "factory_rst" — reset settings to defaults
   StartTracking,  ///< "start_tracking" — begin GPS + sensor route logging
   StopTracking,   ///< "stop_tracking"  — end route logging
+  PauseTracking,  ///< "pause_tracking" — retain session, stop route writes
+  ResumeTracking, ///< "resume_tracking" — continue the retained session
   SetAiding,      ///< "set_aiding" — inject A-GNSS aiding data
   Set,            ///< Synthetic — used for config-set error notifications
   Unknown,        ///< Unrecognised command string
@@ -179,22 +181,22 @@ public:
   /// Set the Status characteristic value (no notify). Use for steady-state
   /// refreshes (BMS poll, GPS fix, history delete) — clients see it on
   /// the next Read.
-  void update_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
-                     uint32_t session_id);
+  void update_status(const PowerSnapshot &power, const GpsData &gps, uint32_t session_id,
+                     TrackingState tracking_state);
 
-  /// Refresh the full Status snapshot AND push a `{tracking, session}` delta
+  /// Refresh the full Status snapshot AND push a `{tracking, session, trk}` delta
   /// NOTIFY. Use on urgent tracking transitions (start success, start failure,
-  /// manual stop) so the client need not poll.
-  void notify_tracking_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
-                              uint32_t session_id);
+  /// pause, resume, manual stop) so the client need not poll.
+  void notify_tracking_status(const PowerSnapshot &power, const GpsData &gps, uint32_t session_id,
+                              TrackingState tracking_state);
 
   /// Refresh the full Status snapshot AND push a `{charging, bat_pct, bat_v}`
   /// delta NOTIFY. Use on charging transitions (plug in, unplug, charge
   /// complete) so clients reflect the change without polling. Delta keys are
   /// disjoint from notify_tracking_status()'s, so clients merge either shape by
   /// key.
-  void notify_charging_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
-                              uint32_t session_id);
+  void notify_charging_status(const PowerSnapshot &power, const GpsData &gps, uint32_t session_id,
+                              TrackingState tracking_state);
 
   /// Push a NOTIFY-only `{disc}` Status delta announcing that the device is
   /// about to drop the BLE link, and why (shutdown or operating-mode change).
@@ -355,11 +357,11 @@ private:
   size_t encode_measures(uint8_t *buf, size_t buf_size, const MeasuresAGo &m, const GpsData &gps,
                          time_t ts);
   size_t encode_status(uint8_t *buf, size_t buf_size, const PowerSnapshot &power,
-                       const GpsData &gps, bool tracking, uint32_t session_id);
-  /// Encode the Status transition delta (`{tracking, session}`) for NOTIFY.
+                       const GpsData &gps, uint32_t session_id, TrackingState tracking_state);
+  /// Encode the Status transition delta (`{tracking, session, trk}`) for NOTIFY.
   /// Returns 0 on encoder overflow.
-  size_t encode_status_transition(uint8_t *buf, size_t buf_size, bool tracking,
-                                  uint32_t session_id);
+  size_t encode_status_transition(uint8_t *buf, size_t buf_size, uint32_t session_id,
+                                  TrackingState tracking_state);
   /// Encode the Status charging delta (`{charging, bat_pct, bat_v}`) for NOTIFY.
   /// Returns 0 on encoder overflow.
   size_t encode_status_charging(uint8_t *buf, size_t buf_size, const PowerSnapshot &power);

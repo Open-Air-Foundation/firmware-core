@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "go_display_geometry.h"
+#include "go_types.h"
 #include "measures_types.h"
 #include "rtos.h"
 #include "services/provisioning_qr.h"
@@ -16,6 +17,7 @@
 enum class Screen : uint8_t {
   Home,
   MainMenu,
+  TrackingMenu,
   Settings,
   Operations,
   DisplayTouch,
@@ -126,7 +128,7 @@ struct DisplayValues {
   bool wifi_connected = false; // connected vs disconnected glyph
   bool gps_enabled = true;
   bool gps_fix = false;
-  bool tracking_active = false;
+  TrackingState tracking_state = TrackingState::Idle;
   bool display_off = false;
   bool use_fahrenheit = false;
   bool use_feet = false;
@@ -227,7 +229,7 @@ struct RtcDisplaySnapshot {
   // Status flags
   bool gps_enabled;
   bool gps_fix;
-  bool tracking_active;
+  TrackingState tracking_state;
   bool ble_enabled;
 
   // Rendering settings

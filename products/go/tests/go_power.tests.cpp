@@ -573,7 +573,7 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
     saved.behavior = Behavior::Tracking;
     saved.lock_state = LockState::Unlocked;
     saved.gps_enabled = false;
-    saved.tracking_active = true;
+    saved.tracking_state = TrackingState::Recording;
     saved.tracking_session_id = 42731;
     saved.sensors_warm = true;
 
@@ -584,7 +584,7 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
     CHECK(loaded.behavior == Behavior::Tracking);
     CHECK(loaded.lock_state == LockState::Unlocked);
     CHECK_FALSE(loaded.gps_enabled);
-    CHECK(loaded.tracking_active);
+    CHECK(loaded.tracking_state == TrackingState::Recording);
     CHECK(loaded.tracking_session_id == 42731);
     CHECK(loaded.sensors_warm);
   }
@@ -613,6 +613,16 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
 
     const RtcAppState loaded = svc.load_state();
     CHECK_FALSE(loaded.sensors_warm);
+  }
+
+  SECTION("paused session survives RTC round-trip") {
+    RtcAppState saved{};
+    saved.tracking_state = TrackingState::Paused;
+    saved.tracking_session_id = 42731;
+    svc.save_state(saved);
+    const auto loaded = svc.load_state();
+    CHECK(loaded.tracking_state == TrackingState::Paused);
+    CHECK(loaded.tracking_session_id == 42731);
   }
 }
 

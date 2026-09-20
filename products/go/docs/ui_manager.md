@@ -59,8 +59,9 @@ on-screen password line agree.
 | `handle_input(source, type)` | Process touch input. Returns `UIActionResult` if an app-level state change occurred. |
 | `build_values(ctx)` | Build a `DisplayValues` snapshot for the Display Service. |
 | `set_screen(screen)` | Force screen (Shutdown, deep-sleep restore). |
+| `sync_tracking_state(state)` | Refresh the cached tracking enum; return from TrackingMenu when the session becomes Idle. |
 | `current_screen()` | Read current screen. |
-| `is_on_menu_screen()` | True when the current screen is a menu-navigation screen (MainMenu, Settings, Operations, DisplayTouch, SettingsChoice, TagList, Confirm, About) or `GettingStarted`. Used by the orchestrator to suppress background display updates. |
+| `is_on_menu_screen()` | True when the current screen is a menu-navigation screen (MainMenu, TrackingMenu, Settings, Operations, DisplayTouch, SettingsChoice, TagList, Confirm, About) or `GettingStarted`. Used by the orchestrator to suppress background display updates. |
 | `show_snackbar(text)` | Show a 3-second snackbar message. Pass `nullptr` to clear (used by the session-entry preamble). Snackbars never render on `Info` / `Provisioning` / `ProvisioningConfirm`. |
 | `clear_expired_snackbar(now_ms)` | Expire stale snackbar. Call before `build_values`. |
 | `sync_settings(settings)` | Synchronise internal state from persisted `GoSettings`, retaining exact measurement-interval seconds. Called by the orchestrator on boot and after settings activation. |
@@ -84,8 +85,10 @@ orchestrator what happened:
 
 | UIAction | Trigger | Notes |
 |---|---|---|
-| `StartTracking` | Menu: "Start Tracking" | |
-| `StopTracking` | Menu: "Stop Tracking" | |
+| `StartTracking` | Main Menu: "Start Tracking" | Shown when Idle |
+| `PauseTracking` | Tracking: "Pause Tracking" | Retains the session |
+| `ResumeTracking` | Tracking: "Resume Tracking" | Continues the retained session |
+| `StopTracking` | Tracking: "Stop Tracking" | Ends a Recording or Paused session |
 | `ChangeMode` | Main Menu: Operating Mode choice | `new_mode` field set |
 | `SettingsChanged` | Settings: any other choice | |
 | `ClearData` | Confirm: "Yes" (from "Clear Data") | |
@@ -109,6 +112,9 @@ partial failure).
 flowchart TD
     Home --> MainMenu
     MainMenu -- Exit --> Home
+    MainMenu -- Tracking --> TrackingMenu
+    TrackingMenu -- Back --> MainMenu
+    TrackingMenu -- Exit, Pause, Resume, or Stop --> Home
     MainMenu -- Operating Mode --> Mode["SettingsChoice: Portable / Stationary / Offline"]
     Mode -- Back --> MainMenu
     MainMenu --> Settings
@@ -135,8 +141,18 @@ flowchart TD
     GettingStarted -- Back --> Settings
 ```
 
-MainMenu rows are Exit Menu (0), Start/Stop Tracking (1), Operating Mode (2),
-and Settings (3). Operating Mode lists Portable, Stationary, and Offline in
+MainMenu rows are Exit Menu (0), Start Tracking / Tracking (1), Operating Mode
+(2), and Settings (3). When Idle, Start Tracking starts a session and returns
+Home. When Recording or Paused, Tracking opens `Screen::TrackingMenu` with Exit,
+Back, Pause Tracking / Resume Tracking, and Stop Tracking. Back is selected on
+every entry, so pressing Enter again returns to MainMenu with Tracking selected
+without pausing or resuming. Exit and the action rows return Home.
+
+`sync_tracking_state()` keeps the menu aligned with BLE and other state changes.
+If a remote Stop ends the session while TrackingMenu is open, it returns to
+MainMenu. The paused state uses a two-bar icon in the recording dot's position.
+
+Operating Mode lists Portable, Stationary, and Offline in
 that order. Selecting a mode returns Home and emits `ChangeMode`; the existing
 Stationary connection/setup flow may then replace Home.
 
@@ -145,6 +161,7 @@ rows follow this order:
 
 | Menu | Content Rows |
 |---|---|
+| Tracking | Pause Tracking or Resume Tracking, Stop Tracking |
 | Settings | Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide, About Device |
 | Operations | Measurement Interval, CO2 Calibration, GPS Mode, Buzzer |
 | Display & Touch | Temperature Unit, Altitude Unit, PM Display, Auto Lock, AQI LED, Touch LED |

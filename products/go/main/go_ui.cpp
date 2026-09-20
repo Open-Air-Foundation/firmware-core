@@ -75,6 +75,11 @@ static constexpr uint8_t TAG_COUNT = 10;
 // Menu row index constants (separate from SettingId)
 // ---------------------------------------------------------------------------
 
+static constexpr uint8_t MENU_TRACKING = 1;
+static constexpr uint8_t TRACKING_MENU_TOTAL = 4;
+static constexpr uint8_t TRACKING_BACK = 1;
+static constexpr uint8_t TRACKING_PAUSE_RESUME = 2;
+static constexpr uint8_t TRACKING_STOP = 3;
 static constexpr uint8_t MENU_MODE = 2;
 static constexpr uint8_t MENU_SETTINGS = 3;
 static constexpr uint8_t SETTINGS_OPERATIONS = 2;
@@ -211,6 +216,8 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_home(source, type);
   case Screen::MainMenu:
     return dispatch_menu(source, type);
+  case Screen::TrackingMenu:
+    return dispatch_tracking_menu(source, type);
   case Screen::Settings:
     return dispatch_settings(source, type);
   case Screen::Operations:
@@ -261,7 +268,7 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
 
 DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   // Cache tracking state for handle_input decisions.
-  _tracking_active = ctx.tracking_active;
+  _tracking_state = ctx.tracking_state;
 
   DisplayValues v{};
 
@@ -288,7 +295,7 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   v.wifi_connected = ctx.wifi_connected;
   v.gps_enabled = ctx.gps_enabled;
   v.gps_fix = ctx.gps_fix;
-  v.tracking_active = ctx.tracking_active;
+  v.tracking_state = ctx.tracking_state;
   v.display_off = ctx.display_off;
   v.use_fahrenheit = ctx.use_fahrenheit;
   v.use_feet = ctx.use_feet;
@@ -306,6 +313,9 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   case Screen::MainMenu:
     populate_menu_rows(v);
     populate_chart(v, ctx.cache, ctx.cache_count);
+    break;
+  case Screen::TrackingMenu:
+    populate_tracking_rows(v);
     break;
   case Screen::Settings:
     populate_settings_rows(v);
@@ -413,6 +423,7 @@ Screen UIManager::current_screen() const { return _screen; }
 bool UIManager::is_on_menu_screen() const {
   switch (_screen) {
   case Screen::MainMenu:
+  case Screen::TrackingMenu:
   case Screen::Settings:
   case Screen::Operations:
   case Screen::DisplayTouch:
@@ -707,6 +718,10 @@ void UIManager::navigate_back() {
   switch (_screen) {
   case Screen::MainMenu:
     go_home();
+    break;
+  case Screen::TrackingMenu:
+    _screen = Screen::MainMenu;
+    _menu_index = MENU_TRACKING;
     break;
   case Screen::Settings:
     _screen = Screen::MainMenu;
@@ -1107,10 +1122,10 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
     case 0: // Exit Menu
       go_home();
       break;
-    case 1: // Start / Stop Tracking
-      if (_tracking_active) {
-        go_home();
-        result.action = UIAction::StopTracking;
+    case MENU_TRACKING:
+      if (tracking_session_active(_tracking_state)) {
+        _screen = Screen::TrackingMenu;
+        _tracking_menu_index = TRACKING_BACK;
       } else {
         go_home();
         result.action = UIAction::StartTracking;
@@ -1548,10 +1563,61 @@ void UIManager::move_provisioning_confirm(int delta) {
 // Row population
 // ---------------------------------------------------------------------------
 
+void UIManager::sync_tracking_state(TrackingState state) {
+  _tracking_state = state;
+  if (state == TrackingState::Idle && _screen == Screen::TrackingMenu) {
+    navigate_back();
+  }
+}
+
+UIActionResult UIManager::dispatch_tracking_menu(InputSource source, InputType /*type*/) {
+  if (!tracking_session_active(_tracking_state)) {
+    navigate_back();
+    return {};
+  }
+  UIActionResult result{};
+  if (source == InputSource::TouchUp || source == InputSource::TouchDown) {
+    const int delta = source == InputSource::TouchUp ? -1 : 1;
+    _tracking_menu_index =
+        static_cast<uint8_t>(wrap(_tracking_menu_index + delta, TRACKING_MENU_TOTAL));
+  } else if (source == InputSource::TouchEnter) {
+    switch (_tracking_menu_index) {
+    case 0:
+      go_home();
+      break;
+    case TRACKING_BACK:
+      navigate_back();
+      break;
+    case TRACKING_PAUSE_RESUME:
+      result.action = _tracking_state == TrackingState::Paused ? UIAction::ResumeTracking
+                                                               : UIAction::PauseTracking;
+      go_home();
+      break;
+    case TRACKING_STOP:
+      result.action = UIAction::StopTracking;
+      go_home();
+      break;
+    }
+  }
+  return result;
+}
+
+void UIManager::populate_tracking_rows(DisplayValues &v) const {
+  v.row_count = TRACKING_MENU_TOTAL;
+  copy_row(v, 0, "Exit", false);
+  copy_row(v, TRACKING_BACK, "Back", false);
+  copy_row(v, TRACKING_PAUSE_RESUME,
+           _tracking_state == TrackingState::Paused ? "Resume Tracking" : "Pause Tracking", false);
+  copy_row(v, TRACKING_STOP, "Stop Tracking", false);
+  v.selected_row = _tracking_menu_index;
+  v.show_separator_after_back = true;
+}
+
 void UIManager::populate_menu_rows(DisplayValues &v) const {
   v.row_count = MAIN_MENU_TOTAL;
   copy_row(v, 0, "Exit Menu", false);
-  copy_row(v, 1, _tracking_active ? "Stop Tracking" : "Start Tracking", false);
+  copy_row(v, MENU_TRACKING,
+           tracking_session_active(_tracking_state) ? "Tracking" : "Start Tracking", false);
   copy_row(v, MENU_MODE, "Operating Mode", false);
   copy_row(v, MENU_SETTINGS, "Settings", false);
   v.selected_row = _menu_index;

@@ -201,9 +201,17 @@ in any (mode, behavior) combination.
 Transitions:
 
 - Mode changes: user navigates UI menu
-- Tracking start / stop: user navigates UI menu, or BLE `start_tracking` /
-  `stop_tracking` command
+- Tracking start / pause / resume / stop: device menu or BLE `start_tracking`,
+  `pause_tracking`, `resume_tracking`, and `stop_tracking` commands
 - Shutdown: physical button long press (Button 1) → BMS QoN
+
+`TrackingState` adds the route lifecycle within this model: Idle (0), Recording
+(1), and Paused (2). Recording and Paused both retain `Behavior::Tracking` and
+the session ID, but only Recording appends route points. Pause closes the file;
+Resume reopens it for append. RTC state preserves the enum across deep sleep.
+Live sensing, chart cache, GPS, and enabled connectivity continue while Paused.
+See [Tracking Lifecycle](docs/orchestrator.md#tracking-lifecycle) and the
+[BLE Status contract](go_ble_client.md#6-status-characteristic).
 
 ### UI State Machine
 
@@ -1068,8 +1076,8 @@ sequenceDiagram
    - If sensors_warm: skip warmup (200 ms settle only)
      Else: interruptible warmup loop with button checks
    - One-shot measurement (skip if button pressed)
-   - One-shot GPS via _board.new_gps_driver() if tracking + GPS active
-   - Storage: _board.storage().cache_measurement() + route point
+   - One-shot GPS via _board.new_gps_driver() when GPS is active, including Paused
+   - Storage: cache_measurement() always; route point only while Recording
      - One _board.power().poll_bms() snapshot supplies route SOC, display,
        and thermal shutdown policy
      - Display + sleep decision via _board.power().decide_sleep()

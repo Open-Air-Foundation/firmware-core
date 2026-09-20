@@ -174,7 +174,7 @@ bool StorageService::route_file_exists(uint32_t session_id) const {
                      [session_id](const auto &session) { return session.id == session_id; });
 }
 bool StorageService::append_route_point(const RoutePoint & /*point*/) { return true; }
-void StorageService::end_route() {}
+bool StorageService::end_route() { return true; }
 bool StorageService::is_route_active() const { return false; }
 uint32_t StorageService::current_route_point_count() const { return 0; }
 bool StorageService::delete_route(uint32_t session_id) {
@@ -261,8 +261,9 @@ public:
     return svc.encode_measures(buf, sz, m, gps, ts);
   }
   static size_t encode_status(BleService &svc, uint8_t *buf, size_t sz, const PowerSnapshot &p,
-                              const GpsData &gps, bool tracking, uint32_t session_id) {
-    return svc.encode_status(buf, sz, p, gps, tracking, session_id);
+                              const GpsData &gps, uint32_t session_id,
+                              TrackingState tracking_state) {
+    return svc.encode_status(buf, sz, p, gps, session_id, tracking_state);
   }
   static size_t encode_config(BleService &svc, uint8_t *buf, size_t sz, const GoSettings &s) {
     return svc.encode_config(buf, sz, s);
@@ -271,9 +272,9 @@ public:
                                     const GoSettings &prev, const GoSettings &cur) {
     return svc.encode_config_delta(buf, sz, prev, cur);
   }
-  static size_t encode_status_transition(BleService &svc, uint8_t *buf, size_t sz, bool tracking,
-                                         uint32_t session_id) {
-    return svc.encode_status_transition(buf, sz, tracking, session_id);
+  static size_t encode_status_transition(BleService &svc, uint8_t *buf, size_t sz,
+                                         uint32_t session_id, TrackingState tracking_state) {
+    return svc.encode_status_transition(buf, sz, session_id, tracking_state);
   }
   static size_t encode_status_charging(BleService &svc, uint8_t *buf, size_t sz,
                                        const PowerSnapshot &p) {
@@ -789,7 +790,7 @@ TEST_CASE("BLE: encode_measures with no valid sensors has only timestamp") {
 // CBOR encoding: Status
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_status has all 9 keys") {
+TEST_CASE("BLE: encode_status retains existing fields and adds trk") {
   storage_spy::reset();
   storage_spy::total_capacity_kb = 262144;
   storage_spy::used_kb = 8192;
@@ -801,11 +802,12 @@ TEST_CASE("BLE: encode_status has all 9 keys") {
   auto gps = make_valid_gps();
 
   uint8_t buf[512];
-  size_t len = BleServiceTestAccess::encode_status(svc, buf, sizeof(buf), power, gps, true, 10042);
+  size_t len = BleServiceTestAccess::encode_status(svc, buf, sizeof(buf), power, gps, 10042,
+                                                   TrackingState::Recording);
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 9);
+  CHECK(entries.size() == 10);
 
   CHECK(find_entry(entries, "gps_fix")->uint_val == 3);
   CHECK(find_entry(entries, "gps_sat")->uint_val == 12);
@@ -816,6 +818,7 @@ TEST_CASE("BLE: encode_status has all 9 keys") {
   CHECK(find_entry(entries, "session")->uint_val == 10042);
   CHECK(find_entry(entries, "flash_kb")->uint_val == 262144);
   CHECK(find_entry(entries, "used_kb")->uint_val == 8192);
+  CHECK(find_entry(entries, "trk")->uint_val == 1);
 }
 
 TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
@@ -828,7 +831,8 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
   GpsData gps{};
 
   uint8_t buf[512];
-  size_t len = BleServiceTestAccess::encode_status(svc, buf, sizeof(buf), power, gps, false, 0);
+  size_t len = BleServiceTestAccess::encode_status(svc, buf, sizeof(buf), power, gps, 0,
+                                                   TrackingState::Idle);
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
@@ -1118,15 +1122,17 @@ TEST_CASE("BLE: status transition delta and cmd_result are within budget") {
   BleService svc(nullptr, storage, default_ble_server);
 
   uint8_t buf[256];
-  size_t len =
-      BleServiceTestAccess::encode_status_transition(svc, buf, sizeof(buf), true, 0xFFFFFFFFu);
+  size_t len = BleServiceTestAccess::encode_status_transition(svc, buf, sizeof(buf), 0xFFFFFFFFu,
+                                                              TrackingState::Recording);
   REQUIRE(len > 0);
+  CHECK(len == 29); // Largest session ID; trk adds five bytes to the legacy delta.
   CHECK(len <= TEST_NOTIFY_BUDGET);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 2);
+  CHECK(entries.size() == 3);
   CHECK(find_entry(entries, "tracking") != nullptr);
   CHECK(find_entry(entries, "session") != nullptr);
+  CHECK(find_entry(entries, "trk")->uint_val == 1);
 }
 
 TEST_CASE("BLE: status charging delta is within budget") {
@@ -1344,6 +1350,29 @@ TEST_CASE("BLE: decode_config_write decodes stop_tracking command") {
 
   CHECK(result.op == BleConfigOp::Command);
   CHECK(result.cmd == BleCommand::StopTracking);
+}
+
+TEST_CASE("BLE: pause and resume commands decode and acknowledge without schema changes") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+  for (const auto *command : {"pause_tracking", "resume_tracking"}) {
+    uint8_t buf[64];
+    const auto len = encode_cmd_cbor(buf, sizeof(buf), command);
+    GoSettings settings;
+    const auto decoded = BleService::decode_config_write(buf, len, settings);
+    REQUIRE(decoded.op == BleConfigOp::Command);
+    CHECK(decoded.cmd == (std::string(command) == "pause_tracking" ? BleCommand::PauseTracking
+                                                                   : BleCommand::ResumeTracking));
+    svc.notify_command_result(decoded.cmd, true);
+    const auto entries = decode_cbor_map(config_char.last_notified_value.data(),
+                                         config_char.last_notified_value.size());
+    CHECK(entries.size() == 3);
+    REQUIRE(find_entry(entries, "cmd") != nullptr);
+    CHECK(find_entry(entries, "cmd")->text_val == command);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2044,7 +2073,7 @@ TEST_CASE("BLE: update_status is no-op when char is null") {
   // _status_char is nullptr by default
 
   // Should not crash
-  svc.update_status(make_valid_power(), make_valid_gps(), false, 0);
+  svc.update_status(make_valid_power(), make_valid_gps(), 0, TrackingState::Idle);
 }
 
 TEST_CASE("BLE: update_status sets value but does not notify") {
@@ -2057,33 +2086,71 @@ TEST_CASE("BLE: update_status sets value but does not notify") {
   // — it is the steady-state set-value-only path.
   BleServiceTestAccess::set_connected(svc, true);
 
-  svc.update_status(make_valid_power(), make_valid_gps(), true, 10042);
+  svc.update_status(make_valid_power(), make_valid_gps(), 10042, TrackingState::Recording);
   CHECK(status_char.set_value_count == 1);
   CHECK(status_char.notify_count == 0);
 }
 
-TEST_CASE("BLE: notify_tracking_status notifies 2-key delta while READ stays 9 keys") {
+TEST_CASE("BLE: Status Read and tracking notifications report the enum alongside legacy fields") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic status_char;
+  BleServiceTestAccess::set_status_char(svc, &status_char);
+  BleServiceTestAccess::set_connected(svc, true);
+  struct Case {
+    TrackingState state;
+    uint64_t wire_state;
+    bool tracking;
+    uint32_t session;
+  };
+  const Case cases[] = {{TrackingState::Idle, 0, false, 0},
+                        {TrackingState::Recording, 1, true, 99999},
+                        {TrackingState::Paused, 2, true, 99999}};
+  for (const auto &c : cases) {
+    svc.notify_tracking_status(make_valid_power(), make_valid_gps(), c.session, c.state);
+    const auto read = decode_cbor_map(status_char.last_value.data(), status_char.last_value.size());
+    const auto notify = decode_cbor_map(status_char.last_notified_value.data(),
+                                        status_char.last_notified_value.size());
+    REQUIRE(read.size() == 10);
+    REQUIRE(notify.size() == 3);
+    for (const auto &entries : {read, notify}) {
+      REQUIRE(find_entry(entries, "trk") != nullptr);
+      REQUIRE(find_entry(entries, "tracking") != nullptr);
+      REQUIRE(find_entry(entries, "session") != nullptr);
+      CHECK(find_entry(entries, "trk")->type == CborIntegerType);
+      CHECK(find_entry(entries, "trk")->uint_val == c.wire_state);
+      CHECK(find_entry(entries, "tracking")->type == CborBooleanType);
+      CHECK(find_entry(entries, "tracking")->bool_val == c.tracking);
+      CHECK(find_entry(entries, "session")->uint_val == c.session);
+      CHECK(find_entry(entries, "paused") == nullptr);
+    }
+  }
+  CHECK(status_char.notify_count == 3);
+}
+
+TEST_CASE("BLE: notify_tracking_status notifies 3-key delta while READ stays 10 keys") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   MockBleCharacteristic status_char;
   BleServiceTestAccess::set_status_char(svc, &status_char);
   BleServiceTestAccess::set_connected(svc, true);
 
-  svc.notify_tracking_status(make_valid_power(), make_valid_gps(), true, 10042);
+  svc.notify_tracking_status(make_valid_power(), make_valid_gps(), 10042, TrackingState::Recording);
   CHECK(status_char.set_value_count == 1);
   CHECK(status_char.notify_count == 1);
 
-  // Stored value (READ) is the full 9-key snapshot.
+  // Stored value (READ) is the full 10-key snapshot.
   auto read_entries = decode_cbor_map(status_char.last_value.data(), status_char.last_value.size());
-  CHECK(read_entries.size() == 9);
+  CHECK(read_entries.size() == 10);
   CHECK(find_entry(read_entries, "type") == nullptr);
 
-  // NOTIFY carries only the {tracking, session} transition delta.
+  // NOTIFY carries the {tracking, session, trk} transition delta.
   auto notify_entries = decode_cbor_map(status_char.last_notified_value.data(),
                                         status_char.last_notified_value.size());
-  CHECK(notify_entries.size() == 2);
+  CHECK(notify_entries.size() == 3);
   CHECK(find_entry(notify_entries, "tracking")->bool_val == true);
   CHECK(find_entry(notify_entries, "session")->uint_val == 10042);
+  CHECK(find_entry(notify_entries, "trk")->uint_val == 1);
 }
 
 TEST_CASE("BLE: notify_tracking_status sets value but skips notify when not connected") {
@@ -2093,7 +2160,7 @@ TEST_CASE("BLE: notify_tracking_status sets value but skips notify when not conn
   BleServiceTestAccess::set_status_char(svc, &status_char);
 
   // Disconnected (default): value still updated for the next Read.
-  svc.notify_tracking_status(make_valid_power(), make_valid_gps(), false, 0);
+  svc.notify_tracking_status(make_valid_power(), make_valid_gps(), 0, TrackingState::Idle);
   CHECK(status_char.set_value_count == 1);
   CHECK(status_char.notify_count == 0);
 }
@@ -2102,23 +2169,26 @@ TEST_CASE("BLE: notify_tracking_status is no-op when char is null") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   // _status_char is nullptr by default — must not crash.
-  svc.notify_tracking_status(make_valid_power(), make_valid_gps(), false, 0);
+  svc.notify_tracking_status(make_valid_power(), make_valid_gps(), 0, TrackingState::Idle);
 }
 
-TEST_CASE("BLE: notify_charging_status notifies 3-key power delta while READ stays 9 keys") {
+TEST_CASE("BLE: notify_charging_status notifies 3-key power delta while READ stays 10 keys") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   MockBleCharacteristic status_char;
   BleServiceTestAccess::set_status_char(svc, &status_char);
   BleServiceTestAccess::set_connected(svc, true);
 
-  svc.notify_charging_status(make_valid_power(), make_valid_gps(), true, 10042);
+  svc.notify_charging_status(make_valid_power(), make_valid_gps(), 10042, TrackingState::Paused);
   CHECK(status_char.set_value_count == 1);
   CHECK(status_char.notify_count == 1);
 
-  // Stored value (READ) is the full 9-key snapshot, no discriminator.
+  // Stored value (READ) is the full 10-key snapshot, no discriminator.
   auto read_entries = decode_cbor_map(status_char.last_value.data(), status_char.last_value.size());
-  CHECK(read_entries.size() == 9);
+  CHECK(read_entries.size() == 10);
+  CHECK(find_entry(read_entries, "tracking")->bool_val == true);
+  CHECK(find_entry(read_entries, "session")->uint_val == 10042);
+  CHECK(find_entry(read_entries, "trk")->uint_val == 2);
   CHECK(find_entry(read_entries, "type") == nullptr);
 
   // NOTIFY carries only the {charging, bat_pct, bat_v} power delta — keys
@@ -2141,7 +2211,7 @@ TEST_CASE("BLE: notify_charging_status sets value but skips notify when not conn
   BleServiceTestAccess::set_status_char(svc, &status_char);
 
   // Disconnected (default): snapshot still refreshed for the next Read.
-  svc.notify_charging_status(make_valid_power(), make_valid_gps(), false, 0);
+  svc.notify_charging_status(make_valid_power(), make_valid_gps(), 0, TrackingState::Idle);
   CHECK(status_char.set_value_count == 1);
   CHECK(status_char.notify_count == 0);
 }
@@ -2150,7 +2220,7 @@ TEST_CASE("BLE: notify_charging_status is no-op when char is null") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   // _status_char is nullptr by default — must not crash.
-  svc.notify_charging_status(make_valid_power(), make_valid_gps(), false, 0);
+  svc.notify_charging_status(make_valid_power(), make_valid_gps(), 0, TrackingState::Idle);
 }
 
 TEST_CASE("BLE: encode_status_charging overflows on undersized buffer") {

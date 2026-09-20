@@ -100,7 +100,8 @@ struct RtcDisplaySnapshot {
   // Battery
   uint8_t battery_pct;  bool is_battery_charging;  bool is_plugged_in;
   // Status flags & rendering settings
-  bool gps_enabled;  bool gps_fix;  bool tracking_active;  bool ble_enabled;
+  bool gps_enabled;  bool gps_fix;  bool ble_enabled;
+  TrackingState tracking_state;
   bool use_fahrenheit;  bool use_feet;  bool pm_use_usaqi;
 };
 ```
@@ -469,11 +470,14 @@ Screen dispatch:
 - **MainMenu:** Home screen (metric cleared to None) + overlay at y=162.
   The 2 px-thick 1st grid divider is preserved as the menu top border.
   Menu rows use full 128 px-wide selection rects. The four rows are Exit Menu,
-  Start/Stop Tracking, Operating Mode, and Settings.
-- **Settings/Operations/DisplayTouch/SettingsChoice/TagList/Confirm/About:** Full-screen list with
+  Start Tracking (Idle) / Tracking (Recording or Paused), Operating Mode, and Settings.
+- **TrackingMenu/Settings/Operations/DisplayTouch/SettingsChoice/TagList/Confirm/About:** Full-screen list with
   full 128 px-wide selection rects and vertically centered text. A
   separator line between the header rows (Exit/Back) and content rows
   uses a 2 px content offset to avoid touching.
+- **TrackingMenu:** Exit, Back, Pause Tracking / Resume Tracking, and Stop
+  Tracking. It participates in list-screen refresh handling, so moving the
+  selection follows the existing partial-refresh policy.
 - **PairingPasskey:** "Bluetooth Pairing" title (`helvB14_tf`, baseline
   y=35), 3 px-thick divider at y=49 (shared chrome with `Shutdown*`),
   6-digit passkey (`logisoso32_tr`, baseline y=145), and "Enter on
@@ -530,8 +534,10 @@ The plug icon appears left of the battery glyph when
 `is_plugged_in && !is_battery_charging` (full-charge pause or charge
 termination done while USB is connected).
 
-When the plug icon is visible and tracking is active, the tracking dot
-shifts left to avoid overlapping the plug glyph.
+Recording shows a dot; Paused shows two bars in the same position; Idle shows
+neither. When the plug icon is visible, either tracking indicator shifts left
+to avoid overlapping it. The tracking enum is retained in the RTC snapshot so
+the pause indicator survives deep sleep.
 
 `_is_header_changed()` includes `is_plugged_in` so plug/unplug
 transitions trigger a status bar redraw.

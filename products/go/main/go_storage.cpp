@@ -287,14 +287,16 @@ bool StorageService::append_route_point(const RoutePoint &point) {
   return true;
 }
 
-void StorageService::end_route() {
+bool StorageService::end_route() {
   if (_route_file == nullptr) {
-    return;
+    return true;
   }
 
-  // Best-effort final sync; nothing useful to do on the close path.
-  (void)flush_and_sync_route_file();
-  fclose(_route_file);
+  const bool synced = flush_and_sync_route_file();
+  const bool closed = fclose(_route_file) == 0;
+  if (!closed) {
+    AG_LOGE(TAG, "end_route: fclose failed (errno=%d)", errno);
+  }
   _route_file = nullptr;
 
   AG_LOGI(TAG, "end_route: session %" PRIu32 " closed (%" PRIu32 " points total)",
@@ -303,6 +305,7 @@ void StorageService::end_route() {
   _current_point_count = 0;
   _current_session_id = 0;
   _last_fsync_ms = FSYNC_ANCHOR_NONE;
+  return synced && closed;
 }
 
 bool StorageService::flush_and_sync_route_file() {

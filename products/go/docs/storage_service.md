@@ -140,10 +140,10 @@ a route is already active, leaving the existing route untouched.
 | Method | Description |
 |---|---|
 | `create_route(session_id)` | Open a brand-new route file. Refuses if the file already exists (no truncating-open) or if `stat()` fails with anything other than `ENOENT`. On success performs an immediate `fflush + fsync` of the empty file so the directory entry is durable on NAND before the orchestrator tells the user / phone the session started. Marked `[[nodiscard]]`. |
-| `resume_route(session_id)` | Reopen an existing route file in append mode after deep-sleep wake. Truncates any torn trailing record (size not aligned to `sizeof(RoutePoint)`) via `ftruncate()` before opening so the next append lands on a clean boundary. Marked `[[nodiscard]]`. |
+| `resume_route(session_id)` | Reopen an existing route file in append mode after Pause or deep-sleep wake. Truncates any torn trailing record (size not aligned to `sizeof(RoutePoint)`) via `ftruncate()` before opening so the next append lands on a clean boundary. Marked `[[nodiscard]]`. |
 | `route_file_exists(session_id)` | Cheap `stat()` check used by the orchestrator's session-ID retry loop and BLE history start/delete. It distinguishes an existing empty route from a missing route. Returns `false` when NAND is not mounted. |
 | `append_route_point(point)` | Write one `RoutePoint` via `fwrite`. Internally enforces the durability budget below — flushes + fsyncs at most every `CONFIG_TRACKING_FSYNC_INTERVAL_MS`, plus an unconditional sync on the very first post-open append. Returns `false` on `fwrite`, `fflush`, or `fsync` failure. Marked `[[nodiscard]]`. |
-| `end_route()` | `fflush` + `fsync` + `fclose` (unconditional). Preserves an empty route as a valid completed session. Resets session ID, point count, and the budget anchor. Safe to call when no route is active (no-op). |
+| `end_route()` | `fflush` + `fsync` + `fclose`. Returns `false` on sync or close failure; releases the file handle either way. Preserves empty files. Resets storage-local session ID, point count, and the budget anchor. Returns `true` if no route is open. |
 | `is_route_active()` | Returns `true` while a route file is open. |
 | `current_route_point_count()` | Total points written in the current session (includes points from previous boots when resuming). Returns 0 when no route is active. |
 | `clear_routes()` | Deletes all files under `<mount_path>/routes/`. Used by Clear Data and Factory Reset. Returns `true` when all route files are removed. |
@@ -178,8 +178,8 @@ configured window regardless of the measurement period:
 
 Any `fflush` or `fsync` failure inside `append_route_point()` surfaces as a
 `false` return. The orchestrator logs and ignores the failure, keeping the
-session running so subsequent appends can retry; only a manual stop or
-deep sleep ends the session.
+session running so subsequent appends can retry. Pause and deep sleep close
+the file while retaining the logical session; Stop ends it.
 
 ### Resume-time Torn-Record Truncate
 
@@ -216,7 +216,7 @@ stored in `RtcAppState::tracking_session_id` so it survives deep sleep.
 // In go_types.h
 struct RtcAppState {
     // ...
-    bool     tracking_active     = false;
+    TrackingState tracking_state = TrackingState::Idle;
     uint32_t tracking_session_id = 0; // 0 = no active session
 };
 ```
@@ -224,7 +224,7 @@ struct RtcAppState {
 ### Generation algorithm
 
 The orchestrator generates a new ID each time the user starts a fresh tracking
-session (i.e. not resuming from sleep). It draws 5-digit random integers
+session (not when resuming from Pause or sleep). It draws 5-digit random integers
 from the shared `generate_random_number(5)` helper in `airgradient-common`
 (hardware RNG on target builds, `std::rand()` under `TEST_HOST`) and probes
 each candidate against `StorageService::route_file_exists()`. On a collision
@@ -241,110 +241,74 @@ The ID is stored immediately in `RtcAppState::tracking_session_id` so it is
 available to the resume path after any subsequent deep sleep.
 
 `StorageService` receives the ID from the orchestrator via `create_route()`
-(fresh session) or `resume_route()` (after deep sleep) and does not generate
+(fresh session) or `resume_route()` (after Pause or deep sleep) and does not generate
 or persist it internally.
 
-## Deep Sleep and Route Continuity
+## Pause, Deep Sleep, And Route Continuity
 
 Deep sleep reboots the CPU — open file handles are lost. Before sleeping the
 orchestrator calls `end_route()` to flush and close the file. On wake, it
-calls `resume_route(rtc_state.tracking_session_id)` with the persisted ID:
+calls `resume_route(rtc_state.tracking_session_id)` with the persisted ID only
+for `TrackingState::Recording`:
 `resume_route()` truncates any torn trailing record (see above), opens the
 file in append mode, and restores `_current_point_count` from the file size.
 The session continues seamlessly as a single file.
 
-```text
-New session:
-  orchestrator generates session_id = 42731 (with collision retry probe)
-  → create_route(42731)  → creates route_42731.bin (empty), fsyncs it,
-                            returns true (0 points)
-  → append × N           (first append unconditionally fsyncs; further
-                            appends fsync at most every
-                            CONFIG_TRACKING_FSYNC_INTERVAL_MS)
-  → end_route()          → flushes, closes (N points on disk)
+Pause also closes the route, but the orchestrator keeps its state as Paused
+and retains the ID. The storage-local ID resets to 0 because no writer is open;
+BLE Status uses the orchestrator's retained ID. Wake while Paused does not reopen
+the file. Explicit Resume appends to that same route; failure leaves it Paused.
 
-Sleep cycle:
-  → end_route()          → flushes, closes (N points on disk)
-  [deep sleep]
-  → resume_route(42731)  → truncates any torn trailing record, opens in
-                            append mode, _current_point_count = N
-  → append × M
-  → end_route()          → flushes, closes (N+M points total)
+```text
+Start:  create_route(N) -> append points
+Pause:  end_route() -> retain state and ID in orchestrator
+Resume: resume_route(N) -> append more points
+Stop:   end_route() -> clear state and ID in orchestrator
 ```
+
+History can export an existing paused route through its normal read path. The
+orchestrator rejects deletion of the current Recording or Paused session.
 
 ## Orchestrator Integration
 
-### On `SensorDataReady` event
+### On Sensor Data Ready
 
-```cpp
-const MeasuresAGo &basic = event.sensor_data;
-storage.cache_measurement(basic);
-if (behavior == Behavior::Tracking && storage.is_route_active()) {
-    RoutePoint point;
-    point.timestamp = get_current_system_time();
-    point.gps       = gps_service.get_latest_fix();
-    point.sensors   = basic;
-    storage.append_route_point(point);
-}
-```
+`on_sensor_data()` updates the live measurement cache regardless of tracking
+state. It appends a `RoutePoint` only when `is_recording()` is true: state is
+Recording and the route file is open. Paused measurements are not backfilled
+into the route on Resume.
 
-### On `UserStartTracking` event
+### On Start, Pause, Resume, And Stop
 
-```cpp
-// Orchestrator generates a new session ID with collision retry, then
-// opens the file via the explicit-intent create_route().
-const uint32_t session_id = generate_session_id(); // retry-on-collision; 0 = exhausted
-if (session_id == 0 || !storage.create_route(session_id)) {
-    // NAND unmounted, ID exhaustion, or open / empty-file fsync failed —
-    // surface "Storage error — can't track" snackbar and BLE notify_tracking_status
-    // with tracking=false inline. Do NOT set tracking_active.
-    return false;
-}
-rtc_state.tracking_session_id = session_id;
-rtc_state.tracking_active = true;
-```
+- Start generates an unused session ID and calls `create_route()`. Only success
+  changes the state to Recording.
+- Pause sets Paused and calls `end_route()`. A sync/close error is reported to the
+  user and BLE command result, while the state stays Paused and the ID is retained.
+- Resume calls `resume_route()` with the retained ID. Only success changes the
+  state back to Recording; failure permits a later retry.
+- Stop calls `end_route()`, sets Idle, and clears the orchestrator's session ID.
+  It accepts both Recording and Paused sessions.
 
-### On `UserStopTracking` event
+See [`go_orchestrator.cpp`](../main/go_orchestrator.cpp) for the lifecycle methods
+and their snackbar / BLE notifications.
 
-```cpp
-storage.end_route();
-rtc_state.tracking_active = false;
-rtc_state.tracking_session_id = 0;
-```
+### On Clear Data / Factory Reset
 
-### On `ClearData` / factory reset
+`clear_data()` stops a Recording or Paused session, clears the chart cache, and
+removes route files. Factory reset builds on these operations before resetting
+settings and BLE bonds.
 
-```cpp
-storage.clear_cache();
-storage.clear_routes();
-```
+### Before Deep Sleep
 
-`clear_data()` uses these helpers directly. Factory reset builds on top of the
-same storage clear operations before resetting settings and BLE bonds.
+The orchestrator backs up the cache, closes any open route, and saves tracking
+state and session ID in RTC memory. A Paused session remains Paused.
 
-### Before deep sleep
+### After Deep Sleep Wake
 
-```cpp
-storage.backup_cache();
-if (storage.is_route_active()) {
-    storage.end_route(); // file handles do not survive deep sleep reboot
-}
-// rtc_state.tracking_active and tracking_session_id remain set if tracking
-```
-
-### After deep sleep wake
-
-```cpp
-storage.restore_cache(); // before init()
-storage.init();          // re-mount NAND
-if (rtc_state.tracking_active) {
-    if (!storage.resume_route(rtc_state.tracking_session_id)) {
-        // Persistent NAND fault. Clear tracking state inline and show
-        // "Tracking stopped — storage" snackbar. BLE is not yet up at
-        // this point; Read on connect is authoritative.
-    }
-}
-```
+Storage restores the cache and remounts NAND. The orchestrator or fast path
+reopens the route only for a saved Recording state. A persistent reopen failure
+in interactive initialization clears the session and shows
+`"Tracking stopped — storage"`; Status Read on connect reports Idle.
 
 ## NAND Mount Failure
 

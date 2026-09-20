@@ -95,6 +95,8 @@ extern bool clear_routes_result;
 extern bool create_route_result;
 extern bool resume_route_result;
 extern bool append_route_point_result;
+extern bool end_route_result;
+extern TrackingState ble_tracking_state;
 extern std::set<uint32_t> existing_route_session_ids;
 
 extern bool bms_polled;
@@ -468,7 +470,9 @@ public:
   static Behavior behavior(const Orchestrator &o) { return o._behavior; }
   static LockState lock_state(const Orchestrator &o) { return o._lock_state; }
   static bool gps_enabled(const Orchestrator &o) { return o._gps_enabled; }
-  static bool tracking_active(const Orchestrator &o) { return o._tracking_active; }
+  static bool tracking_active(const Orchestrator &o) {
+    return tracking_session_active(o._tracking_state);
+  }
   static uint32_t tracking_session_id(const Orchestrator &o) { return o._tracking_session_id; }
   static bool first_measurement_done(const Orchestrator &o) { return o._first_measurement_done; }
   static const MeasuresAGo &cached_measures(const Orchestrator &o) { return o._raw_measures; }
@@ -510,6 +514,9 @@ public:
   static void lock(Orchestrator &o) { o.lock(); }
   static void unlock(Orchestrator &o) { o.unlock(); }
   static bool start_tracking(Orchestrator &o) { return o.start_tracking(); }
+  static bool pause_tracking(Orchestrator &o) { return o.pause_tracking(); }
+  static bool resume_tracking(Orchestrator &o) { return o.resume_tracking(); }
+  static TrackingState tracking_state(const Orchestrator &o) { return o._tracking_state; }
   static void stop_tracking(Orchestrator &o) { o.stop_tracking(); }
   static bool clear_data(Orchestrator &o) { return o.clear_data(); }
   static bool factory_reset(Orchestrator &o) { return o.factory_reset(); }
@@ -770,7 +777,7 @@ TEST_CASE("snapshot_state: captures current application state", "[Orchestrator][
   REQUIRE(state.behavior == Behavior::Idle);
   REQUIRE(state.lock_state == LockState::Locked);
   REQUIRE(state.gps_enabled == true);
-  REQUIRE(state.tracking_active == false);
+  REQUIRE(state.tracking_state == TrackingState::Idle);
   REQUIRE(state.tracking_session_id == 0);
 }
 
@@ -1066,7 +1073,7 @@ TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][i
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
       .gps_enabled = true,
-      .tracking_active = true,
+      .tracking_state = TrackingState::Recording,
       .tracking_session_id = 12345,
   };
 
@@ -1106,7 +1113,7 @@ TEST_CASE(
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
       .gps_enabled = false,
-      .tracking_active = false,
+      .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
 
@@ -1162,7 +1169,7 @@ TEST_CASE("init(Button, display_painted + unlocked): resumes route when tracking
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
       .gps_enabled = true,
-      .tracking_active = true,
+      .tracking_state = TrackingState::Recording,
       .tracking_session_id = 42000,
   };
 
@@ -1304,6 +1311,187 @@ TEST_CASE("unlock: sets Unlocked state", "[Orchestrator][state]") {
 // ============================================================================
 // 8. State Transitions — tracking
 // ============================================================================
+
+TEST_CASE("pause/resume: keep session, GPS and live data; record results only while Recording",
+          "[Orchestrator][tracking][pause]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  REQUIRE(A::start_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  test_spy::reset();
+
+  REQUIRE(A::pause_tracking(orch));
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  CHECK(A::tracking_session_id(orch) == session);
+  CHECK(test_spy::route_ended);
+  CHECK_FALSE(test_spy::route_file_open);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+  CHECK(A::is_gps_active(orch));
+  CHECK(test_spy::ble_last_status_tracking);
+  CHECK(test_spy::ble_last_status_session == session);
+  CHECK(test_spy::ble_tracking_state == TrackingState::Paused);
+  REQUIRE(A::pause_tracking(orch));
+  CHECK(test_spy::ble_notify_tracking_status_count == 1);
+  CHECK_FALSE(A::start_tracking(orch));
+
+  Event reading{};
+  reading.type = EventType::SensorDataReady;
+  reading.sensor_data.co2.co2 = 555;
+  A::dispatch(orch, reading);
+  CHECK_FALSE(test_spy::route_point_appended);
+  CHECK(test_spy::last_cached_measurement.co2.co2 == 555);
+  CHECK(test_spy::cloud_last_snapshot.co2.co2 == 555);
+  CHECK(test_spy::ble_last_measures.co2.co2 == 555);
+
+  REQUIRE(A::resume_tracking(orch));
+  CHECK(test_spy::route_resumed);
+  CHECK(test_spy::route_session_id == session);
+  CHECK(A::tracking_state(orch) == TrackingState::Recording);
+  CHECK_FALSE(test_spy::gps_started);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+  REQUIRE(A::resume_tracking(orch));
+  CHECK(test_spy::ble_notify_tracking_status_count == 2);
+
+  // The first result processed after Resume is eligible for route recording.
+  A::dispatch(orch, reading);
+  CHECK(test_spy::route_point_appended);
+  CHECK(test_spy::last_route_point.sensors.co2.co2 == 555);
+}
+
+TEST_CASE("pause/resume: storage failures retain a paused session",
+          "[Orchestrator][tracking][pause]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  REQUIRE(A::start_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  test_spy::end_route_result = false;
+  CHECK_FALSE(A::pause_tracking(orch));
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  CHECK_FALSE(test_spy::route_file_open);
+  const auto paused = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(paused.snackbar_text != nullptr);
+  CHECK(std::string(paused.snackbar_text) == "Paused - storage sync failed");
+
+  test_spy::resume_route_result = false;
+  test_spy::route_started = false;
+  CHECK_FALSE(A::resume_tracking(orch));
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  CHECK(A::tracking_session_id(orch) == session);
+  CHECK_FALSE(test_spy::route_started);
+  CHECK_FALSE(test_spy::route_file_open);
+
+  A::stop_tracking(orch);
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  CHECK(A::tracking_session_id(orch) == 0);
+  CHECK_FALSE(test_spy::ble_last_status_tracking);
+  CHECK(test_spy::ble_tracking_state == TrackingState::Idle);
+  CHECK_FALSE(A::pause_tracking(orch));
+  CHECK_FALSE(A::resume_tracking(orch));
+}
+
+TEST_CASE("paused tracking survives button wake without reopening the route",
+          "[Orchestrator][tracking][pause][init]") {
+  TestFixture f;
+  test_spy::state_to_load.tracking_state = TrackingState::Paused;
+  test_spy::state_to_load.tracking_session_id = 12345;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  orch.init(WakeCause::Button);
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  CHECK(A::tracking_session_id(orch) == 12345);
+  CHECK_FALSE(test_spy::route_resumed);
+  CHECK(A::is_gps_active(orch));
+  CHECK(A::snapshot_state(orch).tracking_state == TrackingState::Paused);
+  CHECK(A::build_context(orch).tracking_state == TrackingState::Paused);
+}
+
+TEST_CASE("paused route may be exported but cannot be deleted",
+          "[Orchestrator][tracking][pause][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  REQUIRE(A::start_tracking(orch));
+  REQUIRE(A::pause_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  Event event{};
+  event.type = EventType::BleHistoryWrite;
+
+  test_spy::ble_pending_history_len = 1;
+  test_spy::ble_history_decode_result.op = BleHistoryOp::Start;
+  test_spy::ble_history_decode_result.session_id = session;
+  A::dispatch(orch, event);
+  CHECK(test_spy::ble_history_start_called);
+  CHECK(test_spy::ble_history_start_session == session);
+  CHECK_FALSE(test_spy::ble_notify_history_error_called);
+
+  test_spy::ble_pending_history_len = 1;
+  test_spy::ble_history_decode_result.op = BleHistoryOp::Delete;
+  A::dispatch(orch, event);
+  CHECK_FALSE(test_spy::ble_history_delete_called);
+  REQUIRE(test_spy::ble_notify_history_error_called);
+  CHECK(std::string(test_spy::ble_last_history_error) == BLE_VAL_ERR_SESSION_ACTIVE);
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+}
+
+TEST_CASE("paused session survives reconnect and is saved for sleep",
+          "[Orchestrator][tracking][pause]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  REQUIRE(A::start_tracking(orch));
+  REQUIRE(A::pause_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  test_spy::reset();
+  Event event{};
+  event.type = EventType::BleConnected;
+  A::dispatch(orch, event);
+  CHECK(test_spy::ble_tracking_state == TrackingState::Paused);
+  CHECK(test_spy::ble_last_status_tracking);
+  CHECK(test_spy::ble_last_status_session == session);
+  CHECK_FALSE(test_spy::route_resumed);
+
+  A::prepare_for_sleep(orch);
+  CHECK(test_spy::state_saved);
+  CHECK(test_spy::last_saved_state.tracking_state == TrackingState::Paused);
+  CHECK(test_spy::last_saved_state.tracking_session_id == session);
+  CHECK_FALSE(test_spy::route_file_open);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("BLE pause/resume preserve legacy session commands",
+          "[Orchestrator][tracking][pause][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  const auto command = [&](BleCommand cmd) {
+    test_spy::ble_pending_config_len = 1;
+    test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+    test_spy::ble_config_decode_result.cmd = cmd;
+    Event event{};
+    event.type = EventType::BleConfigWrite;
+    A::dispatch(orch, event);
+  };
+  command(BleCommand::PauseTracking);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_NOT_TRACKING);
+  command(BleCommand::StartTracking);
+  REQUIRE(test_spy::ble_last_command_success);
+  const auto session = A::tracking_session_id(orch);
+  command(BleCommand::PauseTracking);
+  REQUIRE(test_spy::ble_last_command_success);
+  command(BleCommand::StartTracking);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_ALREADY_TRACKING);
+  command(BleCommand::ResumeTracking);
+  CHECK(test_spy::ble_last_command_success);
+  CHECK(A::tracking_session_id(orch) == session);
+  command(BleCommand::PauseTracking);
+  command(BleCommand::StopTracking);
+  CHECK(test_spy::ble_last_command_success);
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+}
 
 TEST_CASE("start_tracking: generates session ID and starts route", "[Orchestrator][tracking]") {
   TestFixture f;
@@ -2566,7 +2754,7 @@ TEST_CASE("button wake: pre-armed snackbar clears in single timer fire",
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
       .gps_enabled = false,
-      .tracking_active = false,
+      .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
 
@@ -4513,7 +4701,7 @@ TEST_CASE("prepare_for_sleep: flushes and closes route file when tracking is act
   // end_route() that closes the file, not stop_tracking().  The next wake
   // will call resume_route() to reopen the file in append mode.
   CHECK(test_spy::state_saved);
-  CHECK(test_spy::last_saved_state.tracking_active == true);
+  CHECK(test_spy::last_saved_state.tracking_state == TrackingState::Recording);
   CHECK(test_spy::last_saved_state.tracking_session_id != 0);
 }
 
@@ -4531,7 +4719,7 @@ TEST_CASE("init(Timer, promoted, locked): RTC restored, measures seeded, no meas
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
       .gps_enabled = true,
-      .tracking_active = true,
+      .tracking_state = TrackingState::Recording,
       .tracking_session_id = 55555,
   };
 
@@ -4588,7 +4776,7 @@ TEST_CASE("init(Timer, promoted, unlocked): RTC restored, unlock called, no meas
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
       .gps_enabled = false,
-      .tracking_active = false,
+      .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
 
@@ -4639,7 +4827,7 @@ TEST_CASE("init(Timer, promoted, unlocked, painted): state set directly, no upda
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
       .gps_enabled = true,
-      .tracking_active = false,
+      .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
 
@@ -4675,7 +4863,7 @@ TEST_CASE("init(Timer, promoted, no measures): RTC restored, measurement request
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
       .gps_enabled = true,
-      .tracking_active = false,
+      .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
 
@@ -4713,7 +4901,7 @@ TEST_CASE("init(PowerOn, default handoff): no RTC restored, locked, measurement 
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
       .gps_enabled = false,
-      .tracking_active = true,
+      .tracking_state = TrackingState::Recording,
       .tracking_session_id = 99999,
   };
 
@@ -4753,7 +4941,7 @@ TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with bu
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
       .gps_enabled = false,
-      .tracking_active = false,
+      .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
 

@@ -2,9 +2,8 @@
  * AirGradient Go — BLE Service implementation
  *
  * GATT setup, CBOR encoding/decoding, NimBLE callbacks, and binary
- * history streaming.  Only init() is guarded with #ifndef TEST_HOST
- * (it instantiates the concrete NimbleBleServer). All other methods
- * use the abstract BleServer* interface and compile under host tests.
+ * history streaming. BLE registration is excluded under TEST_HOST; the
+ * encoding and event handlers use the abstract BLE server interface.
  *
  * AirGradient
  * https://airgradient.com
@@ -840,14 +839,14 @@ void BleService::notify_measures(const MeasuresAGo &measures, const GpsData &gps
 // Data output: Status
 // ---------------------------------------------------------------------------
 
-void BleService::update_status(const PowerSnapshot &power, const GpsData &gps, bool tracking_active,
-                               uint32_t session_id) {
+void BleService::update_status(const PowerSnapshot &power, const GpsData &gps, uint32_t session_id,
+                               TrackingState tracking_state) {
   if (_status_char == nullptr) {
     return;
   }
 
   uint8_t buf[CBOR_BUF_SIZE];
-  size_t len = encode_status(buf, sizeof(buf), power, gps, tracking_active, session_id);
+  size_t len = encode_status(buf, sizeof(buf), power, gps, session_id, tracking_state);
   if (len == 0) {
     AG_LOGW(TAG, "status encode failed");
     return;
@@ -857,17 +856,17 @@ void BleService::update_status(const PowerSnapshot &power, const GpsData &gps, b
 }
 
 void BleService::notify_tracking_status(const PowerSnapshot &power, const GpsData &gps,
-                                        bool tracking_active, uint32_t session_id) {
-  // Refresh the full 9-key snapshot through the sole writer (READ stays full).
-  update_status(power, gps, tracking_active, session_id);
+                                        uint32_t session_id, TrackingState tracking_state) {
+  // Refresh the full 10-key snapshot through the sole writer (READ stays full).
+  update_status(power, gps, session_id, tracking_state);
 
   if (!_connected.load() || _status_char == nullptr) {
     return;
   }
 
-  // NOTIFY carries only the transition delta ({tracking, session}).
+  // NOTIFY carries the tracking transition delta ({tracking, session, trk}).
   uint8_t delta[STATUS_DELTA_BUF_SIZE];
-  size_t len = encode_status_transition(delta, sizeof(delta), tracking_active, session_id);
+  size_t len = encode_status_transition(delta, sizeof(delta), session_id, tracking_state);
   if (len == 0) {
     return; // encoder overflow guard (logged in encode_status_transition)
   }
@@ -875,9 +874,9 @@ void BleService::notify_tracking_status(const PowerSnapshot &power, const GpsDat
 }
 
 void BleService::notify_charging_status(const PowerSnapshot &power, const GpsData &gps,
-                                        bool tracking_active, uint32_t session_id) {
-  // Refresh the full 9-key snapshot through the sole writer (READ stays full).
-  update_status(power, gps, tracking_active, session_id);
+                                        uint32_t session_id, TrackingState tracking_state) {
+  // Refresh the full 10-key snapshot through the sole writer (READ stays full).
+  update_status(power, gps, session_id, tracking_state);
 
   if (!_connected.load() || _status_char == nullptr) {
     return;
@@ -1636,14 +1635,15 @@ size_t BleService::encode_measures(uint8_t *buf, size_t buf_size, const Measures
 // ---------------------------------------------------------------------------
 
 size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnapshot &power,
-                                 const GpsData &gps, bool tracking, uint32_t session_id) {
+                                 const GpsData &gps, uint32_t session_id,
+                                 TrackingState tracking_state) {
   CborEncoder encoder;
   cbor_encoder_init(&encoder, buf, buf_size, 0);
 
-  // All 9 keys are always present. Firmware version is intentionally not
+  // All 10 keys are always present. Firmware version is intentionally not
   // exposed here; it lives only in DIS Firmware Revision (0x2A26).
   CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 9);
+  cbor_encoder_create_map(&encoder, &map, 10);
 
   cbor_encode_text_stringz(&map, BLE_KEY_GPS_FIX);
   cbor_encode_uint(&map, static_cast<uint64_t>(gps.fix.fix_type));
@@ -1665,10 +1665,13 @@ size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnaps
   cbor_encode_text_stringz(&map, charging_state_to_str(power.charging_status));
 
   cbor_encode_text_stringz(&map, BLE_KEY_TRACKING);
-  cbor_encode_boolean(&map, tracking);
+  cbor_encode_boolean(&map, tracking_session_active(tracking_state));
 
   cbor_encode_text_stringz(&map, BLE_KEY_SESSION);
   cbor_encode_uint(&map, session_id);
+
+  cbor_encode_text_stringz(&map, BLE_KEY_TRACKING_STATE);
+  cbor_encode_uint(&map, static_cast<uint8_t>(tracking_state));
 
   cbor_encode_text_stringz(&map, BLE_KEY_FLASH_KB);
   cbor_encode_uint(&map, _storage.total_capacity_kb());
@@ -1685,21 +1688,24 @@ size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnaps
   return cbor_encoder_get_buffer_size(&encoder, buf);
 }
 
-size_t BleService::encode_status_transition(uint8_t *buf, size_t buf_size, bool tracking,
-                                            uint32_t session_id) {
+size_t BleService::encode_status_transition(uint8_t *buf, size_t buf_size, uint32_t session_id,
+                                            TrackingState tracking_state) {
   CborEncoder encoder;
   cbor_encoder_init(&encoder, buf, buf_size, 0);
 
-  // Transition delta: only the two keys that change. No "type" — the Status
-  // characteristic carries only status notifications.
+  // Tracking delta: retain the legacy fields and add the explicit state.
+  // No "type" — the Status characteristic carries only status notifications.
   CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 2);
+  cbor_encoder_create_map(&encoder, &map, 3);
 
   cbor_encode_text_stringz(&map, BLE_KEY_TRACKING);
-  cbor_encode_boolean(&map, tracking);
+  cbor_encode_boolean(&map, tracking_session_active(tracking_state));
 
   cbor_encode_text_stringz(&map, BLE_KEY_SESSION);
   cbor_encode_uint(&map, session_id);
+
+  cbor_encode_text_stringz(&map, BLE_KEY_TRACKING_STATE);
+  cbor_encode_uint(&map, static_cast<uint8_t>(tracking_state));
 
   cbor_encoder_close_container(&encoder, &map);
 
@@ -2084,6 +2090,12 @@ static BleCommand str_to_ble_command(const char *s) {
   if (strcmp(s, BLE_VAL_CMD_STOP_TRACKING) == 0) {
     return BleCommand::StopTracking;
   }
+  if (strcmp(s, BLE_VAL_CMD_PAUSE_TRACKING) == 0) {
+    return BleCommand::PauseTracking;
+  }
+  if (strcmp(s, BLE_VAL_CMD_RESUME_TRACKING) == 0) {
+    return BleCommand::ResumeTracking;
+  }
   if (strcmp(s, BLE_VAL_CMD_SET_AIDING) == 0) {
     return BleCommand::SetAiding;
   }
@@ -2103,6 +2115,10 @@ static const char *ble_command_to_str(BleCommand cmd) {
     return BLE_VAL_CMD_START_TRACKING;
   case BleCommand::StopTracking:
     return BLE_VAL_CMD_STOP_TRACKING;
+  case BleCommand::PauseTracking:
+    return BLE_VAL_CMD_PAUSE_TRACKING;
+  case BleCommand::ResumeTracking:
+    return BLE_VAL_CMD_RESUME_TRACKING;
   case BleCommand::SetAiding:
     return BLE_VAL_CMD_SET_AIDING;
   case BleCommand::Set:
