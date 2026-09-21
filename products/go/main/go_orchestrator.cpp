@@ -34,6 +34,7 @@
 static constexpr const char *TAG = "Orchestrator";
 
 static constexpr uint8_t SESSION_ID_LENGTH = 5;
+static constexpr uint32_t MAX_SHAKE_EVENT_AGE_MS = 500;
 
 // 5 random draws against ~90k slots: collision probability is negligible.
 static constexpr int SESSION_ID_MAX_RETRIES = 5;
@@ -677,6 +678,9 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::InputPress:
     on_input(event.input);
     break;
+  case EventType::ShakeDetected:
+    on_shake_detected(event.shake_detected_ms);
+    break;
 
   // BLE events
   case EventType::BleConnected:
@@ -1124,6 +1128,22 @@ void Orchestrator::on_gps_fix(const GpsData &data) {
       _svc.led_service.back_breathe({0, 255, 0}, GPS_TEST_FIX_BREATHE_MS);
     }
     update_display();
+  }
+}
+
+void Orchestrator::on_shake_detected(uint32_t detected_ms) {
+  const uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  // Unsigned subtraction keeps event age correct across uptime wraparound.
+  const uint32_t age_ms = now_ms - detected_ms;
+  if (age_ms > MAX_SHAKE_EVENT_AGE_MS) {
+    return;
+  }
+  if (!_provisioning_sensitive_services_paused && !_ota_committed && !_periph.active &&
+      _svc.ui_manager.current_screen() != Screen::AccelTest) {
+    AG_LOGI(TAG, "shake accepted; buzzer=%s", _settings.buzzer_enabled ? "on" : "off");
+    if (_settings.buzzer_enabled) {
+      _svc.buzzer_service.acknowledge_refresh();
+    }
   }
 }
 
@@ -1751,13 +1771,10 @@ void Orchestrator::finish_gps_test() {
 
 void Orchestrator::start_accel_test() {
   AG_LOGI(TAG, "accel test: start");
-  // Create the driver once (kept for the process lifetime). new_accel_sensor()
-  // probes + init()s and returns null on boards/stubs without an accelerometer.
-  if (_accel == nullptr) {
-    _accel = _svc.board.new_accel_sensor();
-  }
+  AccelService::TestReading reading;
+  const bool available = _svc.accel_service.begin_hardware_test(reading);
   _last_accel_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
-  sample_and_classify_accel();
+  classify_accel(reading, available);
 
   // One-shot pass/fail cue on entry (buzzer + back LED), mirroring the
   // peripheral-test overall cue. Lives only here so it fires exactly once per
@@ -1777,21 +1794,19 @@ void Orchestrator::start_accel_test() {
 }
 
 void Orchestrator::poll_accel_test() {
-  sample_and_classify_accel();
+  AccelService::TestReading reading;
+  const bool available = _svc.accel_service.read_hardware_test(reading);
+  classify_accel(reading, available);
   update_display();
 }
 
-void Orchestrator::sample_and_classify_accel() {
-  if (_accel != nullptr) {
-    _accel_who_am_i = _accel->who_am_i();
-    _accel_id_ok = accel_identity_ok(_accel_who_am_i, _accel->expected_who_am_i());
-    _accel_read_ok = _accel->read(_accel_reading);
-  } else {
-    _accel_who_am_i = 0;
-    _accel_id_ok = false;
-    _accel_read_ok = false;
-    _accel_reading = {};
-  }
+void Orchestrator::classify_accel(const AccelService::TestReading &reading, bool available) {
+  _accel_who_am_i = reading.who_am_i;
+  _accel_id_ok = reading.expected_who_am_i != 0 &&
+                 accel_identity_ok(reading.who_am_i, reading.expected_who_am_i);
+  _accel_reading = reading.sample;
+  _accel_read_ok = available && reading.result == AccelReadResult::Ready &&
+                   _accel_reading.is_valid() && !_accel_reading.clipped;
 
   bool magnitude_ok = false;
   if (_accel_read_ok) {
@@ -1811,6 +1826,9 @@ void Orchestrator::finish_accel_test() {
   AG_LOGI(TAG, "accel test: finish");
   // Restore the buzzer enable and the back LED (the cue overrode both).
   _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
+  if (!_svc.accel_service.end_hardware_test()) {
+    AG_LOGW(TAG, "failed to restore accelerometer capture");
+  }
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   if (_corrected_measures.pm_a.is_pm_25_valid()) {
     _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
@@ -2082,6 +2100,7 @@ void Orchestrator::save_tag(uint8_t tag_index, const char *tag_label) {
 
 void Orchestrator::shutdown(ShipModeRequest reason) {
   AG_LOGI(TAG, "shutdown (reason=%d)", static_cast<int>(reason));
+  _svc.accel_service.stop();
 
   // Manufacturing units retain corrections but clear all other settings and
   // Wi-Fi state changed while testing.
@@ -3135,6 +3154,7 @@ void Orchestrator::try_enter_sleep() {
 
 void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   AG_LOGI(TAG, "prepare_for_sleep");
+  _svc.accel_service.stop();
   log_heap(TAG, "sleep.prepare:enter");
 
   // Ensure pending display refresh completes before stopping worker

@@ -17,6 +17,8 @@
 #include <algorithm>
 
 static constexpr const char *TAG = "Buzzer";
+static constexpr uint32_t REFRESH_ACK_FREQ_HZ = 2700;
+static constexpr uint32_t REFRESH_ACK_DURATION_MS = 100;
 
 // ===========================================================================
 // Construction / Destruction
@@ -107,6 +109,8 @@ void BuzzerService::beep(uint32_t freq_hz, uint32_t duration_ms) {
   Note note{freq_hz, duration_ms};
   play(&note, 1);
 }
+
+void BuzzerService::acknowledge_refresh() { beep(REFRESH_ACK_FREQ_HZ, REFRESH_ACK_DURATION_MS); }
 
 void BuzzerService::set_enabled(bool enabled) { _enabled = enabled; }
 

@@ -15,6 +15,7 @@
 
 #include "accel/accel_sanity.h"
 #include "accel/accel_sensor.h"
+#include "accel/accel_service.h"
 #include "config_store.h"
 #include "go_ble.h"
 #include "buzzer/go_buzzer.h"
@@ -65,6 +66,7 @@ public:
     PortableWifiProvisioner &portable_provisioner; // attached Portable Wi-Fi provisioning
     GoBoard &board;  // borrowed for init_wifi_subsystem() in Stationary entry
     OtaService &ota; // per-mode OTA wiring (BLE push / WiFi pull)
+    AccelService &accel_service;
   };
 
   /// Construct the orchestrator.
@@ -204,14 +206,8 @@ private:
   uint32_t _gps_ttff_ms = GPS_TTFF_PENDING;
 
   // --- Accelerometer (hardware) test flow ---
-  // Active-state is derived from the current screen (Screen::AccelTest). The
-  // driver is created lazily on first entry and kept for the process lifetime
-  // (never freed). Classification uses the pure accel_sanity helpers.
-  //
-  // TODO: fold this into a dedicated accelerometer service when one exists —
-  // the driver handle plus the cached sample/classification state belong there,
-  // leaving the orchestrator to own only the test flow.
-  AccelSensor *_accel = nullptr;
+  // AccelService's worker owns the hardware. The orchestrator caches test
+  // results and classifies them with the pure accel_sanity helpers.
   AccelReading _accel_reading{};
   uint8_t _accel_who_am_i = 0;
   bool _accel_id_ok = false;
@@ -262,6 +258,7 @@ private:
   void on_sensor_data(const MeasuresAGo &data);
   void on_gps_fix(const GpsData &data);
   void on_input(const InputEventData &input);
+  void on_shake_detected(uint32_t detected_ms);
   void on_co2_calibration_done(Co2CalibrationResult result);
   void on_co2_abc_period_done(Co2AbcPeriodResult result);
   void on_tvoc_nox_learning_offset_done(TvocNoxLearningOffsetResult result);
@@ -423,14 +420,13 @@ private:
   /// receiver against settings (stop it if the test ungated it).
   void finish_gps_test();
 
-  /// Enter the live accelerometer test: create the driver (once), take a first
-  /// sample, classify, and fire the one-shot pass/fail cue.
+  /// Request unfiltered readings from the worker, classify the first sample,
+  /// and fire the one-shot pass/fail cue.
   void start_accel_test();
   /// Re-sample the accelerometer and re-render (periodic ~2 Hz refresh). No cue.
   void poll_accel_test();
-  /// Read WHO_AM_I + X/Y/Z and update the cached identity/read/magnitude/pass
-  /// state. I2C-touching; shared by start_accel_test() and poll_accel_test().
-  void sample_and_classify_accel();
+  /// Cache and classify a worker reply without accessing the driver.
+  void classify_accel(const AccelService::TestReading &reading, bool available);
   /// Leave the accelerometer test: restore the back LED brightness + live AQI.
   void finish_accel_test();
 

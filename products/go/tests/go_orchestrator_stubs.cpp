@@ -27,6 +27,7 @@
 #include "go_wifi.h"
 #include "services/local_server.h"
 
+#include <functional>
 #include <algorithm>
 #include <cstring>
 #include <set>
@@ -36,6 +37,8 @@
 // ============================================================================
 
 namespace test_spy {
+std::function<void()> during_melody;
+uint32_t buzzer_refresh_ack_count = 0;
 
 // --- SensorProducer ---
 bool sensor_started = false;
@@ -251,6 +254,8 @@ bool recover_pm_sensor_called = false;
 uint32_t recover_pm_sensor_count = 0;
 
 void reset() {
+  during_melody = nullptr;
+  buzzer_refresh_ack_count = 0;
   sensor_started = false;
   sensor_stopped = false;
   sensor_stop_sleep_pm = false;
@@ -1326,6 +1331,7 @@ bool BuzzerService::start() { return true; }
 
 void BuzzerService::play(const Note * /*notes*/, uint8_t /*count*/) {}
 void BuzzerService::beep(uint32_t /*freq_hz*/, uint32_t /*duration_ms*/) {}
+void BuzzerService::acknowledge_refresh() { ++test_spy::buzzer_refresh_ack_count; }
 void BuzzerService::set_enabled(bool /*enabled*/) {}
 void BuzzerService::stop() {}
 bool BuzzerService::is_playing() const { return false; }
@@ -1353,5 +1359,8 @@ void BuzzerService::pump_for_test(uint32_t /*now_ms*/) {}
 #include "go_melody_sync.h"
 
 uint32_t play_synced(BuzzerService & /*buzzer*/, LedService & /*led*/, MelodySelect /*melody*/) {
+  if (test_spy::during_melody) {
+    test_spy::during_melody();
+  }
   return 0;
 }

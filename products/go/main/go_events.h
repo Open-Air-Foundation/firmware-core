@@ -19,6 +19,7 @@ enum class EventType : uint8_t {
   SensorTestDone,  // payload: SensorTestResults sensor_test_results (bulk AQ self-test)
   GpsFixUpdate,    // payload: GpsData
   InputPress,      // payload: InputEventData
+  ShakeDetected,   // payload: uint32_t shake_detected_ms (monotonic uptime)
 
   // --- System events ---
   InactivityTimeout, // no payload
@@ -109,6 +110,7 @@ struct Event {
     MeasuresAGo sensor_data;                 // SensorDataReady
     GpsData gps_data;                        // GpsFixUpdate (~68 bytes)
     InputEventData input;                    // InputPress (2 bytes)
+    uint32_t shake_detected_ms;              // ShakeDetected
     OperatingMode mode_change;               // UserChangeMode (1 byte)
     WakeEventData wake;                      // WakeFromSleep (1 byte)
     bool gps_enabled;                        // UserToggleGps (1 byte)

@@ -430,8 +430,9 @@ bool StorageService::append_route_point(const RoutePoint &point) {
 }
 
 bool StorageService::end_route() {
-  if (!test_spy::route_file_open)
+  if (!test_spy::route_file_open) {
     return true;
+  }
   test_spy::route_file_open = false;
   test_spy::route_ended = true;
   return true;
@@ -979,6 +980,7 @@ bool BuzzerService::start() { return true; }
 
 void BuzzerService::play(const Note * /*notes*/, uint8_t /*count*/) {}
 void BuzzerService::beep(uint32_t /*freq_hz*/, uint32_t /*duration_ms*/) {}
+void BuzzerService::acknowledge_refresh() {}
 void BuzzerService::set_enabled(bool /*enabled*/) {}
 void BuzzerService::stop() {}
 bool BuzzerService::is_playing() const { return false; }

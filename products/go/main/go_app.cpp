@@ -23,12 +23,14 @@
 inline constexpr int PIN_BUTTON_POWER = 5;
 inline constexpr int PIN_BUTTON_BOOT = 28;
 inline constexpr int PIN_CAP_INT = 1;
+inline constexpr int PIN_ACCEL_INT = 3;
 inline constexpr int GPS_BAUD = 115200;
 // Stub esp_reset_reason for host builds.
 enum esp_reset_reason_t { ESP_RST_UNKNOWN = 0 };
 inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #endif
 #include "go_ble.h"
+#include "accel/accel_service.h"
 #include "go_buzzer.h"
 #include "go_cloud.h"
 #ifndef TEST_HOST
@@ -582,6 +584,9 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
                                              .suppress_button_wake = true,
                                          });
 
+  auto *accel_service = new AccelService(_board.new_accel_sensor(), _board.gpio_hal(), event_queue,
+                                         {.pin_int = PIN_ACCEL_INT});
+
   PowerService &pwr = _board.power();
 
   std::string serial = _board.serial_number();
@@ -614,6 +619,9 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
     gps_service->idle_gnss();
   }
   input_service->start();
+  if (!accel_service->start()) {
+    AG_LOGW(TAG, "accelerometer worker not started");
+  }
   log_heap(TAG, "boot:button-wake:phase2-end");
 
   // -----------------------------------------------------------------------
@@ -693,6 +701,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       .portable_provisioner = *portable_provisioner,
       .board = _board,
       .ota = *ota_service,
+      .accel_service = *accel_service,
   };
 
   auto *orchestrator =
@@ -834,6 +843,9 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
                                           .pin_button_boot = PIN_BUTTON_BOOT,
                                           .suppress_button_wake = handoff.suppress_wake_press});
 
+  auto *accel_service = new AccelService(_board.new_accel_sensor(), _board.gpio_hal(), event_queue,
+                                         {.pin_int = PIN_ACCEL_INT});
+
   PowerService &pwr = _board.power();
 
   auto *ui_manager = new UIManager({
@@ -889,6 +901,9 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
     gps_service->idle_gnss();
   }
   input_service->start();
+  if (!accel_service->start()) {
+    AG_LOGW(TAG, "accelerometer worker not started");
+  }
 
   // --- Orchestrator ---
   Orchestrator::Services services = {
@@ -909,6 +924,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
       .portable_provisioner = *portable_provisioner,
       .board = _board,
       .ota = *ota_service,
+      .accel_service = *accel_service,
   };
 
   auto *orchestrator =
