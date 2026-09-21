@@ -105,6 +105,13 @@ static constexpr uint32_t TOUCH_DIAG_PERIOD_MS = 500;
 // between two gains while a pad is being pressed and released.
 static constexpr uint8_t TOUCH_DIAG_DELTA_SENSE_START = 0; // 128x, as shipped
 static constexpr uint8_t TOUCH_DIAG_DELTA_SENSE_MIN = 7;   // 1x, least sensitive
+
+// Autoranging settles wherever the first unsaturated reading happens to fall,
+// which made two runs land on different gains and disagree about the signal by
+// nearly seven times.  Set this to a DELTA_SENSE code (0..7) to hold one gain
+// for the whole run instead, so two runs can be compared directly; 0xFF leaves
+// the autorange in charge.
+static constexpr uint8_t TOUCH_DIAG_FIXED_SENSE = 3; // 16x
 // The TPL5010 window is ~60 s and nothing else feeds it on this path.
 static constexpr uint32_t TOUCH_DIAG_WDT_FEED_MS = 20000;
 
@@ -740,6 +747,9 @@ void GoHardwareBoard::_log_fg_golden_image() {
 }
 
 void GoHardwareBoard::_autorange_touch_gain() {
+  if (TOUCH_DIAG_FIXED_SENSE <= 7) {
+    return; // the run is pinned to one gain on purpose
+  }
   if (!_touch_diag_saturated || _touch_diag_sense >= TOUCH_DIAG_DELTA_SENSE_MIN) {
     return;
   }
@@ -1284,6 +1294,17 @@ void GoHardwareBoard::run_touch_diag() {
 
   AG_LOGI(TOUCH_DIAG_TAG, "touch-only diagnostic: nothing else on this board is running");
   _touch_diag_sense = TOUCH_DIAG_DELTA_SENSE_START;
+  if (TOUCH_DIAG_FIXED_SENSE <= 7) {
+    _touch_diag_sense = TOUCH_DIAG_FIXED_SENSE;
+    touch.set_delta_sense(_touch_diag_sense);
+    // Recalibrate at the gain the run will actually use, so the base count is
+    // not left over from a different one.  Keep hands off the pads until the
+    // first line appears.
+    touch.calibrate(TouchChannel::ALL);
+    RTOS::delay_ms(500);
+    AG_LOGI(TOUCH_DIAG_TAG, "gain pinned at %ux, autorange off, recalibrated",
+            CAP1203::delta_sense_multiplier(_touch_diag_sense));
+  }
   uint32_t last_feed = 0;
   for (;;) {
     const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
