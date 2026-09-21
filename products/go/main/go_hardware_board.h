@@ -7,6 +7,7 @@
 
 class AgClient;
 class BQ25629Bms;
+class CAP1203;
 class BQ27427;
 class BQ27742;
 class SPS30;
@@ -104,6 +105,13 @@ private:
   int _pm_power_pin() const;
   void _init_fuel_gauge_v1();
   void _init_fuel_gauge_v2();
+
+  // --- Touch diagnostics (go/test/touch-diag branch only) ---
+  // Periodic dump of the CAP1203's own numbers, so the enclosure's effect on
+  // each pad can be read off the serial log instead of guessed at.
+  static void _touch_diag_task(void *arg);
+  void _run_touch_diagnostics();
+  CAP1203 *_touch_diag = nullptr;
   void _log_fg_golden_image(); ///< print the learned image as a C initialiser
   /// Programs the v2 gauge's hardware protector.  Runs from init_bms(),
   /// not init_fuel_gauge(), because it must know whether an adapter is

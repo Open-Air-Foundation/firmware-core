@@ -142,6 +142,48 @@ bool CAP1203::clear_interrupt() {
   return _read_reg(REG_GENERAL_STATUS, status);
 }
 
+bool CAP1203::read_diagnostics(Diagnostics &out) {
+  if (_dev_handle == nullptr) {
+    return false;
+  }
+
+  Diagnostics d{};
+  uint8_t cal_msb[3] = {};
+  uint8_t cal_lsb = 0;
+
+  if (!_read_reg(REG_GENERAL_STATUS, d.general_status) ||
+      !_read_reg(REG_SENSOR_INPUT_STATUS, d.sensor_status) ||
+      !_read_reg(REG_NOISE_FLAG_STATUS, d.noise_flags) ||
+      !_read_reg(REG_BASE_OUT_LIMIT, d.base_out_limit) ||
+      !_read_reg(REG_CALIBRATION_ACTIVATE, d.cal_active) ||
+      !_read_reg(REG_SENSITIVITY_CONTROL, d.sensitivity) ||
+      !_read_reg(REG_CALIBRATION_LSB, cal_lsb)) {
+    return false;
+  }
+
+  for (uint8_t i = 0; i < 3; ++i) {
+    uint8_t raw = 0;
+    if (!_read_reg(static_cast<uint8_t>(REG_DELTA_CH1 + i), raw)) {
+      return false;
+    }
+    d.delta[i] = static_cast<int8_t>(raw); // 2's complement (datasheet 5.4, p.24)
+
+    if (!_read_reg(static_cast<uint8_t>(REG_BASE_COUNT_CH1 + i), d.base[i]) ||
+        !_read_reg(static_cast<uint8_t>(REG_THRESHOLD_CH1 + i), d.threshold[i]) ||
+        !_read_reg(static_cast<uint8_t>(REG_CALIBRATION_CH1 + i), cal_msb[i])) {
+      return false;
+    }
+    // 10-bit value split across two registers: the eight high bits live in
+    // B1h/B2h/B3h, the two low bits are packed two-per-channel into B9h
+    // (datasheet 5.27, p.44).
+    const uint8_t low = static_cast<uint8_t>((cal_lsb >> (i * 2)) & 0x03);
+    d.calibration[i] = static_cast<uint16_t>((static_cast<uint16_t>(cal_msb[i]) << 2) | low);
+  }
+
+  out = d;
+  return true;
+}
+
 bool CAP1203::_read_reg(uint8_t reg, uint8_t &out) {
   if (_dev_handle == nullptr) {
     return false;

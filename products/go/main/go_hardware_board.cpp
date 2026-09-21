@@ -94,6 +94,12 @@ static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
 // already learned prints its image at boot as a C initialiser, ready to paste
 // in here.  Filling it in turns every later unit into a production unit that
 // installs the image and never runs a cycle of its own.
+// Touch diagnostics knobs (go/test/touch-diag branch only).
+static constexpr const char *TOUCH_DIAG_TAG = "TOUCHDIAG";
+static constexpr uint32_t TOUCH_DIAG_PERIOD_MS = 2000;
+static constexpr uint32_t TOUCH_DIAG_TASK_STACK_BYTES = 3072;
+static constexpr uint32_t TOUCH_DIAG_TASK_PRIORITY = 3;
+
 static constexpr FgGoldenImage AGO_FG_GOLDEN_V2 = {};
 
 // Either no image (a characterisation build) or one that would survive the
@@ -1224,7 +1230,61 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
     AG_LOGE(TAG, "CAP1203 touch init failed");
   }
   _chips.set(Chip::Touch, ok, ok ? nullptr : "check CN4 cable");
+  if (ok) {
+    _touch_diag = touch;
+    RTOS::task_create(_touch_diag_task, "touch_diag", TOUCH_DIAG_TASK_STACK_BYTES, this,
+                      TOUCH_DIAG_TASK_PRIORITY, nullptr);
+  }
   return touch;
+}
+
+// ---------------------------------------------------------------------------
+// Touch diagnostics (go/test/touch-diag branch only)
+//
+// The CAP1203 keeps three numbers per pad and the driver reads none of them,
+// so a pad held down by the enclosure looks identical to a pad someone is
+// touching.  This dumps all three every TOUCH_DIAG_PERIOD_MS: the analog trim
+// says whether the chip can still balance the pad at all, the base count is
+// the resting level it settled on, and the delta is how far the pad is from
+// that level right now.  Reads only; on this part nothing clears a latch
+// except an explicit write to MAIN_CONTROL, so this cannot disturb the touch
+// FSM running in InputService.
+// ---------------------------------------------------------------------------
+
+void GoHardwareBoard::_touch_diag_task(void *arg) {
+  auto *self = static_cast<GoHardwareBoard *>(arg);
+  for (;;) {
+    self->_run_touch_diagnostics();
+    RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
+  }
+}
+
+void GoHardwareBoard::_run_touch_diagnostics() {
+  if (_touch_diag == nullptr) {
+    return;
+  }
+  CAP1203::Diagnostics d{};
+  if (!_touch_diag->read_diagnostics(d)) {
+    AG_LOGW(TOUCH_DIAG_TAG, "read failed");
+    return;
+  }
+
+  AG_LOGI(TOUCH_DIAG_TAG, "gen=0x%02X touch=0x%02X noise=0x%02X bcout=0x%02X calact=0x%02X sens=0x%02X",
+          d.general_status, d.sensor_status, d.noise_flags, d.base_out_limit, d.cal_active,
+          d.sensitivity);
+  for (uint8_t i = 0; i < 3; ++i) {
+    AG_LOGI(TOUCH_DIAG_TAG, "CS%u delta=%+4d base=%3u cal=%4u thr=%3u%s%s%s", i + 1, d.delta[i],
+            d.base[i], d.calibration[i], d.threshold[i],
+            CAP1203::calibration_failed(d.calibration[i]) ? "  CAL-PINNED" : "",
+            (d.base_out_limit & (1u << i)) ? "  BASE-OUT" : "",
+            (d.delta[i] == 127) ? "  DELTA-SAT" : "");
+  }
+  if (d.general_status & 0x20) {
+    AG_LOGW(TOUCH_DIAG_TAG, "ACAL_FAIL — at least one pad failed analog calibration");
+  }
+  if (d.base[0] == 0xC8 && d.base[1] == 0xC8 && d.base[2] == 0xC8) {
+    AG_LOGW(TOUCH_DIAG_TAG, "all base counts still at the 0xC8 reset value — no calibration yet");
+  }
 }
 
 AccelSensor *GoHardwareBoard::new_accel_sensor() {

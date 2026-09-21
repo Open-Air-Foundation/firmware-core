@@ -59,6 +59,26 @@ public:
     int timeout_ms = 1000;
   };
 
+  /// One sweep of everything the chip will tell you about its three pads.
+  /// Read-only and non-disturbing: nothing here clears a latch, because on
+  /// this part status only clears on an explicit write to MAIN_CONTROL.
+  struct Diagnostics {
+    uint8_t general_status;  ///< 0x02: b6 BC_OUT, b5 ACAL_FAIL, b4 PWR, b2 MULT, b1 MTP, b0 TOUCH
+    uint8_t sensor_status;   ///< 0x03: which pads read as touched
+    uint8_t noise_flags;     ///< 0x0A: per-pad noise, self-clearing
+    uint8_t base_out_limit;  ///< 0x2E: per-pad base count outside +/-12.5%
+    uint8_t cal_active;      ///< 0x26: set = calibration pending or failed
+    uint8_t sensitivity;     ///< 0x1F: b6:4 DELTA_SENSE, b3:0 BASE_SHIFT
+    int8_t delta[3];         ///< 0x10-0x12: signed, saturates at +127 / -128
+    uint8_t base[3];         ///< 0x50-0x52: resting reference, 0xC8 = never calibrated
+    uint16_t calibration[3]; ///< 0xB1-0xB3 + 0xB9: 10-bit analog trim, 0 or 1023 = failed
+    uint8_t threshold[3];    ///< 0x30-0x32: read back, not what we think we wrote
+  };
+
+  /// True when the analog trim for this pad ran out of range, which no
+  /// threshold or sensitivity change can rescue (datasheet 5.27, p.44).
+  static bool calibration_failed(uint16_t value) { return value == 0 || value == 0x3FF; }
+
   static constexpr uint8_t DEFAULT_ADDRESS = 0x28;
 
   // Constructs the driver. init() must be called before any other method.
@@ -78,6 +98,10 @@ public:
   // reads GENERAL_STATUS to latch-clear the touch status flags.
   // Call this from the interrupt handler or after processing a touch event.
   bool clear_interrupt() override;
+
+  /// Read every diagnostic register in one sweep.  All-or-nothing: false
+  /// leaves @p out untouched rather than half-filled.
+  bool read_diagnostics(Diagnostics &out);
 
 private:
   bool _read_reg(uint8_t reg, uint8_t &out);
@@ -100,9 +124,14 @@ private:
   static constexpr uint8_t REG_CALIBRATION_ACTIVATE = 0x26;
   static constexpr uint8_t REG_INTERRUPT_ENABLE = 0x27;
   static constexpr uint8_t REG_REPEAT_RATE_ENABLE = 0x28;
+  static constexpr uint8_t REG_DELTA_CH1 = 0x10;
+  static constexpr uint8_t REG_BASE_OUT_LIMIT = 0x2E;
   static constexpr uint8_t REG_THRESHOLD_CH1 = 0x30;
   static constexpr uint8_t REG_THRESHOLD_CH2 = 0x31;
   static constexpr uint8_t REG_THRESHOLD_CH3 = 0x32;
+  static constexpr uint8_t REG_BASE_COUNT_CH1 = 0x50;
+  static constexpr uint8_t REG_CALIBRATION_CH1 = 0xB1;
+  static constexpr uint8_t REG_CALIBRATION_LSB = 0xB9;
   static constexpr uint8_t REG_PRODUCT_ID = 0xFD;
   static constexpr uint8_t REG_MANUFACTURER_ID = 0xFE;
   static constexpr uint8_t REG_REVISION = 0xFF;
