@@ -539,8 +539,13 @@ A learning cycle moves it `0x00 → 0x04` (`IT_ENABLE`) `→ 0x05` (after charge
 and relaxation) `→ 0x06` (after discharge and relaxation). A golden image is
 taken at `0x06`; TI's tooling then clears bit 2 so shipped units read `0x02`.
 `IT_ENABLE` also sets `CONTROL_STATUS[QEN]`, which cannot be cleared, so Qmax
-Cell 0 and every protection field must be final before it is sent. Do not
-write Update Status by hand.
+Cell 0 and the Ra tables must be final before it is sent. The chemistry
+checksum it gates covers only subclasses 83, 84, 85 and 108 plus two IT Cfg
+fields (TRM Table 5-12), so the protector and Safety subclasses are not part of
+that rule — but TI still calls `IT_ENABLE` the last step of production, and on
+a production unit the board sends it from `init_fuel_gauge()`, which runs
+before `init_bms()` writes the protector. Update Status bit 1 may be written
+only when restoring a golden image; bit 2 never, only `IT_ENABLE` sets it.
 
 Bench state: Update Status `0x00`, FCC 747 mAh, no learned data. SOC from
 this gauge is not meaningful until a learning cycle completes. The runner now
@@ -565,7 +570,7 @@ Board wiring: [`go_hardware_board.cpp`](../main/go_hardware_board.cpp).
 | Status | `read_safety_status()`, `read_protector_status()`, `read_protector_state()` | logged at boot |
 | Learning reads | `read_learning_progress()` (Update Status + `CONTROL_STATUS[OCVTAKEN]`), `read_qmax_mah()`, `read_ra_table()` | polled every 5 s by the learning runner |
 | Golden image | `read_golden_image()`, `write_golden_image()` | captured on the characterised unit, installed on every other one while Update Status is `0x00`; see [Golden Image](fg_learning.md#golden-image) |
-| `IT_ENABLE` | `set_update_status_learning(true)` | sent once by the learning runner at cycle-1 entry; skipped when Update Status bit 2 is already set |
+| `IT_ENABLE` | `set_update_status_learning(true)` | sent by the learning runner at cycle-1 entry, and by the board on a production unit once its golden image verifies; skipped when Update Status bit 2 is already set, and confirmed by reading that bit back |
 | `PROTECTOR_CHKSUM` subcommand | `control_subcommand(0x001A, …)` | used to verify the protector write |
 | Qmax Cell 0 write | `write_qmax_cell0()` | seeded with Design Capacity from `init_bms()` while Update Status is `0x00`; never overwrites a learned value |
 

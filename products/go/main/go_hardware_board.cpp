@@ -96,6 +96,12 @@ static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
 // installs the image and never runs a cycle of its own.
 static constexpr FgGoldenImage AGO_FG_GOLDEN_V2 = {};
 
+// Either no image (a characterisation build) or one that would survive the
+// runtime guard.  A half-pasted image would otherwise compile and only fail
+// once it reached a production unit.
+static_assert(AGO_FG_GOLDEN_V2.qmax_mah == 0 || fg_golden_image_valid(AGO_FG_GOLDEN_V2),
+              "AGO_FG_GOLDEN_V2 is filled in but incomplete — see fg_learning.md#golden-image");
+
 // Print a captured image the way it has to be typed back in.  Each profile is
 // 15 numbers, so the three fields go on their own lines.
 static void format_ra_profile(const FgRaProfile &p, char *out, size_t len) {
@@ -607,39 +613,56 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
   // is 0 only while IT has never been enabled on this part.
   uint8_t update_status = 0;
   uint16_t qmax_mah = 0;
-  if (!_fuel_gauge_v2->read_update_status(update_status) ||
-      !_fuel_gauge_v2->read_qmax_cell0(qmax_mah)) {
+  const bool status_ok = _fuel_gauge_v2->read_update_status(update_status) &&
+                         _fuel_gauge_v2->read_qmax_cell0(qmax_mah);
+  if (!status_ok) {
     AG_LOGW(TAG, "BQ27742 Qmax / Update Status unreadable — Qmax left as-is");
-  } else if (update_status != 0) {
-    AG_LOGI(TAG,
-            "BQ27742 Impedance Track already started (Update Status 0x%02X) — Qmax %u mAh "
-            "belongs to the gauge",
+  }
+  switch (fg_decide_install(status_ok, update_status, qmax_mah,
+                            fg_golden_image_valid(AGO_FG_GOLDEN_V2),
+                            AGO_CELL_CONFIG_V2.design_capacity_mah)) {
+  case FgInstallAction::None:
+    if (status_ok) {
+      AG_LOGI(TAG, "BQ27742 learned state left alone (Update Status 0x%02X, Qmax %u mAh)",
+              update_status, qmax_mah);
+    }
+    break;
+
+  case FgInstallAction::DumpImage:
+    AG_LOGI(TAG, "BQ27742 Impedance Track running (Update Status 0x%02X) — Qmax %u mAh is the "
+                 "gauge's own",
             update_status, qmax_mah);
-    if (!fg_golden_image_valid(AGO_FG_GOLDEN_V2)) {
-      _log_fg_golden_image(); // characterisation build: hand the result over
-    }
-  } else if (fg_golden_image_valid(AGO_FG_GOLDEN_V2)) {
-    // Production unit: install what the characterised one learned, then start
-    // Impedance Track.  IT_ENABLE latches QEN for the life of the part, so it
-    // only runs once the whole image has been written and read back.
-    AG_LOGI(TAG, "BQ27742 installing golden image (Qmax %u → %u mAh)", qmax_mah,
-            AGO_FG_GOLDEN_V2.qmax_mah);
-    if (!_fuel_gauge_v2->write_golden_image(AGO_FG_GOLDEN_V2)) {
-      AG_LOGW(TAG, "BQ27742 write_golden_image() failed — unit left unlearned, IT not started");
-      df_ok = false;
-    } else if (!_fuel_gauge_v2->set_update_status_learning(true)) {
-      AG_LOGW(TAG, "BQ27742 IT_ENABLE failed — image installed but Impedance Track is off");
-      df_ok = false;
-    }
-  } else if (qmax_mah == AGO_CELL_CONFIG_V2.design_capacity_mah) {
-    AG_LOGI(TAG, "BQ27742 Qmax already seeded (%u mAh) — preserved", qmax_mah);
-  } else {
+    _log_fg_golden_image(); // characterisation build: hand the result over
+    break;
+
+  case FgInstallAction::SeedQmax:
     AG_LOGI(TAG, "BQ27742 seeding Qmax %u → %u mAh before learning", qmax_mah,
             AGO_CELL_CONFIG_V2.design_capacity_mah);
     if (!_fuel_gauge_v2->write_qmax_cell0(AGO_CELL_CONFIG_V2.design_capacity_mah)) {
       AG_LOGW(TAG, "BQ27742 write_qmax_cell0() failed — Qmax not seeded");
       df_ok = false;
     }
+    break;
+
+  case FgInstallAction::InstallImage:
+    AG_LOGI(TAG, "BQ27742 installing golden image (Qmax %u → %u mAh)", qmax_mah,
+            AGO_FG_GOLDEN_V2.qmax_mah);
+    if (!_fuel_gauge_v2->write_golden_image(AGO_FG_GOLDEN_V2)) {
+      AG_LOGW(TAG, "BQ27742 write_golden_image() failed — retried on the next boot");
+      df_ok = false;
+      break;
+    }
+    [[fallthrough]]; // image is in; the same IT_ENABLE finishes the job
+
+  case FgInstallAction::StartImpedanceTrack:
+    // Reached on a later boot too, when the image went in but IT_ENABLE did
+    // not: Update Status 0x02 is an unfinished install, not a gauge to leave
+    // alone.  IT_ENABLE latches QEN, so it only runs behind a verified image.
+    if (!_fuel_gauge_v2->set_update_status_learning(true)) {
+      AG_LOGW(TAG, "BQ27742 IT_ENABLE failed — image installed, Impedance Track still off");
+      df_ok = false;
+    }
+    break;
   }
 
   if (!df_ok) {
@@ -678,15 +701,27 @@ void GoHardwareBoard::_log_fg_golden_image() {
     AG_LOGW(TAG, "BQ27742 golden image unreadable");
     return;
   }
+  // The printed Update Status is the shipping one, not the 0x06 this gauge
+  // reads: bit 2 is IT_ENABLE's to set on each unit, so the line stays
+  // directly pasteable.  The real value only decides the warning below.
+  FgGoldenImage as_shipped = img;
+  as_shipped.update_status = FG_GOLDEN_UPDATE_STATUS;
+
   char buf[320];
-  AG_LOGI(TAG, "BQ27742 golden image: .qmax_mah = %u, .update_status = 0x%02X,", img.qmax_mah,
-          img.update_status);
+  AG_LOGI(TAG, "BQ27742 golden image: .qmax_mah = %u, .update_status = 0x%02X,",
+          as_shipped.qmax_mah, as_shipped.update_status);
   format_ra_profile(img.ra0, buf, sizeof(buf));
   AG_LOGI(TAG, "BQ27742 golden image: .ra0 = %s,", buf);
   format_ra_profile(img.ra0x, buf, sizeof(buf));
   AG_LOGI(TAG, "BQ27742 golden image: .ra0x = %s,", buf);
-  if (!fg_golden_image_valid(img)) {
-    AG_LOGW(TAG, "BQ27742 golden image is not yet complete — do not paste it in");
+
+  if (img.update_status != FG_UPDATE_STATUS_LEARNED) {
+    AG_LOGW(TAG,
+            "BQ27742 learning is not finished (Update Status 0x%02X, needs 0x%02X) — "
+            "do not paste this in",
+            img.update_status, FG_UPDATE_STATUS_LEARNED);
+  } else if (!fg_golden_image_valid(as_shipped)) {
+    AG_LOGW(TAG, "BQ27742 golden image is incomplete — do not paste it in");
   }
 }
 

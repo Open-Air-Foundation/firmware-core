@@ -390,6 +390,14 @@ inline bool fg_ra_profile_enabled(const FgRaProfile &p) {
   return fg_ra_profile_state(p) == FgRaFlag::ENABLED;
 }
 
+/// High byte of the flag: `0xFF` means every resistance in this profile is
+/// still the ROM default (TRM SLUUAX0C §5.7).  Those defaults are positive and
+/// plausible, so they are indistinguishable from learned data by value alone —
+/// this byte is the only thing that tells them apart.
+inline bool fg_ra_profile_is_defaults(const FgRaProfile &p) {
+  return static_cast<uint8_t>((p.flag >> 8) & 0xFF) == FgRaFlag::DEFAULTS;
+}
+
 /// The learned state copied off one characterised unit and written into every
 /// other one, so only that unit ever has to run a learning cycle.  TI calls it
 /// a golden image; `update_status` carries bit 1 (Qmax and Ra learned) with
@@ -409,11 +417,21 @@ static constexpr uint16_t FG_QMAX_CELL0_MAX_MAH = 14500;
 /// started.
 static constexpr uint8_t FG_GOLDEN_UPDATE_STATUS = 0x02;
 
-/// True when an image is complete enough to transplant.  Pure, so the guard is
-/// host-tested rather than discovered on a production line: a zero Qmax means
-/// no image was captured, exactly one profile may be enabled, and the enabled
-/// one must hold real resistances.
-inline bool fg_golden_image_valid(const FgGoldenImage &img) {
+/// Update Status bit 2 — Impedance Track running.  Only `IT_ENABLE` sets it.
+static constexpr uint8_t FG_UPDATE_STATUS_IT_ENABLED = 0x04;
+
+/// Update Status at the end of a successful learning cycle: Impedance Track
+/// running, optimised Qmax and Ra learned.  A golden image may only be
+/// captured here (TRM SLUUAX0C §5.5.3.2).
+static constexpr uint8_t FG_UPDATE_STATUS_LEARNED = 0x06;
+
+/// True when an image is complete enough to transplant.  Pure and constexpr, so
+/// the guard is host-tested and a filled-in constant can be checked at compile
+/// time rather than discovered on a production line: a zero Qmax means no image
+/// was captured, exactly one profile may be enabled, and the enabled one must
+/// hold learned resistances rather than the ROM defaults a fresh part ships
+/// with.
+constexpr bool fg_golden_image_valid(const FgGoldenImage &img) {
   if (img.qmax_mah == 0 || img.qmax_mah > FG_QMAX_CELL0_MAX_MAH) {
     return false;
   }
@@ -424,12 +442,67 @@ inline bool fg_golden_image_valid(const FgGoldenImage &img) {
     return false; // none enabled, or both — the gauge always has exactly one
   }
   const FgRaProfile &live = fg_ra_profile_enabled(img.ra0) ? img.ra0 : img.ra0x;
+  if (fg_ra_profile_is_defaults(live)) {
+    return false; // a fresh gauge, captured before it learned anything
+  }
   for (size_t i = 0; i < FG_RA_TABLE_SIZE; ++i) {
     if (live.ra[i] <= 0) {
       return false;
     }
   }
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// What to do with a gauge's learned state at boot
+// ---------------------------------------------------------------------------
+
+/// The one action boot takes on Qmax / Ra / Update Status.
+enum class FgInstallAction : uint8_t {
+  None,          ///< unreadable, or the gauge owns its learned state already
+  SeedQmax,      ///< characterisation build, fresh part: seed Qmax and let it learn
+  InstallImage,  ///< production build, fresh part: write the image, then start IT
+  StartImpedanceTrack, ///< image is already in, IT_ENABLE did not land last time
+  DumpImage,     ///< characterisation build on a learned part: hand the image over
+};
+
+/// Decide that action from what the gauge reports.  Pure so the state matrix is
+/// host-tested: the interesting cell is Update Status `0x02`, which means an
+/// image is installed but `IT_ENABLE` never landed.  Treating that as "the
+/// gauge owns this" would strand the unit with Impedance Track switched off for
+/// the life of the part, and nothing retries it.
+///
+/// @param status_ok     false when Update Status could not be read at all
+/// @param update_status the gauge's Update Status byte
+/// @param qmax_mah      Qmax Cell 0 as the gauge holds it
+/// @param have_image    a valid golden image is compiled in (production build)
+/// @param design_capacity_mah  what a fresh part should be seeded with
+constexpr FgInstallAction fg_decide_install(bool status_ok, uint8_t update_status,
+                                            uint16_t qmax_mah, bool have_image,
+                                            uint16_t design_capacity_mah) {
+  if (!status_ok) {
+    return FgInstallAction::None; // never write on a reading we do not trust
+  }
+  if ((update_status & FG_UPDATE_STATUS_IT_ENABLED) != 0) {
+    // Running: the gauge has been learning its own cell since, and its values
+    // outrank anything compiled in.
+    return have_image ? FgInstallAction::None : FgInstallAction::DumpImage;
+  }
+  if (update_status == 0) {
+    // Nothing learned and nothing installed — the only state safe to write.
+    if (have_image) {
+      return FgInstallAction::InstallImage;
+    }
+    return (qmax_mah == design_capacity_mah) ? FgInstallAction::None
+                                             : FgInstallAction::SeedQmax;
+  }
+  // Learned values are present with Impedance Track off.  0x02 is our own
+  // unfinished install and only needs IT_ENABLE; anything else is a state the
+  // gauge should not be able to reach, so report it and write nothing rather
+  // than seed Qmax over a learned value.
+  return (have_image && update_status == FG_GOLDEN_UPDATE_STATUS)
+             ? FgInstallAction::StartImpedanceTrack
+             : FgInstallAction::DumpImage;
 }
 
 #endif // BMS_TYPES_H

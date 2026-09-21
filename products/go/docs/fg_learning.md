@@ -214,7 +214,8 @@ reached EDV, persisted `CycleDone`, and entered ship mode (powered off) — an L
 is impossible. The re-plug cue is therefore the `Discharge complete` screen,
 painted as the last frame before power-off. On re-plug the run auto-resumes with
 no operator input (next cycle's `Charge`, or `Verify` after the final cycle). For
-a clean OCV2, let the unit rest briefly while powered off before re-plugging.
+a clean OCV2, leave the unit powered off for at least 5 h before re-plugging —
+that rest is the second of the two points a Qmax update needs.
 
 ### Boot Routing and Resume
 
@@ -308,9 +309,9 @@ current stage **this power session**, so it resets across the ship-off / re-plug
 
 The dashboard's `Q R OCV` row is the gauge's own report of how far Impedance
 Track has gotten. `poll_bms_fg_learning()` packs these three bits into
-`fg_learning_flags`. `OCV` comes straight from `Flags()`; the other two come
+`fg_learning_flags`. All three come
 from `FuelGaugeDevice::read_learning_progress()`, which each driver fills from
-whichever register its part keeps progress in:
+whichever registers its part keeps them in:
 
 | Display | Meaning | Constant | BQ27427 source | BQ27742 source |
 |---|---|---|---|---|
@@ -343,9 +344,13 @@ whichever register its part keeps progress in:
   than trusting `RES_UP`. Ra is learned in `Discharge`, at temperature (hence the
   ~25 °C target there).
 
-Healthy progression: `OCV` flips to 1 first, then `R` turns on during the first
-qualified discharge, and `Q` turns on once the full cycle (two OCVs) closes —
-so `Q0 R0 OCV1` during cycle-1 `Charge` is exactly what you expect.
+Healthy progression differs by variant. On rev 1 `OCV` flips first, `R` turns on
+during the first qualified discharge, and `Q` once the full cycle closes. On
+rev 2.0 both `Q` and `R` come from Update Status, so `Q` appears at `0x05`
+(after the charge and its rest) and `R` only at `0x06` (after the discharge
+**and** the rest that follows it). `Q0 R0 OCV1` all through a rev 2.0 discharge
+is therefore expected, and `Q0` after a rest means that rest was too short for
+the gauge to qualify the OCV point, not that the run has failed.
 
 ### Persistent Journal (NAND)
 
@@ -482,18 +487,29 @@ rule that follows is simply never to change it.
 `AGO_FG_GOLDEN_V2` in [`go_hardware_board.cpp`](../main/go_hardware_board.cpp)
 decides which build this is, and `fg_golden_image_valid()` is the test.
 
-- **Characterisation build** — the constant is empty. A fresh gauge gets Qmax
-  seeded with the design capacity and is left to learn. Once that gauge has
-  learned, every boot prints its image as a C initialiser, ready to paste into
-  the constant.
-- **Production build** — the constant is filled in. A fresh gauge has the whole
-  image written and read back, and only then is `IT_ENABLE` sent. Both steps are
-  gated on Update Status still being `0x00`, so a gauge that has ever started
-  Impedance Track is never written again and keeps whatever it learned in the
-  field.
+- **Characterisation build** — the constant is empty. A virgin gauge gets Qmax
+  seeded with the design capacity; Impedance Track stays off until a learning
+  run is armed. Once that gauge has learned, every boot prints its image as a C
+  initialiser, ready to paste into the constant.
+- **Production build** — the constant is filled in. A virgin gauge has the whole
+  image written and read back, and only then is `IT_ENABLE` sent.
 
-`IT_ENABLE` latches `QEN` for the life of the part, which is why it is the last
-step and runs only after the image verifies.
+`fg_decide_install()` in [`bms_types.h`](../../../components/airgradient-bms/types/bms_types.h)
+owns that choice and is host-tested over the whole state matrix. Two of its
+cells are the ones worth knowing:
+
+- Update Status **`0x00`** is the only state anything is written in, so a gauge
+  that holds learned values is never written over, and a unit that has been
+  learning in the field keeps what it learned.
+- Update Status **`0x02`** means a previous boot wrote the image and then failed
+  to start Impedance Track. It is an unfinished install, not a gauge to leave
+  alone, so the next boot sends `IT_ENABLE` again. Reading it as "already
+  started" would have shipped the unit with gauging switched off for good.
+
+`IT_ENABLE` latches `QEN` for the life of the part, which is why it runs last,
+only behind a verified image, and why `set_update_status_learning()` confirms
+the bit by reading Update Status back rather than trusting the I²C write — this
+gauge has been seen to report a failure on a subcommand that landed.
 
 ### Capturing an image
 
@@ -505,6 +521,11 @@ BQ27742 golden image: .qmax_mah = 2543, .update_status = 0x02,
 BQ27742 golden image: .ra0 = {0x0055, {301, 302, ...}},
 BQ27742 golden image: .ra0x = {0xFF00, {291, 292, ...}},
 ```
+
+The dump refuses to recommend itself until Update Status reads `0x06`, and
+`fg_golden_image_valid()` rejects a profile whose flag still says ROM defaults,
+so a capture taken mid-cycle cannot quietly become the image. A filled-in
+constant is checked again at compile time by a `static_assert`.
 
 Paste them into `AGO_FG_GOLDEN_V2`, rebuild, and validate the result on a second
 unit before committing to a production run: install the image, then compare the

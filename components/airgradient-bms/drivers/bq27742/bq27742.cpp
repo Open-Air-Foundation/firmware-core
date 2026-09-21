@@ -459,13 +459,22 @@ bool BQ27742::set_update_status_learning(bool enable) {
   if (!_unseal()) {
     return false;
   }
+  // The write itself is not the answer: this gauge clock-stretches past the
+  // driver timeout and has been observed to report a failure on a subcommand
+  // that landed.  Read Update Status back and let bit 2 decide.
   if (!_write_word(CMD_CONTROL, CTRL_IT_ENABLE)) {
-    return false;
+    ESP_LOGW(TAG, "IT ENABLE write reported a failure - checking whether it landed");
   }
   RTOS::delay_ms(DF_SETTLE_MS);
-  if (read_update_status(status)) {
-    ESP_LOGI(TAG, "IT ENABLE sent, Update Status=0x%02X", status);
+  if (!read_update_status(status)) {
+    ESP_LOGE(TAG, "IT ENABLE sent but Update Status unreadable");
+    return false;
   }
+  if ((status & UPDATE_STATUS_IT_ENABLED) == 0) {
+    ESP_LOGE(TAG, "IT ENABLE did not take, Update Status=0x%02X", status);
+    return false;
+  }
+  ESP_LOGI(TAG, "IT ENABLE confirmed, Update Status=0x%02X", status);
   return true;
 }
 
@@ -578,12 +587,9 @@ bool BQ27742::_write_update_status(uint8_t status) {
 
 bool BQ27742::read_golden_image(FgGoldenImage &out) {
   if (!read_qmax_cell0(out.qmax_mah) || !_read_ra_profile(SUBCLASS_RA0, out.ra0) ||
-      !_read_ra_profile(SUBCLASS_RA0X, out.ra0x)) {
+      !_read_ra_profile(SUBCLASS_RA0X, out.ra0x) || !read_update_status(out.update_status)) {
     return false;
   }
-  // A capture always reports the shipping value: the gauge that learned this
-  // reads 0x06, but bit 2 is the host's to set with IT_ENABLE on each unit.
-  out.update_status = FG_GOLDEN_UPDATE_STATUS;
   return true;
 }
 
@@ -596,10 +602,11 @@ bool BQ27742::write_golden_image(const FgGoldenImage &img) {
     return false;
   }
   // Qmax and the resistances first; Update Status last, so a half-written
-  // image never claims to be learned.
+  // image never claims to be learned.  Bit 2 is written clear whatever the
+  // capture held: only IT_ENABLE may start Impedance Track (TRM §5.5.3.2).
   if (!write_qmax_cell0(img.qmax_mah) || !_write_ra_profile(SUBCLASS_RA0, img.ra0) ||
       !_write_ra_profile(SUBCLASS_RA0X, img.ra0x) ||
-      !_write_update_status(img.update_status)) {
+      !_write_update_status(FG_GOLDEN_UPDATE_STATUS)) {
     return false;
   }
 
@@ -611,14 +618,14 @@ bool BQ27742::write_golden_image(const FgGoldenImage &img) {
     return false;
   }
   if (verify.qmax_mah != img.qmax_mah || verify.ra0.flag != img.ra0.flag ||
-      verify.ra0x.flag != img.ra0x.flag || status != img.update_status ||
+      verify.ra0x.flag != img.ra0x.flag || status != FG_GOLDEN_UPDATE_STATUS ||
       memcmp(verify.ra0.ra, img.ra0.ra, sizeof(img.ra0.ra)) != 0 ||
       memcmp(verify.ra0x.ra, img.ra0x.ra, sizeof(img.ra0x.ra)) != 0) {
     ESP_LOGE(TAG, "golden image write did NOT stick - readback mismatch");
     return false;
   }
   ESP_LOGI(TAG, "golden image installed (Qmax=%u mAh UpdateStatus=0x%02X Ra0=0x%04X Ra0x=0x%04X)",
-           img.qmax_mah, img.update_status, img.ra0.flag, img.ra0x.flag);
+           img.qmax_mah, FG_GOLDEN_UPDATE_STATUS, img.ra0.flag, img.ra0x.flag);
   return true;
 }
 

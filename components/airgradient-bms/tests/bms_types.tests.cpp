@@ -359,6 +359,27 @@ TEST_CASE("fg_golden_image_valid accepts a finished capture", "[BmsTypes][golden
   }
 }
 
+TEST_CASE("fg_golden_image_valid rejects a gauge that has not learned yet",
+          "[BmsTypes][golden]") {
+  // A part straight from the factory reads Ra0 flag 0xFF55: enabled, but the
+  // high byte says every resistance is still a ROM default.  Those defaults are
+  // positive and plausible, so only the flag tells them apart.
+  FgGoldenImage fresh{};
+  fresh.qmax_mah = 2600; // as the board seeds it
+  fresh.update_status = FG_GOLDEN_UPDATE_STATUS;
+  fresh.ra0.flag = 0xFF55;
+  fresh.ra0x.flag = 0xFFFF;
+  for (size_t i = 0; i < FG_RA_TABLE_SIZE; ++i) {
+    fresh.ra0.ra[i] = static_cast<int16_t>(272 + i * 10); // TRM defaults
+    fresh.ra0x.ra[i] = static_cast<int16_t>(272 + i * 10);
+  }
+  REQUIRE_FALSE(fg_golden_image_valid(fresh));
+
+  // The same profile once the gauge has actually updated it.
+  fresh.ra0.flag = 0x0055;
+  REQUIRE(fg_golden_image_valid(fresh));
+}
+
 TEST_CASE("fg_golden_image_valid rejects an unusable capture", "[BmsTypes][golden]") {
   SECTION("no Qmax") {
     FgGoldenImage img = learned_image();
@@ -394,5 +415,59 @@ TEST_CASE("fg_golden_image_valid rejects an unusable capture", "[BmsTypes][golde
     FgGoldenImage img = learned_image();
     img.ra0x.ra[7] = 0;
     REQUIRE(fg_golden_image_valid(img));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// fg_decide_install — the boot-time state matrix
+// ---------------------------------------------------------------------------
+
+namespace {
+constexpr uint16_t DESIGN_MAH = 2600;
+constexpr uint16_t LEARNED_MAH = 2543;
+
+FgInstallAction decide(uint8_t status, uint16_t qmax, bool have_image) {
+  return fg_decide_install(/*status_ok=*/true, status, qmax, have_image, DESIGN_MAH);
+}
+} // namespace
+
+TEST_CASE("fg_decide_install never writes on a reading it does not trust",
+          "[BmsTypes][install]") {
+  REQUIRE(fg_decide_install(false, 0x00, 0, true, DESIGN_MAH) == FgInstallAction::None);
+  REQUIRE(fg_decide_install(false, 0x00, 0, false, DESIGN_MAH) == FgInstallAction::None);
+}
+
+TEST_CASE("fg_decide_install on a characterisation build", "[BmsTypes][install]") {
+  SECTION("fresh part gets its Qmax seeded") {
+    REQUIRE(decide(0x00, 1000, false) == FgInstallAction::SeedQmax);
+  }
+  SECTION("already seeded, nothing to do") {
+    REQUIRE(decide(0x00, DESIGN_MAH, false) == FgInstallAction::None);
+  }
+  SECTION("once Impedance Track runs, hand the image over") {
+    REQUIRE(decide(0x04, DESIGN_MAH, false) == FgInstallAction::DumpImage);
+    REQUIRE(decide(0x05, DESIGN_MAH, false) == FgInstallAction::DumpImage);
+    REQUIRE(decide(0x06, LEARNED_MAH, false) == FgInstallAction::DumpImage);
+  }
+}
+
+TEST_CASE("fg_decide_install on a production build", "[BmsTypes][install]") {
+  SECTION("fresh part takes the whole image") {
+    REQUIRE(decide(0x00, 1000, true) == FgInstallAction::InstallImage);
+    REQUIRE(decide(0x00, DESIGN_MAH, true) == FgInstallAction::InstallImage);
+  }
+  SECTION("a gauge already running Impedance Track is left alone") {
+    // It has been learning its own cell since; those values outrank ours.
+    REQUIRE(decide(0x04, DESIGN_MAH, true) == FgInstallAction::None);
+    REQUIRE(decide(0x06, LEARNED_MAH, true) == FgInstallAction::None);
+  }
+  SECTION("0x02 is an unfinished install, not a gauge to leave alone") {
+    // The image went in and IT_ENABLE did not land.  Treating this as "already
+    // started" would ship the unit with Impedance Track off for good.
+    REQUIRE(decide(FG_GOLDEN_UPDATE_STATUS, LEARNED_MAH, true) ==
+            FgInstallAction::StartImpedanceTrack);
+  }
+  SECTION("0x02 on a characterisation build still just dumps") {
+    REQUIRE(decide(FG_GOLDEN_UPDATE_STATUS, LEARNED_MAH, false) == FgInstallAction::DumpImage);
   }
 }
