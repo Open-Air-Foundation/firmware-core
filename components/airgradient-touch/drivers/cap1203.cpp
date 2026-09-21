@@ -84,6 +84,8 @@ bool CAP1203::init() {
     return false;
   }
 
+  _log_applied_config();
+
   // Clear any pending interrupt so the INT line starts deasserted (HIGH).
   // Without this, a stale touch event from before init could leave INT LOW,
   // preventing the first falling-edge ISR from ever firing.
@@ -187,6 +189,34 @@ bool CAP1203::_apply_config() {
          _write_reg(REG_THRESHOLD_CH1, _config.threshold_ch1) &&
          _write_reg(REG_THRESHOLD_CH2, _config.threshold_ch2) &&
          _write_reg(REG_THRESHOLD_CH3, _config.threshold_ch3);
+}
+
+// Report what the chip ended up holding, not what was asked for.  Sensitivity
+// and threshold decide whether a pad works at all, and a silent write failure
+// would otherwise only show up as "touch feels wrong" on somebody's desk.
+void CAP1203::_log_applied_config() {
+  uint8_t sens = 0;
+  uint8_t cfg = 0;
+  uint8_t input_cfg = 0;
+  uint8_t thr1 = 0;
+  if (!_read_reg(REG_SENSITIVITY_CONTROL, sens) || !_read_reg(REG_CONFIGURATION, cfg) ||
+      !_read_reg(REG_SENSOR_INPUT_CONFIG, input_cfg) || !_read_reg(REG_THRESHOLD_CH1, thr1)) {
+    ESP_LOGW(TAG, "config read-back failed");
+    return;
+  }
+  const uint8_t sense_code = static_cast<uint8_t>((sens >> 4) & 0x07);
+  const bool max_dur_on = (cfg & 0x08) != 0;
+  ESP_LOGI(TAG, "gain=%ux thr=%u max_dur=%s%s", delta_sense_multiplier(sense_code), thr1,
+           max_dur_on ? "on" : "off",
+           max_dur_on ? "" : " (a pad held down will never recover)");
+
+  const uint8_t want_sens = static_cast<uint8_t>((_config.delta_sense << 4) | _config.base_shift);
+  if (sens != want_sens || thr1 != _config.threshold_ch1 ||
+      max_dur_on != _config.max_duration_recal ||
+      (max_dur_on && ((input_cfg >> 4) & 0x0F) != _config.max_duration_code)) {
+    ESP_LOGE(TAG, "config did NOT stick: sens=0x%02X cfg=0x%02X inputcfg=0x%02X thr=%u", sens, cfg,
+             input_cfg, thr1);
+  }
 }
 
 // Both fields share a register with settings the driver does not own, so each

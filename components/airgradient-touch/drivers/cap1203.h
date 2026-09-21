@@ -66,6 +66,12 @@ public:
     int timeout_ms = 1000;
   };
 
+  /// Sensitivity multiplier for a DELTA_SENSE code, 0..7 (datasheet Table 5-7,
+  /// p.25): 0 is 128x and each step halves it down to 1x.
+  static uint8_t delta_sense_multiplier(uint8_t code) {
+    return static_cast<uint8_t>(code > 7 ? 0 : (128u >> code));
+  }
+
   static constexpr uint8_t DEFAULT_ADDRESS = 0x28;
 
   // Constructs the driver. init() must be called before any other method.
@@ -91,6 +97,7 @@ private:
   bool _write_reg(uint8_t reg, uint8_t val);
   bool _apply_config();
   bool _apply_max_duration();
+  void _log_applied_config();
   void _rm_device();
 
   i2c_master_bus_handle_t _i2c_bus;
