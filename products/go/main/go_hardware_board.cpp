@@ -97,6 +97,13 @@ static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
 // Touch diagnostics knobs (go/test/touch-diag branch only).
 static constexpr const char *TOUCH_DIAG_TAG = "TOUCHDIAG";
 static constexpr uint32_t TOUCH_DIAG_PERIOD_MS = 500;
+// The product runs DELTA_SENSE 0 (128x).  At that gain every real touch on
+// this board pins the delta count at +127, which the datasheet calls out as
+// "sensitivity settings are too high" (5.4, p.24), and it also trips the noise
+// detector intermittently.  A saturated reading cannot be used to pick a
+// threshold, so the diagnostic measures at a lower gain: 2 = 32x, the chip's
+// own default.  1 = 64x if 32x turns out too quiet.
+static constexpr uint8_t TOUCH_DIAG_DELTA_SENSE = 2;
 // The TPL5010 window is ~60 s and nothing else feeds it on this path.
 static constexpr uint32_t TOUCH_DIAG_WDT_FEED_MS = 20000;
 
@@ -1252,7 +1259,7 @@ void GoHardwareBoard::run_touch_diag() {
   ext_watchdog_init(gpio_hal(), static_cast<int>(PIN_EXT_WDT));
 
   CAP1203::Config cfg;
-  cfg.delta_sense = TOUCH_DELTA_SENSE;
+  cfg.delta_sense = TOUCH_DIAG_DELTA_SENSE;
   cfg.repeat_rate_channels = static_cast<uint8_t>(TouchChannel::ALL & ~touch_channel_map().enter);
   CAP1203 touch(_i2c_bus, I2C_ADDR_CAP1203, cfg);
   if (!touch.init()) {
@@ -1269,6 +1276,11 @@ void GoHardwareBoard::run_touch_diag() {
       last_feed = now;
     }
     _run_touch_diagnostics();
+    // Acknowledge, or the touch bits stay set for good once a pad has been
+    // pressed: they clear only on a write to MAIN_CONTROL, and only for pads
+    // that have actually been released.  Without this the touch column reads
+    // as a permanent false stuck-touch and hides the real one.
+    _touch_diag->clear_interrupt();
     RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
   }
 }
@@ -1283,7 +1295,8 @@ void GoHardwareBoard::_run_touch_diagnostics() {
     return;
   }
 
-  AG_LOGI(TOUCH_DIAG_TAG, "gen=0x%02X touch=0x%02X noise=0x%02X bcout=0x%02X calact=0x%02X sens=0x%02X",
+  AG_LOGI(TOUCH_DIAG_TAG,
+          "gen=0x%02X touch=0x%02X noise=0x%02X bcout=0x%02X calact=0x%02X sens=0x%02X",
           d.general_status, d.sensor_status, d.noise_flags, d.base_out_limit, d.cal_active,
           d.sensitivity);
   for (uint8_t i = 0; i < 3; ++i) {
