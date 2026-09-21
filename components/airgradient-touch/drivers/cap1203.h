@@ -52,6 +52,13 @@ public:
     uint8_t threshold_ch2 = 64;
     uint8_t threshold_ch3 = 64;
 
+    // Recalibrate a channel whose touch has been held longer than
+    // max_duration_code, which rescues a pad something is resting on. Off by
+    // default, matching the chip. The code is 0–15; 0x6 is 2800 ms and each
+    // step is listed in the datasheet (Table 5-12).
+    bool max_duration_recal = false;
+    uint8_t max_duration_code = 0x6;
+
     // I2C bus speed.
     uint32_t scl_speed_hz = 100000;
 
@@ -83,6 +90,7 @@ private:
   bool _read_reg(uint8_t reg, uint8_t &out);
   bool _write_reg(uint8_t reg, uint8_t val);
   bool _apply_config();
+  bool _apply_max_duration();
   void _rm_device();
 
   i2c_master_bus_handle_t _i2c_bus;
@@ -96,6 +104,8 @@ private:
   static constexpr uint8_t REG_SENSOR_INPUT_STATUS = 0x03;
   static constexpr uint8_t REG_NOISE_FLAG_STATUS = 0x0A;
   static constexpr uint8_t REG_SENSITIVITY_CONTROL = 0x1F;
+  static constexpr uint8_t REG_CONFIGURATION = 0x20;
+  static constexpr uint8_t REG_SENSOR_INPUT_CONFIG = 0x22;
   static constexpr uint8_t REG_SENSOR_INPUT_ENABLE = 0x21;
   static constexpr uint8_t REG_CALIBRATION_ACTIVATE = 0x26;
   static constexpr uint8_t REG_INTERRUPT_ENABLE = 0x27;

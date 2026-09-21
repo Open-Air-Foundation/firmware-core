@@ -170,6 +170,13 @@ bool CAP1203::_apply_config() {
     ESP_LOGE(TAG, "threshold out of range (0-127)");
     return false;
   }
+  if (_config.max_duration_code > 0x0F) {
+    ESP_LOGE(TAG, "max_duration_code %u out of range (0-15)", _config.max_duration_code);
+    return false;
+  }
+  if (!_apply_max_duration()) {
+    return false;
+  }
 
   const uint8_t sens = static_cast<uint8_t>((_config.delta_sense << 4) | _config.base_shift);
 
@@ -180,6 +187,36 @@ bool CAP1203::_apply_config() {
          _write_reg(REG_THRESHOLD_CH1, _config.threshold_ch1) &&
          _write_reg(REG_THRESHOLD_CH2, _config.threshold_ch2) &&
          _write_reg(REG_THRESHOLD_CH3, _config.threshold_ch3);
+}
+
+// Both fields share a register with settings the driver does not own, so each
+// is a read-modify-write rather than a blind byte.
+bool CAP1203::_apply_max_duration() {
+  uint8_t cfg = 0;
+  if (!_read_reg(REG_CONFIGURATION, cfg)) {
+    return false;
+  }
+  constexpr uint8_t MAX_DUR_EN = 0x08; // Configuration bit 3
+  const uint8_t want_cfg = _config.max_duration_recal ? static_cast<uint8_t>(cfg | MAX_DUR_EN)
+                                                      : static_cast<uint8_t>(cfg & ~MAX_DUR_EN);
+  if (want_cfg != cfg && !_write_reg(REG_CONFIGURATION, want_cfg)) {
+    return false;
+  }
+  if (!_config.max_duration_recal) {
+    return true; // the duration itself only matters once it is enabled
+  }
+
+  uint8_t input_cfg = 0;
+  if (!_read_reg(REG_SENSOR_INPUT_CONFIG, input_cfg)) {
+    return false;
+  }
+  // Top nibble is MAX_DUR, bottom nibble is the repeat rate, which stays.
+  const uint8_t want_input =
+      static_cast<uint8_t>((_config.max_duration_code << 4) | (input_cfg & 0x0F));
+  if (want_input != input_cfg && !_write_reg(REG_SENSOR_INPUT_CONFIG, want_input)) {
+    return false;
+  }
+  return true;
 }
 
 void CAP1203::_rm_device() {

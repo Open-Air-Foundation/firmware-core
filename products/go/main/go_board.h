@@ -53,6 +53,41 @@ inline constexpr uint8_t pm_power_on_level(BoardVariant v) {
 }
 
 // ---------------------------------------------------------------------------
+// Capacitive touch tuning (header-only, host-test-safe)
+// ---------------------------------------------------------------------------
+
+/// How hard a board's pads have to be pressed.
+struct TouchTuning {
+  uint8_t delta_sense; ///< DELTA_SENSE code 0..7; 0 is 128x and each step halves it
+  uint8_t threshold;   ///< per-pad touch threshold, 0..127
+};
+
+/// Rev 1 and rev 2.0 do not share a touch panel: rev 1 carries the pads on a
+/// separate board, rev 2.0 moved them and the CAP1203 onto the main PCB. What
+/// saturates one can be invisible on the other, so one global setting cannot
+/// serve both.
+///
+/// Rev 2.0, measured on the bench with the enclosure fitted: a touch is about
+/// 82 counts at 2x against an idle band of one, and the three pads agree
+/// within 4 %. At rev 1's 128x that same touch works out near 5250 counts
+/// against a ceiling of 127, so every press saturated and the delta count
+/// carried no information at all. The threshold is half the measured peak,
+/// still forty times the noise.
+///
+/// Rev 1 keeps what it shipped with. That pad has never been measured, and
+/// 128x with a threshold of 64 is what every unit in the field already does;
+/// guessing on its behalf could leave them with no working touch at all.
+inline constexpr TouchTuning touch_tuning_for(BoardVariant v) {
+  return (v == BoardVariant::V2) ? TouchTuning{6, 40} : TouchTuning{0, 64};
+}
+
+/// Recalibrate a pad whose touch never ends, which is what the enclosure
+/// resting on one looks like. The chip's own last resort, off by default
+/// (datasheet 4.4.3). 0x6 is 2800 ms, the nearest step above the longest hold
+/// the UI asks for, a 1000 ms press on the Enter pad.
+inline constexpr uint8_t TOUCH_MAX_DURATION_CODE = 0x6;
+
+// ---------------------------------------------------------------------------
 // Fuel-gauge bring-up decision helper (header-only, host-test-safe)
 // ---------------------------------------------------------------------------
 

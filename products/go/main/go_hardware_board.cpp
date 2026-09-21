@@ -1213,8 +1213,17 @@ GpsDriver *GoHardwareBoard::new_gps_driver() {
 
 CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
   assert(_buses_ready && "new_touch_sensor() requires init_buses()");
+  const TouchTuning tuning = touch_tuning_for(_variant);
   CAP1203::Config cfg;
-  cfg.delta_sense = TOUCH_DELTA_SENSE;
+  cfg.delta_sense = tuning.delta_sense;
+  cfg.threshold_ch1 = tuning.threshold;
+  cfg.threshold_ch2 = tuning.threshold;
+  cfg.threshold_ch3 = tuning.threshold;
+  // A pad the enclosure is resting on reads as a touch that never ends, and
+  // nothing in firmware can tell it apart from a finger.  Let the chip notice
+  // and recalibrate itself instead.
+  cfg.max_duration_recal = true;
+  cfg.max_duration_code = TOUCH_MAX_DURATION_CODE;
   // The Enter pad needs clean press/release edges for its gesture FSM, so
   // it is the one channel without the repeat rate.
   cfg.repeat_rate_channels = static_cast<uint8_t>(TouchChannel::ALL & ~touch_channel_map().enter);
@@ -1263,6 +1272,7 @@ TouchChannelMap GoHardwareBoard::touch_channel_map() const {
   }
   return {};
 }
+
 
 std::string GoHardwareBoard::serial_number() { return build_serial_number(); }
 
