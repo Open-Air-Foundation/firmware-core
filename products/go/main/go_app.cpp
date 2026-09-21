@@ -59,6 +59,10 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 
 static constexpr const char *TAG = "app";
 
+// go/test/touch-diag branch only: boot straight into the touch measurement
+// loop instead of the product.
+static constexpr bool TOUCH_DIAG_ONLY = true;
+
 // HTTP host for WiFi pull OTA. Mirrors AgClient's (private) default cloud
 // domain; keep in sync with the Cloud service host.
 static constexpr const char *OTA_HTTP_DOMAIN = "hw.airgradient.com";
@@ -149,6 +153,18 @@ void GoApp::run() {
   retained_uptime::init();
   RTOS::delay_ms(100);
   log_heap(TAG, "boot:run-entry");
+
+  // go/test/touch-diag branch only.  Ahead of every other path on purpose:
+  // the point is to measure the touch pads with nothing else powered, so the
+  // OTG boost, the PM fan, the e-paper refresh and the LEDs cannot add
+  // switching noise to a capacitance measurement, and nothing else writes to
+  // the log.  Set to false to get the normal firmware back.
+  if (TOUCH_DIAG_ONLY) {
+    AG_LOGW(TAG, "TOUCH-ONLY DIAGNOSTIC BUILD — normal boot paths are skipped");
+    _board.init_buses();
+    _board.run_touch_diag(); // never returns
+    return;
+  }
 
   // Factory fuel-gauge learning pre-empts every normal boot path. Only the
   // lightweight, idempotent init_nvs() is needed to read FactorySettings; the

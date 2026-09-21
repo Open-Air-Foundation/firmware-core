@@ -96,9 +96,9 @@ static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
 // installs the image and never runs a cycle of its own.
 // Touch diagnostics knobs (go/test/touch-diag branch only).
 static constexpr const char *TOUCH_DIAG_TAG = "TOUCHDIAG";
-static constexpr uint32_t TOUCH_DIAG_PERIOD_MS = 2000;
-static constexpr uint32_t TOUCH_DIAG_TASK_STACK_BYTES = 3072;
-static constexpr uint32_t TOUCH_DIAG_TASK_PRIORITY = 3;
+static constexpr uint32_t TOUCH_DIAG_PERIOD_MS = 500;
+// The TPL5010 window is ~60 s and nothing else feeds it on this path.
+static constexpr uint32_t TOUCH_DIAG_WDT_FEED_MS = 20000;
 
 static constexpr FgGoldenImage AGO_FG_GOLDEN_V2 = {};
 
@@ -1230,11 +1230,6 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
     AG_LOGE(TAG, "CAP1203 touch init failed");
   }
   _chips.set(Chip::Touch, ok, ok ? nullptr : "check CN4 cable");
-  if (ok) {
-    _touch_diag = touch;
-    RTOS::task_create(_touch_diag_task, "touch_diag", TOUCH_DIAG_TASK_STACK_BYTES, this,
-                      TOUCH_DIAG_TASK_PRIORITY, nullptr);
-  }
   return touch;
 }
 
@@ -1251,10 +1246,29 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
 // FSM running in InputService.
 // ---------------------------------------------------------------------------
 
-void GoHardwareBoard::_touch_diag_task(void *arg) {
-  auto *self = static_cast<GoHardwareBoard *>(arg);
+void GoHardwareBoard::run_touch_diag() {
+  // Nothing else is brought up on this path, so the external watchdog has no
+  // other owner: without this the board resets inside a minute.
+  ext_watchdog_init(gpio_hal(), static_cast<int>(PIN_EXT_WDT));
+
+  CAP1203::Config cfg;
+  cfg.delta_sense = TOUCH_DELTA_SENSE;
+  cfg.repeat_rate_channels = static_cast<uint8_t>(TouchChannel::ALL & ~touch_channel_map().enter);
+  CAP1203 touch(_i2c_bus, I2C_ADDR_CAP1203, cfg);
+  if (!touch.init()) {
+    AG_LOGE(TOUCH_DIAG_TAG, "CAP1203 init failed — check CN4 cable");
+  }
+  _touch_diag = &touch;
+
+  AG_LOGI(TOUCH_DIAG_TAG, "touch-only diagnostic: nothing else on this board is running");
+  uint32_t last_feed = 0;
   for (;;) {
-    self->_run_touch_diagnostics();
+    const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+    if (last_feed == 0 || (now - last_feed) >= TOUCH_DIAG_WDT_FEED_MS) {
+      ext_watchdog_reset(gpio_hal(), static_cast<int>(PIN_EXT_WDT));
+      last_feed = now;
+    }
+    _run_touch_diagnostics();
     RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
   }
 }

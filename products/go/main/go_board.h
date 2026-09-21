@@ -216,6 +216,12 @@ struct GoBoard {
   virtual const char *firmware_version() = 0;
   virtual const gpio::Hal &gpio_hal() = 0;
 
+  /// Touch-only diagnostic loop (go/test/touch-diag branch only).  Brings up
+  /// the CAP1203 and nothing else and never returns, so the pads can be
+  /// measured without the rest of the board adding switching noise or
+  /// flooding the log.
+  virtual void run_touch_diag() {}
+
   // -----------------------------------------------------------------
   // Hardware operations
   // -----------------------------------------------------------------
