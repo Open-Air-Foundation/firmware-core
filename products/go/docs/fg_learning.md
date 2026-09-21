@@ -453,6 +453,66 @@ frame, lights the result LED (green / red), and holds until the POWER press.
   plus a single key read before path selection; confirm on hardware that this is
   not measurable.
 
+## Golden Image
+
+A learning cycle takes the better part of a day, so only **one** unit per cell
+design runs one. Everything it learns is copied off it and compiled into the
+firmware, and every other unit installs that image at first boot instead of
+learning. This is TI's own production flow, and the chip is built for it: TRM
+§5.7 permits writing the Ra tables for exactly this purpose, and §5.5.3.2
+describes the golden file carrying Update Status `0x02`.
+
+What transfers, and what does not:
+
+| Field | Where | Transferable |
+|---|---|---|
+| Qmax Cell 0 | subclass 82 offset 0 | yes |
+| Ra0 and Ra0x, both flags | subclasses 88 and 89 | yes |
+| Update Status | subclass 82 offset 2 | as `0x02`; bit 2 only ever via `IT_ENABLE` |
+| Cell config, Safety, protector, Charging Voltage | several | already written on every boot |
+| Chem ID | subclass 83 | **no** — writing it has no effect, it takes TI's bqCONFIG (TRM §5.6.1.1) |
+
+Chemistry is the one thing firmware cannot install, and the one thing that does
+not need installing: every gauge leaves the factory with the same chemistry, so
+the unit that learns and the units that receive its image already agree. The
+rule that follows is simply never to change it.
+
+### The two builds
+
+`AGO_FG_GOLDEN_V2` in [`go_hardware_board.cpp`](../main/go_hardware_board.cpp)
+decides which build this is, and `fg_golden_image_valid()` is the test.
+
+- **Characterisation build** — the constant is empty. A fresh gauge gets Qmax
+  seeded with the design capacity and is left to learn. Once that gauge has
+  learned, every boot prints its image as a C initialiser, ready to paste into
+  the constant.
+- **Production build** — the constant is filled in. A fresh gauge has the whole
+  image written and read back, and only then is `IT_ENABLE` sent. Both steps are
+  gated on Update Status still being `0x00`, so a gauge that has ever started
+  Impedance Track is never written again and keeps whatever it learned in the
+  field.
+
+`IT_ENABLE` latches `QEN` for the life of the part, which is why it is the last
+step and runs only after the image verifies.
+
+### Capturing an image
+
+Run a learning cycle to `Complete`, then read the three log lines the
+characterisation build prints at every boot:
+
+```text
+BQ27742 golden image: .qmax_mah = 2543, .update_status = 0x02,
+BQ27742 golden image: .ra0 = {0x0055, {301, 302, ...}},
+BQ27742 golden image: .ra0x = {0xFF00, {291, 292, ...}},
+```
+
+Paste them into `AGO_FG_GOLDEN_V2`, rebuild, and validate the result on a second
+unit before committing to a production run: install the image, then compare the
+gauge's reported SOC against a measured discharge. Under 3 % error is the bar.
+
+An image is tied to the cell model and vendor. Changing either means running a
+new cycle.
+
 ## Variant Differences
 
 The FSM and the runner are variant-neutral. Everything that differs between the

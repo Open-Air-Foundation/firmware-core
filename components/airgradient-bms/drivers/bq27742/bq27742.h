@@ -102,6 +102,18 @@ public:
   /// Sleep Current.  Unseals the gauge (idempotent; it stays unsealed).
   bool read_cell_config(FgCellConfig &out);
 
+  /// Read every learned field off a characterised unit, ready to compile into
+  /// a firmware that installs it on the rest.  `update_status` comes back as
+  /// the shipping value, not the 0x06 this gauge reads.
+  bool read_golden_image(FgGoldenImage &out);
+
+  /// Install a learned image on a fresh gauge: Qmax, both Ra profiles with
+  /// their flags, then Update Status.  Refuses an image that does not pass
+  /// fg_golden_image_valid(), and reads every field back.  The caller still
+  /// has to send IT_ENABLE afterwards; writing that bit by hand is forbidden
+  /// (TRM SLUUAX0C §5.5.3.2).
+  bool write_golden_image(const FgGoldenImage &img);
+
   /// Charging Voltage (subclass 34 offset 0).  With Taper Voltage it sets the
   /// level Voltage() must reach before the gauge will qualify a charge
   /// termination and raise Flags()[FC] (TRM SLUUAX0C §2.6.4, §5.3.2.1), so it
@@ -158,6 +170,10 @@ private:
   bool _read_block(uint8_t reg, uint8_t *buf, size_t len);
   bool _write_block(uint8_t reg, const uint8_t *buf, size_t len);
   bool _unseal();
+  bool _read_ra_profile(uint8_t subclass, FgRaProfile &out);
+  bool _write_ra_profile(uint8_t subclass, const FgRaProfile &in);
+  bool _write_update_status(uint8_t status); ///< golden-image restore only
+
   bool _read_df_block(uint8_t subclass, uint8_t block, uint8_t *out32);
   bool _write_df_block(uint8_t subclass, uint8_t block, const uint8_t *in32);
   bool _write_df_word(uint8_t subclass, uint8_t offset, uint16_t value);

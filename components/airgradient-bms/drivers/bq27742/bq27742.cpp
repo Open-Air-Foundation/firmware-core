@@ -70,6 +70,7 @@ constexpr uint8_t SUBCLASS_POWER = 68;     // Sleep Current @2
 constexpr uint8_t SUBCLASS_IT_CFG = 80;    // Terminate Voltage @64
 constexpr uint8_t SUBCLASS_STATE = 82;     // Qmax Cell 0 @0, Update Status @2
 constexpr uint8_t SUBCLASS_RA0 = 88;       // flag @0, Ra 0..14 @2..30
+constexpr uint8_t SUBCLASS_RA0X = 89;      // the alternate profile, same layout
 constexpr uint8_t OFFSET_OV_PROT_THRESHOLD = 0;
 constexpr uint8_t OFFSET_OV_PROT_RECOVERY = 3;
 constexpr uint8_t OFFSET_UV_PROT_THRESHOLD = 5;
@@ -536,6 +537,88 @@ bool BQ27742::read_update_status(uint8_t &out) {
     return false;
   }
   out = block[OFFSET_UPDATE_STATUS];
+  return true;
+}
+
+bool BQ27742::_read_ra_profile(uint8_t subclass, FgRaProfile &out) {
+  uint8_t block[DF_BLOCK_SIZE] = {};
+  if (!_read_df_block(subclass, 0, block)) {
+    return false;
+  }
+  out.flag = (static_cast<uint16_t>(block[0]) << 8) | block[1];
+  for (size_t i = 0; i < RA_TABLE_SIZE; ++i) {
+    const size_t off = OFFSET_RA_FIRST + i * 2;
+    out.ra[i] = static_cast<int16_t>((static_cast<uint16_t>(block[off]) << 8) | block[off + 1]);
+  }
+  return true;
+}
+
+bool BQ27742::_write_ra_profile(uint8_t subclass, const FgRaProfile &in) {
+  // flag + 15 words fills the block exactly, so it is built rather than
+  // read-modified: every byte here is one the golden image owns.
+  uint8_t block[DF_BLOCK_SIZE] = {};
+  block[0] = static_cast<uint8_t>((in.flag >> 8) & 0xFF);
+  block[1] = static_cast<uint8_t>(in.flag & 0xFF);
+  for (size_t i = 0; i < RA_TABLE_SIZE; ++i) {
+    const size_t off = OFFSET_RA_FIRST + i * 2;
+    block[off] = static_cast<uint8_t>((static_cast<uint16_t>(in.ra[i]) >> 8) & 0xFF);
+    block[off + 1] = static_cast<uint8_t>(static_cast<uint16_t>(in.ra[i]) & 0xFF);
+  }
+  return _write_df_block(subclass, 0, block);
+}
+
+bool BQ27742::_write_update_status(uint8_t status) {
+  uint8_t block[DF_BLOCK_SIZE] = {};
+  if (!_read_df_block(SUBCLASS_STATE, 0, block)) {
+    return false;
+  }
+  block[OFFSET_UPDATE_STATUS] = status;
+  return _write_df_block(SUBCLASS_STATE, 0, block);
+}
+
+bool BQ27742::read_golden_image(FgGoldenImage &out) {
+  if (!read_qmax_cell0(out.qmax_mah) || !_read_ra_profile(SUBCLASS_RA0, out.ra0) ||
+      !_read_ra_profile(SUBCLASS_RA0X, out.ra0x)) {
+    return false;
+  }
+  // A capture always reports the shipping value: the gauge that learned this
+  // reads 0x06, but bit 2 is the host's to set with IT_ENABLE on each unit.
+  out.update_status = FG_GOLDEN_UPDATE_STATUS;
+  return true;
+}
+
+bool BQ27742::write_golden_image(const FgGoldenImage &img) {
+  if (!ready()) {
+    return false;
+  }
+  if (!fg_golden_image_valid(img)) {
+    ESP_LOGE(TAG, "golden image rejected - incomplete or inconsistent");
+    return false;
+  }
+  // Qmax and the resistances first; Update Status last, so a half-written
+  // image never claims to be learned.
+  if (!write_qmax_cell0(img.qmax_mah) || !_write_ra_profile(SUBCLASS_RA0, img.ra0) ||
+      !_write_ra_profile(SUBCLASS_RA0X, img.ra0x) ||
+      !_write_update_status(img.update_status)) {
+    return false;
+  }
+
+  RTOS::delay_ms(50);
+  FgGoldenImage verify{};
+  uint8_t status = 0;
+  if (!read_golden_image(verify) || !read_update_status(status)) {
+    ESP_LOGE(TAG, "golden image readback failed after write");
+    return false;
+  }
+  if (verify.qmax_mah != img.qmax_mah || verify.ra0.flag != img.ra0.flag ||
+      verify.ra0x.flag != img.ra0x.flag || status != img.update_status ||
+      memcmp(verify.ra0.ra, img.ra0.ra, sizeof(img.ra0.ra)) != 0 ||
+      memcmp(verify.ra0x.ra, img.ra0x.ra, sizeof(img.ra0x.ra)) != 0) {
+    ESP_LOGE(TAG, "golden image write did NOT stick - readback mismatch");
+    return false;
+  }
+  ESP_LOGI(TAG, "golden image installed (Qmax=%u mAh UpdateStatus=0x%02X Ra0=0x%04X Ra0x=0x%04X)",
+           img.qmax_mah, img.update_status, img.ra0.flag, img.ra0x.flag);
   return true;
 }
 

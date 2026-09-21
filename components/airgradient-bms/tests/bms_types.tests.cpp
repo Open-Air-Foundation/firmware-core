@@ -10,6 +10,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <string>
+#include <utility>
 
 #include "types/bms_types.h"
 
@@ -322,4 +323,76 @@ TEST_CASE("FgLearningProgress defaults to nothing learned", "[BmsTypes]") {
   FgLearningProgress p{};
   REQUIRE_FALSE(p.qmax_updated);
   REQUIRE_FALSE(p.ra_updated);
+  REQUIRE_FALSE(p.ocv_taken);
+}
+
+namespace {
+
+/// An image as it comes off a unit that finished a learning cycle: R_a0 is the
+/// profile in use, R_a0x holds the alternate.
+FgGoldenImage learned_image() {
+  FgGoldenImage img{};
+  img.qmax_mah = 2543;
+  img.update_status = FG_GOLDEN_UPDATE_STATUS;
+  img.ra0.flag = 0x0055; // enabled, resistances updated
+  img.ra0x.flag = 0xFF00;
+  for (size_t i = 0; i < FG_RA_TABLE_SIZE; ++i) {
+    img.ra0.ra[i] = static_cast<int16_t>(300 + i);
+    img.ra0x.ra[i] = static_cast<int16_t>(290 + i);
+  }
+  return img;
+}
+
+} // namespace
+
+TEST_CASE("an empty golden image marks a characterisation build", "[BmsTypes][golden]") {
+  REQUIRE_FALSE(fg_golden_image_valid(FgGoldenImage{}));
+}
+
+TEST_CASE("fg_golden_image_valid accepts a finished capture", "[BmsTypes][golden]") {
+  REQUIRE(fg_golden_image_valid(learned_image()));
+
+  SECTION("either profile may be the enabled one") {
+    FgGoldenImage img = learned_image();
+    std::swap(img.ra0, img.ra0x);
+    REQUIRE(fg_golden_image_valid(img));
+  }
+}
+
+TEST_CASE("fg_golden_image_valid rejects an unusable capture", "[BmsTypes][golden]") {
+  SECTION("no Qmax") {
+    FgGoldenImage img = learned_image();
+    img.qmax_mah = 0;
+    REQUIRE_FALSE(fg_golden_image_valid(img));
+  }
+  SECTION("Qmax past the part's ceiling") {
+    FgGoldenImage img = learned_image();
+    img.qmax_mah = FG_QMAX_CELL0_MAX_MAH + 1;
+    REQUIRE_FALSE(fg_golden_image_valid(img));
+  }
+  SECTION("Update Status still says Impedance Track is running") {
+    FgGoldenImage img = learned_image();
+    img.update_status = 0x06; // what the gauge that learned it reads
+    REQUIRE_FALSE(fg_golden_image_valid(img));
+  }
+  SECTION("neither profile is enabled") {
+    FgGoldenImage img = learned_image();
+    img.ra0.flag = 0xFFFF;
+    REQUIRE_FALSE(fg_golden_image_valid(img));
+  }
+  SECTION("both profiles claim to be enabled") {
+    FgGoldenImage img = learned_image();
+    img.ra0x.flag = 0x0055;
+    REQUIRE_FALSE(fg_golden_image_valid(img));
+  }
+  SECTION("the enabled profile holds a dead resistance") {
+    FgGoldenImage img = learned_image();
+    img.ra0.ra[7] = 0;
+    REQUIRE_FALSE(fg_golden_image_valid(img));
+  }
+  SECTION("a dead resistance in the idle profile is not a reason to refuse") {
+    FgGoldenImage img = learned_image();
+    img.ra0x.ra[7] = 0;
+    REQUIRE(fg_golden_image_valid(img));
+  }
 }

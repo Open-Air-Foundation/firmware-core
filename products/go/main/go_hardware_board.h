@@ -104,6 +104,7 @@ private:
   int _pm_power_pin() const;
   void _init_fuel_gauge_v1();
   void _init_fuel_gauge_v2();
+  void _log_fg_golden_image(); ///< print the learned image as a C initialiser
   /// Programs the v2 gauge's hardware protector.  Runs from init_bms(),
   /// not init_fuel_gauge(), because it must know whether an adapter is
   /// attached and every boot path brings the gauge up before the charger.

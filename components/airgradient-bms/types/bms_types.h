@@ -361,4 +361,75 @@ static constexpr uint16_t RES_UP = (1u << 8);  ///< Ra updated (sets only after 
 /// FgLearningController.
 static constexpr size_t FG_RA_TABLE_SIZE = 15;
 
+// ---------------------------------------------------------------------------
+// Golden image — what a learned gauge holds that a fresh one does not
+// ---------------------------------------------------------------------------
+
+/// Low byte of a Cell0 R_a flag: which of the two profiles the gauge is using
+/// (TRM SLUUAX0C §5.7).
+namespace FgRaFlag {
+static constexpr uint8_t ENABLED = 0x55;             ///< this profile is in use
+static constexpr uint8_t UPDATED_NOT_ENABLED = 0x00; ///< learned, but the other one is in use
+static constexpr uint8_t DEFAULTS = 0xFF;            ///< never updated
+} // namespace FgRaFlag
+
+/// One Ra resistance profile exactly as data flash holds it: the status flag
+/// followed by the 15 grid points.  The BQ27742-G1 keeps two profiles (R_a0 in
+/// subclass 88, R_a0x in 89) and enables one at a time so it can rewrite the
+/// other without disturbing gauging, so a transplanted image has to carry both
+/// and their flags, not just the numbers.
+struct FgRaProfile {
+  uint16_t flag = 0;
+  int16_t ra[FG_RA_TABLE_SIZE] = {};
+};
+
+inline uint8_t fg_ra_profile_state(const FgRaProfile &p) {
+  return static_cast<uint8_t>(p.flag & 0xFF);
+}
+inline bool fg_ra_profile_enabled(const FgRaProfile &p) {
+  return fg_ra_profile_state(p) == FgRaFlag::ENABLED;
+}
+
+/// The learned state copied off one characterised unit and written into every
+/// other one, so only that unit ever has to run a learning cycle.  TI calls it
+/// a golden image; `update_status` carries bit 1 (Qmax and Ra learned) with
+/// bit 2 cleared, because Impedance Track may only be started by the IT_ENABLE
+/// subcommand and never by writing that bit (TRM §5.5.3.2).
+struct FgGoldenImage {
+  uint16_t qmax_mah = 0; ///< 0 marks "no image yet" — a characterisation build
+  uint8_t update_status = 0;
+  FgRaProfile ra0;  ///< subclass 88
+  FgRaProfile ra0x; ///< subclass 89
+};
+
+/// Qmax Cell 0 ceiling on this part (TRM Table 5-5).
+static constexpr uint16_t FG_QMAX_CELL0_MAX_MAH = 14500;
+
+/// Update Status a golden image must carry: Qmax and Ra learned, IT not yet
+/// started.
+static constexpr uint8_t FG_GOLDEN_UPDATE_STATUS = 0x02;
+
+/// True when an image is complete enough to transplant.  Pure, so the guard is
+/// host-tested rather than discovered on a production line: a zero Qmax means
+/// no image was captured, exactly one profile may be enabled, and the enabled
+/// one must hold real resistances.
+inline bool fg_golden_image_valid(const FgGoldenImage &img) {
+  if (img.qmax_mah == 0 || img.qmax_mah > FG_QMAX_CELL0_MAX_MAH) {
+    return false;
+  }
+  if (img.update_status != FG_GOLDEN_UPDATE_STATUS) {
+    return false;
+  }
+  if (fg_ra_profile_enabled(img.ra0) == fg_ra_profile_enabled(img.ra0x)) {
+    return false; // none enabled, or both — the gauge always has exactly one
+  }
+  const FgRaProfile &live = fg_ra_profile_enabled(img.ra0) ? img.ra0 : img.ra0x;
+  for (size_t i = 0; i < FG_RA_TABLE_SIZE; ++i) {
+    if (live.ra[i] <= 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 #endif // BMS_TYPES_H

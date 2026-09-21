@@ -315,14 +315,22 @@ All six fields share block 0 (TRM p.62, p.81–84).
 
 | Offset | Field | Type | Min | Max | Default | Unit | Go v2.0 |
 |---|---|---|---|---|---|---|---|
-| 0 | Qmax Cell 0 | I2 | 0 | 14500 | 1000 | mAh | — (target 2600, not written) |
-| 2 | Update Status | H1 | 0x00 | 0x06 | 0x00 | — | — (gauge-owned) |
+| 0 | Qmax Cell 0 | I2 | 0 | 14500 | 1000 | mAh | 2600 seeded, or the learned value from a golden image |
+| 2 | Update Status | H1 | 0x00 | 0x06 | 0x00 | — | gauge-owned, except the `0x02` a golden image restores |
 | 3 | V at Chg Term | I2 | 0 | 5000 | 4350 | mV | — |
 
-### Subclass 88 Ra0
+### Subclass 88 Ra0 and 89 Ra0x
 
-Offset 0 holds the table flag, offsets 2–30 hold Ra 0…14 as I2. The driver
-reads the table for learning diagnostics and never writes it.
+Offset 0 holds the table flag, offsets 2–30 hold Ra 0…14 as I2. There are two
+profiles with that identical layout, and the gauge keeps exactly one enabled so
+it can rewrite the other without disturbing gauging (TRM p.100 §5.7). The flag's
+low byte says which: `0x55` enabled, `0x00` learned but idle, `0xFF` untouched
+defaults. Fresh parts read `0xFF55` on Ra0 and `0xFFFF` on Ra0x.
+
+TRM §5.7 allows exactly one kind of write here: "reading the values from another
+pre-learned pack for creating Golden Image Files". That is what
+`write_golden_image()` does, and why an image has to carry both profiles and
+both flags rather than just the fifteen numbers of the enabled one.
 
 ### Subclass 112 Codes
 
@@ -556,6 +564,7 @@ Board wiring: [`go_hardware_board.cpp`](../main/go_hardware_board.cpp).
 | Charging Voltage | `read_charging_voltage_mv()`, `write_charging_voltage_mv()` | written at boot when different (4200); range-checked and read back |
 | Status | `read_safety_status()`, `read_protector_status()`, `read_protector_state()` | logged at boot |
 | Learning reads | `read_learning_progress()` (Update Status + `CONTROL_STATUS[OCVTAKEN]`), `read_qmax_mah()`, `read_ra_table()` | polled every 5 s by the learning runner |
+| Golden image | `read_golden_image()`, `write_golden_image()` | captured on the characterised unit, installed on every other one while Update Status is `0x00`; see [Golden Image](fg_learning.md#golden-image) |
 | `IT_ENABLE` | `set_update_status_learning(true)` | sent once by the learning runner at cycle-1 entry; skipped when Update Status bit 2 is already set |
 | `PROTECTOR_CHKSUM` subcommand | `control_subcommand(0x001A, …)` | used to verify the protector write |
 | Qmax Cell 0 write | `write_qmax_cell0()` | seeded with Design Capacity from `init_bms()` while Update Status is `0x00`; never overwrites a learned value |

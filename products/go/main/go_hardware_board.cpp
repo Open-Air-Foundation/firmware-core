@@ -88,6 +88,29 @@ static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
     .sleep_current_ma = 50,
 };
 
+// The learned state copied off the one unit that runs a fuel-gauge learning
+// cycle.  While qmax_mah is 0 this is a characterisation build: a fresh gauge
+// only gets its Qmax seeded and is then left to learn, and a gauge that has
+// already learned prints its image at boot as a C initialiser, ready to paste
+// in here.  Filling it in turns every later unit into a production unit that
+// installs the image and never runs a cycle of its own.
+static constexpr FgGoldenImage AGO_FG_GOLDEN_V2 = {};
+
+// Print a captured image the way it has to be typed back in.  Each profile is
+// 15 numbers, so the three fields go on their own lines.
+static void format_ra_profile(const FgRaProfile &p, char *out, size_t len) {
+  int n = snprintf(out, len, "{0x%04X, {", p.flag);
+  for (size_t i = 0; i < FG_RA_TABLE_SIZE; ++i) {
+    if (n < 0 || static_cast<size_t>(n) >= len) {
+      return;
+    }
+    n += snprintf(out + n, len - static_cast<size_t>(n), "%s%d", i == 0 ? "" : ", ", p.ra[i]);
+  }
+  if (n > 0 && static_cast<size_t>(n) < len) {
+    snprintf(out + n, len - static_cast<size_t>(n), "}}");
+  }
+}
+
 // Gauge-side reference for detecting the end of a charge.  Flags()[FC] is only
 // raised once Voltage() reaches Charging Voltage minus Taper Voltage (TRM
 // SLUUAX0C §2.6.4).  TI's 4350 mV default against the 100 mV Taper Voltage puts
@@ -592,6 +615,22 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
             "BQ27742 Impedance Track already started (Update Status 0x%02X) — Qmax %u mAh "
             "belongs to the gauge",
             update_status, qmax_mah);
+    if (!fg_golden_image_valid(AGO_FG_GOLDEN_V2)) {
+      _log_fg_golden_image(); // characterisation build: hand the result over
+    }
+  } else if (fg_golden_image_valid(AGO_FG_GOLDEN_V2)) {
+    // Production unit: install what the characterised one learned, then start
+    // Impedance Track.  IT_ENABLE latches QEN for the life of the part, so it
+    // only runs once the whole image has been written and read back.
+    AG_LOGI(TAG, "BQ27742 installing golden image (Qmax %u → %u mAh)", qmax_mah,
+            AGO_FG_GOLDEN_V2.qmax_mah);
+    if (!_fuel_gauge_v2->write_golden_image(AGO_FG_GOLDEN_V2)) {
+      AG_LOGW(TAG, "BQ27742 write_golden_image() failed — unit left unlearned, IT not started");
+      df_ok = false;
+    } else if (!_fuel_gauge_v2->set_update_status_learning(true)) {
+      AG_LOGW(TAG, "BQ27742 IT_ENABLE failed — image installed but Impedance Track is off");
+      df_ok = false;
+    }
   } else if (qmax_mah == AGO_CELL_CONFIG_V2.design_capacity_mah) {
     AG_LOGI(TAG, "BQ27742 Qmax already seeded (%u mAh) — preserved", qmax_mah);
   } else {
@@ -631,6 +670,24 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
           "BQ27742 boot: flags=0x%04X safety=0x%04X protector=0x%02X (CHG %s, DSG %s) state=0x%02X",
           flags, safety, prot, (prot & BQ27742::ProtectorStatus::CHG_OFF) ? "OFF" : "on",
           (prot & BQ27742::ProtectorStatus::DSG_OFF) ? "OFF" : "on", state);
+}
+
+void GoHardwareBoard::_log_fg_golden_image() {
+  FgGoldenImage img{};
+  if (!_fuel_gauge_v2->read_golden_image(img)) {
+    AG_LOGW(TAG, "BQ27742 golden image unreadable");
+    return;
+  }
+  char buf[320];
+  AG_LOGI(TAG, "BQ27742 golden image: .qmax_mah = %u, .update_status = 0x%02X,", img.qmax_mah,
+          img.update_status);
+  format_ra_profile(img.ra0, buf, sizeof(buf));
+  AG_LOGI(TAG, "BQ27742 golden image: .ra0 = %s,", buf);
+  format_ra_profile(img.ra0x, buf, sizeof(buf));
+  AG_LOGI(TAG, "BQ27742 golden image: .ra0x = %s,", buf);
+  if (!fg_golden_image_valid(img)) {
+    AG_LOGW(TAG, "BQ27742 golden image is not yet complete — do not paste it in");
+  }
 }
 
 // Hardware protector.  Separate from _init_fuel_gauge_v2() because the write
