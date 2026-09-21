@@ -142,6 +142,15 @@ bool CAP1203::clear_interrupt() {
   return _read_reg(REG_GENERAL_STATUS, status);
 }
 
+bool CAP1203::set_delta_sense(uint8_t code) {
+  if (code > 7) {
+    return false;
+  }
+  _config.delta_sense = code;
+  return _write_reg(REG_SENSITIVITY_CONTROL,
+                    static_cast<uint8_t>((code << 4) | _config.base_shift));
+}
+
 bool CAP1203::read_diagnostics(Diagnostics &out) {
   if (_dev_handle == nullptr) {
     return false;

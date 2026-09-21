@@ -97,13 +97,14 @@ static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
 // Touch diagnostics knobs (go/test/touch-diag branch only).
 static constexpr const char *TOUCH_DIAG_TAG = "TOUCHDIAG";
 static constexpr uint32_t TOUCH_DIAG_PERIOD_MS = 500;
-// The product runs DELTA_SENSE 0 (128x).  At that gain every real touch on
-// this board pins the delta count at +127, which the datasheet calls out as
-// "sensitivity settings are too high" (5.4, p.24), and it also trips the noise
-// detector intermittently.  A saturated reading cannot be used to pick a
-// threshold, so the diagnostic measures at a lower gain: 2 = 32x, the chip's
-// own default.  1 = 64x if 32x turns out too quiet.
-static constexpr uint8_t TOUCH_DIAG_DELTA_SENSE = 2;
+// The pads on this board saturate the delta count at both 128x and 32x, so
+// the useful gain is not known in advance.  Start at the product's setting and
+// step down on every saturated reading until nothing pins: DELTA_SENSE is a
+// plain multiplier, so whatever the settled gain measures scales back up to
+// any other setting.  One-directional on purpose, so it cannot oscillate
+// between two gains while a pad is being pressed and released.
+static constexpr uint8_t TOUCH_DIAG_DELTA_SENSE_START = 0; // 128x, as shipped
+static constexpr uint8_t TOUCH_DIAG_DELTA_SENSE_MIN = 7;   // 1x, least sensitive
 // The TPL5010 window is ~60 s and nothing else feeds it on this path.
 static constexpr uint32_t TOUCH_DIAG_WDT_FEED_MS = 20000;
 
@@ -738,6 +739,20 @@ void GoHardwareBoard::_log_fg_golden_image() {
   }
 }
 
+void GoHardwareBoard::_autorange_touch_gain() {
+  if (!_touch_diag_saturated || _touch_diag_sense >= TOUCH_DIAG_DELTA_SENSE_MIN) {
+    return;
+  }
+  const uint8_t next = static_cast<uint8_t>(_touch_diag_sense + 1);
+  if (!_touch_diag->set_delta_sense(next)) {
+    return;
+  }
+  AG_LOGW(TOUCH_DIAG_TAG, "delta saturated — dropping gain %ux -> %ux",
+          CAP1203::delta_sense_multiplier(_touch_diag_sense),
+          CAP1203::delta_sense_multiplier(next));
+  _touch_diag_sense = next;
+}
+
 // Hardware protector.  Separate from _init_fuel_gauge_v2() because the write
 // needs the charger: between the subclass 64 commit and the Prot Checksum the
 // gauge can open both FETs, which on battery cuts the system mid-sequence.
@@ -1259,7 +1274,7 @@ void GoHardwareBoard::run_touch_diag() {
   ext_watchdog_init(gpio_hal(), static_cast<int>(PIN_EXT_WDT));
 
   CAP1203::Config cfg;
-  cfg.delta_sense = TOUCH_DIAG_DELTA_SENSE;
+  cfg.delta_sense = TOUCH_DIAG_DELTA_SENSE_START;
   cfg.repeat_rate_channels = static_cast<uint8_t>(TouchChannel::ALL & ~touch_channel_map().enter);
   CAP1203 touch(_i2c_bus, I2C_ADDR_CAP1203, cfg);
   if (!touch.init()) {
@@ -1268,6 +1283,7 @@ void GoHardwareBoard::run_touch_diag() {
   _touch_diag = &touch;
 
   AG_LOGI(TOUCH_DIAG_TAG, "touch-only diagnostic: nothing else on this board is running");
+  _touch_diag_sense = TOUCH_DIAG_DELTA_SENSE_START;
   uint32_t last_feed = 0;
   for (;;) {
     const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
@@ -1276,6 +1292,7 @@ void GoHardwareBoard::run_touch_diag() {
       last_feed = now;
     }
     _run_touch_diagnostics();
+    _autorange_touch_gain();
     // Acknowledge, or the touch bits stay set for good once a pad has been
     // pressed: they clear only on a write to MAIN_CONTROL, and only for pads
     // that have actually been released.  Without this the touch column reads
@@ -1295,16 +1312,20 @@ void GoHardwareBoard::_run_touch_diagnostics() {
     return;
   }
 
+  _touch_diag_saturated = false;
   AG_LOGI(TOUCH_DIAG_TAG,
-          "gen=0x%02X touch=0x%02X noise=0x%02X bcout=0x%02X calact=0x%02X sens=0x%02X",
-          d.general_status, d.sensor_status, d.noise_flags, d.base_out_limit, d.cal_active,
-          d.sensitivity);
+          "gain=%ux gen=0x%02X touch=0x%02X noise=0x%02X bcout=0x%02X calact=0x%02X sens=0x%02X",
+          CAP1203::delta_sense_multiplier(_touch_diag_sense), d.general_status, d.sensor_status,
+          d.noise_flags, d.base_out_limit, d.cal_active, d.sensitivity);
   for (uint8_t i = 0; i < 3; ++i) {
     AG_LOGI(TOUCH_DIAG_TAG, "CS%u delta=%+4d base=%3u cal=%4u thr=%3u%s%s%s", i + 1, d.delta[i],
             d.base[i], d.calibration[i], d.threshold[i],
             CAP1203::calibration_failed(d.calibration[i]) ? "  CAL-PINNED" : "",
             (d.base_out_limit & (1u << i)) ? "  BASE-OUT" : "",
             (d.delta[i] == 127) ? "  DELTA-SAT" : "");
+    if (d.delta[i] == 127 || d.delta[i] == -128) {
+      _touch_diag_saturated = true;
+    }
   }
   if (d.general_status & 0x20) {
     AG_LOGW(TOUCH_DIAG_TAG, "ACAL_FAIL — at least one pad failed analog calibration");

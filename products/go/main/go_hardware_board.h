@@ -112,7 +112,10 @@ public:
 
 private:
   void _run_touch_diagnostics();
+  void _autorange_touch_gain();
   CAP1203 *_touch_diag = nullptr;
+  uint8_t _touch_diag_sense = 0;
+  bool _touch_diag_saturated = false;
   void _log_fg_golden_image(); ///< print the learned image as a C initialiser
   /// Programs the v2 gauge's hardware protector.  Runs from init_bms(),
   /// not init_fuel_gauge(), because it must know whether an adapter is

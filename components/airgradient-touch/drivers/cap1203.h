@@ -99,6 +99,17 @@ public:
   // Call this from the interrupt handler or after processing a touch event.
   bool clear_interrupt() override;
 
+  /// Sensitivity multiplier for a DELTA_SENSE code, 0..7 (datasheet Table
+  /// 5-7, p.25): 0 is 128x and each step halves it down to 1x.
+  static uint8_t delta_sense_multiplier(uint8_t code) {
+    return static_cast<uint8_t>(code > 7 ? 0 : (128u >> code));
+  }
+
+  /// Change DELTA_SENSE in place, leaving BASE_SHIFT and the thresholds as
+  /// they are.  Diagnostic use: the gain is a plain multiplier on the delta
+  /// count, so a reading taken at one setting scales to any other.
+  bool set_delta_sense(uint8_t code);
+
   /// Read every diagnostic register in one sweep.  All-or-nothing: false
   /// leaves @p out untouched rather than half-filled.
   bool read_diagnostics(Diagnostics &out);
