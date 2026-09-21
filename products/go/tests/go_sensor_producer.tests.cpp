@@ -365,13 +365,13 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
     access.handle_measurement(notify);
 
     // The posted event should carry the spliced cache, not invalid sentinels
-    CHECK(captured.sensor_data.tvoc_nox.tvoc_index == 150);
-    CHECK(captured.sensor_data.tvoc_nox.tvoc_raw == 25000);
-    CHECK(captured.sensor_data.tvoc_nox.nox_index == 42);
-    CHECK(captured.sensor_data.tvoc_nox.nox_raw == 18000);
+    CHECK(captured.sensor_data.measures.tvoc_nox.tvoc_index == 150);
+    CHECK(captured.sensor_data.measures.tvoc_nox.tvoc_raw == 25000);
+    CHECK(captured.sensor_data.measures.tvoc_nox.nox_index == 42);
+    CHECK(captured.sensor_data.measures.tvoc_nox.nox_raw == 18000);
 
     // Other fields from real reads
-    CHECK(captured.sensor_data.co2.co2 == 400);
+    CHECK(captured.sensor_data.measures.co2.co2 == 400);
   }
 
   // -----------------------------------------------------------------------
@@ -398,8 +398,8 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
     access.handle_measurement(notify);
 
     // TVOC/NOx should come from SensorManager (not spliced cache)
-    CHECK(captured.sensor_data.tvoc_nox.tvoc_raw == 30000);
-    CHECK(captured.sensor_data.tvoc_nox.nox_raw == 20000);
+    CHECK(captured.sensor_data.measures.tvoc_nox.tvoc_raw == 30000);
+    CHECK(captured.sensor_data.measures.tvoc_nox.nox_raw == 20000);
   }
 
   // -----------------------------------------------------------------------
@@ -586,7 +586,7 @@ TEST_CASE("SensorProducer run()", "[SensorProducer]") {
 
     CHECK(captured.type == EventType::SensorDataReady);
     // TVOC should be from cache (initial sentinels since no sampler tick yet)
-    CHECK(captured.sensor_data.tvoc_nox.tvoc_index == MeasuresInvalid::TVOC);
+    CHECK(captured.sensor_data.measures.tvoc_nox.tvoc_index == MeasuresInvalid::TVOC);
   }
 
   SECTION("run: timeout fires sampler tick and caches TVOC") {

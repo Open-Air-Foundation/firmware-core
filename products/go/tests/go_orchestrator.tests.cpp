@@ -1539,7 +1539,7 @@ TEST_CASE("pause/resume: keep session, GPS and live data; record results only wh
 
   Event reading{};
   reading.type = EventType::SensorDataReady;
-  reading.sensor_data.co2.co2 = 555;
+  reading.sensor_data.measures.co2.co2 = 555;
   A::dispatch(orch, reading);
   CHECK_FALSE(test_spy::route_point_appended);
   CHECK(test_spy::last_cached_measurement.co2.co2 == 555);
@@ -3565,8 +3565,8 @@ TEST_CASE("dispatch: routes SensorDataReady to on_sensor_data", "[Orchestrator][
 
   Event evt{};
   evt.type = EventType::SensorDataReady;
-  evt.sensor_data = MeasuresAGo{};
-  evt.sensor_data.co2.co2 = 999;
+  evt.sensor_data.measures = MeasuresAGo{};
+  evt.sensor_data.measures.co2.co2 = 999;
 
   A::dispatch(orch, evt);
 

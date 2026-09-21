@@ -663,7 +663,7 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) 
 void Orchestrator::dispatch(const Event &event) {
   switch (event.type) {
   case EventType::SensorDataReady:
-    on_sensor_data(event.sensor_data);
+    on_sensor_data(event.sensor_data.measures);
     break;
   case EventType::PmSensorAsleep:
     // PM sleep finished while still connected — isolate the bus now.

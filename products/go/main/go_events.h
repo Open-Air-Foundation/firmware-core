@@ -14,7 +14,7 @@
 
 enum class EventType : uint8_t {
   // --- Producer events ---
-  SensorDataReady, // payload: MeasuresAGo
+  SensorDataReady, // payload: SensorEventData
   PmSensorAsleep,  // no payload (PM sleep done; orchestrator may isolate now)
   SensorTestDone,  // payload: SensorTestResults sensor_test_results (bulk AQ self-test)
   GpsFixUpdate,    // payload: GpsData
@@ -69,6 +69,10 @@ enum class EventType : uint8_t {
 
 // --- Event payload structs ---
 
+struct SensorEventData {
+  MeasuresAGo measures{};
+};
+
 struct InputEventData {
   InputSource source;
   InputType type;
@@ -107,7 +111,7 @@ struct Event {
   EventType type;
 
   union {
-    MeasuresAGo sensor_data;                 // SensorDataReady
+    SensorEventData sensor_data;             // SensorDataReady
     GpsData gps_data;                        // GpsFixUpdate (~68 bytes)
     InputEventData input;                    // InputPress (2 bytes)
     uint32_t shake_detected_ms;              // ShakeDetected

@@ -320,7 +320,7 @@ void SensorProducer::handle_measurement(uint32_t notify_value) {
 
   Event event{};
   event.type = EventType::SensorDataReady;
-  event.sensor_data = basic;
+  event.sensor_data.measures = basic;
   RTOS::queue_send(_event_queue, &event, 0);
 }
 
