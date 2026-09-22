@@ -363,7 +363,7 @@ DisplayValues FgLearningRunner::build_dashboard_values(const PowerSnapshot &snap
   FgLearningDashboardData &d = v.fg_dashboard;
   d.valid = snap.fg_soc_percent != BmsInvalid::SOC_PERCENT;
   d.cycle = _controller.cycle();
-  d.cycle_target = FgLearningController::CYCLE_TARGET;
+  d.cycle_target = _controller.cycle_target();
   d.soc_pct = snap.fg_soc_percent;
   d.voltage_mv = snap.fg_voltage_mv;
   d.current_ma = snap.fg_current_ma;

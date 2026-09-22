@@ -76,7 +76,18 @@ struct VerifyInputs {
 
 class FgLearningController {
 public:
-  static constexpr uint8_t CYCLE_TARGET = 2;          ///< fixed cycles before verify
+  /// Cycles before Verify. One is what the part asks for: TRM SLUUAX0C
+  /// §5.5.3.2 walks the golden-file cycle as Update Status 0x00, IT_ENABLE to
+  /// 0x04, charge and relaxation to 0x05, discharge and relaxation to 0x06,
+  /// and says a golden file can be generated from there. Bit 1 of that
+  /// register is defined as Qmax *and* the Ra tables learned, so one cycle
+  /// produces both and nothing in the TRM asks for a second. A second cycle
+  /// costs another fifteen hours of bench time and does not make
+  /// verify_fail_reason() any stricter, since every criterion there reads end
+  /// state. The counter and its branches stay because the run is worth
+  /// repeating on a unit whose first Qmax looks wrong; tests drive that path
+  /// by injecting a larger target.
+  static constexpr uint8_t CYCLE_TARGET = 1;
   static constexpr uint8_t ITPOR_LOSS_CAP = 3;        ///< POR-loss restarts -> Failed
   /// Default floor on the rest before discharge; the runner injects the
   /// per-variant value from PowerService::fg_learning_rest_min_ms().
@@ -88,8 +99,9 @@ public:
   static constexpr float QMAX_MIN_FRACTION = 0.7f;
   static constexpr float QMAX_MAX_FRACTION = 1.4f;
 
-  explicit FgLearningController(uint32_t rest_min_ms = REST_TIMEOUT_MS)
-      : _rest_min_ms(rest_min_ms) {}
+  explicit FgLearningController(uint32_t rest_min_ms = REST_TIMEOUT_MS,
+                                uint8_t cycle_target = CYCLE_TARGET)
+      : _rest_min_ms(rest_min_ms), _cycle_target(cycle_target) {}
 
   void load(FgLearningStage stage, uint8_t cycle, uint8_t itpor_losses);
   void start(); ///< arm a fresh run (stage=Charge, cycle=1)
@@ -103,6 +115,7 @@ public:
 
   FgLearningStage stage() const { return _stage; }
   uint8_t cycle() const { return _cycle; }
+  uint8_t cycle_target() const { return _cycle_target; }
   uint8_t itpor_losses() const { return _itpor_losses; }
   FgLearnFailReason fail_reason() const { return _fail_reason; }
   /// Restore the persisted fail reason after a sticky-Failed reboot.
@@ -118,6 +131,7 @@ private:
   FgLearningAction build_action() const;
 
   const uint32_t _rest_min_ms; ///< Rest -> Discharge floor for this run
+  const uint8_t _cycle_target; ///< cycles before Verify; CYCLE_TARGET in production
   FgLearningStage _stage = FgLearningStage::Idle;
   uint8_t _cycle = 0;
   uint8_t _itpor_losses = 0;

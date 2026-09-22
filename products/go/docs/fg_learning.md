@@ -95,8 +95,9 @@ for `FgLearningAction`, `VerifyInputs`, and the accessors (`stage`, `cycle`,
 
 The controller is driven, not autonomous. Each `tick()` derives the next stage
 from the snapshot flags and returns an `FgLearningAction` for the runner to
-apply. The run executes a fixed `CYCLE_TARGET` (default 2) full cycles before
-verifying once.
+apply. The run executes `CYCLE_TARGET` full cycles before verifying once. That
+is one in production; a larger target can be injected through the constructor,
+which is how the repeat path stays tested.
 
 ```mermaid
 stateDiagram-v2
@@ -123,18 +124,29 @@ stateDiagram-v2
 ### Cycle Timeline
 
 The run repeats one full charge → rest → discharge → ship → re-plug cycle
-`CYCLE_TARGET` (default 2) times, then verifies **once**. Each `Discharge`
-starts at the **full** top and ends **empty** at the EDV cutoff, so the battery
-is full only at the _start_ of a discharge.
+`CYCLE_TARGET` times, then verifies **once**. Each `Discharge` starts at the
+**full** top and ends **empty** at the EDV cutoff, so the battery is full only
+at the _start_ of a discharge.
+
+One cycle is what the part asks for. TRM SLUUAX0C §5.5.3.2 walks the golden-file
+cycle as Update Status `0x00`, `IT_ENABLE` to `0x04`, charge and relaxation to
+`0x05`, discharge and relaxation to `0x06`, and states a golden file can be
+generated from there; bit 1 of that register is defined as Qmax *and* the Ra
+tables learned, so the single cycle produces both. A second cycle costs roughly
+another fifteen hours and makes no verify criterion stricter, since all of them
+read end state.
 
 ```text
 Arm
  └─ Cycle 1: Charge(empty->full) -> Rest(OCV1) -> Discharge(full->EDV) -> CycleDone -> ship
- re-plug   (cycle 1 below target -> next Charge)
- └─ Cycle 2: Charge(empty->full) -> Rest(OCV1) -> Discharge(full->EDV) -> CycleDone -> ship
- re-plug   (cycle 2 at target -> Verify)
+ re-plug   (cycle 1 at target -> Verify)
  └─ Verify (battery empty, read-only) -> Complete / Failed
 ```
+
+With a target above one, each re-plug from `CycleDone` below the target starts
+another identical cycle first. That is worth doing on a unit whose first Qmax
+looks wrong — re-arm after `Complete` rather than paying for it up front, so the
+first number can be read before committing to a second run.
 
 The boot resume matrix sequences this: on re-plug from `CycleDone`, `cycle below
 target` returns to `Charge` (cycle + 1), while `cycle at target` enters
@@ -144,9 +156,10 @@ it keeps charge off and only reads the learned values back
 Qmax recompute happen during the powered-off rest before that re-plug, so the
 rest before re-plugging matters. For the rev 2.0 golden image leave the unit off
 for at least 5 h, the point at which the gauge forces its OCV measurement if the
-cell has not relaxed sooner (TRM SLUUAX0C §2.1). Across the two cycles the flags typically fill
-in as: `OCV` first, `R` during cycle 1's discharge, `Q` once cycle 1 closes, with
-cycle 2 refining both before `Verify`.
+cell has not relaxed sooner (TRM SLUUAX0C §2.1). The flags typically fill in as:
+`OCV` first, `R` during the discharge, and `Q` once the cycle closes — which is
+Update Status reaching `0x05` after the charge and relaxation and `0x06` after
+the discharge and relaxation.
 
 ### Controlled Power Profile
 

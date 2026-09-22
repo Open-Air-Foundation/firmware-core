@@ -100,7 +100,7 @@ bool FgLearningController::resume_on_boot(const PowerSnapshot &snap) {
   case FgLearningStage::CycleDone:
     if (por) {
       por_loss_restart();
-    } else if (_cycle < CYCLE_TARGET) {
+    } else if (_cycle < _cycle_target) {
       _cycle++;
       _stage = FgLearningStage::Charge;
       _charge_observed = false;
@@ -241,7 +241,7 @@ bool FgLearningController::on_verify_result(const VerifyInputs &in) {
   const bool pass = (reason == FgLearnFailReason::None);
   if (pass) {
     _stage = FgLearningStage::Complete;
-  } else if (_cycle >= CYCLE_TARGET) {
+  } else if (_cycle >= _cycle_target) {
     _stage = FgLearningStage::Failed;
     _fail_reason = reason;
   } else {

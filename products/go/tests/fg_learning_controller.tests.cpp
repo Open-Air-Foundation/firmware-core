@@ -272,7 +272,10 @@ TEST_CASE("resume: Complete with POR fails (learning lost)", "[fg][resume]") {
 }
 
 TEST_CASE("resume: CycleDone no POR below cap advances cycle and charges", "[fg][resume]") {
-  FgLearningController c;
+  // Production runs a single cycle, so this branch only exists for a run that
+  // is deliberately repeated. Inject the larger target rather than lose the
+  // coverage of it.
+  FgLearningController c(FgLearningController::REST_TIMEOUT_MS, 2);
   c.load(FgLearningStage::CycleDone, 1, 0);
   REQUIRE(c.resume_on_boot(quiet_snapshot()));
   REQUIRE(c.stage() == FgLearningStage::Charge);
@@ -282,6 +285,19 @@ TEST_CASE("resume: CycleDone no POR below cap advances cycle and charges", "[fg]
 TEST_CASE("resume: CycleDone no POR at cap goes to Verify", "[fg][resume]") {
   FgLearningController c;
   c.load(FgLearningStage::CycleDone, FgLearningController::CYCLE_TARGET, 0);
+  REQUIRE(c.resume_on_boot(quiet_snapshot()));
+  REQUIRE(c.stage() == FgLearningStage::Verify);
+}
+
+TEST_CASE("a production run closes after one cycle", "[fg][resume]") {
+  // Not just the constant: what it buys. TRM SLUUAX0C 5.5.3.2 takes the
+  // golden-file cycle to Update Status 0x06 after one charge, relax, discharge
+  // and relax, and a golden file can be generated from there. Every extra
+  // cycle is another fifteen hours on someone's bench for a verify that reads
+  // end state and cannot tell the difference.
+  FgLearningController c;
+  REQUIRE(c.cycle_target() == 1);
+  c.load(FgLearningStage::CycleDone, 1, 0);
   REQUIRE(c.resume_on_boot(quiet_snapshot()));
   REQUIRE(c.stage() == FgLearningStage::Verify);
 }
@@ -421,7 +437,7 @@ TEST_CASE("on_verify_result fail at cap -> Failed", "[fg][verify]") {
 }
 
 TEST_CASE("on_verify_result fail below cap -> another Charge cycle (guard)", "[fg][verify]") {
-  FgLearningController c;
+  FgLearningController c(FgLearningController::REST_TIMEOUT_MS, 2);
   c.load(FgLearningStage::Verify, 1, 0);
   VerifyInputs bad = passing_verify();
   bad.qmax_up = false;
