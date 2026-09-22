@@ -241,49 +241,56 @@ then lets the fresh output driver take over with zero power glitch.
 
 In non-Offline modes (Portable, Stationary) the device stays awake but
 the SPS30 PM sensor may idle for long periods between measurements,
-drawing 45–65 mA of continuous fan current.  When the measurement
-interval is at or above `pm_sleep_threshold_ms` (default 20 s) the
+drawing 45–65 mA of continuous fan current. When the
+time remaining until the next scheduled measurement is at or above
+`pm_sleep_threshold_ms` (default 20 s), the
 orchestrator puts the SPS30 into its native **Sleep** mode (`0x1001`)
 between measurements, then isolates it from the I2C bus (V1) via
 `set_pm_power(false)`.
 
 ### Cycle
 
-```text
-Measurement completes → on_sensor_data() → request_pm_sleep()
-    ↓
-SensorProducer sleeps SPS30 (fan stopped) → posts PmSensorAsleep
-    → orchestrator set_pm_power(false) (isolate bus)
-    ↓
-Idle (PM asleep, fan stopped, ~8 µA)
-    ↓
-Pre-wake timer fires (interval − warmup before next measurement)
-    → set_pm_power(true) (connect bus) → request_prepare()
-    ↓
-SensorProducer pm_wake() + warmup() (~10 s of discard reads)
-    — fan spins up during warmup
-    ↓
-Measurement timer fires → request_measurement(1, All)
-    — PM data is stable, fan has spun up during warmup
+```mermaid
+stateDiagram-v2
+    Ready --> Sleeping: Sleep eligible after result
+    Sleeping --> Asleep: PmSensorAsleep, isolate bus
+    Asleep --> Preparing: Pre-wake or refresh, connect bus and prepare
+    Preparing --> Ready: PmPrepared after wake and warmup
+    Ready --> Ready: Measurement requested and completed
 ```
+
+The producer reports `PmPreparationStarted` before `pm_wake()` + blocking
+`warmup()` (about 10 s by default), and `PmPrepared` afterward. The orchestrator
+waits for preparation before requesting a refresh measurement. Preparation
+completion does not guarantee a valid reading; normal field validation still
+applies.
 
 ### Eligibility
 
-The orchestrator checks eligibility inline at each decision point —
-no persistent mode flag is tracked:
+The orchestrator checks eligibility at each decision point. After a result,
+the argument is the remaining time to the regular deadline, clamped to zero
+when overdue:
 
 ```cpp
-_mode != OperatingMode::Offline && should_sleep_pm_sensor(interval_ms)
+_mode != OperatingMode::Offline && should_sleep_pm_sensor(remaining_ms)
 ```
+
+A manual refresh does not move that deadline. When the next scheduled reading
+is close, PM stays ready rather than sleeping and needing another warmup.
+Interval-policy checks, including pre-wake eligibility, still use the configured
+interval. PM operation state prevents duplicate sleep or preparation requests.
 
 ### Edge Cases
 
 | Scenario | Handling |
 |---|---|
 | **Unlock** | Display shows cached data; PM wakes at the next pre-wake timer |
-| **Interval shortened below threshold** | `reschedule_sensor_timer()` calls `set_pm_power(true)` + `request_prepare()` (wakes) |
-| **Interval lengthened above threshold** | `reschedule_sensor_timer()` calls `request_pm_sleep()` |
-| **Mode change** | `change_mode()` calls `set_pm_power(true)` + `request_prepare()` (connect + wake) |
+| **Interval shortened below threshold** | Prepare an asleep sensor; a sleeping sensor is prepared after `PmSensorAsleep` |
+| **Interval lengthened above threshold** | Request sleep when PM is ready and no measurement or refresh is pending |
+| **Mode change** | `change_mode()` calls `prepare_pm()` to connect and prepare an asleep sensor |
+| **Shake while PM asleep or preparing** | Prepare if asleep, then request the refresh after `PmPrepared` |
+| **Shake while PM sleep is in progress** | Wait for `PmSensorAsleep`, then prepare and measure |
+| **Refresh completes near the regular deadline** | Keep PM awake when the remaining time is below the existing sleep threshold |
 
 ### Methods
 

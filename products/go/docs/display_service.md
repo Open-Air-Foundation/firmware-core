@@ -442,6 +442,13 @@ suppressed. The display catches up on the next user-initiated repaint
 or on the next deliberate session render. See `docs/orchestrator.md`
 for the full call-site classification.
 
+Shake-refresh progress is an explicit user-requested update. The orchestrator's
+`update_refresh_display()` submits it with `wait=true` on Home and menus so
+progress text can change and clear while a menu is open. It still skips active
+setup sessions and the pairing focus screen. Snackbar text and persistence
+belong to the orchestrator and UI Manager; Display Service only renders the
+supplied values and selects the normal refresh tier.
+
 ## Rendering Pipeline
 
 Frame assembly order:

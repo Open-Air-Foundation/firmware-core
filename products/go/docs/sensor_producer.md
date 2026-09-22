@@ -2,8 +2,9 @@
 
 Independent RTOS task that drives sensor measurements for AirGradient Go.
 Wraps the shared `SensorManager` component: the orchestrator signals it with
-an iteration count via RTOS task notification; the task blocks inside
-`SensorManager::start_measures()` for the full averaging window, then posts a
+an iteration count, sensor groups, and measurement origin via RTOS task
+notification; the task blocks inside `SensorManager::start_measures()` for
+the full averaging window, then posts a
 `SensorDataReady` event to the orchestrator queue.
 
 The same task also runs blocking CO2 calibration requests and posts their
@@ -26,10 +27,23 @@ of which sensors are wired — that is the product wiring layer's responsibility
 |---|---|---|
 | `SensorManager` | `airgradient-sensors` (`services/sensor_manager.h`) | Blocking multi-iteration sensor averaging |
 | `Sensors` struct | `airgradient-sensors` (`services/sensor_manager.h`) | HAL pointer table injected into `SensorManager` by wiring layer |
-| `MeasuresAGo` | `airgradient-common` (`measures_types.h`) | Averaging result; carried in `SensorDataReady` event payload |
+| `MeasuresAGo` | `airgradient-common` (`measures_types.h`) | Averaging result, wrapped by `SensorEventData` |
 | `RTOS` | `airgradient-common` (`rtos.h`) | `task_create()`, `task_delete()`, `queue_send()`, `task_notify_send()`, `task_notify_wait()` |
-| `go_events.h` | product | `Event`, `EventType::SensorDataReady` |
+| `go_events.h` | product | `SensorEventData`, `MeasurementOrigin`, measurement and PM boundary events |
 | `Co2CalibrationResult` | `airgradient-sensors` (`sensor_manager.h`) | Completion payload for asynchronous CO2 calibration |
+
+## Public API
+
+| Method | Purpose |
+|---|---|
+| `start()` / `stop(sleep_pm)` | Manage the producer task and PM shutdown policy |
+| `request_measurement(iterations, groups, origin = MeasurementOrigin::Scheduled)` | Request readings tagged as scheduled or manual refresh |
+| `request_prepare()` | Wake PM, run blocking warmup, and report preparation boundaries |
+| `request_pm_sleep()` | Sleep PM and report completion before the orchestrator isolates the bus |
+| `request_self_test()` | Run the Hardware Test sensor sweep |
+
+See [`go_sensor_producer.h`](../main/go_sensor_producer.h) for full signatures
+and calibration/settings requests.
 
 ## AGo Sensor Wiring
 
@@ -121,13 +135,24 @@ central queue drops the completion without retry. The orchestrator maps a
 delivered completion to the on-device snackbar and, when connected, the BLE
 Config command result.
 
-```cpp
-// Event union member (go_events.h):
-MeasuresAGo sensor_data;   // all averaged fields; null-sensor fields carry sentinel values
-```
+The event union contains `SensorEventData sensor_data`, with two members:
 
-The orchestrator receives this event and routes the `MeasuresAGo` payload to
-storage, display, and BLE services as appropriate.
+| Member | Meaning |
+|---|---|
+| `measures` | `MeasuresAGo` result; unavailable sensor fields retain invalid sentinels |
+| `origin` | `MeasurementOrigin::Scheduled` (default) or `MeasurementOrigin::Refresh`, copied from the request |
+
+The producer does not infer origin from timing. The orchestrator tags the
+request; a scheduled measurement reused for a shake keeps `Scheduled`.
+Both origins update current readings, while only `Scheduled` writes chart
+cache and route points.
+
+At boot and for `request_prepare()`, the producer posts `PmPreparationStarted`,
+calls `pm_wake()` and blocking `warmup()`, then posts `PmPrepared`.
+`request_pm_sleep()` posts `PmSensorAsleep` after the sleep call. These events
+report operation boundaries, not guaranteed sensor validity. Measurement and
+PM boundary posts wait for central queue space. Calibration completion keeps
+its existing zero-wait delivery.
 
 ## Iteration Count and Sensor Groups
 
@@ -145,11 +170,12 @@ The `SensorGroup` parameter controls which sensor categories are polled:
 | `TvocNox` | `tvoc_nox` (SGP41 read + algorithm step when configured) |
 | `All` | All of the above (default) |
 
-The task encodes both values into the `uint32_t` notification: iterations
-in bits 0-7, group mask in bits 8-15. On decode, zero iterations defaults
-to 1, and `SensorGroup::None` defaults to `All`.
+The task encodes requests into the `uint32_t` notification: iterations in
+bits 0–7, group mask in bits 8–15, and `NOTIFY_REFRESH` in bit 16 when origin
+is `Refresh`. An unset origin bit means `Scheduled`. On decode, zero iterations
+defaults to 1, and `SensorGroup::None` defaults to `All`.
 
-Four sentinel values use the remaining notification space:
+Six sentinel values use the remaining notification space:
 
 | Sentinel | Value | Purpose |
 |---|---|---|
@@ -247,6 +273,7 @@ sensor_producer.request_prepare();
 
 // Internally every request uses the same overwrite notification slot:
 uint32_t value = (static_cast<uint32_t>(groups) << 8) | iterations;
+// Manual refresh requests also set NOTIFY_REFRESH (bit 16).
 RTOS::task_notify_send(_task_handle, value);
 // overwrites any unconsumed notification
 ```
@@ -257,6 +284,16 @@ gate. A new request replaces any unconsumed measurement, prepare, sleep,
 self-test, or calibration request. While a handler is blocking, at most the
 latest request remains latched for the next loop iteration; repeated requests
 can therefore coalesce and do not guarantee one completion per call.
+
+For scheduled measurements and shake refresh, the orchestrator tracks one
+pending measurement and PM preparation/sleep state. It waits for the relevant
+PM completion event before requesting a refresh measurement, and reuses an
+already-requested measurement instead of sending another. The notification
+transport remains unchanged; there is no command queue.
+
+PM preparation still blocks this task in `warmup()`. Gas-index sampler ticks
+run between command handlers, not during warmup. Refresh results use the
+latest sampler cache when the sampler is active.
 
 ### Task Duration
 
@@ -319,4 +356,5 @@ For host testing:
 - `start()` is a no-op in `TEST_HOST` mode (`RTOS::task_create` returns
   `false`); call `run()` directly in tests to exercise the task loop.
 - Verify `request_measurement(0)` causes the task to use 1 iteration.
-- Verify `SensorDataReady` is posted with the correct `MeasuresAGo` payload.
+- Verify `SensorDataReady` carries the readings and the requested origin in
+  `SensorEventData`.
