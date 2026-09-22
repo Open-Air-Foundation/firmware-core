@@ -67,18 +67,29 @@ struct TouchTuning {
 /// saturates one can be invisible on the other, so one global setting cannot
 /// serve both.
 ///
-/// Rev 2.0, measured on the bench with the enclosure fitted: a touch is about
-/// 82 counts at 2x against an idle band of one, and the three pads agree
-/// within 4 %. At rev 1's 128x that same touch works out near 5250 counts
-/// against a ceiling of 127, so every press saturated and the delta count
-/// carried no information at all. The threshold is half the measured peak,
-/// still forty times the noise.
+/// Rev 2.0, measured on the bench with the enclosure fitted, one guided press
+/// per pad at 16x: CS1 peaks at 120, CS2 at 87, CS3 at 114, against an idle
+/// band of a single count. The pads are unequal but they are clean — with one
+/// pad pressed the other two read zero, so the three can share a threshold.
+///
+/// 16x is still too high. It leaves CS1 seven counts short of the register
+/// ceiling, and a pinned delta is the datasheet's own symptom of sensitivity
+/// set too high: it also trips the noise detector, which forces the delta to
+/// zero for that sample and makes a press read as a release mid-hold. 8x
+/// halves all three into the middle of the range, 60 / 43 / 57, with the
+/// weakest still forty times the noise.
+///
+/// The threshold is sized for the weakest pad, CS2, at half its peak. The
+/// other two then trigger at under 40 % of theirs, which is more sensitive
+/// rather than less. Per-pad thresholds were considered and skipped: the
+/// spread rests on one press each, and CS1's was held five times longer than
+/// CS3's, so the differences are not yet solid enough to fit to.
 ///
 /// Rev 1 keeps what it shipped with. That pad has never been measured, and
 /// 128x with a threshold of 64 is what every unit in the field already does;
 /// guessing on its behalf could leave them with no working touch at all.
 inline constexpr TouchTuning touch_tuning_for(BoardVariant v) {
-  return (v == BoardVariant::V2) ? TouchTuning{6, 40} : TouchTuning{0, 64};
+  return (v == BoardVariant::V2) ? TouchTuning{4, 21} : TouchTuning{0, 64};
 }
 
 /// Recalibrate a pad whose touch never ends, which is what the enclosure
