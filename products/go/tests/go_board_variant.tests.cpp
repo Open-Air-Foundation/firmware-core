@@ -43,6 +43,11 @@ TEST_CASE("touch_tuning_for keeps rev 1 on what it shipped with", "[board][touch
   CHECK(touch_tuning_for(BoardVariant::V1).threshold == 64);
   CHECK(touch_tuning_for(BoardVariant::Prototype).delta_sense == 0);
   CHECK(touch_tuning_for(BoardVariant::Prototype).threshold == 64);
+  // Delayed recalibration is new behaviour, not something rev 1 shipped with:
+  // it ends a press mid-hold at 2800 ms and the pad then answers nothing for
+  // about a second while the negative-delta counter heals it.
+  CHECK_FALSE(touch_tuning_for(BoardVariant::V1).max_duration_recal);
+  CHECK_FALSE(touch_tuning_for(BoardVariant::Prototype).max_duration_recal);
 }
 
 TEST_CASE("touch_tuning_for gives rev 2.0 the gain its pads were measured at",
@@ -51,6 +56,9 @@ TEST_CASE("touch_tuning_for gives rev 2.0 the gain its pads were measured at",
   // of the register ceiling and far above the noise.
   CHECK(touch_tuning_for(BoardVariant::V2).delta_sense == 4);
   CHECK(touch_tuning_for(BoardVariant::V2).threshold == 21);
+  // Rev 2.0's pads sit under an enclosure that can rest on one, so it takes
+  // the trade rev 1 does not.
+  CHECK(touch_tuning_for(BoardVariant::V2).max_duration_recal);
 }
 
 TEST_CASE("the rev 2.0 threshold sits between the noise and a real touch",

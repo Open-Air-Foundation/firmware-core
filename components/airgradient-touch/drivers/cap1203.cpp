@@ -198,24 +198,27 @@ void CAP1203::_log_applied_config() {
   uint8_t sens = 0;
   uint8_t cfg = 0;
   uint8_t input_cfg = 0;
-  uint8_t thr1 = 0;
+  uint8_t thr[3] = {};
   if (!_read_reg(REG_SENSITIVITY_CONTROL, sens) || !_read_reg(REG_CONFIGURATION, cfg) ||
-      !_read_reg(REG_SENSOR_INPUT_CONFIG, input_cfg) || !_read_reg(REG_THRESHOLD_CH1, thr1)) {
+      !_read_reg(REG_SENSOR_INPUT_CONFIG, input_cfg) || !_read_reg(REG_THRESHOLD_CH1, thr[0]) ||
+      !_read_reg(REG_THRESHOLD_CH2, thr[1]) || !_read_reg(REG_THRESHOLD_CH3, thr[2])) {
     ESP_LOGW(TAG, "config read-back failed");
     return;
   }
   const uint8_t sense_code = static_cast<uint8_t>((sens >> 4) & 0x07);
   const bool max_dur_on = (cfg & 0x08) != 0;
-  ESP_LOGI(TAG, "gain=%ux thr=%u max_dur=%s%s", delta_sense_multiplier(sense_code), thr1,
-           max_dur_on ? "on" : "off",
+  ESP_LOGI(TAG, "gain=%ux thr=%u/%u/%u max_dur=%s%s", delta_sense_multiplier(sense_code), thr[0],
+           thr[1], thr[2], max_dur_on ? "on" : "off",
            max_dur_on ? "" : " (a pad held down will never recover)");
 
+  // Every threshold, not just the first: the point of a read-back is to catch
+  // a write that did not stick, and a partial check would miss two of three.
   const uint8_t want_sens = static_cast<uint8_t>((_config.delta_sense << 4) | _config.base_shift);
-  if (sens != want_sens || thr1 != _config.threshold_ch1 ||
-      max_dur_on != _config.max_duration_recal ||
+  if (sens != want_sens || thr[0] != _config.threshold_ch1 || thr[1] != _config.threshold_ch2 ||
+      thr[2] != _config.threshold_ch3 || max_dur_on != _config.max_duration_recal ||
       (max_dur_on && ((input_cfg >> 4) & 0x0F) != _config.max_duration_code)) {
-    ESP_LOGE(TAG, "config did NOT stick: sens=0x%02X cfg=0x%02X inputcfg=0x%02X thr=%u", sens, cfg,
-             input_cfg, thr1);
+    ESP_LOGE(TAG, "config did NOT stick: sens=0x%02X cfg=0x%02X inputcfg=0x%02X thr=%u/%u/%u", sens,
+             cfg, input_cfg, thr[0], thr[1], thr[2]);
   }
 }
 

@@ -1221,8 +1221,8 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
   cfg.threshold_ch3 = tuning.threshold;
   // A pad the enclosure is resting on reads as a touch that never ends, and
   // nothing in firmware can tell it apart from a finger.  Let the chip notice
-  // and recalibrate itself instead.
-  cfg.max_duration_recal = true;
+  // and recalibrate itself instead -- on the revisions that asked for it.
+  cfg.max_duration_recal = tuning.max_duration_recal;
   cfg.max_duration_code = TOUCH_MAX_DURATION_CODE;
   // The Enter pad needs clean press/release edges for its gesture FSM, so
   // it is the one channel without the repeat rate.
@@ -1272,7 +1272,6 @@ TouchChannelMap GoHardwareBoard::touch_channel_map() const {
   }
   return {};
 }
-
 
 std::string GoHardwareBoard::serial_number() { return build_serial_number(); }
 

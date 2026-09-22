@@ -58,8 +58,9 @@ inline constexpr uint8_t pm_power_on_level(BoardVariant v) {
 
 /// How hard a board's pads have to be pressed.
 struct TouchTuning {
-  uint8_t delta_sense; ///< DELTA_SENSE code 0..7; 0 is 128x and each step halves it
-  uint8_t threshold;   ///< per-pad touch threshold, 0..127
+  uint8_t delta_sense;      ///< DELTA_SENSE code 0..7; 0 is 128x and each step halves it
+  uint8_t threshold;        ///< per-pad touch threshold, 0..127
+  bool max_duration_recal;  ///< let the chip rescue a pad something is resting on
 };
 
 /// Rev 1 and rev 2.0 do not share a touch panel: rev 1 carries the pads on a
@@ -85,17 +86,26 @@ struct TouchTuning {
 /// spread rests on one press each, and CS1's was held five times longer than
 /// CS3's, so the differences are not yet solid enough to fit to.
 ///
-/// Rev 1 keeps what it shipped with. That pad has never been measured, and
-/// 128x with a threshold of 64 is what every unit in the field already does;
-/// guessing on its behalf could leave them with no working touch at all.
+/// Delayed recalibration is rev 2.0 only, and that is a deliberate asymmetry.
+/// It is not free: at 2800 ms the chip recalibrates under a finger that is
+/// still down, so the press ends mid-hold, and once the finger lifts the pad
+/// reads negative and answers nothing until the negative-delta counter heals
+/// it — sixteen samples, about a second, during which the part does not
+/// respond to touch at all (datasheet 4.4.2). Rev 2.0 takes that trade because
+/// its pads sit under an enclosure that can rest on one. Rev 1's panel has
+/// never been measured and the units are already in the field, so it stays on
+/// the chip's default of off.
+///
+/// Rev 1 keeps what it shipped with in every other respect too. 128x with a
+/// threshold of 64 is what every unit in the field already does; guessing on
+/// its behalf could leave them with no working touch at all.
 inline constexpr TouchTuning touch_tuning_for(BoardVariant v) {
-  return (v == BoardVariant::V2) ? TouchTuning{4, 21} : TouchTuning{0, 64};
+  return (v == BoardVariant::V2) ? TouchTuning{4, 21, true} : TouchTuning{0, 64, false};
 }
 
-/// Recalibrate a pad whose touch never ends, which is what the enclosure
-/// resting on one looks like. The chip's own last resort, off by default
-/// (datasheet 4.4.3). 0x6 is 2800 ms, the nearest step above the longest hold
-/// the UI asks for, a 1000 ms press on the Enter pad.
+/// 0x6 is 2800 ms, the nearest step above the longest hold the UI asks for, a
+/// 1000 ms press on the Enter pad (datasheet Table 5-12). Only reaches the
+/// chip on a variant whose tuning opts into the recalibration.
 inline constexpr uint8_t TOUCH_MAX_DURATION_CODE = 0x6;
 
 // ---------------------------------------------------------------------------
