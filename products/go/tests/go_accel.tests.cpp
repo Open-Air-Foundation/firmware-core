@@ -121,20 +121,19 @@ TEST_CASE("Shake: broken sample continuity cannot finish a partial gesture", "[S
   CHECK(detector.peaks() <= 1);
 }
 
-TEST_CASE("Shake: cooldown needs elapsed time and observed quiet", "[Shake]") {
+TEST_CASE("Shake: cooldown lasts one second without requiring quiet samples", "[Shake]") {
   ShakeDetector detector({});
   uint32_t now = 1000;
+  SECTION("normal uptime") {}
+  SECTION("millisecond counter wraps") { now = UINT32_MAX - 200; }
+  const uint32_t started = now;
   REQUIRE(shake(detector, now) == 1);
   detector.reset_capture();
-  for (int tick = 0; tick < 350; ++tick) {
-    CHECK(detector.update(sample(600), now) != ShakeDetector::Result::Shake);
-    now += 10;
-  }
-  CHECK(shake(detector, now) == 0); // Short releases do not supply 300 ms quiet.
-  for (int tick = 0; tick < 35; ++tick) {
-    detector.update(sample(0), now);
-    now += 10;
-  }
+  // The first shake was detected on its sixth peak, 500 ms after starting.
+  now = started + 500 + 999;
+  CHECK(detector.update(sample(600), now) == ShakeDetector::Result::None);
+  CHECK(detector.peaks() == 0);
+  ++now;
   CHECK(shake(detector, now, -1) == 1);
 }
 
@@ -314,29 +313,114 @@ TEST_CASE("Accel: inactive interrupt does not start XYZ polling", "[Accel]") {
   CHECK(gpio_state.enables == 2);
 }
 
-TEST_CASE("Accel: accepted gesture posts an event and capture rearms after five seconds",
-          "[Accel]") {
+TEST_CASE("Accel: shake stops polling immediately and rearms after one second", "[Accel]") {
   Fixture f;
+  uint32_t gesture_delay_ms = 0;
+  SECTION("shake early in the burst") {}
+  SECTION("shake at the burst deadline") { gesture_delay_ms = 4500; }
+  SECTION("millisecond counter wraps") { f.clock.now = UINT32_MAX - 200; }
   f.init();
   const uint32_t started = f.clock.now;
-  for (int tick = 0; tick < 501; ++tick) {
-    const int peak = tick / 10;
-    f.sensor.next = sample(peak < 6 ? (peak % 2 ? -600 : 600) : 0);
-    REQUIRE(f.poll(tick == 0));
-    f.clock.now += 10;
+  for (uint32_t elapsed = 0; elapsed <= gesture_delay_ms + 500; elapsed += 10) {
+    f.clock.now = started + elapsed;
+    f.sensor.next = sample(0);
+    if (elapsed >= gesture_delay_ms) {
+      const uint32_t peak = (elapsed - gesture_delay_ms) / 100;
+      f.sensor.next = sample(peak % 2 ? -600 : 600);
+    }
+    REQUIRE(f.poll(elapsed == 0));
   }
-  CHECK(f.clock.now >= started + 5000);
   CHECK_FALSE(AccelServiceTestAccess::burst(f.service));
-  CHECK(gpio_state.enables == 2);
+  CHECK(gpio_state.enables == 1); // GPIO stays masked throughout cooldown.
   Event event{};
   REQUIRE(RTOS::queue_receive(f.events, &event, 0));
   CHECK(event.type == EventType::ShakeDetected);
-  CHECK(event.shake_detected_ms == started + 500); // Sixth peak, before queue consumption.
+  CHECK(event.shake_detected_ms == started + gesture_delay_ms + 500);
+  CHECK(f.clock.now == event.shake_detected_ms); // No blocking cooldown delay.
+  const uint32_t detected = event.shake_detected_ms;
   CHECK_FALSE(RTOS::queue_receive(f.events, &event, 0));
   const auto reads = f.sensor.reads;
-  f.clock.now += 1000;
+  const auto source_reads = f.sensor.source_reads;
+  for (uint32_t elapsed : {0u, 100u, 500u, 999u}) {
+    f.clock.now = detected + elapsed;
+    gpio_state.level = 1; // Motion during cooldown must not start another burst.
+    REQUIRE(f.poll(true));
+    CHECK(f.sensor.reads == reads);
+    CHECK(f.sensor.source_reads == source_reads);
+    CHECK(gpio_state.enables == 1);
+    CHECK_FALSE(AccelServiceTestAccess::burst(f.service));
+  }
+
+  f.clock.now = detected + 1000;
+  REQUIRE(f.poll());
+  CHECK(gpio_state.enables == 2);
+  CHECK(f.sensor.source_reads == source_reads + 1); // Discard the cooldown's latched motion.
+  CHECK(gpio_state.level == 0);
+  CHECK(f.sensor.reads == reads);
+  REQUIRE(f.poll());
+  CHECK(f.sensor.reads == reads); // Wait for a new interrupt after rearming.
+
+  const uint32_t next_started = f.clock.now;
+  for (uint32_t elapsed = 0; elapsed <= 500; elapsed += 10) {
+    f.clock.now = next_started + elapsed;
+    f.sensor.next = sample((elapsed / 100) % 2 ? 600 : -600);
+    REQUIRE(f.poll(elapsed == 0));
+  }
+  REQUIRE(RTOS::queue_receive(f.events, &event, 0));
+  CHECK(event.type == EventType::ShakeDetected);
+  CHECK(event.shake_detected_ms == next_started + 500);
+  CHECK_FALSE(AccelServiceTestAccess::burst(f.service));
+  CHECK_FALSE(RTOS::queue_receive(f.events, &event, 0));
+}
+
+TEST_CASE("Accel: burst without a shake still ends after five seconds", "[Accel]") {
+  Fixture f;
+  f.init();
+  const uint32_t started = f.clock.now;
+  REQUIRE(f.poll(true));
+  f.clock.now = started + 4999;
+  REQUIRE(f.poll());
+  CHECK(AccelServiceTestAccess::burst(f.service));
+  CHECK(gpio_state.enables == 1);
+  f.clock.now = started + 5000;
+  REQUIRE(f.poll());
+  CHECK_FALSE(AccelServiceTestAccess::burst(f.service));
+  CHECK(gpio_state.enables == 2);
+  Event event{};
+  CHECK_FALSE(RTOS::queue_receive(f.events, &event, 0));
+}
+
+TEST_CASE("Accel: Hardware Test remains available during shake cooldown", "[Accel]") {
+  Fixture f;
+  f.init();
+  const uint32_t started = f.clock.now;
+  for (uint32_t elapsed = 0; elapsed <= 500; elapsed += 10) {
+    f.clock.now = started + elapsed;
+    f.sensor.next = sample((elapsed / 100) % 2 ? -600 : 600);
+    REQUIRE(f.poll(elapsed == 0));
+  }
+  REQUIRE_FALSE(AccelServiceTestAccess::burst(f.service));
+  CHECK(gpio_state.enables == 1);
+  REQUIRE(f.service.end_hardware_test()); // Already capturing: keep the cooldown intact.
+  CHECK(gpio_state.enables == 1);
+
+  AccelService::TestReading reading;
+  REQUIRE(f.service.begin_hardware_test(reading));
+  CHECK(reading.result == AccelReadResult::Ready);
+  REQUIRE(f.service.read_hardware_test(reading));
+  REQUIRE(f.service.end_hardware_test());
+  CHECK(AccelServiceTestAccess::running(f.service));
+  CHECK(gpio_state.enables == 1);
+
+  const auto reads = f.sensor.reads;
+  f.clock.now = started + 500 + 999;
+  REQUIRE(f.poll(true));
+  CHECK(f.sensor.reads == reads);
+  CHECK(gpio_state.enables == 1);
+  ++f.clock.now;
   REQUIRE(f.poll());
   CHECK(f.sensor.reads == reads);
+  CHECK(gpio_state.enables == 2);
 }
 
 TEST_CASE("Accel: Hardware Test keeps the worker and switches filtering at +/-4 g", "[Accel]") {

@@ -24,8 +24,7 @@ public:
     uint32_t window_ms = 1600;
     uint32_t max_sample_gap_ms = 50;
     uint32_t quiet_lead_ms = 0;
-    uint32_t cooldown_ms = 3000;
-    uint32_t rearm_quiet_ms = 300;
+    uint32_t cooldown_ms = 1000;
   };
   enum class Result { None, Peak, Shake, Rejected, Invalid, OffAxis };
 
@@ -34,6 +33,7 @@ public:
   Result update(const AccelReading &sample, uint32_t now);
   // A new capture cannot continue an old sequence. Cooldown survives captures.
   void reset_capture();
+  bool in_cooldown(uint32_t now) const;
   uint8_t peaks() const { return _peaks; }
 
 private:
@@ -51,7 +51,6 @@ private:
   bool _quiet = false;
   bool _lead_ready = false;
   bool _cooling = false;
-  bool _rearm_ready = false;
 
   void reset_sequence();
 };

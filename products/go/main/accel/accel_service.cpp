@@ -160,7 +160,7 @@ void AccelService::process_command(Command command) {
     reply.ok = _mode == Mode::HardwareTest;
     break;
   case Command::EndTest:
-    reply.ok = _mode == Mode::Capture;
+    reply.ok = _mode == Mode::Capture || _mode == Mode::Cooldown;
     if (!reply.ok) {
       _burst_active = false;
       _interrupt_pending = false;
@@ -169,9 +169,16 @@ void AccelService::process_command(Command command) {
       // until a later EndTest request successfully restores the configuration.
       _mode = Mode::CaptureUnavailable;
       reply.ok = _sensor != nullptr && _gpio.disable_interrupt(_config.pin_int) &&
-                 _sensor->configure(CAPTURE_CONFIG) && _gpio.enable_interrupt(_config.pin_int);
+                 _sensor->configure(CAPTURE_CONFIG);
       if (reply.ok) {
-        _mode = Mode::Capture;
+        if (_detector.in_cooldown(static_cast<uint32_t>(RTOS::get_time_ms()))) {
+          _mode = Mode::Cooldown;
+        } else {
+          reply.ok = _gpio.enable_interrupt(_config.pin_int);
+          if (reply.ok) {
+            _mode = Mode::Capture;
+          }
+        }
       }
     }
     AG_LOGI(TAG, "Hardware Test finished; interrupt capture restored=%d", reply.ok);
@@ -250,7 +257,7 @@ bool AccelService::initialize_capture() {
           CAPTURE_CONFIG.interrupt.latched);
   AG_LOGI(TAG, "interrupt-burst: GPIO%d; Y peak=400 release=150 mg, 6 peaks, 50..400 ms",
           _config.pin_int);
-  AG_LOGI(TAG, "window=1600 cooldown=3000 quiet=300 burst=5000 ms; waiting for IRQ, XYZ idle");
+  AG_LOGI(TAG, "window=1600 cooldown=1000 burst=5000 ms max; waiting for IRQ, XYZ idle");
   return true;
 }
 
@@ -260,10 +267,16 @@ bool AccelService::poll_capture() {
   if (!_running.load() || _sensor == nullptr) {
     return false;
   }
-  if (_mode != Mode::Capture) {
+  if (_mode != Mode::Capture && _mode != Mode::Cooldown) {
     return true;
   }
   const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  if (_mode == Mode::Cooldown) {
+    if (_detector.in_cooldown(now)) {
+      return true;
+    }
+    return rearm_interrupt();
+  }
   if (!_burst_active) {
     if (!start_burst_if_interrupted(notified, now)) {
       return false;
@@ -276,7 +289,7 @@ bool AccelService::poll_capture() {
   if (!read_burst_sample(now)) {
     return false;
   }
-  if (now - _burst_start >= BURST_MS) {
+  if (_burst_active && now - _burst_start >= BURST_MS) {
     return finish_burst(now);
   }
   return true;
@@ -335,6 +348,7 @@ bool AccelService::read_burst_sample(uint32_t now) {
   }
   if (result == ShakeDetector::Result::Shake) {
     post_shake_event(now);
+    return finish_burst(now);
   }
   return true;
 }
@@ -352,18 +366,28 @@ void AccelService::post_shake_event(uint32_t now) {
 
 bool AccelService::finish_burst(uint32_t now) {
   AG_LOGI(TAG, "BURST_END,%" PRIu32 ",remaining_peaks=%u", now, _detector.peaks());
+  _burst_active = false;
+  if (_detector.in_cooldown(now)) {
+    _mode = Mode::Cooldown;
+    AG_LOGI(TAG, "shake cooldown; GPIO%d masked, XYZ polling idle", _config.pin_int);
+    return true;
+  }
+  return rearm_interrupt();
+}
+
+bool AccelService::rearm_interrupt() {
   bool active = false;
   if (!_sensor->read_interrupt(active)) {
     return false;
   }
   RTOS::delay_ms(REARM_DELAY_MS);
-  _burst_active = false;
   if (!_running.load()) {
     return true;
   }
   if (!_gpio.enable_interrupt(_config.pin_int)) {
     return false;
   }
+  _mode = Mode::Capture;
   AG_LOGI(TAG, "GPIO%d rearmed; XYZ polling idle", _config.pin_int);
   return true;
 }

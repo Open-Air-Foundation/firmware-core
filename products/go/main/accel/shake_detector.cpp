@@ -11,8 +11,7 @@ bool ShakeDetector::valid_config(const Config &c) {
          c.max_peak_ms >= c.min_peak_ms && c.window_ms >= c.min_peak_ms * (c.required_peaks - 1) &&
          c.window_ms <= Config::MAX_WINDOW_MS && c.max_peak_ms <= c.window_ms &&
          c.max_sample_gap_ms > 0 && c.max_sample_gap_ms <= c.min_peak_ms &&
-         c.quiet_lead_ms <= Config::MAX_WINDOW_MS && c.cooldown_ms <= Config::MAX_COOLDOWN_MS &&
-         c.rearm_quiet_ms > 0 && c.rearm_quiet_ms <= Config::MAX_WINDOW_MS;
+         c.quiet_lead_ms <= Config::MAX_WINDOW_MS && c.cooldown_ms <= Config::MAX_COOLDOWN_MS;
 }
 
 void ShakeDetector::reset_sequence() {
@@ -26,6 +25,10 @@ void ShakeDetector::reset_capture() {
   reset_sequence();
   _have_sample = false;
   _quiet = false;
+}
+
+bool ShakeDetector::in_cooldown(uint32_t now) const {
+  return _cooling && (now - _last_shake) < _config.cooldown_ms;
 }
 
 ShakeDetector::Result ShakeDetector::update(const AccelReading &sample, uint32_t now) {
@@ -57,15 +60,12 @@ ShakeDetector::Result ShakeDetector::update(const AccelReading &sample, uint32_t
     if ((now - _quiet_start) >= _config.quiet_lead_ms) {
       _lead_ready = true;
     }
-    if (_cooling && (now - _quiet_start) >= _config.rearm_quiet_ms) {
-      _rearm_ready = true;
-    }
   } else {
     _quiet = false;
   }
 
   if (_cooling) {
-    if ((now - _last_shake) < _config.cooldown_ms || !_rearm_ready) {
+    if (in_cooldown(now)) {
       return Result::None;
     }
     _cooling = false;
@@ -117,7 +117,6 @@ ShakeDetector::Result ShakeDetector::update(const AccelReading &sample, uint32_t
 
   _last_shake = now;
   _cooling = true;
-  _rearm_ready = false;
   reset_sequence();
   _quiet = false;
   return Result::Shake;

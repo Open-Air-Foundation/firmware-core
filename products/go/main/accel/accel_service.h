@@ -63,7 +63,7 @@ private:
       .interrupt = {},
   };
   enum class Command : uint8_t { Interrupt, BeginTest, ReadTest, EndTest, Stop };
-  enum class Mode { CaptureUnavailable, Capture, HardwareTest, HardwareTestError };
+  enum class Mode { CaptureUnavailable, Capture, Cooldown, HardwareTest, HardwareTestError };
   struct Reply {
     TestReading reading{};
     bool ok = false;
@@ -108,5 +108,6 @@ private:
   bool read_burst_sample(uint32_t now);
   void post_shake_event(uint32_t now);
   bool finish_burst(uint32_t now);
+  bool rearm_interrupt();
   void cleanup_capture();
 };
