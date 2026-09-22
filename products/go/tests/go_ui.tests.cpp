@@ -903,7 +903,7 @@ TEST_CASE("UIManager: snackbar lifecycle", "[UIManager][snackbar]") {
     CHECK(v.snackbar_text == nullptr);
   }
 
-  SECTION("persistent progress stays on Home until cleared") {
+  SECTION("persistent progress stays on Home and menus until explicitly cleared") {
     ui.show_snackbar("Preparing...", true);
     ui.clear_expired_snackbar(1000);
     ui.clear_expired_snackbar(60000);
@@ -916,13 +916,35 @@ TEST_CASE("UIManager: snackbar lifecycle", "[UIManager][snackbar]") {
     CHECK(ui.build_values(ctx).snackbar_text == nullptr);
     ctx.display_off = false;
     press(ui, InputSource::TouchEnter);
-    CHECK(ui.build_values(ctx).snackbar_text == nullptr);
+    CHECK(ui.current_screen() == Screen::MainMenu);
+    REQUIRE(ui.build_values(ctx).snackbar_text != nullptr);
+    CHECK(std::string(ui.build_values(ctx).snackbar_text) == "Preparing...");
     ui.reset_to_home();
     CHECK(ui.build_values(ctx).snackbar_text != nullptr);
 
-    ui.show_snackbar(nullptr);
+    ui.show_snackbar(nullptr, true);
     CHECK_FALSE(ui.snackbar_persistent());
     CHECK(ui.build_values(ctx).snackbar_text == nullptr);
+  }
+
+  SECTION("persistent progress ignores ordinary messages and clear requests") {
+    auto ctx = make_default_ctx();
+    ui.show_snackbar("Preparing...", true);
+    ui.show_snackbar("Unlocked");
+    ui.show_snackbar(nullptr);
+    ui.clear_expired_snackbar(60000);
+    REQUIRE(ui.build_values(ctx).snackbar_text != nullptr);
+    CHECK(std::string(ui.build_values(ctx).snackbar_text) == "Preparing...");
+    CHECK(ui.snackbar_persistent());
+
+    ui.show_snackbar("Measuring...", true);
+    REQUIRE(ui.build_values(ctx).snackbar_text != nullptr);
+    CHECK(std::string(ui.build_values(ctx).snackbar_text) == "Measuring...");
+    ui.show_snackbar(nullptr, true);
+    ui.show_snackbar("Locked");
+    REQUIRE(ui.build_values(ctx).snackbar_text != nullptr);
+    CHECK(std::string(ui.build_values(ctx).snackbar_text) == "Locked");
+    CHECK_FALSE(ui.snackbar_persistent());
   }
 }
 
@@ -1686,7 +1708,10 @@ TEST_CASE("UIManager: Screen::Info ignores all touch input", "[UIManager][info]"
 TEST_CASE("UIManager: snackbar is suppressed on all session screens",
           "[UIManager][session][snackbar]") {
   UIManager ui(DEFAULT_UI_CONFIG);
-  ui.show_snackbar("Mode changed");
+  bool persistent = false;
+  SECTION("ordinary message") {}
+  SECTION("persistent progress") { persistent = true; }
+  ui.show_snackbar("Message", persistent);
 
   // Home — snackbar visible.
   auto ctx = make_default_ctx();

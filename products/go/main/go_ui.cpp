@@ -412,7 +412,8 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
       (_screen == Screen::Info || _screen == Screen::Provisioning ||
        _screen == Screen::ProvisioningConfirm || _screen == Screen::GettingStarted);
   const bool snackbar_visible =
-      !session_screen && (!snackbar_persistent() || (_screen == Screen::Home && !ctx.display_off));
+      !session_screen && (!snackbar_persistent() ||
+                          ((_screen == Screen::Home || is_on_menu_screen()) && !ctx.display_off));
   v.snackbar_text = (snackbar_visible && snackbar_active()) ? _snackbar_text : nullptr;
 
   return v;
@@ -455,6 +456,9 @@ bool UIManager::is_hardware_test_screen() const {
 }
 
 void UIManager::show_snackbar(const char *text, bool persistent) {
+  if (snackbar_persistent() && !persistent) {
+    return;
+  }
   if (text == nullptr) {
     _snackbar_text[0] = '\0';
     _snackbar_deadline_ms = 0;

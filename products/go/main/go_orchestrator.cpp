@@ -1069,8 +1069,10 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
 
   if (refreshed) {
     AG_LOGI(TAG, "refresh complete");
+    update_refresh_display();
+  } else {
+    request_background_display_update();
   }
-  request_background_display_update(/*wait=*/refreshed);
 }
 
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
@@ -1163,7 +1165,7 @@ void Orchestrator::on_shake_detected(uint32_t detected_ms) {
     _refresh_pending = true;
     _svc.buzzer_service.acknowledge_refresh();
     try_refresh();
-    request_background_display_update(/*wait=*/true);
+    update_refresh_display();
   }
 }
 
@@ -1224,7 +1226,7 @@ void Orchestrator::on_pm_event(EventType type) {
   }
   try_refresh();
   if (_refresh_pending) {
-    request_background_display_update(/*wait=*/true);
+    update_refresh_display();
   }
 }
 
@@ -1234,8 +1236,16 @@ void Orchestrator::clear_refresh() {
   }
   _refresh_pending = false;
   if (_svc.ui_manager.snackbar_persistent()) {
-    _svc.ui_manager.show_snackbar(nullptr);
+    _svc.ui_manager.show_snackbar(nullptr, /*persistent=*/true);
   }
+}
+
+void Orchestrator::update_refresh_display() {
+  if (_setup_session_active || _svc.ui_manager.is_focus_screen()) {
+    return;
+  }
+  // Refresh progress must update and clear on menus as well as Home.
+  update_display(/*wait=*/true);
 }
 
 static const char *input_source_str(InputSource s) {

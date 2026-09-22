@@ -265,6 +265,7 @@ private:
   void start_measurement(MeasurementOrigin origin);
   void try_refresh();
   void clear_refresh();
+  void update_refresh_display();
   void on_gps_fix(const GpsData &data);
   void on_input(const InputEventData &input);
   void on_shake_detected(uint32_t detected_ms);

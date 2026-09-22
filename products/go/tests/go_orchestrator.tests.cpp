@@ -8432,7 +8432,7 @@ TEST_CASE("Refresh: sleep and preparation complete before measurement is request
         "Measuring...");
 }
 
-TEST_CASE("Refresh: progress is stored by the flow and redraw preserves newer messages",
+TEST_CASE("Refresh: progress survives other messages and menu navigation",
           "[Orchestrator][Shake][refresh][snackbar]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -8440,27 +8440,55 @@ TEST_CASE("Refresh: progress is stored by the flow and redraw preserves newer me
   REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
   SECTION("refresh starts on Home") {}
   SECTION("refresh starts while a menu is open") { f.ui_manager.set_screen(Screen::MainMenu); }
+  A::sensor_asleep(orch);
 
   Event shake{};
   shake.type = EventType::ShakeDetected;
   shake.shake_detected_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  uint32_t renders = DisplayService::spy_update_count;
   A::dispatch(orch, shake);
+  CHECK(DisplayService::spy_update_count == renders + 1);
   REQUIRE(f.ui_manager.snackbar_persistent());
   CHECK(A::snackbar_refresh_deadline_ms(orch) == 0);
 
-  f.ui_manager.reset_to_home();
+  if (f.ui_manager.current_screen() == Screen::Home) {
+    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+  }
+  REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
+  CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Preparing...");
+  A::unlock(orch); // The ordinary "Unlocked" message cannot replace refresh progress.
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Preparing...");
+  CHECK(A::snackbar_refresh_deadline_ms(orch) == 0);
+
+  Event prepared{};
+  prepared.type = EventType::PmPrepared;
+  renders = DisplayService::spy_update_count;
+  A::dispatch(orch, prepared);
+  CHECK(DisplayService::spy_update_count == renders + 1);
+  CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
   CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
         "Measuring...");
-  A::unlock(orch); // Its redraw must preserve the newer "Unlocked" message.
-  REQUIRE_FALSE(f.ui_manager.snackbar_persistent());
-  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
-  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) == "Unlocked");
 
   Event result{};
   result.type = EventType::SensorDataReady;
   result.sensor_data.origin = MeasurementOrigin::Refresh;
+  renders = DisplayService::spy_update_count;
   A::dispatch(orch, result);
+  CHECK(DisplayService::spy_update_count == renders + 1);
+  CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
+  CHECK(f.ui_manager.current_screen() == Screen::MainMenu);
   CHECK_FALSE(A::refresh_pending(orch));
+  CHECK_FALSE(f.ui_manager.snackbar_persistent());
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).snackbar_text == nullptr);
+
+  A::unlock(orch); // Ordinary snackbars work again after completion.
   REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
   CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) == "Unlocked");
 }
