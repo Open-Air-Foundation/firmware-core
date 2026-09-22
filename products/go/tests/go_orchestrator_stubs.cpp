@@ -27,6 +27,7 @@
 #include "go_wifi.h"
 #include "services/local_server.h"
 
+#include <functional>
 #include <algorithm>
 #include <cstring>
 #include <set>
@@ -36,12 +37,15 @@
 // ============================================================================
 
 namespace test_spy {
+std::function<void()> during_melody;
+uint32_t buzzer_refresh_ack_count = 0;
 
 // --- SensorProducer ---
 bool sensor_started = false;
 bool sensor_stopped = false;
 bool sensor_stop_sleep_pm = false;
 bool measurement_requested = false;
+MeasurementOrigin last_measurement_origin = MeasurementOrigin::Scheduled;
 uint8_t last_iterations = 0;
 SensorGroup last_groups = SensorGroup::None;
 bool co2_calibration_requested = false;
@@ -251,10 +255,13 @@ bool recover_pm_sensor_called = false;
 uint32_t recover_pm_sensor_count = 0;
 
 void reset() {
+  during_melody = nullptr;
+  buzzer_refresh_ack_count = 0;
   sensor_started = false;
   sensor_stopped = false;
   sensor_stop_sleep_pm = false;
   measurement_requested = false;
+  last_measurement_origin = MeasurementOrigin::Scheduled;
   last_iterations = 0;
   co2_calibration_requested = false;
   prepare_requested = false;
@@ -464,8 +471,10 @@ void SensorProducer::stop(bool sleep_pm) {
   test_spy::sensor_stop_sleep_pm = sleep_pm;
 }
 
-void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups) {
+void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups,
+                                         MeasurementOrigin origin) {
   test_spy::measurement_requested = true;
+  test_spy::last_measurement_origin = origin;
   test_spy::last_iterations = iterations;
   test_spy::last_groups = groups;
 }
@@ -1326,6 +1335,7 @@ bool BuzzerService::start() { return true; }
 
 void BuzzerService::play(const Note * /*notes*/, uint8_t /*count*/) {}
 void BuzzerService::beep(uint32_t /*freq_hz*/, uint32_t /*duration_ms*/) {}
+void BuzzerService::acknowledge_refresh() { ++test_spy::buzzer_refresh_ack_count; }
 void BuzzerService::set_enabled(bool /*enabled*/) {}
 void BuzzerService::stop() {}
 bool BuzzerService::is_playing() const { return false; }
@@ -1353,5 +1363,8 @@ void BuzzerService::pump_for_test(uint32_t /*now_ms*/) {}
 #include "go_melody_sync.h"
 
 uint32_t play_synced(BuzzerService & /*buzzer*/, LedService & /*led*/, MelodySelect /*melody*/) {
+  if (test_spy::during_melody) {
+    test_spy::during_melody();
+  }
   return 0;
 }

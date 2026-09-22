@@ -18,6 +18,7 @@
 #include <trompeloeil.hpp>
 #include <trompeloeil/mock.hpp>
 
+#include <functional>
 #include <memory>
 #include <set>
 #include <map>
@@ -28,6 +29,7 @@
 #include "go_board.h"
 #include "go_local_api.h"
 #include "go_orchestrator.h"
+#include "go_accel_test_access.h"
 #include "services/ag_client.h"
 
 static constexpr uint32_t TEST_OTA_WIFI_CHECK_INTERVAL_MS = 3'600'000;
@@ -37,10 +39,13 @@ static constexpr uint32_t TEST_OTA_WIFI_CHECK_INTERVAL_MS = 3'600'000;
 // ============================================================================
 
 namespace test_spy {
+extern std::function<void()> during_melody;
+extern uint32_t buzzer_refresh_ack_count;
 extern bool sensor_started;
 extern bool sensor_stopped;
 extern bool sensor_stop_sleep_pm;
 extern bool measurement_requested;
+extern MeasurementOrigin last_measurement_origin;
 extern uint8_t last_iterations;
 extern SensorGroup last_groups;
 extern bool co2_calibration_requested;
@@ -261,6 +266,14 @@ public:
     system_time_epoch = epoch_seconds;
   }
 
+  AccelService *accel_worker = nullptr;
+  bool queue_receive_impl(RtosQueueHandle queue, void *item, uint32_t timeout_ms) override {
+    if (accel_worker != nullptr && AccelServiceTestAccess::is_reply_queue(*accel_worker, queue)) {
+      AccelServiceTestAccess::process_pending(*accel_worker);
+    }
+    return RTOS::queue_receive_impl(queue, item, timeout_ms);
+  }
+
   bool system_time_set = false;
   int64_t system_time_epoch = 0;
 };
@@ -331,14 +344,39 @@ public:
   AccelReading reading{};
   bool read_result = true;
   int read_calls = 0;
+  int power_down_calls = 0;
+  int configure_calls = 0;
+  bool configure_result = true;
+  bool ready = true;
+  AccelConfig last_config{};
 
+  bool configure(const AccelConfig &config) override {
+    ++configure_calls;
+    last_config = config;
+    return configure_result;
+  }
+  bool read_interrupt(bool &active) override {
+    active = false;
+    return true;
+  }
+  bool power_down() override {
+    ++power_down_calls;
+    return true;
+  }
   bool init() override { return who_am_i_value == expected_value; }
   uint8_t who_am_i() override { return who_am_i_value; }
   uint8_t expected_who_am_i() const override { return expected_value; }
-  bool read(AccelReading &out) override {
+  AccelReadResult read(AccelReading &out) override {
     ++read_calls;
+    out = {};
+    if (!read_result) {
+      return AccelReadResult::Error;
+    }
+    if (!ready) {
+      return AccelReadResult::NotReady;
+    }
     out = reading;
-    return read_result;
+    return AccelReadResult::Ready;
   }
 };
 
@@ -504,6 +542,14 @@ public:
   }
 
   // --- Accelerometer test flow ---
+  static void start_peripheral_test(Orchestrator &o) { o.start_peripheral_test(); }
+  static void finish_peripheral_test(Orchestrator &o) { o.finish_peripheral_test(); }
+  static void pause_sensitive_services(Orchestrator &o) {
+    o.pause_provisioning_sensitive_services();
+  }
+  static void resume_sensitive_services(Orchestrator &o) {
+    o.resume_provisioning_sensitive_services();
+  }
   static void start_accel_test(Orchestrator &o) { o.start_accel_test(); }
   static void poll_accel_test(Orchestrator &o) { o.poll_accel_test(); }
   static void finish_accel_test(Orchestrator &o) { o.finish_accel_test(); }
@@ -542,7 +588,23 @@ public:
   }
   static void set_first_measurement_done(Orchestrator &o, bool v) { o._first_measurement_done = v; }
   static void set_latest_power(Orchestrator &o, const PowerSnapshot &v) { o._latest_power = v; }
-  static bool pm_prepare_sent(const Orchestrator &o) { return o._pm_prepare_sent; }
+  static bool pm_preparing(const Orchestrator &o) {
+    return o._pm_state == Orchestrator::PmState::Preparing;
+  }
+  static void sensor_ready(Orchestrator &o) {
+    o._pm_state = Orchestrator::PmState::Ready;
+    o._measurement_pending = false;
+  }
+  static void sensor_asleep(Orchestrator &o) {
+    sensor_ready(o);
+    o._pm_state = Orchestrator::PmState::Asleep;
+  }
+  static void sensor_sleeping(Orchestrator &o) {
+    sensor_ready(o);
+    o._pm_state = Orchestrator::PmState::Sleeping;
+  }
+  static void clear_refresh(Orchestrator &o) { o.clear_refresh(); }
+  static bool refresh_pending(const Orchestrator &o) { return o._refresh_pending; }
   static void change_mode(Orchestrator &o, OperatingMode mode) { o.change_mode(mode); }
   static void enter_manufacturing_mode(Orchestrator &o) { o.enter_manufacturing_mode(); }
   static bool manufacturing_mode(const Orchestrator &o) { return o._manufacturing_mode; }
@@ -636,6 +698,7 @@ struct TestFixture {
   StubGoBoard stub_board;
   PortableWifiProvisioner portable_provisioner;
   OtaService ota_service;
+  AccelService accel_service;
 
   Orchestrator::Services services;
   GoSettings settings;
@@ -646,7 +709,7 @@ struct TestFixture {
   std::unique_ptr<trompeloeil::expectation> _exp_get_float;
   std::unique_ptr<trompeloeil::expectation> _exp_set_float;
 
-  TestFixture()
+  explicit TestFixture(AccelSensor *accel_sensor = nullptr)
       : event_queue(mock_rtos.queue_create_impl(EVENT_QUEUE_DEPTH, sizeof(Event))),
         payload_cache(stub_cache_storage, 16),
         sensor_producer(reinterpret_cast<SensorManager &>(stub_sensor_mgr), nullptr,
@@ -671,11 +734,12 @@ struct TestFixture {
                               *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
                              PortableWifiProvisioner::Config{}),
         ota_service(stub_ble_server, power_service, OtaService::Config{}),
+        accel_service(accel_sensor, test_gpio_hal, event_queue, {.pin_int = 3}),
         services{sensor_producer,   gps_service,          input_service,        display_service,
                  led_service_inert, buzzer_service_inert, storage_service,      power_service,
                  ui_manager,        ble_service,          wifi_service,         cloud_service,
                  local_api,         serial_command,       portable_provisioner, stub_board,
-                 ota_service} {
+                 ota_service,       accel_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
@@ -687,16 +751,34 @@ struct TestFixture {
   }
 
   ~TestFixture() {
+    accel_service.stop();
     mock_rtos.queue_delete_impl(event_queue);
     RTOS::set_instance(nullptr);
   }
 
   Orchestrator make_orchestrator() {
-    return {event_queue, services, settings, mock_config, "TEST00"};
+    Orchestrator orch{event_queue, services, settings, mock_config, "TEST00"};
+    // Tests that skip init() model a device whose boot warmup has completed.
+    A::sensor_ready(orch);
+    return orch;
   }
 
 private:
   alignas(8) static inline char _stub_buf[64];
+};
+
+// Execute the worker's real command handler cooperatively when the caller waits.
+struct AccelWorker {
+  TestFixture &fixture;
+  AccelService &service;
+  explicit AccelWorker(TestFixture &f) : fixture(f), service(f.accel_service) {
+    REQUIRE(AccelServiceTestAccess::initialize(service));
+    f.mock_rtos.accel_worker = &service;
+  }
+  ~AccelWorker() {
+    service.stop();
+    fixture.mock_rtos.accel_worker = nullptr;
+  }
 };
 
 // ============================================================================
@@ -1477,7 +1559,7 @@ TEST_CASE("pause/resume: keep session, GPS and live data; record results only wh
 
   Event reading{};
   reading.type = EventType::SensorDataReady;
-  reading.sensor_data.co2.co2 = 555;
+  reading.sensor_data.measures.co2.co2 = 555;
   A::dispatch(orch, reading);
   CHECK_FALSE(test_spy::route_point_appended);
   CHECK(test_spy::last_cached_measurement.co2.co2 == 555);
@@ -2687,6 +2769,7 @@ TEST_CASE("check_timers: fires measurement when interval elapses", "[Orchestrato
   REQUIRE(test_spy::measurement_requested);
   REQUIRE(test_spy::last_iterations == 1);
   REQUIRE(test_spy::last_groups == SensorGroup::All);
+  CHECK(A::last_measurement_ms(orch) == 11000); // Next regular deadline follows the request time.
 }
 
 TEST_CASE("check_timers: no measurement when interval not yet elapsed", "[Orchestrator][timers]") {
@@ -3503,8 +3586,8 @@ TEST_CASE("dispatch: routes SensorDataReady to on_sensor_data", "[Orchestrator][
 
   Event evt{};
   evt.type = EventType::SensorDataReady;
-  evt.sensor_data = MeasuresAGo{};
-  evt.sensor_data.co2.co2 = 999;
+  evt.sensor_data.measures = MeasuresAGo{};
+  evt.sensor_data.measures.co2.co2 = 999;
 
   A::dispatch(orch, evt);
 
@@ -4552,25 +4635,31 @@ static void enter_accel_test(TestFixture &f, Orchestrator &orch) {
 
 TEST_CASE("Accel Test: entry classifies PASS on a healthy at-rest sensor",
           "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
   accel.who_am_i_value = 0x33;
   accel.expected_value = 0x33;
   accel.reading = {0, 0, 1000}; // 1 g on Z at rest
   accel.read_result = true;
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
   enter_accel_test(f, orch);
 
-  CHECK(f.stub_board.new_accel_sensor_calls == 1);
+  CHECK(f.stub_board.new_accel_sensor_calls == 0);
   CHECK(A::accel_who_am_i(orch) == 0x33);
   CHECK(A::accel_id_ok(orch));
   CHECK(A::accel_read_ok(orch));
   CHECK(A::accel_magnitude_mg(orch) == 1000);
   CHECK(A::accel_pass(orch));
+
+  CHECK(accel.last_config.sample_rate_hz == 100);
+  CHECK(accel.last_config.range == AccelRange::G4);
+  CHECK_FALSE(accel.last_config.high_pass);
+  CHECK(accel.last_config.interrupt.high_axes == 0);
+  CHECK(accel.last_config.interrupt.low_axes == 0);
 
   // Exit (any tap) returns to the Hardware Test submenu on the Accel row.
   InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
@@ -4580,14 +4669,14 @@ TEST_CASE("Accel Test: entry classifies PASS on a healthy at-rest sensor",
 
 TEST_CASE("Accel Test: wrong WHO_AM_I fails identity and overall",
           "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
   accel.who_am_i_value = 0x00; // absent / wrong device
   accel.expected_value = 0x33;
   accel.reading = {0, 0, 1000};
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
   enter_accel_test(f, orch);
@@ -4597,14 +4686,14 @@ TEST_CASE("Accel Test: wrong WHO_AM_I fails identity and overall",
 }
 
 TEST_CASE("Accel Test: read failure fails overall", "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
   accel.who_am_i_value = 0x33;
   accel.expected_value = 0x33;
   accel.read_result = false; // present but unreadable
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
   enter_accel_test(f, orch);
@@ -4614,16 +4703,39 @@ TEST_CASE("Accel Test: read failure fails overall", "[Orchestrator][hwtest][acce
   CHECK_FALSE(A::accel_pass(orch));
 }
 
+TEST_CASE("Accel Test: configuration and sample validity gate classification",
+          "[Orchestrator][hwtest][accel]") {
+  FakeAccel accel;
+  TestFixture f(&accel);
+  auto orch = f.make_orchestrator();
+  accel.reading = {0, 0, 1000};
+  AccelWorker worker(f);
+  SECTION("configuration failure") { accel.configure_result = false; }
+  SECTION("sample not ready") { accel.ready = false; }
+  SECTION("invalid X") { accel.reading.x_mg = AccelReading::INVALID; }
+  SECTION("invalid Y") { accel.reading.y_mg = AccelReading::INVALID; }
+  SECTION("invalid Z") { accel.reading.z_mg = AccelReading::INVALID; }
+  SECTION("clipped sample") { accel.reading.clipped = true; }
+  A::start_accel_test(orch);
+  CHECK_FALSE(A::accel_read_ok(orch));
+  CHECK_FALSE(A::accel_pass(orch));
+  A::poll_accel_test(orch);
+  CHECK_FALSE(A::accel_read_ok(orch));
+  if (!accel.configure_result) {
+    CHECK(accel.read_calls == 0);
+  }
+}
+
 TEST_CASE("Accel Test: out-of-band magnitude fails overall", "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
   accel.who_am_i_value = 0x33;
   accel.expected_value = 0x33;
   accel.reading = {0, 0, 2000}; // 2 g → out of the 850–1150 mg band
   accel.read_result = true;
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
   enter_accel_test(f, orch);
@@ -4637,7 +4749,7 @@ TEST_CASE("Accel Test: absent driver (nullptr) fails safely", "[Orchestrator][hw
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  f.stub_board.accel_to_return = nullptr; // board without an accelerometer
+  CHECK_FALSE(f.accel_service.start()); // Driver probe returned nullptr.
 
   A::unlock(orch);
   enter_accel_test(f, orch);
@@ -4647,30 +4759,29 @@ TEST_CASE("Accel Test: absent driver (nullptr) fails safely", "[Orchestrator][hw
   CHECK_FALSE(A::accel_pass(orch));
 }
 
-TEST_CASE("Accel Test: driver created once and reused across entries",
-          "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+TEST_CASE("Accel Test: entries reuse the service-owned driver", "[Orchestrator][hwtest][accel]") {
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
-  // Two entries → the lazily-created driver is kept, not recreated.
+  // Both entries use the existing service; the orchestrator never creates a driver.
   A::start_accel_test(orch);
   A::start_accel_test(orch);
 
-  CHECK(f.stub_board.new_accel_sensor_calls == 1);
+  CHECK(f.stub_board.new_accel_sensor_calls == 0);
 }
 
 TEST_CASE("Accel Test: poll re-samples and refreshes classification",
           "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
   accel.reading = {0, 0, 1000};
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
   enter_accel_test(f, orch);
@@ -4686,11 +4797,11 @@ TEST_CASE("Accel Test: poll re-samples and refreshes classification",
 
 TEST_CASE("Accel Test: poll deadline caps the queue timeout while open",
           "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
   enter_accel_test(f, orch);
@@ -5188,8 +5299,9 @@ TEST_CASE("settings groups and moved melody choices retain inactivity lock",
     A::unlock(orch);
     enter_settings(f, orch);
     open_ui_row(f, orch, group);
-    if (std::string(group) == "Hardware Test")
+    if (std::string(group) == "Hardware Test") {
       open_ui_row(f, orch, "Play Melody");
+    }
     ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
     A::check_timers(orch);
     CHECK(A::lock_state(orch) == LockState::Locked);
@@ -5508,6 +5620,7 @@ struct PmSleepFixture {
   StubGoBoard stub_board;
   PortableWifiProvisioner portable_provisioner;
   OtaService ota_service;
+  AccelService accel_service;
 
   MockRTOS mock_rtos;
   MockConfigStore mock_config;
@@ -5553,11 +5666,12 @@ struct PmSleepFixture {
                               *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
                              PortableWifiProvisioner::Config{}),
         ota_service(stub_ble_server, power_service, OtaService::Config{}),
+        accel_service(nullptr, test_gpio_hal, nullptr, {}),
         services{sensor_producer,   gps_service,          input_service,        display_service,
                  led_service_inert, buzzer_service_inert, storage_service,      power_service,
                  ui_manager,        ble_service,          wifi_service,         cloud_service,
                  local_api,         serial_command,       portable_provisioner, stub_board,
-                 ota_service} {
+                 ota_service,       accel_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     settings.operating_mode = OperatingMode::Portable;
@@ -5577,7 +5691,11 @@ struct PmSleepFixture {
 
   ~PmSleepFixture() { RTOS::set_instance(nullptr); }
 
-  Orchestrator make_orchestrator() { return {nullptr, services, settings, mock_config, "TEST00"}; }
+  Orchestrator make_orchestrator() {
+    Orchestrator orch{nullptr, services, settings, mock_config, "TEST00"};
+    A::sensor_ready(orch);
+    return orch;
+  }
 
 private:
   alignas(8) static inline char _stub_buf[64];
@@ -5600,6 +5718,7 @@ TEST_CASE("PM sleep: on_sensor_data requests PM sleep for Portable + long interv
 
 TEST_CASE("PM sleep: PmSensorAsleep event isolates the PM bus", "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
 
@@ -5665,6 +5784,7 @@ TEST_CASE("PM sleep: mode change powers on and wakes PM", "[Orchestrator][pm_sle
   f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   test_spy::pm_power_set = false;
   test_spy::pm_power_on = false;
@@ -5681,6 +5801,7 @@ TEST_CASE("PM sleep: check_timers fires prepare at warmup deadline", "[Orchestra
   f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Advance time to prepare deadline: 60000 - 10000 = 50000 ms after last measurement
   f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(50000);
@@ -5693,7 +5814,7 @@ TEST_CASE("PM sleep: check_timers fires prepare at warmup deadline", "[Orchestra
   CHECK(test_spy::prepare_requested);
   CHECK(test_spy::pm_power_set);
   CHECK(test_spy::pm_power_on);
-  CHECK(A::pm_prepare_sent(orch));
+  CHECK(A::pm_preparing(orch));
 }
 
 TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
@@ -5702,6 +5823,7 @@ TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
   f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Advance time to 49s — 1s before prepare deadline
   f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(49000);
@@ -5711,7 +5833,7 @@ TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
   A::check_timers(orch);
 
   CHECK_FALSE(test_spy::prepare_requested);
-  CHECK_FALSE(A::pm_prepare_sent(orch));
+  CHECK_FALSE(A::pm_preparing(orch));
 }
 
 TEST_CASE("PM sleep: check_timers skips prepare for short interval", "[Orchestrator][pm_sleep]") {
@@ -5719,6 +5841,7 @@ TEST_CASE("PM sleep: check_timers skips prepare for short interval", "[Orchestra
   f.settings.measure_interval_seconds = 10; // below threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Even past the would-be deadline, prepare should not fire
   f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
@@ -5736,6 +5859,7 @@ TEST_CASE("PM sleep: reschedule requests PM sleep when interval increases above 
   f.settings.measure_interval_seconds = 10; // starts below threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_ready(orch); // Boot measurement has already completed.
 
   // Change interval to above threshold
   A::settings(orch).measure_interval_seconds = 60;
@@ -5754,6 +5878,7 @@ TEST_CASE("PM sleep: reschedule powers on and wakes PM when interval decreases b
   f.settings.measure_interval_seconds = 60; // starts above threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Change interval to below threshold
   A::settings(orch).measure_interval_seconds = 10;
@@ -6715,6 +6840,7 @@ TEST_CASE("change_mode(Stationary) still re-enables PM power",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Portable);
+  A::sensor_asleep(orch);
   test_spy::wifi_has_saved_networks = true;
   test_spy::pm_power_set = false;
   test_spy::pm_power_on = false;
@@ -8047,4 +8173,431 @@ TEST_CASE("provisioning success publishes online RSSI",
 
   REQUIRE(f.local_api.get_system_info().wifi_rssi.has_value());
   CHECK(*f.local_api.get_system_info().wifi_rssi == -58);
+}
+
+TEST_CASE("Shake: orchestrator delegates acknowledgment regardless of sound setting",
+          "[Orchestrator][Shake]") {
+  TestFixture f;
+  GoSettings settings;
+  settings.buzzer_enabled = true;
+  SECTION("sound enabled on locked Home") {}
+  SECTION("sound disabled") { settings.buzzer_enabled = false; }
+  f.settings = settings;
+  auto orch = f.make_orchestrator();
+  Event event{};
+  event.type = EventType::ShakeDetected;
+  event.shake_detected_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  test_spy::reset();
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == 1); // BuzzerService owns the sound-enabled check.
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
+  CHECK_FALSE(test_spy::prepare_requested);
+  CHECK(test_spy::led_back_play_count == 0);
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+}
+
+TEST_CASE("Shake: event freshness has a 500 ms limit across uptime wraparound",
+          "[Orchestrator][Shake]") {
+  TestFixture f;
+  f.settings.buzzer_enabled = true;
+  auto orch = f.make_orchestrator();
+  uint64_t now = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  for (const uint32_t detected_ms : {1000u, UINT32_MAX - 200}) {
+    for (const uint32_t age_ms : {0u, 499u, 500u, 501u, 5000u}) {
+      CAPTURE(detected_ms, age_ms);
+      now = static_cast<uint64_t>(detected_ms) + age_ms;
+      Event event{};
+      event.type = EventType::ShakeDetected;
+      event.shake_detected_ms = detected_ms;
+      test_spy::reset();
+      A::clear_refresh(orch); // Each table entry is an independent gesture.
+      A::dispatch(orch, event);
+      CHECK(test_spy::buzzer_refresh_ack_count == (age_ms <= 500 ? 1 : 0));
+    }
+  }
+}
+
+TEST_CASE("Shake: Hardware Test uses the worker's sensor and ignores shakes on its screen",
+          "[Orchestrator][Shake][hwtest]") {
+  FakeAccel sensor;
+  TestFixture f(&sensor);
+  GoSettings settings;
+  settings.buzzer_enabled = true;
+  f.settings = settings;
+  auto orch = f.make_orchestrator();
+  sensor.reading = {0, 0, 1000};
+  AccelWorker worker(f);
+  auto &service = worker.service;
+  Event event{};
+  event.type = EventType::ShakeDetected;
+  event.shake_detected_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+  CHECK(A::accel_pass(orch));
+  CHECK(A::accel_magnitude_mg(orch) == 1000);
+  CHECK(f.stub_board.new_accel_sensor_calls == 0);
+  CHECK(AccelServiceTestAccess::running(service));
+  CHECK(sensor.power_down_calls == 0);
+  CHECK(sensor.last_config.range == AccelRange::G4);
+  CHECK_FALSE(sensor.last_config.high_pass);
+  test_spy::reset();
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == 0);
+}
+
+TEST_CASE("Shake: application flows ignore events without stopping the worker",
+          "[Orchestrator][Shake]") {
+  FakeAccel sensor;
+  TestFixture f(&sensor);
+  f.settings.buzzer_enabled = true;
+  auto orch = f.make_orchestrator();
+  AccelWorker worker(f);
+  const int configurations = sensor.configure_calls;
+  uint64_t now = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  void (*finish)(Orchestrator &) = nullptr;
+  SECTION("peripheral test") {
+    A::start_peripheral_test(orch);
+    finish = A::finish_peripheral_test;
+  }
+  SECTION("provisioning") {
+    A::pause_sensitive_services(orch);
+    finish = A::resume_sensitive_services;
+  }
+  SECTION("OTA") {
+    A::enter_ota(orch);
+    finish = [](Orchestrator &o) { A::exit_ota(o, nullptr); };
+  }
+  Event event{};
+  event.type = EventType::ShakeDetected;
+  event.shake_detected_ms = static_cast<uint32_t>(now);
+  test_spy::reset();
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == 0);
+  REQUIRE(finish != nullptr);
+  finish(orch);
+  A::dispatch(orch, event); // A fresh queued event is accepted once the flow ends.
+  CHECK(test_spy::buzzer_refresh_ack_count == 1);
+  now += 501;
+  test_spy::reset();
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == 0);
+  event.shake_detected_ms = static_cast<uint32_t>(now);
+  A::clear_refresh(orch);
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == 1);
+  CHECK(AccelServiceTestAccess::running(worker.service));
+  CHECK(sensor.power_down_calls == 0);
+  CHECK(sensor.configure_calls == configurations);
+}
+
+TEST_CASE("Shake: buffered shakes after melody playback are accepted by age",
+          "[Orchestrator][Shake]") {
+  FakeAccel sensor;
+  TestFixture f(&sensor);
+  f.settings.buzzer_enabled = true;
+  auto orch = f.make_orchestrator();
+  AccelWorker worker(f);
+  uint64_t now = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  uint32_t remaining_playback_ms = 501;
+  SECTION("event expires while the melody plays") {}
+  SECTION("event remains fresh when the melody ends") { remaining_playback_ms = 500; }
+  A::unlock(orch);
+  enter_hardware_test(f, orch);
+  open_ui_row(f, orch, "Play Melody");
+  test_spy::reset();
+  bool played = false;
+  test_spy::during_melody = [&] {
+    played = true;
+    CHECK(AccelServiceTestAccess::running(worker.service));
+    Event event{};
+    event.type = EventType::ShakeDetected;
+    event.shake_detected_ms = static_cast<uint32_t>(now);
+    REQUIRE(RTOS::queue_send(f.event_queue, &event, 0));
+    now += remaining_playback_ms;
+  };
+  open_ui_row(f, orch, "Chime");
+  REQUIRE(played);
+  test_spy::during_melody = nullptr;
+  Event event{};
+  REQUIRE(RTOS::queue_receive(f.event_queue, &event, 0));
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == (remaining_playback_ms <= 500 ? 1 : 0));
+  test_spy::reset();
+  event.shake_detected_ms = static_cast<uint32_t>(now);
+  A::clear_refresh(orch);
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == 1);
+  CHECK(sensor.power_down_calls == 0);
+  CHECK(sensor.configure_calls == 1);
+}
+
+TEST_CASE("Refresh: result origin controls recording while all current readings update",
+          "[Orchestrator][Shake][refresh]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 60;
+  f.settings.buzzer_enabled = true;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  REQUIRE(A::start_tracking(orch));
+  uint64_t now = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  MeasurementOrigin origin = MeasurementOrigin::Refresh;
+  SECTION("manual measurement") {}
+  SECTION("reuse scheduled measurement") {
+    now = 60000;
+    A::check_timers(orch);
+    origin = MeasurementOrigin::Scheduled;
+  }
+  const uint32_t regular_clock = A::last_measurement_ms(orch);
+  test_spy::reset();
+
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(now);
+  A::dispatch(orch, shake);
+  CHECK(test_spy::measurement_requested == (origin == MeasurementOrigin::Refresh));
+  CHECK(test_spy::last_measurement_origin == origin);
+  A::dispatch(orch, shake);
+  CHECK(test_spy::buzzer_refresh_ack_count == 1);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Measuring...");
+
+  Event result{};
+  result.type = EventType::SensorDataReady;
+  result.sensor_data.origin = origin;
+  result.sensor_data.measures.co2.co2 = 650;
+  result.sensor_data.measures.pm_a.pm_25 = 12.0f;
+  test_spy::measurement_requested = false;
+  A::dispatch(orch, result);
+  CHECK(A::raw_measures(orch).co2.co2 == 650);
+  CHECK(test_spy::ble_last_measures.co2.co2 == 650);
+  CHECK(test_spy::cloud_last_snapshot.co2.co2 == 650);
+  CHECK(f.local_api.get_measures().co2.co2 == 650);
+  CHECK(test_spy::cache_measurement_called == (origin == MeasurementOrigin::Scheduled));
+  CHECK(test_spy::route_point_appended == (origin == MeasurementOrigin::Scheduled));
+  CHECK_FALSE(test_spy::measurement_requested); // No follow-up after satisfying the refresh.
+  CHECK_FALSE(A::refresh_pending(orch));
+  CHECK_FALSE(f.ui_manager.snackbar_persistent());
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).snackbar_text == nullptr);
+  CHECK(A::last_measurement_ms(orch) == regular_clock);
+}
+
+TEST_CASE("Refresh: sleep and preparation complete before measurement is requested",
+          "[Orchestrator][Shake][refresh]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  uint64_t now = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  bool sleep_pending = false;
+  SECTION("already asleep") { A::sensor_asleep(orch); }
+  SECTION("sleep already requested") {
+    sleep_pending = true;
+    A::sensor_sleeping(orch);
+  }
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(now);
+  A::dispatch(orch, shake);
+  CHECK_FALSE(test_spy::measurement_requested);
+  CHECK(test_spy::prepare_requested == !sleep_pending);
+  if (sleep_pending) {
+    Event asleep{};
+    asleep.type = EventType::PmSensorAsleep;
+    A::dispatch(orch, asleep);
+  }
+  CHECK(test_spy::prepare_requested);
+  CHECK(test_spy::pm_power_on);
+  Event preparation{};
+  preparation.type = EventType::PmPreparationStarted;
+  A::dispatch(orch, preparation);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Preparing...");
+  CHECK_FALSE(test_spy::measurement_requested);
+
+  now += CONFIG_SENSOR_WARMUP_DURATION_MS;
+  preparation.type = EventType::PmPrepared;
+  A::dispatch(orch, preparation);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
+  CHECK(A::last_measurement_ms(orch) == 0);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Measuring...");
+}
+
+TEST_CASE("Refresh: progress survives other messages and menu navigation",
+          "[Orchestrator][Shake][refresh][snackbar]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+  SECTION("refresh starts on Home") {}
+  SECTION("refresh starts while a menu is open") { f.ui_manager.set_screen(Screen::MainMenu); }
+  A::sensor_asleep(orch);
+
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  uint32_t renders = DisplayService::spy_update_count;
+  A::dispatch(orch, shake);
+  CHECK(DisplayService::spy_update_count == renders + 1);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(A::snackbar_refresh_deadline_ms(orch) == 0);
+
+  if (f.ui_manager.current_screen() == Screen::Home) {
+    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+  }
+  REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
+  CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Preparing...");
+  A::unlock(orch); // The ordinary "Unlocked" message cannot replace refresh progress.
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Preparing...");
+  CHECK(A::snackbar_refresh_deadline_ms(orch) == 0);
+
+  Event prepared{};
+  prepared.type = EventType::PmPrepared;
+  renders = DisplayService::spy_update_count;
+  A::dispatch(orch, prepared);
+  CHECK(DisplayService::spy_update_count == renders + 1);
+  CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Measuring...");
+
+  Event result{};
+  result.type = EventType::SensorDataReady;
+  result.sensor_data.origin = MeasurementOrigin::Refresh;
+  renders = DisplayService::spy_update_count;
+  A::dispatch(orch, result);
+  CHECK(DisplayService::spy_update_count == renders + 1);
+  CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
+  CHECK(f.ui_manager.current_screen() == Screen::MainMenu);
+  CHECK_FALSE(A::refresh_pending(orch));
+  CHECK_FALSE(f.ui_manager.snackbar_persistent());
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).snackbar_text == nullptr);
+
+  A::unlock(orch); // Ordinary snackbars work again after completion.
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) == "Unlocked");
+}
+
+TEST_CASE("Refresh: starts near the regular deadline and keeps PM awake afterward",
+          "[Orchestrator][Shake][refresh]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  uint64_t now = 59000;
+  SECTION("one second before the regular deadline") {}
+  SECTION("nine seconds before the regular deadline") { now = 51000; }
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(now);
+  A::dispatch(orch, shake);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Measuring...");
+  CHECK(A::last_measurement_ms(orch) == 0);
+
+  now += 100;
+  Event result{};
+  result.type = EventType::SensorDataReady;
+  result.sensor_data.origin = MeasurementOrigin::Refresh;
+  test_spy::measurement_requested = false;
+  A::dispatch(orch, result);
+  CHECK_FALSE(A::refresh_pending(orch));
+  CHECK_FALSE(test_spy::measurement_requested);
+  CHECK_FALSE(test_spy::pm_sleep_requested);
+  CHECK(A::last_measurement_ms(orch) == 0);
+
+  now = 60000;
+  A::check_timers(orch);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Scheduled);
+  CHECK(A::last_measurement_ms(orch) == 60000);
+
+  now = 60100;
+  result.sensor_data.origin = MeasurementOrigin::Scheduled;
+  A::dispatch(orch, result);
+  CHECK(test_spy::pm_sleep_requested); // Enough time to warm up before the next regular cycle.
+}
+
+TEST_CASE("Refresh: PM sleep policy uses time remaining before the regular measurement",
+          "[Orchestrator][Shake][refresh][pm_sleep]") {
+  struct Scenario {
+    uint64_t completed_ms;
+    bool should_sleep;
+  };
+  const Scenario scenarios[] = {
+      {40000, true},  // 20 seconds remaining: meets the existing sleep threshold.
+      {40001, false}, // Just below the threshold.
+      {45000, false}, // 15 seconds remaining: keep awake even though warmup would fit.
+      {60000, false}, // Regular measurement is due now.
+      {61000, false}, // Overdue: clamp remaining time to zero.
+  };
+  for (const auto &scenario : scenarios) {
+    CAPTURE(scenario.completed_ms);
+    PmSleepFixture f;
+    f.settings.measure_interval_seconds = 60;
+    auto orch = f.make_orchestrator();
+    ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(scenario.completed_ms);
+    Event result{};
+    result.type = EventType::SensorDataReady;
+    result.sensor_data.origin = MeasurementOrigin::Refresh;
+    A::dispatch(orch, result);
+    CHECK(test_spy::pm_sleep_requested == scenario.should_sleep);
+  }
+}
+
+TEST_CASE("Refresh: uses PM preparation already started by the regular timer",
+          "[Orchestrator][Shake][refresh]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::sensor_asleep(orch);
+  uint64_t now = 50000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  A::check_timers(orch);
+  REQUIRE(test_spy::prepare_requested);
+  REQUIRE(A::pm_preparing(orch));
+  REQUIRE_FALSE(test_spy::measurement_requested);
+  test_spy::prepare_requested = false;
+
+  now = 55000;
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(now);
+  A::dispatch(orch, shake);
+  REQUIRE(A::refresh_pending(orch));
+  CHECK_FALSE(test_spy::prepare_requested);
+  CHECK_FALSE(test_spy::measurement_requested);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Preparing...");
+
+  now = 60000;
+  Event prepared{};
+  prepared.type = EventType::PmPrepared;
+  A::dispatch(orch, prepared);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
+  CHECK(A::last_measurement_ms(orch) == 0);
+
+  test_spy::measurement_requested = false;
+  A::check_timers(orch);
+  CHECK_FALSE(test_spy::measurement_requested); // Wait for the refresh already requested.
 }

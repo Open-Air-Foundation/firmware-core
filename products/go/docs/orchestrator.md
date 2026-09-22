@@ -17,6 +17,8 @@ sleep cycle.
 | Dependency | Source | Usage |
 |---|---|---|
 | `SensorProducer` | product (`go_sensor_producer.h`) | Request measurement cycles |
+| `AccelService` | product (`accel/accel_service.h`) | Deliver shake events; serialize Hardware Test sensor access |
+| `BuzzerService` | product (`buzzer/go_buzzer.h`) | Acknowledge accepted refreshes, respecting sound settings |
 | `GpsService` | product (`go_gps.h`) | Read latest GPS fix |
 | `InputService` | product (`go_input.h`) | Started/stopped by orchestrator; posts `InputPress` events |
 | `DisplayService` | product (`go_display.h`) | Render display frames |
@@ -217,6 +219,9 @@ The orchestrator owns the authoritative application state:
 | `_mode` | `OperatingMode` | `Portable` | Portable / Stationary / Offline |
 | `_behavior` | `Behavior` | `Idle` | Tracking / Idle / Shutdown |
 | `_lock_state` | `LockState` | `Locked` | Locked / Unlocked |
+| `_pm_state` | `PmState` | `Preparing` | PM preparation, ready, sleep-in-progress, or asleep |
+| `_measurement_pending` | `bool` | `false` | A measurement has been requested and its result is outstanding |
+| `_refresh_pending` | `bool` | `false` | An accepted shake is waiting for a measurement result |
 | `_gps_enabled` | `bool` | `true` | Whether GPS data is used (derived from `GpsMode` setting) |
 | `_tracking_state` | `TrackingState` | `Idle` | Idle (0), Recording (1), or Paused (2); Paused retains the session |
 | `_tracking_session_id` | `uint32_t` | `0` | 5-digit session ID; 0 = no active session |
@@ -252,13 +257,13 @@ the nearest deadline.
 
 | Timer | Interval | Active When |
 |---|---|---|
-| PM pre-wake | `measure_interval - CONFIG_SENSOR_WARMUP_DURATION_MS` | Not Offline, interval ≥ `pm_sleep_threshold_ms`, prepare not yet sent, sensitive services not paused |
-| Sensor (all groups) | `measure_interval_seconds * 1000` | Sensitive services not paused |
+| PM pre-wake | `measure_interval - CONFIG_SENSOR_WARMUP_DURATION_MS` | Not Offline, interval ≥ `pm_sleep_threshold_ms`, PM asleep, sensitive services not paused |
+| Sensor (all groups) | `measure_interval_seconds * 1000` | PM ready, no measurement pending, sensitive services not paused |
 | BMS full poll | `BMS_POLL_INTERVAL_MS` (30000 ms) | Sensitive services not paused |
 | BMS status poll | `BMS_STATUS_POLL_INTERVAL_MS` (5000 ms) | Sensitive services not paused |
 | External watchdog | `EXT_WDT_INTERVAL_MS` (60000 ms) | Always — never suppressed during a setup session |
 | Inactivity | `auto_lock_seconds * 1000` | Unlocked, auto-lock > 0, and no setup session active |
-| Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | Snackbar active, sensitive services not paused |
+| Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | Non-persistent snackbar active, sensitive services not paused |
 | Wi-Fi initial-connect / fallback | `WifiService::next_deadline_ms()` | While the service has armed a deadline (Stationary bring-up) |
 | Local endpoint activation retry | `LOCAL_API_ACTIVATION_RETRY_MS` (5000 ms) | Stationary + online after local HTTP or mDNS activation fails |
 | OTA poll | `OTA_BLE_POLL_INTERVAL_MS` (2000 ms) / `OTA_WIFI_CHECK_INTERVAL_MS` (3600000 ms) | Portable + (authenticated client or latched `is_ble_active()`); or Stationary + online + no setup session + cloud enabled. See [Firmware Update (OTA)](#firmware-update-ota) |
@@ -287,7 +292,10 @@ Events are dispatched by type:
 
 | EventType | Handler |
 |---|---|
-| `SensorDataReady` | `on_sensor_data()` — cache, update back AQI LEDs (`back_update_aqi` / `back_clear_aqi`), clear cold-boot splash if active, log full `MeasuresAGo` snapshot, store route point if tracking, update BLE measures, update display |
+| `SensorDataReady` | `on_sensor_data(measures, origin)` — complete pending measurement/refresh, update current readings and consumers; cache and record only scheduled results |
+| `PmPreparationStarted`, `PmPrepared`, `PmSensorAsleep` | `on_pm_event()` — advance PM state, manage bus isolation, and continue a pending refresh |
+| `ShakeDetected` | `on_shake_detected()` — check eligibility and event age, acknowledge once, request or reuse a measurement |
+| `SensorTestDone` | `on_sensor_test_done()` — clear the pending-measurement flag, then handle Hardware Test results |
 | `GpsFixUpdate` | `on_gps_fix()` — cache GPS if `is_gps_active()` |
 | `InputPress` | `on_input()` — touch flash on touch events, shutdown, lock/unlock, forward to UIManager |
 | `UserStartTracking` | `start_tracking()` |
@@ -653,9 +661,12 @@ attempt-specific narration text, and starts the STA attempt with
 idles the GNSS receiver if GPS is active, and drops the PM sensor power
 rail so the Wi-Fi driver has enough DMA-capable contiguous heap while
 the provisioning transport stack is active.
+It also cancels pending refresh UI and clears the pending-measurement flag;
+PM state becomes `Asleep` after stopping the producer with PM sleep enabled.
 `resume_provisioning_sensitive_services()` re-enables PM, restarts the
-sensor producer and GPS, and requests one immediate measurement so the
-post-resume display refreshes promptly. The pause is idempotent — the
+sensor producer and GPS, sets PM state to `Preparing`, and requests one
+immediate scheduled measurement so the post-resume display refreshes promptly.
+The pause is idempotent — the
 STA-only `Screen::Info` bring-up phase never triggers it.
 
 Sensor-measurement, BMS full poll, BMS status poll, PM pre-wake, and
@@ -875,8 +886,8 @@ a `DisplayValues` snapshot:
    altitude, and PM presentation flags come from the active `GoSettings`
 3. `UIManager::build_values(ctx)` — produce `DisplayValues`
 4. `DisplayService::update(values)` — non-blocking render submission
-5. If a snackbar is active and no refresh timer is pending, schedule a
-   one-shot `_snackbar_refresh_deadline_ms` to guarantee the snackbar is
+5. If a non-persistent snackbar is active and no refresh timer is pending,
+   schedule a one-shot `_snackbar_refresh_deadline_ms` to guarantee the snackbar is
    visually cleared even if no other events trigger `update_display()`
 
 The `BuildContext` requires a `const Measures &` reference. The orchestrator
@@ -885,7 +896,7 @@ from the cached `MeasuresAGo` each time `build_context()` is called.
 
 ### Background Display Suppression
 
-Display-update call sites are split into two categories:
+Ordinary display-update call sites are split into two categories:
 
 **User-initiated** — call `update_display()` directly (always repaint):
 `on_input()`, `lock()`, `unlock()`, `start_tracking()`, `pause_tracking()`,
@@ -894,7 +905,8 @@ Display-update call sites are split into two categories:
 `shutdown()`, `on_co2_calibration_done()`, `on_ble_pairing_request()`.
 
 **Background** — call `request_background_display_update()`:
-`on_sensor_data()`, `on_ble_connected()`, `on_ble_disconnected()`,
+`on_sensor_data()` when no refresh is pending, `on_ble_connected()`,
+`on_ble_disconnected()`,
 `on_ble_auth_complete()`, `on_ble_config_write()` (Set branch),
 `on_bms_status_timer()`, snackbar refresh timer in `check_timers()`.
 
@@ -921,6 +933,13 @@ the e-paper refresh is skipped. The display catches up on the next
 user-initiated repaint (input, lock/unlock, returning to Home, or the
 explicit `update_display(wait=true)` calls from the setup session
 helpers).
+
+Shake-refresh start, PM progress changes, and completion use
+`update_refresh_display()`. This helper calls `update_display(wait=true)` on
+Home and menus, skipping active setup sessions and the pairing focus screen.
+It keeps refresh progress current and clears it even while a menu is open.
+`try_refresh()` owns the progress text; `update_display()` only builds and
+submits the current UI snapshot.
 
 ### Drop-Free Renders for Critical Transitions
 
@@ -990,16 +1009,18 @@ receiver. Pause and Resume leave the receiver and cached fix intact.
 
 ## Sensor Scheduling
 
-The orchestrator maintains a single timer (`_last_measurement_ms`).
-`check_timers()` fires when `measure_interval_seconds` elapses, always
-requesting `SensorGroup::All` with a single
-`request_measurement(1, SensorGroup::All)` call.
+The orchestrator maintains a single regular timer (`_last_measurement_ms`).
+When `measure_interval_seconds` elapses, `check_timers()` requests a scheduled
+measurement only if PM is ready and no measurement is pending. The common
+`start_measurement(origin)` helper marks the request pending and requests one
+iteration of `SensorGroup::All`. A scheduled request advances the regular
+timer baseline; a manual refresh does not.
 
 When the interval setting changes, `reschedule_sensor_timer()` resets the
 baseline to `now` and reconciles PM sensor power with the new interval:
-powers off if the new interval crosses above `pm_sleep_threshold_ms`,
-powers on if it crosses below.  If the interval is unchanged, the
-baseline and PM power are not touched.
+requests sleep when eligible and PM is ready with no measurement or refresh
+pending, or prepares an asleep sensor when the interval requires it to stay
+awake. If the interval is unchanged, the baseline and PM power are not touched.
 
 Iterations are always 1 — AGo sensors perform internal averaging, and the
 per-iteration 2 s delay is skipped for single iterations.
@@ -1007,10 +1028,12 @@ per-iteration 2 s delay is skipped for single iterations.
 `on_sensor_data()` always overwrites all fields in `_raw_measures`, then derives
 `_corrected_measures` with the active measurement corrections. Sensor readings come from the `SensorDataReady` payload; `MeasuresPower`
 is refreshed from `_latest_power` (`PowerSnapshot`) because Go battery and
-charger telemetry is owned by `PowerService`, not `SensorProducer`. In
-non-Offline modes with a long enough interval, it requests PM sleep via
-`request_pm_sleep()` to stop the fan until the next pre-wake timer fires
-(the producer sleeps the SPS30, then the bus is isolated on `PmSensorAsleep`).
+charger telemetry is owned by `PowerService`, not `SensorProducer`.
+The event wraps readings and `MeasurementOrigin` in `SensorEventData`.
+Both origins update the current display values, raw BLE readings, corrected
+local API snapshot, PM AQI LEDs, and raw cloud snapshot. Only `Scheduled`
+results enter chart cache and route storage. A refresh does not trigger a
+cloud upload or change its timer.
 Sensor failures are immediately visible (display shows dashes) rather
 than masked by stale cached data.
 
@@ -1022,14 +1045,64 @@ the latest BMS snapshot used by the cache and cloud snapshot.
 
 ### PM Sensor Sleep
 
-When `mode != Offline` and `measure_interval_seconds * 1000 >=
-pm_sleep_threshold_ms`, the orchestrator sleeps the SPS30 between
-measurements.  A `_pm_prepare_sent` flag prevents duplicate pre-wake
-signals within the same measurement cycle; it is reset when the
-measurement timer fires.
+PM uses `Preparing`, `Ready`, `Sleeping`, and `Asleep` states. Preparation
+requests move an asleep sensor to `Preparing`; `PmPrepared` marks completion.
+Sleep requests move it to `Sleeping`; `PmSensorAsleep` marks completion and
+allows the orchestrator to isolate the bus. Boot preparation also reports
+`PmPreparationStarted`. A measurement result clears `_measurement_pending`
+without changing PM state.
+
+After each result, the orchestrator computes the time remaining until the
+next regular measurement, clamping overdue deadlines to zero. In non-Offline
+modes, ready PM sleeps only if
+`PowerService::should_sleep_pm_sensor(remaining_ms)` permits it. The existing
+threshold is 20 s by default. Thus a manual refresh near the next regular
+measurement leaves PM awake instead of requiring another warmup. The regular
+pre-wake timer prepares an asleep sensor one warmup duration before its deadline.
 
 See [Power Management — PM Sensor Sleep](power_management.md#pm-sensor-sleep-active-mode-power-cycling)
 for the full cycle, edge cases, and method documentation.
+
+### Shake-To-Refresh
+
+`AccelService` starts in the application wiring alongside the other workers.
+It detects motion without application policy; the orchestrator handles the
+timestamped `ShakeDetected` event. See [Accelerometer Service](accel_service.md)
+for the gesture, interrupt capture, and one-second cooldown.
+
+`on_shake_detected()` ignores events older than 500 ms, further shakes while a
+refresh is pending, and shakes during paused provisioning services, committed
+OTA, an active Peripheral Test, or the Accelerometer Test screen. An accepted
+shake sets `_refresh_pending` and calls `BuzzerService::acknowledge_refresh()`
+(2700 Hz, 100 ms, subject to the buzzer setting).
+
+`try_refresh()` follows the current measurement and PM state:
+
+| State | Action |
+|---|---|
+| Measurement already requested | Reuse its result; keep the original measurement origin |
+| No measurement pending, PM ready | Request `MeasurementOrigin::Refresh` immediately |
+| PM asleep | Connect PM and request preparation; measure after `PmPrepared` |
+| PM preparing | Wait for `PmPrepared`, then request the refresh |
+| PM sleeping | Wait for `PmSensorAsleep`, then prepare and measure |
+
+A nearby regular deadline is not a reason to defer a manual refresh. If the
+refresh starts first, a regular measurement that becomes due waits for that
+result and PM readiness, then proceeds through the regular timer. If a regular
+measurement was already requested, its result serves both purposes and is
+recorded normally.
+
+The orchestrator chooses persistent snackbar text: `Preparing...` during
+warmup, `Measuring...` for an outstanding measurement, otherwise `Waiting...`.
+`on_pm_event()` retries the refresh at PM boundaries. `on_sensor_data()` clears
+the pending refresh and its persistent message, including when sensor fields
+are invalid. `clear_refresh()` also handles cancellation during provisioning
+pause and sleep preparation. There is no refresh timeout.
+
+Ordinary snackbars cannot overwrite or clear persistent progress. Progress
+remains visible on Home and menus while the display is on; setup and pairing
+screens keep their existing suppression. See
+[Snackbar Lifecycle](ui_manager.md#snackbar-lifecycle).
 
 ## Session ID Generation
 

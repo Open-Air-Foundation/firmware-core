@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "getting-started-early-20260920-1",
+  "rev": "shake-refresh-20260923-2",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -51,7 +51,7 @@
       "sub_category": "Home charts",
       "applies_to": ["V1"],
       "description": "Home metric selection and rolling charts use valid samples and configured units",
-      "expected_result": "Down cycles None > PM2.5 > CO2 > Temperature > Humidity > None and Up traverses the reverse order. Charts use valid samples from the newest 16 completed measurements, so a field invalid in that window yields fewer than 16 plotted points. After 17 recorded cycles, displayed Min and Max equal the valid values in cycles 2 through 17 after conversion and display rounding; a deliberately unique cycle-1 temperature maximum is no longer the Max. A CO2 value omitted during warm-up is excluded. Changing C/F or mass/USAQI recalculates statistics. Returning Home through lock or menu reset selects None and removes the prior chart on the next refresh.",
+      "expected_result": "Down cycles None > PM2.5 > CO2 > Temperature > Humidity > None and Up traverses the reverse order. Charts use valid samples from the newest 16 completed scheduled measurements, so a field invalid in that window yields fewer than 16 plotted points. After 17 recorded cycles, displayed Min and Max equal the valid values in cycles 2 through 17 after conversion and display rounding; a deliberately unique cycle-1 temperature maximum is no longer the Max. A CO2 value omitted during warm-up is excluded. Changing C/F or mass/USAQI recalculates statistics. Returning Home through lock or menu reset selects None and removes the prior chart on the next refresh.",
       "notes": "Before changing configuration, record the measurement interval, temperature unit, and PM standard. Clear data, set 3 seconds, and use a safe warm-air source within -40 to 125 C to make cycle 1 a unique temperature maximum; remove it for cycles 2-17 and record all values. Use cold-start CO2 warm-up for invalid filtering. Restore the recorded configuration values after the case."
     },
     {
@@ -124,7 +124,34 @@
       "applies_to": ["V1"],
       "description": "Measurement cadence and V1 SPS30 sleep/wake follow the selected release settings",
       "expected_result": "At 3 seconds, five consecutive completed-measurement timestamps are each 2 through 4 seconds apart, and BLE Measures plus Home update once per completed cycle. At 30 seconds, two consecutive cycles show the SPS30 fan stop after measurement and serial PM power OFF, followed before the next result by PM power ON, \"PM prepare: waking and warming up after power-on\", and \"PM prepare: complete\". PM1/PM2.5/PM10 are present in that next result, no reboot occurs, and the serial capture contains zero \"PMID collapsed\" or \"PMID wait timed out\" warnings.",
-      "notes": "Use an onboarded V1 in a quiet room with serial and bonded BLE Measures capture. Record five 3-second cycles, then two 30-second cycles. Restore the recorded interval."
+      "notes": "Use an onboarded V1 in a quiet room with serial and bonded BLE Measures capture. Record five 3-second cycles, then two 30-second cycles without deliberate shakes so these timestamps measure the regular cadence. Restore the recorded interval."
+    },
+    {
+      "id": "sensors.refresh.shake-and-progress",
+      "category": "Sensor Presentation",
+      "sub_category": "Measurement scheduling",
+      "applies_to": ["V1"],
+      "description": "Shake refreshes readings with a beep and progress feedback",
+      "expected_result": "An accepted shake gives a short beep when the buzzer is enabled and refreshes Home readings. Progress appears while waiting for measurement or PM warmup, stays visible when opening menus, and clears on completion. Other snackbar messages do not replace it. More shakes while waiting do not add refreshes or beeps. After completion, another shake can refresh again. With the buzzer disabled, refresh still works silently.",
+      "notes": "Use an awake Go with a longer interval, such as 60 seconds, to observe PM warmup. Shake naturally side to side a few times; retry if needed. Try both hands, open a menu or lock/unlock while progress is visible, and check with the buzzer on and off. Serial logs can confirm capture ends on detection and rearms after a short cooldown."
+    },
+    {
+      "id": "sensors.refresh.regular-overlap-and-pm-hold",
+      "category": "Sensor Presentation",
+      "sub_category": "Measurement scheduling",
+      "applies_to": ["V1"],
+      "description": "Shake refresh works alongside regular measurements and PM warmup",
+      "expected_result": "A regular measurement already requested can also complete the refresh without an extra measurement. Otherwise, a shake requests fresh readings even when the next regular reading is close. Regular measurements continue afterward. PM stays awake when the next regular reading is close, avoiding another warmup.",
+      "notes": "Use a 60-second interval. Try shaking during startup warmup and between regular readings, including near the next reading. Use serial logs to follow measurement requests and PM activity; precise timing is not required."
+    },
+    {
+      "id": "sensors.refresh.live-data-without-extra-records",
+      "category": "Sensor Presentation",
+      "sub_category": "Measurement scheduling",
+      "applies_to": ["V1"],
+      "description": "Refresh updates live readings without adding extra history or uploads",
+      "expected_result": "Refreshed readings appear on Home and the connected BLE or Local Server interface. A manual refresh does not add extra chart samples or route points, or trigger an extra cloud upload. Regular recording and cloud updates continue normally. A regular measurement reused for refresh is still recorded normally.",
+      "notes": "Use a longer interval to distinguish manual refreshes from regular readings. Spot-check BLE in Portable or Local Server in Stationary. With tracking enabled, check the route history after a few refreshes. In Stationary with cloud enabled, check that uploads keep their normal cadence."
     },
     {
       "id": "diagnostics.peripheral.success",
@@ -132,7 +159,7 @@
       "sub_category": "Peripheral Test",
       "applies_to": ["V1"],
       "description": "The guided Peripheral Test passes all fitted V1 actuators and air-quality sensor roles",
-      "expected_result": "Prompts occur in this order: rear red/green/blue, three touch LEDs, and buzzer. Select Pass only after the prompted actuator alone produces the requested light or sound. Within five minutes, the AQ summary marks temperature, humidity, CO2, PM, TVOC, NOx, and pressure valid. Every row is PASS; the summary drives green rear LEDs, plays the charge-done melody, and logs \"peripheral test: summary overall=PASS\". Exit logs hardware restoration and restores the recorded LED levels, buzzer value, and AQI color within one refresh.",
+      "expected_result": "Prompts occur in this order: rear red/green/blue, three touch LEDs, and buzzer. Select Pass only after the prompted actuator alone produces the requested light or sound. Within five minutes, the AQ summary marks temperature, humidity, CO2, PM, TVOC, NOx, and pressure valid. Every row is PASS; the summary drives green rear LEDs, plays the charge-done melody, and logs \"peripheral test: summary overall=PASS\". Exit logs hardware restoration and restores the recorded LED levels, buzzer value, and AQI color within one refresh. Regular measurements continue after exit.",
       "notes": "Warm the unit for five minutes before entry and record rear/touch brightness, buzzer, and AQI color. Do not select Pass for an actuator that was not observed. Auto-lock must remain suppressed."
     },
     {
@@ -168,8 +195,8 @@
       "sub_category": "Accelerometer Test",
       "applies_to": ["V1"],
       "description": "Accelerometer Test verifies V1 identity, at-rest magnitude, and orientation response",
-      "expected_result": "WHO_AM_I is 0x33 OK. After two seconds at rest, X/Y/Z read successfully, magnitude is 850–1150 mg, Result is PASS, and the entry success cue plays once. Hold each of the six faces upward for two seconds: the axis perpendicular to that face becomes dominant, its sign reverses on the opposite face, and magnitude remains 850–1150 mg. Serial contains the 0x33 initialization and PASS entry lines. Exit restores the recorded buzzer and rear AQI LED state.",
-      "notes": "Record buzzer and rear LED state before entry. Use a level surface for each face and wait for at least four 500 ms screen updates before rotating."
+      "expected_result": "At rest, WHO_AM_I is 0x33 OK, magnitude is around 1 g, and Result is PASS. Rotating Go changes the displayed axes and signs. The entry cue plays once. Shaking while the test is open does not trigger a measurement refresh. After exit, the buzzer and rear AQI LED settings are restored, and shake refresh works again on Home.",
+      "notes": "Open Settings > Hardware Test > Accelerometer Test with no refresh pending. Let Go rest, then rotate and shake it. Return Home and try a normal shake refresh."
     },
     {
       "id": "diagnostics.accelerometer.failure",

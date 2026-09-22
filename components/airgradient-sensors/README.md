@@ -157,7 +157,7 @@ product-layer concern.
   returns as soon as I2C reads complete.
 - Per-iteration pacing target: `CONFIG_AVERAGING_ITERATION_INTERVAL_MS`.
 
-### `warmup_sensor()`
+### `warmup()` And `warmup_step(condition_gas = true)`
 
 Blocking helper that prepares TVOC/NOx and PM sensors before the first real
 measurement:
@@ -172,6 +172,11 @@ measurement:
 - Conditioning failures are logged via `AG_LOGW` and do not abort the
   warmup.
 - Temp/hum, CO2, O3/NO2, and pressure sensors are not touched.
+
+`warmup_step()` performs one cycle without pacing; its caller controls timing.
+Passing `condition_gas=false` skips TVOC/NOx conditioning while retaining the
+PM discard reads. The blocking `warmup()` uses the default `true`. Go's sensor
+producer continues to use that blocking warmup, including after PM wake.
 
 ## Configuration
 
