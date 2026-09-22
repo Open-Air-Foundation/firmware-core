@@ -94,27 +94,6 @@ static constexpr FgCellConfig AGO_CELL_CONFIG_V2 = {
 // already learned prints its image at boot as a C initialiser, ready to paste
 // in here.  Filling it in turns every later unit into a production unit that
 // installs the image and never runs a cycle of its own.
-// Touch diagnostics knobs (go/test/touch-diag branch only).
-static constexpr const char *TOUCH_DIAG_TAG = "TOUCHDIAG";
-static constexpr uint32_t TOUCH_DIAG_PERIOD_MS = 500;
-// The pads on this board saturate the delta count at both 128x and 32x, so
-// the useful gain is not known in advance.  Start at the product's setting and
-// step down on every saturated reading until nothing pins: DELTA_SENSE is a
-// plain multiplier, so whatever the settled gain measures scales back up to
-// any other setting.  One-directional on purpose, so it cannot oscillate
-// between two gains while a pad is being pressed and released.
-static constexpr uint8_t TOUCH_DIAG_DELTA_SENSE_START = 0; // 128x, as shipped
-static constexpr uint8_t TOUCH_DIAG_DELTA_SENSE_MIN = 7;   // 1x, least sensitive
-
-// Autoranging settles wherever the first unsaturated reading happens to fall,
-// which made two runs land on different gains and disagree about the signal by
-// nearly seven times.  Set this to a DELTA_SENSE code (0..7) to hold one gain
-// for the whole run instead, so two runs can be compared directly; 0xFF leaves
-// the autorange in charge.
-static constexpr uint8_t TOUCH_DIAG_FIXED_SENSE = 3; // 16x
-// The TPL5010 window is ~60 s and nothing else feeds it on this path.
-static constexpr uint32_t TOUCH_DIAG_WDT_FEED_MS = 20000;
-
 static constexpr FgGoldenImage AGO_FG_GOLDEN_V2 = {};
 
 // Either no image (a characterisation build) or one that would survive the
@@ -746,23 +725,6 @@ void GoHardwareBoard::_log_fg_golden_image() {
   }
 }
 
-void GoHardwareBoard::_autorange_touch_gain() {
-  if (TOUCH_DIAG_FIXED_SENSE <= 7) {
-    return; // the run is pinned to one gain on purpose
-  }
-  if (!_touch_diag_saturated || _touch_diag_sense >= TOUCH_DIAG_DELTA_SENSE_MIN) {
-    return;
-  }
-  const uint8_t next = static_cast<uint8_t>(_touch_diag_sense + 1);
-  if (!_touch_diag->set_delta_sense(next)) {
-    return;
-  }
-  AG_LOGW(TOUCH_DIAG_TAG, "delta saturated — dropping gain %ux -> %ux",
-          CAP1203::delta_sense_multiplier(_touch_diag_sense),
-          CAP1203::delta_sense_multiplier(next));
-  _touch_diag_sense = next;
-}
-
 // Hardware protector.  Separate from _init_fuel_gauge_v2() because the write
 // needs the charger: between the subclass 64 commit and the Prot Checksum the
 // gauge can open both FETs, which on battery cuts the system mid-sequence.
@@ -1268,91 +1230,511 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
 // ---------------------------------------------------------------------------
 // Touch diagnostics (go/test/touch-diag branch only)
 //
-// The CAP1203 keeps three numbers per pad and the driver reads none of them,
-// so a pad held down by the enclosure looks identical to a pad someone is
-// touching.  This dumps all three every TOUCH_DIAG_PERIOD_MS: the analog trim
-// says whether the chip can still balance the pad at all, the base count is
-// the resting level it settled on, and the delta is how far the pad is from
-// that level right now.  Reads only; on this part nothing clears a latch
-// except an explicit write to MAIN_CONTROL, so this cannot disturb the touch
-// FSM running in InputService.
+// A guided measurement, not a log dump.  The question this has to answer is
+// what each pad peaks at, and what the other two read at that same instant,
+// because the last free-running run could not tell a press on CS1 from a
+// press on CS1 that dragged CS3 with it.  So the run asks for one pad at a
+// time, finds the press itself, and reports the peak sample rather than
+// leaving a human to pick it out of the scrollback.
+//
+// Reads are non-disturbing: on this part nothing clears a latch except an
+// explicit write to MAIN_CONTROL.
 // ---------------------------------------------------------------------------
+
+static constexpr const char *TOUCH_DIAG_TAG = "TOUCHDIAG";
+
+// The chip publishes a new delta once per sensing cycle.  Register 0x24 is
+// left at its POR value 0x39 — AVG 8 samples, SAMP_TIME 1.28 ms, CYCLE_TIME
+// 70 ms — and three channels at 8 x 1.28 ms = 31 ms fits inside that, so the
+// programmed 70 ms is what holds (datasheet 5.10, p.31).  Poll at well under
+// half a cycle so no update is missed; the previous 500 ms poll read one
+// value in seven and could miss the peak of a two-second press entirely.
+// Three FreeRTOS ticks at the project's 100 Hz, so the request is exact.
+static constexpr uint32_t TOUCH_DIAG_PERIOD_MS = 30;
+
+// Gains the run walks through, as DELTA_SENSE codes.  16x first because that
+// is where the pads read without pinning, then 2x to check the multiplier:
+// DELTA_SENSE scales the reported count and nothing else (datasheet Table
+// 5-7), so every peak should fall by exactly the ratio of the two gains.  If
+// it does not, no number taken across a gain change can be trusted, which is
+// the assumption two earlier runs disagreed over.
+static constexpr uint8_t TOUCH_DIAG_GAINS[] = {3, 6}; // 16x, then 2x
+
+// Press segmentation, quoted at 16x and scaled with the gain.  The idle band
+// at 16x measures about one count and the weakest pad peaks near 50, so 12
+// sits an order of magnitude above the noise and well below any real press.
+static constexpr int TOUCH_DIAG_ENTER_AT_16X = 12;
+// At 2x the scaled entry level rounds down to 1, which the idle band alone
+// would trip.
+static constexpr int TOUCH_DIAG_ENTER_FLOOR = 3;
+
+// A press has to hold above the exit level for this many polls to count, and
+// fall below it for this many to end.  Three polls is one full sensing cycle,
+// so a single stray sample can neither open nor close a segment.
+static constexpr uint16_t TOUCH_DIAG_MIN_HOLD_SAMPLES = 3;
+static constexpr uint8_t TOUCH_DIAG_RELEASE_SAMPLES = 4;
+
+// How long to watch the pads untouched before asking for the first press.
+static constexpr uint32_t TOUCH_DIAG_IDLE_MS = 2000;
+
+// Grace before each recalibration.  Calibrating with a finger still down bakes
+// the touch into the base count, and every delta for the rest of the stage is
+// then measured against a pressed pad.
+static constexpr uint32_t TOUCH_DIAG_HANDS_CLEAR_MS = 5000;
+
+// Two goes at each pad.  A pad that reads wrong twice is reporting real
+// crosstalk, and asking a third time will not change that.
+static constexpr uint8_t TOUCH_DIAG_ATTEMPTS_PER_PAD = 2;
+
+// Another pad at this share of the pressed pad's peak is called out: at that
+// level a threshold set for one pad also fires on the other.
+static constexpr int TOUCH_DIAG_CROSSTALK_PCT = 40;
+
+// The TPL5010 window is ~60 s and nothing else feeds it on this path.
+static constexpr uint32_t TOUCH_DIAG_WDT_FEED_MS = 20000;
+
+namespace {
+
+/// What one pad did during one gain stage.
+struct TouchDiagPad {
+  int peak = 0;                 ///< this pad's own best delta while it was the target
+  int at_peak[3] = {0, 0, 0};   ///< all three channels at that same instant
+  int worst_other = 0;          ///< highest any other pad reached at any point in the press
+  uint8_t worst_other_pad = 0;
+  int idle_lo = 0;              ///< delta range with nothing touching the pads
+  int idle_hi = 0;
+  uint8_t presses = 0;
+  uint8_t mismatches = 0;       ///< presses where another pad beat this one
+  bool saturated = false;
+  bool noise = false;
+};
+
+struct TouchDiagStage {
+  uint8_t sense = 0;
+  TouchDiagPad pad[3];
+};
+
+/// Delta a pad has to reach to open a press segment at this gain.
+int touch_diag_enter_level(uint8_t sense) {
+  const int scaled = TOUCH_DIAG_ENTER_AT_16X * CAP1203::delta_sense_multiplier(sense) / 16;
+  return scaled < TOUCH_DIAG_ENTER_FLOOR ? TOUCH_DIAG_ENTER_FLOOR : scaled;
+}
+
+/// Delta every pad has to fall below to close one.  Half the entry level for
+/// hysteresis, so a press hovering at the threshold cannot chatter into
+/// several segments — but never at or below what the pads do untouched.  The
+/// gain-scaled half lands on 1 count at 2x, and a pad resting one count high
+/// would then hold the segment open for good.
+int touch_diag_exit_level(uint8_t sense, int idle_hi) {
+  const int half = touch_diag_enter_level(sense) / 2;
+  const int floor_level = idle_hi + 1;
+  return half > floor_level ? half : floor_level;
+}
+
+/// Highest delta any pad reached with nothing touching it.
+int touch_diag_idle_ceiling(const TouchDiagStage &stage) {
+  int hi = 0;
+  for (int i = 0; i < 3; ++i) {
+    if (stage.pad[i].idle_hi > hi) {
+      hi = stage.pad[i].idle_hi;
+    }
+  }
+  return hi;
+}
+
+void touch_diag_feed_wdt(const gpio::Hal &hal, uint32_t &last_feed) {
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  if (last_feed == 0 || (now - last_feed) >= TOUCH_DIAG_WDT_FEED_MS) {
+    ext_watchdog_reset(hal, static_cast<int>(PIN_EXT_WDT));
+    last_feed = now;
+  }
+}
+
+/// Recalibrate and wait for the chip to say it finished.  CALIBRATION_ACTIVATE
+/// clears itself when the routine completes; until then the analog trim reads
+/// 0x00, which is also the value that means the trim ran out of range, so
+/// nothing may be read before this clears (datasheet 5.10.1 and 5.27).
+bool touch_diag_calibrate(CAP1203 &touch, const gpio::Hal &hal, uint32_t &last_feed) {
+  if (!touch.calibrate(TouchChannel::ALL)) {
+    return false;
+  }
+  for (int i = 0; i < 100; ++i) { // 100 polls at 30 ms is 3 s
+    touch_diag_feed_wdt(hal, last_feed);
+    RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
+    CAP1203::Diagnostics d{};
+    if (touch.read_diagnostics(d) && d.cal_active == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// What the pads read with nothing on them.  Everything downstream is judged
+/// against this: a threshold is only safe if it clears the band by a margin.
+void touch_diag_idle_band(CAP1203 &touch, const gpio::Hal &hal, TouchDiagStage &stage,
+                          uint32_t &last_feed) {
+  int lo[3] = {127, 127, 127};
+  int hi[3] = {-128, -128, -128};
+  const uint32_t started = static_cast<uint32_t>(RTOS::get_time_ms());
+  uint16_t samples = 0;
+
+  while ((static_cast<uint32_t>(RTOS::get_time_ms()) - started) < TOUCH_DIAG_IDLE_MS) {
+    touch_diag_feed_wdt(hal, last_feed);
+    CAP1203::Diagnostics d{};
+    if (touch.read_diagnostics(d)) {
+      for (int i = 0; i < 3; ++i) {
+        if (d.delta[i] < lo[i]) {
+          lo[i] = d.delta[i];
+        }
+        if (d.delta[i] > hi[i]) {
+          hi[i] = d.delta[i];
+        }
+      }
+      ++samples;
+    }
+    touch.clear_interrupt();
+    RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
+  }
+
+  const int enter = touch_diag_enter_level(stage.sense);
+  for (int i = 0; i < 3; ++i) {
+    stage.pad[i].idle_lo = lo[i];
+    stage.pad[i].idle_hi = hi[i];
+    if (hi[i] >= enter) {
+      AG_LOGW(TOUCH_DIAG_TAG,
+              "CS%d already reads %+d untouched — something is resting on it, or a "
+              "hand moved during the idle window; reset and try again",
+              i + 1, hi[i]);
+    }
+  }
+  AG_LOGI(TOUCH_DIAG_TAG, "idle band over %u samples: CS1 %+d..%+d  CS2 %+d..%+d  CS3 %+d..%+d",
+          samples, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]);
+}
+
+/// Ask for each pad in turn and record the peak sample of every press.
+void touch_diag_run_stage(CAP1203 &touch, const gpio::Hal &hal, TouchDiagStage &stage,
+                          uint32_t &last_feed) {
+  const int idle_hi = touch_diag_idle_ceiling(stage);
+  const int exit_level = touch_diag_exit_level(stage.sense, idle_hi);
+  int enter = touch_diag_enter_level(stage.sense);
+  if (enter <= exit_level) {
+    enter = exit_level + 1;
+    AG_LOGW(TOUCH_DIAG_TAG,
+            "the idle band reaches %+d, which leaves no room under the entry level this gain "
+            "asks for — raising entry to %d, and treat every number from this stage as marginal",
+            idle_hi, enter);
+  }
+  const uint8_t mult = CAP1203::delta_sense_multiplier(stage.sense);
+  AG_LOGI(TOUCH_DIAG_TAG, "press opens at %+d, closes under %+d", enter, exit_level);
+
+  uint8_t target = 0;
+  uint8_t attempts[3] = {0, 0, 0};
+  uint8_t done_mask = 0;
+  uint8_t press_no = 0;
+
+  bool in_press = false;
+  uint8_t below = 0;
+  uint16_t hold_samples = 0;
+  int peak = 0;              // the target pad's own best delta this press
+  int at_peak[3] = {0, 0, 0};
+  int worst_other = 0;       // highest any other pad reached at any point
+  uint8_t worst_other_pad = 0;
+  uint32_t press_start = 0;
+  bool press_sat = false;
+  bool press_noise = false;
+
+  AG_LOGI(TOUCH_DIAG_TAG, "press CS%u only — one fingertip, ~2 s, then lift clear", target + 1);
+
+  while (done_mask != 0x07) {
+    touch_diag_feed_wdt(hal, last_feed);
+
+    CAP1203::Diagnostics d{};
+    if (!touch.read_diagnostics(d)) {
+      AG_LOGW(TOUCH_DIAG_TAG, "read failed");
+      RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
+      continue;
+    }
+    touch.clear_interrupt();
+
+    // Segments open and close on whichever pad is loudest, so a press on the
+    // wrong pad is still seen and reported rather than silently ignored.
+    int strongest = 0;
+    for (int i = 0; i < 3; ++i) {
+      if (d.delta[i] > strongest) {
+        strongest = d.delta[i];
+      }
+    }
+
+    if (!in_press) {
+      if (strongest < enter) {
+        RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
+        continue;
+      }
+      in_press = true;
+      below = 0;
+      hold_samples = 0;
+      peak = 0;
+      worst_other = 0;
+      worst_other_pad = target == 0 ? 1 : 0;
+      press_sat = false;
+      press_noise = false;
+      press_start = static_cast<uint32_t>(RTOS::get_time_ms());
+    }
+
+    // The peak instant is the target pad's own best moment: this run exists to
+    // learn what CS<target> reaches and what the other two read just then.
+    if (d.delta[target] > peak) {
+      peak = d.delta[target];
+      for (int i = 0; i < 3; ++i) {
+        at_peak[i] = d.delta[i];
+      }
+    }
+    // Separately, the highest any other pad got at any point in the press.
+    // That, not its value at the target's peak, is what would false-trigger.
+    for (int i = 0; i < 3; ++i) {
+      if (i != target && d.delta[i] > worst_other) {
+        worst_other = d.delta[i];
+        worst_other_pad = static_cast<uint8_t>(i);
+      }
+    }
+    // A set noise flag forces that pad's delta to zero for the sample, so a
+    // real press can read +0 mid-hold.  Flag the press rather than the sample.
+    if (d.noise_flags & 0x07) {
+      press_noise = true;
+    }
+    for (int i = 0; i < 3; ++i) {
+      if (d.delta[i] == 127) {
+        press_sat = true;
+      }
+    }
+
+    if (strongest >= exit_level) {
+      ++hold_samples;
+      below = 0;
+      RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
+      continue;
+    }
+    if (++below < TOUCH_DIAG_RELEASE_SAMPLES) {
+      RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
+      continue;
+    }
+
+    in_press = false;
+    const uint32_t held_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - press_start;
+    if (hold_samples < TOUCH_DIAG_MIN_HOLD_SAMPLES) {
+      AG_LOGW(TOUCH_DIAG_TAG, "ignored a %u ms blip while waiting for CS%u — too short to be a "
+                              "press",
+              held_ms, target + 1);
+      RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
+      continue;
+    }
+
+    const int cross_pct = peak > 0 ? worst_other * 100 / peak : 100;
+    const bool mismatch = worst_other > peak;
+
+    TouchDiagPad &rec = stage.pad[target];
+    ++rec.presses;
+    if (mismatch) {
+      ++rec.mismatches;
+    }
+    if (peak > rec.peak) {
+      rec.peak = peak;
+      for (int i = 0; i < 3; ++i) {
+        rec.at_peak[i] = at_peak[i];
+      }
+    }
+    if (worst_other > rec.worst_other) {
+      rec.worst_other = worst_other;
+      rec.worst_other_pad = worst_other_pad;
+    }
+    rec.saturated = rec.saturated || press_sat;
+    rec.noise = rec.noise || press_noise;
+
+    ++press_no;
+    AG_LOGI(TOUCH_DIAG_TAG,
+            "press %u @%ux  asked CS%u  peak %+d  at that instant CS1 %+d  CS2 %+d  CS3 %+d  "
+            "worst other CS%u %+d (%d%%)  held %u ms (%u samples)%s%s%s",
+            press_no, mult, target + 1, peak, at_peak[0], at_peak[1], at_peak[2],
+            worst_other_pad + 1, worst_other, cross_pct, held_ms, hold_samples,
+            mismatch ? "  MISMATCH" : "", press_sat ? "  SAT" : "", press_noise ? "  NOISE" : "");
+    if (mismatch) {
+      AG_LOGW(TOUCH_DIAG_TAG, "CS%u was asked for but CS%u read higher — this is the failure that "
+                              "makes Up register as Enter",
+              target + 1, worst_other_pad + 1);
+    } else if (cross_pct >= TOUCH_DIAG_CROSSTALK_PCT) {
+      AG_LOGW(TOUCH_DIAG_TAG, "CS%u followed CS%u to %d%% of its peak — no threshold separates them",
+              worst_other_pad + 1, target + 1, cross_pct);
+    }
+    if (press_sat) {
+      AG_LOGW(TOUCH_DIAG_TAG, "delta pinned at +127 — %ux is too high to measure this pad", mult);
+    }
+
+    if (++attempts[target] >= TOUCH_DIAG_ATTEMPTS_PER_PAD || !mismatch) {
+      done_mask = static_cast<uint8_t>(done_mask | (1u << target));
+    }
+    if (done_mask == 0x07) {
+      break;
+    }
+    for (uint8_t step = 1; step <= 3; ++step) {
+      const uint8_t next = static_cast<uint8_t>((target + step) % 3);
+      if ((done_mask & (1u << next)) == 0) {
+        target = next;
+        break;
+      }
+    }
+    AG_LOGI(TOUCH_DIAG_TAG, "press CS%u only — one fingertip, ~2 s, then lift clear", target + 1);
+    RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
+  }
+}
+
+void touch_diag_report(const TouchDiagStage &stage) {
+  const uint8_t mult = CAP1203::delta_sense_multiplier(stage.sense);
+  AG_LOGI(TOUCH_DIAG_TAG, "==== %ux: each pad's peak, and what the others did during that press ====",
+          mult);
+  AG_LOGI(TOUCH_DIAG_TAG, "pad  peak   CS1   CS2   CS3   worst other   idle     n  bad");
+
+  int worst_pct = 0;
+  uint8_t worst_victim = 0;
+  uint8_t worst_source = 0;
+  for (int i = 0; i < 3; ++i) {
+    const TouchDiagPad &p = stage.pad[i];
+    if (p.peak <= 0) {
+      AG_LOGW(TOUCH_DIAG_TAG, "CS%d never registered a press — nothing to tune from", i + 1);
+      continue;
+    }
+    const int pct = p.worst_other * 100 / p.peak;
+    AG_LOGI(TOUCH_DIAG_TAG, "CS%d  %+4d  %+4d  %+4d  %+4d   CS%u %+4d %3d%%  %+d..%+d  %u  %u%s%s",
+            i + 1, p.peak, p.at_peak[0], p.at_peak[1], p.at_peak[2], p.worst_other_pad + 1,
+            p.worst_other, pct, p.idle_lo, p.idle_hi, p.presses, p.mismatches,
+            p.saturated ? "  SAT" : "", p.noise ? "  NOISE" : "");
+    if (pct > worst_pct) {
+      worst_pct = pct;
+      worst_victim = p.worst_other_pad;
+      worst_source = static_cast<uint8_t>(i);
+    }
+  }
+
+  AG_LOGI(TOUCH_DIAG_TAG, "worst crosstalk %d%%: CS%u while CS%u was pressed — %s", worst_pct,
+          worst_victim + 1, worst_source + 1,
+          worst_pct >= TOUCH_DIAG_CROSSTALK_PCT
+              ? "REAL. No threshold separates these pads; this is a spacing question for v2.1"
+              : "the pads separate cleanly, so per-pad thresholds will work");
+
+  // Half the peak is the usual starting point: far enough above the idle band
+  // to never self-trigger, far enough below the peak that a light press still
+  // registers.  Printed per pad because CS1 and CS2 differ by about a third.
+  AG_LOGI(TOUCH_DIAG_TAG, "starting thresholds at %ux (half of peak): CS1 %d  CS2 %d  CS3 %d", mult,
+          stage.pad[0].peak / 2, stage.pad[1].peak / 2, stage.pad[2].peak / 2);
+}
+
+/// Does the same finger really read eight times smaller at an eighth of the
+/// gain?  Everything the tuning depends on assumes it does.
+void touch_diag_linearity(const TouchDiagStage &hi, const TouchDiagStage &lo) {
+  const uint8_t mult_hi = CAP1203::delta_sense_multiplier(hi.sense);
+  const uint8_t mult_lo = CAP1203::delta_sense_multiplier(lo.sense);
+  const int expect_x10 = mult_lo > 0 ? (mult_hi * 10) / mult_lo : 0;
+  AG_LOGI(TOUCH_DIAG_TAG, "==== gain check: %ux against %ux, expect x%d.%d ====", mult_hi, mult_lo,
+          expect_x10 / 10, expect_x10 % 10);
+
+  bool holds = true;
+  for (int i = 0; i < 3; ++i) {
+    const int a = hi.pad[i].peak;
+    const int b = lo.pad[i].peak;
+    if (b <= 0 || a <= 0) {
+      AG_LOGW(TOUCH_DIAG_TAG, "CS%d  %ux %+d  %ux %+d  — no ratio, a pad never registered", i + 1,
+              mult_hi, a, mult_lo, b);
+      holds = false;
+      continue;
+    }
+    const int ratio_x10 = a * 10 / b;
+    // A count either way at the low gain moves the ratio a long way, so allow
+    // a quarter either side before calling the multiplier broken.
+    const bool ok = ratio_x10 >= (expect_x10 * 3) / 4 && ratio_x10 <= (expect_x10 * 5) / 4;
+    AG_LOGI(TOUCH_DIAG_TAG, "CS%d  %ux %+d  %ux %+d  ratio %d.%d%s", i + 1, mult_hi, a, mult_lo, b,
+            ratio_x10 / 10, ratio_x10 % 10, ok ? "" : "  OFF");
+    holds = holds && ok;
+  }
+  if (holds) {
+    AG_LOGI(TOUCH_DIAG_TAG,
+            "multiplier holds — a peak measured at one gain scales to any other");
+  } else {
+    AG_LOGW(TOUCH_DIAG_TAG, "multiplier does NOT hold — no number may be carried across a gain "
+                            "change, and the tuning must be measured at the gain it will ship at");
+  }
+}
+
+} // namespace
 
 void GoHardwareBoard::run_touch_diag() {
   // Nothing else is brought up on this path, so the external watchdog has no
   // other owner: without this the board resets inside a minute.
   ext_watchdog_init(gpio_hal(), static_cast<int>(PIN_EXT_WDT));
+  const gpio::Hal &hal = gpio_hal();
+  uint32_t last_feed = 0;
 
   CAP1203::Config cfg;
-  cfg.delta_sense = TOUCH_DIAG_DELTA_SENSE_START;
+  cfg.delta_sense = TOUCH_DIAG_GAINS[0];
   cfg.repeat_rate_channels = static_cast<uint8_t>(TouchChannel::ALL & ~touch_channel_map().enter);
   CAP1203 touch(_i2c_bus, I2C_ADDR_CAP1203, cfg);
   if (!touch.init()) {
     AG_LOGE(TOUCH_DIAG_TAG, "CAP1203 init failed — check CN4 cable");
   }
-  _touch_diag = &touch;
 
-  AG_LOGI(TOUCH_DIAG_TAG, "touch-only diagnostic: nothing else on this board is running");
-  _touch_diag_sense = TOUCH_DIAG_DELTA_SENSE_START;
-  if (TOUCH_DIAG_FIXED_SENSE <= 7) {
-    _touch_diag_sense = TOUCH_DIAG_FIXED_SENSE;
-    touch.set_delta_sense(_touch_diag_sense);
-    // Recalibrate at the gain the run will actually use, so the base count is
-    // not left over from a different one.  Keep hands off the pads until the
-    // first line appears.
-    touch.calibrate(TouchChannel::ALL);
-    RTOS::delay_ms(500);
-    AG_LOGI(TOUCH_DIAG_TAG, "gain pinned at %ux, autorange off, recalibrated",
-            CAP1203::delta_sense_multiplier(_touch_diag_sense));
+  AG_LOGI(TOUCH_DIAG_TAG, "guided touch measurement — nothing else on this board is running");
+  AG_LOGI(TOUCH_DIAG_TAG, "board flat on the table, both hands clear until the idle band prints");
+
+  constexpr size_t stage_count = sizeof(TOUCH_DIAG_GAINS) / sizeof(TOUCH_DIAG_GAINS[0]);
+  TouchDiagStage stages[stage_count];
+  size_t measured = 0;
+
+  for (size_t s = 0; s < stage_count; ++s) {
+    stages[s].sense = TOUCH_DIAG_GAINS[s];
+    const uint8_t mult = CAP1203::delta_sense_multiplier(stages[s].sense);
+
+    if (!touch.set_delta_sense(stages[s].sense)) {
+      AG_LOGE(TOUCH_DIAG_TAG, "could not set gain to %ux — stopping", mult);
+      break;
+    }
+    AG_LOGI(TOUCH_DIAG_TAG, "---- gain %ux ----", mult);
+    AG_LOGW(TOUCH_DIAG_TAG, "hands off the pads — recalibrating in %u s",
+            TOUCH_DIAG_HANDS_CLEAR_MS / 1000);
+    for (uint32_t waited = 0; waited < TOUCH_DIAG_HANDS_CLEAR_MS; waited += TOUCH_DIAG_PERIOD_MS) {
+      touch_diag_feed_wdt(hal, last_feed);
+      RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
+    }
+    if (!touch_diag_calibrate(touch, hal, last_feed)) {
+      AG_LOGW(TOUCH_DIAG_TAG, "calibration did not report finished — trim values below are suspect");
+    }
+
+    CAP1203::Diagnostics d{};
+    if (touch.read_diagnostics(d)) {
+      for (int i = 0; i < 3; ++i) {
+        AG_LOGI(TOUCH_DIAG_TAG, "CS%d trim=%u/1023 base=%u thr=%u%s%s", i + 1, d.calibration[i],
+                d.base[i], d.threshold[i],
+                CAP1203::calibration_failed(d.calibration[i]) ? "  CAL-PINNED" : "",
+                (d.base_out_limit & (1u << i)) ? "  BASE-OUT" : "");
+      }
+      if (d.general_status & 0x20) {
+        AG_LOGW(TOUCH_DIAG_TAG, "ACAL_FAIL — at least one pad failed analog calibration");
+      }
+    }
+
+    touch_diag_idle_band(touch, hal, stages[s], last_feed);
+    touch_diag_run_stage(touch, hal, stages[s], last_feed);
+    touch_diag_report(stages[s]);
+    ++measured;
   }
-  uint32_t last_feed = 0;
+
+  // Only worth comparing two stages that both actually ran; a stage that
+  // never got its gain set would read as a broken multiplier.
+  if (measured >= 2) {
+    touch_diag_linearity(stages[0], stages[1]);
+  }
+  AG_LOGI(TOUCH_DIAG_TAG, "measurement complete — reset the board to run it again");
+
   for (;;) {
-    const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
-    if (last_feed == 0 || (now - last_feed) >= TOUCH_DIAG_WDT_FEED_MS) {
-      ext_watchdog_reset(gpio_hal(), static_cast<int>(PIN_EXT_WDT));
-      last_feed = now;
-    }
-    _run_touch_diagnostics();
-    _autorange_touch_gain();
-    // Acknowledge, or the touch bits stay set for good once a pad has been
-    // pressed: they clear only on a write to MAIN_CONTROL, and only for pads
-    // that have actually been released.  Without this the touch column reads
-    // as a permanent false stuck-touch and hides the real one.
-    _touch_diag->clear_interrupt();
+    touch_diag_feed_wdt(hal, last_feed);
     RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
-  }
-}
-
-void GoHardwareBoard::_run_touch_diagnostics() {
-  if (_touch_diag == nullptr) {
-    return;
-  }
-  CAP1203::Diagnostics d{};
-  if (!_touch_diag->read_diagnostics(d)) {
-    AG_LOGW(TOUCH_DIAG_TAG, "read failed");
-    return;
-  }
-
-  _touch_diag_saturated = false;
-  AG_LOGI(TOUCH_DIAG_TAG,
-          "gain=%ux gen=0x%02X touch=0x%02X noise=0x%02X bcout=0x%02X calact=0x%02X sens=0x%02X",
-          CAP1203::delta_sense_multiplier(_touch_diag_sense), d.general_status, d.sensor_status,
-          d.noise_flags, d.base_out_limit, d.cal_active, d.sensitivity);
-  for (uint8_t i = 0; i < 3; ++i) {
-    AG_LOGI(TOUCH_DIAG_TAG, "CS%u delta=%+4d base=%3u cal=%4u thr=%3u%s%s%s", i + 1, d.delta[i],
-            d.base[i], d.calibration[i], d.threshold[i],
-            CAP1203::calibration_failed(d.calibration[i]) ? "  CAL-PINNED" : "",
-            (d.base_out_limit & (1u << i)) ? "  BASE-OUT" : "",
-            (d.delta[i] == 127) ? "  DELTA-SAT" : "");
-    if (d.delta[i] == 127 || d.delta[i] == -128) {
-      _touch_diag_saturated = true;
-    }
-  }
-  if (d.general_status & 0x20) {
-    AG_LOGW(TOUCH_DIAG_TAG, "ACAL_FAIL — at least one pad failed analog calibration");
-  }
-  if (d.base[0] == 0xC8 && d.base[1] == 0xC8 && d.base[2] == 0xC8) {
-    AG_LOGW(TOUCH_DIAG_TAG, "all base counts still at the 0xC8 reset value — no calibration yet");
   }
 }
 
