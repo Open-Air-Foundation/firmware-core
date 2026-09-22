@@ -1748,6 +1748,8 @@ void Orchestrator::peripheral_step_result(bool pass) {
 }
 
 void Orchestrator::on_sensor_test_done(const SensorTestResults &results) {
+  _measurement_pending = false;
+
   // Only meaningful while the flow is waiting on the AQ sweep.
   if (!_periph.active || _periph.step != PeripheralTestState::Step::Testing) {
     return;
