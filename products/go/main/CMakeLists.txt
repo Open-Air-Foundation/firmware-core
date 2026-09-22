@@ -46,6 +46,7 @@ idf_component_register(
               airgradient-local-server
               airgradient-nand-storage
               airgradient-provisioning
+              airgradient-sd-storage
               airgradient-serial
               airgradient-wifi
               libnmea-esp32

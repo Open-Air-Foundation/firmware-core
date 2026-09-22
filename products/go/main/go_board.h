@@ -148,6 +148,7 @@ class BuzzerService;
 class CapTouchSensor;
 class ConfigStore;
 class DisplayService;
+class SdCardStorage;
 class GpsDriver;
 class HttpServer;
 class LedService;
@@ -216,6 +217,10 @@ struct GoBoard {
   virtual BmsDevice *bms() = 0;
   virtual SensorManager &sensors(bool warm = false) = 0;
   virtual StorageService &storage() = 0;
+  /// The removable card, or nullptr on a board without a slot. Unlike the
+  /// other accessors this one hands back an unmounted object: the card can be
+  /// pulled and pushed back in, so mounting is the caller's to retry.
+  virtual SdCardStorage *sd_card() { return nullptr; }
   virtual DisplayService &display() = 0;
   virtual LedService &led_service() = 0;
   virtual BuzzerService &buzzer_service() = 0;

@@ -7,6 +7,7 @@
 
 class AgClient;
 class BQ25629Bms;
+class SdCardStorage;
 class BQ27427;
 class BQ27742;
 class SPS30;
@@ -40,6 +41,7 @@ public:
   BmsDevice *bms() override;
   SensorManager &sensors(bool warm) override;
   StorageService &storage() override;
+  SdCardStorage *sd_card() override;
   DisplayService &display() override;
   LedService &led_service() override;
   BuzzerService &buzzer_service() override;
@@ -130,6 +132,7 @@ private:
   bool _pm_fan_inited = false;
   SensorManager *_sensor_manager = nullptr;
   StorageService *_storage = nullptr;
+  SdCardStorage *_sd_card = nullptr;
   DisplayService *_display = nullptr;
   LP5036 *_lp5036 = nullptr;
   LedService *_led_service = nullptr;

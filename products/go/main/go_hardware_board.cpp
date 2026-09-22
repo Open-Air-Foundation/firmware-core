@@ -46,6 +46,7 @@
 #include "rtos.h"
 #include "services/payload_cache.h"
 #include "services/sensor_manager.h"
+#include "sd_card_storage.h"
 #include "spi_nand_storage.h"
 
 #include "board_config.h"
@@ -1061,6 +1062,24 @@ StorageService &GoHardwareBoard::storage() {
     _chips.set(Chip::Nand, mounted, mounted ? "mounted" : "mount failed");
   }
   return *_storage;
+}
+
+SdCardStorage *GoHardwareBoard::sd_card() {
+  if (_variant != BoardVariant::V2) {
+    return nullptr; // only rev 2.0 has a card slot
+  }
+  assert(_spi_ready && "sd_card() requires init_spi()");
+  if (_sd_card == nullptr) {
+    SdCardStorage::Config cfg{};
+    cfg.spi_host = SPI_HOST;
+    // SD CS sits on the I2C expander, same as NAND: software chip-select per
+    // transaction. Both toggles happen inside the SPI bus lock the sdspi host
+    // holds, which is what keeps them from interleaving with NAND's.
+    cfg.cs_hal = &gpio::expander::hal;
+    cfg.cs_hal_pin = PIN_V2_SD_CS;
+    _sd_card = new SdCardStorage(cfg);
+  }
+  return _sd_card;
 }
 
 DisplayService &GoHardwareBoard::display() {
