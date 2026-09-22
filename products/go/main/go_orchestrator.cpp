@@ -279,7 +279,8 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   _svc.ui_manager.sync_settings(_settings);
 
   if (!handoff.measurement_completed) {
-    _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+    // Boot warmup runs before the producer consumes this notification.
+    start_measurement(MeasurementOrigin::Scheduled);
   }
 
   _latest_power =
@@ -359,7 +360,7 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
   uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
   if (!_provisioning_sensitive_services_paused) {
     // Sensor timer deadline
-    {
+    if (!_measurement_pending && _pm_state == PmState::Ready) {
       uint32_t deadline = _last_measurement_ms + interval_ms;
       uint32_t remaining = deadline - now;
       next = std::min(next, remaining);
@@ -383,11 +384,12 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, inact_remaining);
   }
 
-  // PM pre-wake deadline (not Offline, interval above threshold, prepare
-  // not yet sent, not in the sensitive-services pause).
+  // PM pre-wake deadline (not Offline, interval above threshold, sensor
+  // asleep, not in the sensitive-services pause).
   bool pm_sleep_eligible =
       _mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms);
-  if (pm_sleep_eligible && !_pm_prepare_sent && !_provisioning_sensitive_services_paused) {
+  if (pm_sleep_eligible && _pm_state == PmState::Asleep &&
+      !_provisioning_sensitive_services_paused) {
     uint32_t measure_deadline = _last_measurement_ms + interval_ms;
     uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
     uint32_t pm_remaining = prepare_deadline - now;
@@ -474,22 +476,20 @@ void Orchestrator::check_timers() {
     // --- PM pre-wake timer (fires warmup_duration before next measurement) ---
     bool pm_sleep_eligible =
         _mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval);
-    if (pm_sleep_eligible && !_pm_prepare_sent) {
+    if (pm_sleep_eligible && _pm_state == PmState::Asleep) {
       uint32_t measure_deadline = _last_measurement_ms + interval;
       uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
       if ((now - prepare_deadline) < MAX_REASONABLE_TIMEOUT_MS) {
         AG_LOGI(TAG, "PM pre-wake: powering on and requesting prepare");
-        _svc.power_service.set_pm_power(true);
-        _svc.sensor_producer.request_prepare();
-        _pm_prepare_sent = true;
+        prepare_pm();
       }
     }
 
     // --- Sensor timer (single) ---
-    if ((now - _last_measurement_ms) >= interval) {
-      _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+    if ((now - _last_measurement_ms) >= interval && !_measurement_pending &&
+        _pm_state == PmState::Ready) {
+      start_measurement(MeasurementOrigin::Scheduled);
       _last_measurement_ms = now;
-      _pm_prepare_sent = false;
     }
 
     // --- BMS full telemetry timer ---
@@ -648,12 +648,15 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) 
   uint32_t new_interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
   if (_mode != OperatingMode::Offline &&
       _svc.power_service.should_sleep_pm_sensor(new_interval_ms)) {
-    _svc.sensor_producer.request_pm_sleep();
+    if (!_measurement_pending && !_refresh_pending && _pm_state == PmState::Ready) {
+      _svc.sensor_producer.request_pm_sleep();
+      _pm_state = PmState::Sleeping;
+    }
   } else {
     // Back to always-on: connect now, then wake + warm the (possibly asleep) sensor.
-    _svc.power_service.set_pm_power(true);
-    _svc.sensor_producer.request_prepare();
+    prepare_pm();
   }
+  try_refresh();
 }
 
 // ---------------------------------------------------------------------------
@@ -663,11 +666,12 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) 
 void Orchestrator::dispatch(const Event &event) {
   switch (event.type) {
   case EventType::SensorDataReady:
-    on_sensor_data(event.sensor_data.measures);
+    on_sensor_data(event.sensor_data.measures, event.sensor_data.origin);
     break;
+  case EventType::PmPreparationStarted:
+  case EventType::PmPrepared:
   case EventType::PmSensorAsleep:
-    // PM sleep finished while still connected — isolate the bus now.
-    _svc.power_service.set_pm_power(false);
+    on_pm_event(event.type);
     break;
   case EventType::SensorTestDone:
     on_sensor_test_done(event.sensor_test_results);
@@ -960,7 +964,11 @@ void Orchestrator::apply_config_update(const GoConfigUpdate &update, GoConfigSou
 // Event handlers
 // ---------------------------------------------------------------------------
 
-void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
+void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin origin) {
+  _measurement_pending = false;
+  const bool refreshed = _refresh_pending;
+  clear_refresh();
+
   // Always overwrite all fields — single interval, no group-based gating.
   _raw_measures.pm_a = data.pm_a;
   _raw_measures.co2 = data.co2;
@@ -1007,7 +1015,8 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
       _pm_first_fail_ms = 0;
       AG_LOGW(TAG, "PM invalid for %" PRIu32 " ms -> power-cycle recovery", PM_RECOVERY_TIMEOUT_MS);
       _svc.power_service.recover_pm_sensor();
-      _svc.sensor_producer.request_prepare();
+      _pm_state = PmState::Asleep;
+      prepare_pm();
     }
   }
 
@@ -1023,20 +1032,22 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
 
   log_sensor_snapshot(_raw_measures);
 
-  _svc.storage_service.cache_measurement(_raw_measures);
-
   // Unconditional — snapshot is ready for the next Stationary arm.
   _svc.cloud.update_measures_snapshot(_raw_measures);
 
-  if (is_recording()) {
-    RoutePoint p{};
-    p.timestamp = time(nullptr);
-    p.gps = _latest_gps;
-    p.sensors = _raw_measures;
-    p.battery_percentage = _latest_power.battery_percentage;
-    // Failures are logged by the storage layer; the session keeps running
-    // and re-attempts on each subsequent measurement.
-    (void)_svc.storage_service.append_route_point(p);
+  if (origin == MeasurementOrigin::Scheduled) {
+    _svc.storage_service.cache_measurement(_raw_measures);
+    // Record
+    if (is_recording()) {
+      RoutePoint p{};
+      p.timestamp = time(nullptr);
+      p.gps = _latest_gps;
+      p.sensors = _raw_measures;
+      p.battery_percentage = _latest_power.battery_percentage;
+      // Failures are logged by the storage layer; the session keeps running
+      // and re-attempts on each subsequent measurement.
+      (void)_svc.storage_service.append_route_point(p);
+    }
   }
 
   // Update BLE measures characteristic (always for READ; notifies when connected)
@@ -1044,14 +1055,22 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   // the correction settings from Config.
   _svc.ble_service.notify_measures(_raw_measures, _latest_gps, time(nullptr));
 
-  // Sleep PM sensor after measurement when interval justifies power-cycling.
+  // Sleep PM sensor when the time until the next measurement justifies power-cycling.
   // The producer sleeps the sensor, then posts PmSensorAsleep so we isolate.
   uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
-  if (_mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms)) {
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  const int32_t until_regular = static_cast<int32_t>(_last_measurement_ms + interval_ms - now);
+  const uint32_t remaining_ms = until_regular > 0 ? static_cast<uint32_t>(until_regular) : 0;
+  if (_pm_state == PmState::Ready && _mode != OperatingMode::Offline &&
+      _svc.power_service.should_sleep_pm_sensor(remaining_ms)) {
     _svc.sensor_producer.request_pm_sleep();
+    _pm_state = PmState::Sleeping;
   }
 
-  request_background_display_update();
+  if (refreshed) {
+    AG_LOGI(TAG, "refresh complete");
+  }
+  request_background_display_update(/*wait=*/refreshed);
 }
 
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
@@ -1135,15 +1154,87 @@ void Orchestrator::on_shake_detected(uint32_t detected_ms) {
   const uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
   // Unsigned subtraction keeps event age correct across uptime wraparound.
   const uint32_t age_ms = now_ms - detected_ms;
-  if (age_ms > MAX_SHAKE_EVENT_AGE_MS) {
+  if (age_ms > MAX_SHAKE_EVENT_AGE_MS || _refresh_pending) {
     return;
   }
   if (!_provisioning_sensitive_services_paused && !_ota_committed && !_periph.active &&
       _svc.ui_manager.current_screen() != Screen::AccelTest) {
     AG_LOGI(TAG, "shake accepted; buzzer=%s", _settings.buzzer_enabled ? "on" : "off");
-    if (_settings.buzzer_enabled) {
-      _svc.buzzer_service.acknowledge_refresh();
+    _refresh_pending = true;
+    _svc.buzzer_service.acknowledge_refresh();
+    try_refresh();
+    request_background_display_update(/*wait=*/true);
+  }
+}
+
+void Orchestrator::prepare_pm() {
+  if (_pm_state != PmState::Asleep) {
+    return;
+  }
+  _svc.power_service.set_pm_power(true);
+  _pm_state = PmState::Preparing;
+  _svc.sensor_producer.request_prepare();
+}
+
+void Orchestrator::start_measurement(MeasurementOrigin origin) {
+  AG_LOGI(TAG, "measurement requested: %s",
+          origin == MeasurementOrigin::Refresh ? "refresh" : "scheduled");
+  _measurement_pending = true;
+  _svc.sensor_producer.request_measurement(1, SensorGroup::All, origin);
+}
+
+void Orchestrator::try_refresh() {
+  if (!_refresh_pending) {
+    return;
+  }
+  // An outstanding measurement also satisfies the refresh.
+  if (!_measurement_pending) {
+    if (_pm_state == PmState::Ready) {
+      start_measurement(MeasurementOrigin::Refresh);
+    } else {
+      prepare_pm(); // Preparing/Sleeping wait for the producer's completion event.
     }
+  }
+
+  const char *text = "Waiting...";
+  if (_pm_state == PmState::Preparing) {
+    text = "Preparing...";
+  } else if (_measurement_pending) {
+    text = "Measuring...";
+  }
+  _svc.ui_manager.show_snackbar(text, /*persistent=*/true);
+  _snackbar_refresh_deadline_ms = 0;
+}
+
+void Orchestrator::on_pm_event(EventType type) {
+  if (_provisioning_sensitive_services_paused) {
+    return;
+  }
+  if (type == EventType::PmPreparationStarted) {
+    _pm_state = PmState::Preparing;
+  } else if (type == EventType::PmPrepared) {
+    _pm_state = PmState::Ready;
+  } else {
+    _pm_state = PmState::Asleep;
+    _svc.power_service.set_pm_power(false);
+    const uint32_t interval = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+    if (_mode == OperatingMode::Offline || !_svc.power_service.should_sleep_pm_sensor(interval)) {
+      prepare_pm();
+    }
+  }
+  try_refresh();
+  if (_refresh_pending) {
+    request_background_display_update(/*wait=*/true);
+  }
+}
+
+void Orchestrator::clear_refresh() {
+  if (!_refresh_pending) {
+    return;
+  }
+  _refresh_pending = false;
+  if (_svc.ui_manager.snackbar_persistent()) {
+    _svc.ui_manager.show_snackbar(nullptr);
   }
 }
 
@@ -1893,12 +1984,11 @@ void Orchestrator::apply_mode_transition(OperatingMode old_mode, OperatingMode n
     init_ble_if_portable();
   }
 
-  // Ensure PM sensor is connected and awake — covers mode changes away
-  // from Portable while PM was slept/isolated.  Must fire before the
+  // Wake PM if it is asleep — covers mode changes away from Portable
+  // while PM was slept/isolated. Must fire before the
   // Stationary early-return below so Stationary entry restores PM after a
   // prior Portable session may have slept it.
-  _svc.power_service.set_pm_power(true);
-  _svc.sensor_producer.request_prepare();
+  prepare_pm();
 
   if (new_mode == OperatingMode::Stationary && old_mode != OperatingMode::Stationary) {
     // enter_stationary() opens Screen::Info with the bring-up text and
@@ -2879,7 +2969,10 @@ void Orchestrator::pause_provisioning_sensitive_services() {
     return;
   }
   AG_LOGI(TAG, "pausing network-sensitive services");
+  clear_refresh();
   _svc.sensor_producer.stop(/*sleep_pm=*/true);
+  _measurement_pending = false;
+  _pm_state = PmState::Asleep;
   if (is_gps_active()) {
     _svc.gps_service.stop_and_idle_gnss();
   }
@@ -2895,13 +2988,14 @@ void Orchestrator::resume_provisioning_sensitive_services() {
   AG_LOGI(TAG, "resuming network-sensitive services");
   _svc.power_service.set_pm_power(true);
   _svc.sensor_producer.start();
+  _pm_state = PmState::Preparing;
   if (is_gps_active()) {
     _svc.gps_service.start();
   }
   _provisioning_sensitive_services_paused = false;
   // One immediate measurement so the display refreshes promptly after
   // the resume rather than waiting for the next scheduled tick.
-  _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+  start_measurement(MeasurementOrigin::Scheduled);
   log_heap(TAG, "prov.resume-sensitive:exit");
 }
 
@@ -3038,7 +3132,8 @@ void Orchestrator::update_display(bool wait) {
   // expires.  Only arm once per snackbar — intermediate update_display()
   // calls (from sensor data, input, etc.) that happen before the deadline
   // naturally clear it and the timer fires as a harmless no-op.
-  if (values.snackbar_text != nullptr && _snackbar_refresh_deadline_ms == 0) {
+  if (values.snackbar_text != nullptr && !_svc.ui_manager.snackbar_persistent() &&
+      _snackbar_refresh_deadline_ms == 0) {
     _snackbar_refresh_deadline_ms = now_ms + SNACKBAR_DURATION_MS + 200;
   }
 
@@ -3155,6 +3250,7 @@ void Orchestrator::try_enter_sleep() {
 void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   AG_LOGI(TAG, "prepare_for_sleep");
   _svc.accel_service.stop();
+  clear_refresh();
   log_heap(TAG, "sleep.prepare:enter");
 
   // Ensure pending display refresh completes before stopping worker

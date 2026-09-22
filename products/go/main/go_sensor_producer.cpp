@@ -62,10 +62,14 @@ void SensorProducer::stop(bool sleep_pm) {
   }
 }
 
-void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups) {
+void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups,
+                                         MeasurementOrigin origin) {
   if (_task_handle != nullptr) {
-    // Pack iterations (bits 0-7) and group mask (bits 8-15) into one notify value
+    // Pack iterations (bits 0-7), group mask (bits 8-15), and refresh origin (bit 16).
     uint32_t value = (static_cast<uint32_t>(groups) << 8) | iterations;
+    if (origin == MeasurementOrigin::Refresh) {
+      value |= NOTIFY_REFRESH;
+    }
     RTOS::task_notify_send(_task_handle, value);
   }
 }
@@ -144,9 +148,11 @@ void SensorProducer::run() {
   }
 
   AG_LOGI(TAG, "warming up sensors before first measurement");
+  post_pm_event(EventType::PmPreparationStarted);
   _manager.pm_wake(); // no-op unless resuming from sleep
   _manager.warmup();
   AG_LOGI(TAG, "warmup complete");
+  post_pm_event(EventType::PmPrepared);
 
   // Enable the gas-index sampler when a TVOC/NOx sensor is wired and
   // algorithm configuration succeeds. The sampler converts the indefinite
@@ -205,6 +211,15 @@ void SensorProducer::run() {
   }
 }
 
+void SensorProducer::post_pm_event(EventType type) {
+  Event event{};
+  event.type = type;
+  // The orchestrator waits for these boundaries before sending the next command.
+  if (!RTOS::queue_send(_event_queue, &event, UINT32_MAX)) {
+    AG_LOGW(TAG, "PM event not delivered");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Notification handlers
 // ---------------------------------------------------------------------------
@@ -221,17 +236,16 @@ void SensorProducer::handle_calibration() {
 
 void SensorProducer::handle_prepare() {
   AG_LOGI(TAG, "PM prepare: waking and warming up after power-on");
+  post_pm_event(EventType::PmPreparationStarted);
   _manager.pm_wake();
   _manager.warmup();
   AG_LOGI(TAG, "PM prepare: complete");
+  post_pm_event(EventType::PmPrepared);
 }
 
 void SensorProducer::handle_pm_sleep() {
   _manager.pm_sleep();
-
-  Event event{};
-  event.type = EventType::PmSensorAsleep;
-  RTOS::queue_send(_event_queue, &event, 0);
+  post_pm_event(EventType::PmSensorAsleep);
 }
 
 void SensorProducer::handle_self_test() {
@@ -321,7 +335,12 @@ void SensorProducer::handle_measurement(uint32_t notify_value) {
   Event event{};
   event.type = EventType::SensorDataReady;
   event.sensor_data.measures = basic;
-  RTOS::queue_send(_event_queue, &event, 0);
+  if ((notify_value & NOTIFY_REFRESH) != 0) {
+    event.sensor_data.origin = MeasurementOrigin::Refresh;
+  } else {
+    event.sensor_data.origin = MeasurementOrigin::Scheduled;
+  }
+  RTOS::queue_send(_event_queue, &event, UINT32_MAX);
 }
 
 void SensorProducer::handle_sampler_tick() {

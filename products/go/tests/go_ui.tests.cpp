@@ -902,6 +902,28 @@ TEST_CASE("UIManager: snackbar lifecycle", "[UIManager][snackbar]") {
     DisplayValues v = ui.build_values(ctx);
     CHECK(v.snackbar_text == nullptr);
   }
+
+  SECTION("persistent progress stays on Home until cleared") {
+    ui.show_snackbar("Preparing...", true);
+    ui.clear_expired_snackbar(1000);
+    ui.clear_expired_snackbar(60000);
+    auto ctx = make_default_ctx();
+    REQUIRE(ui.build_values(ctx).snackbar_text != nullptr);
+    CHECK(std::string(ui.build_values(ctx).snackbar_text) == "Preparing...");
+    CHECK(ui.snackbar_persistent());
+
+    ctx.display_off = true;
+    CHECK(ui.build_values(ctx).snackbar_text == nullptr);
+    ctx.display_off = false;
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.build_values(ctx).snackbar_text == nullptr);
+    ui.reset_to_home();
+    CHECK(ui.build_values(ctx).snackbar_text != nullptr);
+
+    ui.show_snackbar(nullptr);
+    CHECK_FALSE(ui.snackbar_persistent());
+    CHECK(ui.build_values(ctx).snackbar_text == nullptr);
+  }
 }
 
 // ============================================================================

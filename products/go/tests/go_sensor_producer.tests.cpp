@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <trompeloeil.hpp>
 #include <trompeloeil/mock.hpp>
+#include <vector>
 
 #include "go_sensor_producer.h"
 #include "hal/co2_sensor.h"
@@ -125,8 +126,10 @@ public:
   void handle_sampler_tick() { _p.handle_sampler_tick(); }
   void run() { _p.run(); }
 
-  static uint32_t encode_notify(uint8_t iterations, SensorGroup groups) {
-    return (static_cast<uint32_t>(groups) << 8) | iterations;
+  static uint32_t encode_notify(uint8_t iterations, SensorGroup groups,
+                                MeasurementOrigin origin = MeasurementOrigin::Scheduled) {
+    return (static_cast<uint32_t>(groups) << 8) | iterations |
+           (origin == MeasurementOrigin::Refresh ? SensorProducer::NOTIFY_REFRESH : 0);
   }
 
 private:
@@ -256,13 +259,23 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
   // handle_prepare
   // -----------------------------------------------------------------------
 
-  SECTION("handle_prepare wakes PM then warms up") {
+  SECTION("handle_prepare wakes PM, warms up, and reports preparation") {
     REQUIRE_CALL(mock_pm, wake()).RETURN(true);
     // warmup() calls warmup_step() in a loop — expect conditioning + PM reads
     REQUIRE_CALL(mock_tvoc_nox, run_conditioning()).TIMES(AT_LEAST(1)).RETURN(true);
     ALLOW_CALL(mock_pm, read(trompeloeil::_)).RETURN(false);
+    uint64_t now = 0;
+    ALLOW_CALL(mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_)).LR_SIDE_EFFECT(now += _1);
+    std::vector<EventType> events;
+    REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+        .TIMES(2)
+        .LR_SIDE_EFFECT(events.push_back(static_cast<const Event *>(_2)->type))
+        .RETURN(true);
 
     access.handle_prepare();
+    CHECK(events == std::vector<EventType>{EventType::PmPreparationStarted, EventType::PmPrepared});
+    CHECK(now >= CONFIG_SENSOR_WARMUP_DURATION_MS);
   }
 
   SECTION("handle_pm_sleep sleeps PM and posts PmSensorAsleep") {
@@ -341,6 +354,9 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
 
   SECTION("sampler active: strips TvocNox from All, splices cache") {
     access.set_sampler_enabled(true);
+    MeasurementOrigin origin = MeasurementOrigin::Scheduled;
+    SECTION("scheduled measurement") {}
+    SECTION("refresh measurement") { origin = MeasurementOrigin::Refresh; }
 
     // Pre-set the TVOC/NOx cache with known values
     TVOCNOxData cached{.tvoc_index = 150, .tvoc_raw = 25000, .nox_index = 42, .nox_raw = 18000};
@@ -361,8 +377,9 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
         .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
         .RETURN(true);
 
-    uint32_t notify = SensorProducerTestAccess::encode_notify(1, SensorGroup::All);
+    uint32_t notify = SensorProducerTestAccess::encode_notify(1, SensorGroup::All, origin);
     access.handle_measurement(notify);
+    CHECK(captured.sensor_data.origin == origin);
 
     // The posted event should carry the spliced cache, not invalid sentinels
     CHECK(captured.sensor_data.measures.tvoc_nox.tvoc_index == 150);
@@ -569,9 +586,10 @@ TEST_CASE("SensorProducer run()", "[SensorProducer]") {
     // SGP41 should NOT be read (sampler strips TvocNox)
     FORBID_CALL(mock_tvoc_nox, read(trompeloeil::_));
 
-    // Capture the posted event
+    // Capture only the result; boot preparation also posts progress events.
     Event captured{};
     REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+        .WITH(static_cast<const Event *>(_2)->type == EventType::SensorDataReady)
         .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
         .RETURN(true);
 

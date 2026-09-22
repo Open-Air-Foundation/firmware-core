@@ -329,7 +329,7 @@ bool AccelService::read_burst_sample(uint32_t now) {
   _last_sample = now;
   const auto result = _detector.update(sample, now);
   if (_config.log_polls) {
-    AG_LOGI(TAG, "POLL #%" PRIu32 " xyz_mg=%d,%d,%d ov=%d clip=%d peaks=%u %s", _polls, sample.x_mg,
+    AG_LOGD(TAG, "POLL #%" PRIu32 " xyz_mg=%d,%d,%d ov=%d clip=%d peaks=%u %s", _polls, sample.x_mg,
             sample.y_mg, sample.z_mg, sample.overrun, sample.clipped, _detector.peaks(),
             result_name(result));
   }

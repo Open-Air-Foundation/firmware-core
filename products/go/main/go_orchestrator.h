@@ -140,7 +140,10 @@ private:
   bool _local_api_access_gated_for_ota = false;
 
   // --- PM sensor sleep (Portable mode power-cycling) ---
-  bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle
+  enum class PmState { Preparing, Ready, Sleeping, Asleep };
+  PmState _pm_state = PmState::Preparing; ///< Producer starts with boot warmup.
+  bool _measurement_pending = false;      ///< Requested measurement has not returned yet.
+  bool _refresh_pending = false;
 
   // --- PM sensor recovery (V1: boost-kill power cycle on persistent failure) ---
   uint32_t _pm_first_fail_ms = 0; ///< 0 = no failure in progress
@@ -255,7 +258,13 @@ private:
   void apply_config_update(const GoConfigUpdate &update, GoConfigSource source);
 
   // --- Event handlers ---
-  void on_sensor_data(const MeasuresAGo &data);
+  void on_sensor_data(const MeasuresAGo &data,
+                      MeasurementOrigin origin = MeasurementOrigin::Scheduled);
+  void on_pm_event(EventType type);
+  void prepare_pm();
+  void start_measurement(MeasurementOrigin origin);
+  void try_refresh();
+  void clear_refresh();
   void on_gps_fix(const GpsData &data);
   void on_input(const InputEventData &input);
   void on_shake_detected(uint32_t detected_ms);

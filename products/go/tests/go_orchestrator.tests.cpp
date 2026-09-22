@@ -45,6 +45,7 @@ extern bool sensor_started;
 extern bool sensor_stopped;
 extern bool sensor_stop_sleep_pm;
 extern bool measurement_requested;
+extern MeasurementOrigin last_measurement_origin;
 extern uint8_t last_iterations;
 extern SensorGroup last_groups;
 extern bool co2_calibration_requested;
@@ -587,7 +588,23 @@ public:
   }
   static void set_first_measurement_done(Orchestrator &o, bool v) { o._first_measurement_done = v; }
   static void set_latest_power(Orchestrator &o, const PowerSnapshot &v) { o._latest_power = v; }
-  static bool pm_prepare_sent(const Orchestrator &o) { return o._pm_prepare_sent; }
+  static bool pm_preparing(const Orchestrator &o) {
+    return o._pm_state == Orchestrator::PmState::Preparing;
+  }
+  static void sensor_ready(Orchestrator &o) {
+    o._pm_state = Orchestrator::PmState::Ready;
+    o._measurement_pending = false;
+  }
+  static void sensor_asleep(Orchestrator &o) {
+    sensor_ready(o);
+    o._pm_state = Orchestrator::PmState::Asleep;
+  }
+  static void sensor_sleeping(Orchestrator &o) {
+    sensor_ready(o);
+    o._pm_state = Orchestrator::PmState::Sleeping;
+  }
+  static void clear_refresh(Orchestrator &o) { o.clear_refresh(); }
+  static bool refresh_pending(const Orchestrator &o) { return o._refresh_pending; }
   static void change_mode(Orchestrator &o, OperatingMode mode) { o.change_mode(mode); }
   static void enter_manufacturing_mode(Orchestrator &o) { o.enter_manufacturing_mode(); }
   static bool manufacturing_mode(const Orchestrator &o) { return o._manufacturing_mode; }
@@ -740,7 +757,10 @@ struct TestFixture {
   }
 
   Orchestrator make_orchestrator() {
-    return {event_queue, services, settings, mock_config, "TEST00"};
+    Orchestrator orch{event_queue, services, settings, mock_config, "TEST00"};
+    // Tests that skip init() model a device whose boot warmup has completed.
+    A::sensor_ready(orch);
+    return orch;
   }
 
 private:
@@ -2749,6 +2769,7 @@ TEST_CASE("check_timers: fires measurement when interval elapses", "[Orchestrato
   REQUIRE(test_spy::measurement_requested);
   REQUIRE(test_spy::last_iterations == 1);
   REQUIRE(test_spy::last_groups == SensorGroup::All);
+  CHECK(A::last_measurement_ms(orch) == 11000); // Next regular deadline follows the request time.
 }
 
 TEST_CASE("check_timers: no measurement when interval not yet elapsed", "[Orchestrator][timers]") {
@@ -5670,7 +5691,11 @@ struct PmSleepFixture {
 
   ~PmSleepFixture() { RTOS::set_instance(nullptr); }
 
-  Orchestrator make_orchestrator() { return {nullptr, services, settings, mock_config, "TEST00"}; }
+  Orchestrator make_orchestrator() {
+    Orchestrator orch{nullptr, services, settings, mock_config, "TEST00"};
+    A::sensor_ready(orch);
+    return orch;
+  }
 
 private:
   alignas(8) static inline char _stub_buf[64];
@@ -5693,6 +5718,7 @@ TEST_CASE("PM sleep: on_sensor_data requests PM sleep for Portable + long interv
 
 TEST_CASE("PM sleep: PmSensorAsleep event isolates the PM bus", "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
 
@@ -5758,6 +5784,7 @@ TEST_CASE("PM sleep: mode change powers on and wakes PM", "[Orchestrator][pm_sle
   f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   test_spy::pm_power_set = false;
   test_spy::pm_power_on = false;
@@ -5774,6 +5801,7 @@ TEST_CASE("PM sleep: check_timers fires prepare at warmup deadline", "[Orchestra
   f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Advance time to prepare deadline: 60000 - 10000 = 50000 ms after last measurement
   f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(50000);
@@ -5786,7 +5814,7 @@ TEST_CASE("PM sleep: check_timers fires prepare at warmup deadline", "[Orchestra
   CHECK(test_spy::prepare_requested);
   CHECK(test_spy::pm_power_set);
   CHECK(test_spy::pm_power_on);
-  CHECK(A::pm_prepare_sent(orch));
+  CHECK(A::pm_preparing(orch));
 }
 
 TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
@@ -5795,6 +5823,7 @@ TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
   f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Advance time to 49s — 1s before prepare deadline
   f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(49000);
@@ -5804,7 +5833,7 @@ TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
   A::check_timers(orch);
 
   CHECK_FALSE(test_spy::prepare_requested);
-  CHECK_FALSE(A::pm_prepare_sent(orch));
+  CHECK_FALSE(A::pm_preparing(orch));
 }
 
 TEST_CASE("PM sleep: check_timers skips prepare for short interval", "[Orchestrator][pm_sleep]") {
@@ -5812,6 +5841,7 @@ TEST_CASE("PM sleep: check_timers skips prepare for short interval", "[Orchestra
   f.settings.measure_interval_seconds = 10; // below threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Even past the would-be deadline, prepare should not fire
   f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
@@ -5829,6 +5859,7 @@ TEST_CASE("PM sleep: reschedule requests PM sleep when interval increases above 
   f.settings.measure_interval_seconds = 10; // starts below threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_ready(orch); // Boot measurement has already completed.
 
   // Change interval to above threshold
   A::settings(orch).measure_interval_seconds = 60;
@@ -5847,6 +5878,7 @@ TEST_CASE("PM sleep: reschedule powers on and wakes PM when interval decreases b
   f.settings.measure_interval_seconds = 60; // starts above threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Change interval to below threshold
   A::settings(orch).measure_interval_seconds = 10;
@@ -6808,6 +6840,7 @@ TEST_CASE("change_mode(Stationary) still re-enables PM power",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Portable);
+  A::sensor_asleep(orch);
   test_spy::wifi_has_saved_networks = true;
   test_spy::pm_power_set = false;
   test_spy::pm_power_on = false;
@@ -8142,7 +8175,7 @@ TEST_CASE("provisioning success publishes online RSSI",
   CHECK(*f.local_api.get_system_info().wifi_rssi == -58);
 }
 
-TEST_CASE("Shake: orchestrator beeps for fresh gestures only when sound is enabled",
+TEST_CASE("Shake: orchestrator delegates acknowledgment regardless of sound setting",
           "[Orchestrator][Shake]") {
   TestFixture f;
   GoSettings settings;
@@ -8156,8 +8189,9 @@ TEST_CASE("Shake: orchestrator beeps for fresh gestures only when sound is enabl
   event.shake_detected_ms = static_cast<uint32_t>(RTOS::get_time_ms());
   test_spy::reset();
   A::dispatch(orch, event);
-  CHECK(test_spy::buzzer_refresh_ack_count == (settings.buzzer_enabled ? 1 : 0));
-  CHECK_FALSE(test_spy::measurement_requested);
+  CHECK(test_spy::buzzer_refresh_ack_count == 1); // BuzzerService owns the sound-enabled check.
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
   CHECK_FALSE(test_spy::prepare_requested);
   CHECK(test_spy::led_back_play_count == 0);
   CHECK(f.ui_manager.current_screen() == Screen::Home);
@@ -8178,6 +8212,7 @@ TEST_CASE("Shake: event freshness has a 500 ms limit across uptime wraparound",
       event.type = EventType::ShakeDetected;
       event.shake_detected_ms = detected_ms;
       test_spy::reset();
+      A::clear_refresh(orch); // Each table entry is an independent gesture.
       A::dispatch(orch, event);
       CHECK(test_spy::buzzer_refresh_ack_count == (age_ms <= 500 ? 1 : 0));
     }
@@ -8250,6 +8285,7 @@ TEST_CASE("Shake: application flows ignore events without stopping the worker",
   A::dispatch(orch, event);
   CHECK(test_spy::buzzer_refresh_ack_count == 0);
   event.shake_detected_ms = static_cast<uint32_t>(now);
+  A::clear_refresh(orch);
   A::dispatch(orch, event);
   CHECK(test_spy::buzzer_refresh_ack_count == 1);
   CHECK(AccelServiceTestAccess::running(worker.service));
@@ -8292,8 +8328,248 @@ TEST_CASE("Shake: buffered shakes after melody playback are accepted by age",
   CHECK(test_spy::buzzer_refresh_ack_count == (remaining_playback_ms <= 500 ? 1 : 0));
   test_spy::reset();
   event.shake_detected_ms = static_cast<uint32_t>(now);
+  A::clear_refresh(orch);
   A::dispatch(orch, event);
   CHECK(test_spy::buzzer_refresh_ack_count == 1);
   CHECK(sensor.power_down_calls == 0);
   CHECK(sensor.configure_calls == 1);
+}
+
+TEST_CASE("Refresh: result origin controls recording while all current readings update",
+          "[Orchestrator][Shake][refresh]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 60;
+  f.settings.buzzer_enabled = true;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  REQUIRE(A::start_tracking(orch));
+  uint64_t now = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  MeasurementOrigin origin = MeasurementOrigin::Refresh;
+  SECTION("manual measurement") {}
+  SECTION("reuse scheduled measurement") {
+    now = 60000;
+    A::check_timers(orch);
+    origin = MeasurementOrigin::Scheduled;
+  }
+  const uint32_t regular_clock = A::last_measurement_ms(orch);
+  test_spy::reset();
+
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(now);
+  A::dispatch(orch, shake);
+  CHECK(test_spy::measurement_requested == (origin == MeasurementOrigin::Refresh));
+  CHECK(test_spy::last_measurement_origin == origin);
+  A::dispatch(orch, shake);
+  CHECK(test_spy::buzzer_refresh_ack_count == 1);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Measuring...");
+
+  Event result{};
+  result.type = EventType::SensorDataReady;
+  result.sensor_data.origin = origin;
+  result.sensor_data.measures.co2.co2 = 650;
+  result.sensor_data.measures.pm_a.pm_25 = 12.0f;
+  test_spy::measurement_requested = false;
+  A::dispatch(orch, result);
+  CHECK(A::raw_measures(orch).co2.co2 == 650);
+  CHECK(test_spy::ble_last_measures.co2.co2 == 650);
+  CHECK(test_spy::cloud_last_snapshot.co2.co2 == 650);
+  CHECK(f.local_api.get_measures().co2.co2 == 650);
+  CHECK(test_spy::cache_measurement_called == (origin == MeasurementOrigin::Scheduled));
+  CHECK(test_spy::route_point_appended == (origin == MeasurementOrigin::Scheduled));
+  CHECK_FALSE(test_spy::measurement_requested); // No follow-up after satisfying the refresh.
+  CHECK_FALSE(A::refresh_pending(orch));
+  CHECK_FALSE(f.ui_manager.snackbar_persistent());
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).snackbar_text == nullptr);
+  CHECK(A::last_measurement_ms(orch) == regular_clock);
+}
+
+TEST_CASE("Refresh: sleep and preparation complete before measurement is requested",
+          "[Orchestrator][Shake][refresh]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  uint64_t now = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  bool sleep_pending = false;
+  SECTION("already asleep") { A::sensor_asleep(orch); }
+  SECTION("sleep already requested") {
+    sleep_pending = true;
+    A::sensor_sleeping(orch);
+  }
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(now);
+  A::dispatch(orch, shake);
+  CHECK_FALSE(test_spy::measurement_requested);
+  CHECK(test_spy::prepare_requested == !sleep_pending);
+  if (sleep_pending) {
+    Event asleep{};
+    asleep.type = EventType::PmSensorAsleep;
+    A::dispatch(orch, asleep);
+  }
+  CHECK(test_spy::prepare_requested);
+  CHECK(test_spy::pm_power_on);
+  Event preparation{};
+  preparation.type = EventType::PmPreparationStarted;
+  A::dispatch(orch, preparation);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Preparing...");
+  CHECK_FALSE(test_spy::measurement_requested);
+
+  now += CONFIG_SENSOR_WARMUP_DURATION_MS;
+  preparation.type = EventType::PmPrepared;
+  A::dispatch(orch, preparation);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
+  CHECK(A::last_measurement_ms(orch) == 0);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Measuring...");
+}
+
+TEST_CASE("Refresh: progress is stored by the flow and redraw preserves newer messages",
+          "[Orchestrator][Shake][refresh][snackbar]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+  SECTION("refresh starts on Home") {}
+  SECTION("refresh starts while a menu is open") { f.ui_manager.set_screen(Screen::MainMenu); }
+
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  A::dispatch(orch, shake);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(A::snackbar_refresh_deadline_ms(orch) == 0);
+
+  f.ui_manager.reset_to_home();
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Measuring...");
+  A::unlock(orch); // Its redraw must preserve the newer "Unlocked" message.
+  REQUIRE_FALSE(f.ui_manager.snackbar_persistent());
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) == "Unlocked");
+
+  Event result{};
+  result.type = EventType::SensorDataReady;
+  result.sensor_data.origin = MeasurementOrigin::Refresh;
+  A::dispatch(orch, result);
+  CHECK_FALSE(A::refresh_pending(orch));
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) == "Unlocked");
+}
+
+TEST_CASE("Refresh: starts near the regular deadline and keeps PM awake afterward",
+          "[Orchestrator][Shake][refresh]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  uint64_t now = 59000;
+  SECTION("one second before the regular deadline") {}
+  SECTION("nine seconds before the regular deadline") { now = 51000; }
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(now);
+  A::dispatch(orch, shake);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Measuring...");
+  CHECK(A::last_measurement_ms(orch) == 0);
+
+  now += 100;
+  Event result{};
+  result.type = EventType::SensorDataReady;
+  result.sensor_data.origin = MeasurementOrigin::Refresh;
+  test_spy::measurement_requested = false;
+  A::dispatch(orch, result);
+  CHECK_FALSE(A::refresh_pending(orch));
+  CHECK_FALSE(test_spy::measurement_requested);
+  CHECK_FALSE(test_spy::pm_sleep_requested);
+  CHECK(A::last_measurement_ms(orch) == 0);
+
+  now = 60000;
+  A::check_timers(orch);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Scheduled);
+  CHECK(A::last_measurement_ms(orch) == 60000);
+
+  now = 60100;
+  result.sensor_data.origin = MeasurementOrigin::Scheduled;
+  A::dispatch(orch, result);
+  CHECK(test_spy::pm_sleep_requested); // Enough time to warm up before the next regular cycle.
+}
+
+TEST_CASE("Refresh: PM sleep policy uses time remaining before the regular measurement",
+          "[Orchestrator][Shake][refresh][pm_sleep]") {
+  struct Scenario {
+    uint64_t completed_ms;
+    bool should_sleep;
+  };
+  const Scenario scenarios[] = {
+      {40000, true},  // 20 seconds remaining: meets the existing sleep threshold.
+      {40001, false}, // Just below the threshold.
+      {45000, false}, // 15 seconds remaining: keep awake even though warmup would fit.
+      {60000, false}, // Regular measurement is due now.
+      {61000, false}, // Overdue: clamp remaining time to zero.
+  };
+  for (const auto &scenario : scenarios) {
+    CAPTURE(scenario.completed_ms);
+    PmSleepFixture f;
+    f.settings.measure_interval_seconds = 60;
+    auto orch = f.make_orchestrator();
+    ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(scenario.completed_ms);
+    Event result{};
+    result.type = EventType::SensorDataReady;
+    result.sensor_data.origin = MeasurementOrigin::Refresh;
+    A::dispatch(orch, result);
+    CHECK(test_spy::pm_sleep_requested == scenario.should_sleep);
+  }
+}
+
+TEST_CASE("Refresh: uses PM preparation already started by the regular timer",
+          "[Orchestrator][Shake][refresh]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::sensor_asleep(orch);
+  uint64_t now = 50000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  A::check_timers(orch);
+  REQUIRE(test_spy::prepare_requested);
+  REQUIRE(A::pm_preparing(orch));
+  REQUIRE_FALSE(test_spy::measurement_requested);
+  test_spy::prepare_requested = false;
+
+  now = 55000;
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(now);
+  A::dispatch(orch, shake);
+  REQUIRE(A::refresh_pending(orch));
+  CHECK_FALSE(test_spy::prepare_requested);
+  CHECK_FALSE(test_spy::measurement_requested);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Preparing...");
+
+  now = 60000;
+  Event prepared{};
+  prepared.type = EventType::PmPrepared;
+  A::dispatch(orch, prepared);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
+  CHECK(A::last_measurement_ms(orch) == 0);
+
+  test_spy::measurement_requested = false;
+  A::check_timers(orch);
+  CHECK_FALSE(test_spy::measurement_requested); // Wait for the refresh already requested.
 }

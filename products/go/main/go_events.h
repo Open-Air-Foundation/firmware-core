@@ -14,12 +14,14 @@
 
 enum class EventType : uint8_t {
   // --- Producer events ---
-  SensorDataReady, // payload: SensorEventData
-  PmSensorAsleep,  // no payload (PM sleep done; orchestrator may isolate now)
-  SensorTestDone,  // payload: SensorTestResults sensor_test_results (bulk AQ self-test)
-  GpsFixUpdate,    // payload: GpsData
-  InputPress,      // payload: InputEventData
-  ShakeDetected,   // payload: uint32_t shake_detected_ms (monotonic uptime)
+  SensorDataReady,      // payload: SensorEventData
+  PmPreparationStarted, // no payload (PM warmup started)
+  PmPrepared,           // no payload (PM warmup finished)
+  PmSensorAsleep,       // no payload (PM sleep done; orchestrator may isolate now)
+  SensorTestDone,       // payload: SensorTestResults sensor_test_results (bulk AQ self-test)
+  GpsFixUpdate,         // payload: GpsData
+  InputPress,           // payload: InputEventData
+  ShakeDetected,        // payload: uint32_t shake_detected_ms (monotonic uptime)
 
   // --- System events ---
   InactivityTimeout, // no payload
@@ -69,8 +71,11 @@ enum class EventType : uint8_t {
 
 // --- Event payload structs ---
 
+enum class MeasurementOrigin : uint8_t { Scheduled, Refresh };
+
 struct SensorEventData {
   MeasuresAGo measures{};
+  MeasurementOrigin origin = MeasurementOrigin::Scheduled;
 };
 
 struct InputEventData {

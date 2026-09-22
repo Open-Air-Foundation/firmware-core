@@ -45,6 +45,7 @@ bool sensor_started = false;
 bool sensor_stopped = false;
 bool sensor_stop_sleep_pm = false;
 bool measurement_requested = false;
+MeasurementOrigin last_measurement_origin = MeasurementOrigin::Scheduled;
 uint8_t last_iterations = 0;
 SensorGroup last_groups = SensorGroup::None;
 bool co2_calibration_requested = false;
@@ -260,6 +261,7 @@ void reset() {
   sensor_stopped = false;
   sensor_stop_sleep_pm = false;
   measurement_requested = false;
+  last_measurement_origin = MeasurementOrigin::Scheduled;
   last_iterations = 0;
   co2_calibration_requested = false;
   prepare_requested = false;
@@ -469,8 +471,10 @@ void SensorProducer::stop(bool sleep_pm) {
   test_spy::sensor_stop_sleep_pm = sleep_pm;
 }
 
-void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups) {
+void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups,
+                                         MeasurementOrigin origin) {
   test_spy::measurement_requested = true;
+  test_spy::last_measurement_origin = origin;
   test_spy::last_iterations = iterations;
   test_spy::last_groups = groups;
 }

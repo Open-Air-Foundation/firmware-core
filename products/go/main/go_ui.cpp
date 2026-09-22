@@ -411,7 +411,9 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   const bool session_screen =
       (_screen == Screen::Info || _screen == Screen::Provisioning ||
        _screen == Screen::ProvisioningConfirm || _screen == Screen::GettingStarted);
-  v.snackbar_text = (!session_screen && snackbar_active()) ? _snackbar_text : nullptr;
+  const bool snackbar_visible =
+      !session_screen && (!snackbar_persistent() || (_screen == Screen::Home && !ctx.display_off));
+  v.snackbar_text = (snackbar_visible && snackbar_active()) ? _snackbar_text : nullptr;
 
   return v;
 }
@@ -452,19 +454,24 @@ bool UIManager::is_hardware_test_screen() const {
          _screen == Screen::GpsTest || _screen == Screen::AccelTest;
 }
 
-void UIManager::show_snackbar(const char *text) {
+void UIManager::show_snackbar(const char *text, bool persistent) {
   if (text == nullptr) {
     _snackbar_text[0] = '\0';
     _snackbar_deadline_ms = 0;
     return;
   }
   (void)snprintf(_snackbar_text, sizeof(_snackbar_text), "%s", text);
-  _snackbar_deadline_ms = SNACKBAR_PENDING;
+  _snackbar_deadline_ms = persistent ? 0 : SNACKBAR_PENDING;
+}
+
+bool UIManager::snackbar_persistent() const {
+  return _snackbar_text[0] != '\0' && _snackbar_deadline_ms == 0;
 }
 
 void UIManager::clear_expired_snackbar(uint32_t now_ms) {
-  if (_snackbar_text[0] == '\0')
+  if (_snackbar_text[0] == '\0') {
     return;
+  }
 
   // Arm the deadline on first clear call after show_snackbar.
   if (_snackbar_deadline_ms == SNACKBAR_PENDING) {
@@ -701,9 +708,7 @@ void UIManager::_encode_provisioning_qr() {
 // Internal queries
 // ---------------------------------------------------------------------------
 
-bool UIManager::snackbar_active() const {
-  return _snackbar_text[0] != '\0' && _snackbar_deadline_ms != 0;
-}
+bool UIManager::snackbar_active() const { return _snackbar_text[0] != '\0'; }
 
 // ---------------------------------------------------------------------------
 // Navigation helpers

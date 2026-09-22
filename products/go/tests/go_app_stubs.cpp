@@ -268,7 +268,7 @@ LocalServer::~LocalServer() = default;
 SensorManager::SensorManager(Sensors &sensors) : _sensors(sensors) {}
 SensorManager::~SensorManager() = default;
 
-void SensorManager::warmup_step() { test_spy::warmup_step_count++; }
+void SensorManager::warmup_step(bool /*condition_gas*/) { test_spy::warmup_step_count++; }
 void SensorManager::warmup() {}
 void SensorManager::pm_sleep() { test_spy::pm_sleep_count++; }
 void SensorManager::pm_wake() {}
@@ -310,7 +310,8 @@ bool SensorProducer::start() {
 
 void SensorProducer::stop(bool /*sleep_pm*/) { test_spy::sensor_stopped = true; }
 
-void SensorProducer::request_measurement(uint8_t /*iterations*/, SensorGroup /*groups*/) {}
+void SensorProducer::request_measurement(uint8_t /*iterations*/, SensorGroup /*groups*/,
+                                         MeasurementOrigin /*origin*/) {}
 void SensorProducer::request_co2_calibration() {}
 void SensorProducer::request_prepare() {}
 void SensorProducer::request_pm_sleep() {}
@@ -783,7 +784,7 @@ DisplayValues UIManager::build_values(const BuildContext & /*ctx*/) const { retu
 void UIManager::set_screen(Screen /*screen*/) {}
 Screen UIManager::current_screen() const { return Screen::Home; }
 bool UIManager::is_on_menu_screen() const { return false; }
-void UIManager::show_snackbar(const char * /*text*/) {}
+void UIManager::show_snackbar(const char * /*text*/, bool /*persistent*/) {}
 void UIManager::clear_expired_snackbar(uint32_t /*now_ms*/) {}
 void UIManager::sync_settings(const GoSettings & /*settings*/) {}
 void UIManager::apply_to_settings(GoSettings & /*settings*/) const {}
@@ -862,7 +863,7 @@ bool StorageService::ensure_route_dir() const { return true; }
 
 // Orchestrator private stubs (never called in GoApp tests)
 void Orchestrator::dispatch(const Event & /*event*/) {}
-void Orchestrator::on_sensor_data(const MeasuresAGo & /*data*/) {}
+void Orchestrator::on_sensor_data(const MeasuresAGo & /*data*/, MeasurementOrigin /*origin*/) {}
 void Orchestrator::on_gps_fix(const GpsData & /*data*/) {}
 void Orchestrator::on_input(const InputEventData & /*input*/) {}
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult /*result*/) {}
