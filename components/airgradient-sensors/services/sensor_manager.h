@@ -145,7 +145,8 @@ public:
   ///
   /// Does NOT pace itself — caller controls timing between calls.
   /// Returns immediately if no TVOC/NOx or PM sensors are present.
-  void warmup_step();
+  /// Set condition_gas=false for PM-only warmup while gas sampling is active.
+  void warmup_step(bool condition_gas = true);
 
   /// Run a full blocking warmup loop.
   ///
