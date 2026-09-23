@@ -32,6 +32,7 @@
 #ifndef TEST_HOST
 #include "driver/gpio.h"
 #include "esp_sleep.h"
+#include "sd_log_capture.h"
 #endif
 
 #include "go_power.h"
@@ -613,6 +614,8 @@ bool PowerService::set_watchdog_timeout_ms(uint32_t timeout_ms) {
 void PowerService::shutdown() {
 #ifndef TEST_HOST
   AG_LOGI(TAG, "shutdown: entering BMS ship mode (QoN)");
+  // Ship mode cuts power outright, so the card gets its last lines first.
+  sd_log::stop();
   if (_bms == nullptr || !_bms->enter_ship_mode()) {
     AG_LOGE(TAG, "shutdown: enter_ship_mode failed — falling back to deep sleep");
   }
@@ -751,6 +754,9 @@ void PowerService::enter_sleep(uint32_t sleep_duration_ms) {
 
   AG_LOGI(TAG, "enter_sleep: entering deep sleep for %" PRIu32 " ms", sleep_duration_ms);
   configure_wake_sources(sleep_duration_ms);
+  // Last, so the line above is in the file. A wake is a fresh boot as far as
+  // RAM is concerned; nothing queued survives it.
+  sd_log::stop();
   esp_deep_sleep_start();
   // Does not return — CPU reboots on wake.
 #endif

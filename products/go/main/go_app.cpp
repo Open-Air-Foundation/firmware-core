@@ -32,6 +32,8 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "go_cloud.h"
 #ifndef TEST_HOST
 #include "fg_learning/fg_learning_runner.h"
+#include "sd_card_storage.h"
+#include "sd_log_capture.h"
 #endif
 #include "go_events.h"
 #include "go_input.h"
@@ -144,6 +146,57 @@ bool GoApp::init_bms_with_retry() {
 // ===========================================================================
 // GoApp::run() — boot path selection
 // ===========================================================================
+
+#ifndef TEST_HOST
+static const char *reset_reason_name(esp_reset_reason_t r) {
+  switch (r) {
+  case ESP_RST_POWERON:
+    return "power-on";
+  case ESP_RST_EXT:
+    return "external";
+  case ESP_RST_SW:
+    return "software";
+  case ESP_RST_PANIC:
+    return "panic";
+  case ESP_RST_INT_WDT:
+    return "interrupt-watchdog";
+  case ESP_RST_TASK_WDT:
+    return "task-watchdog";
+  case ESP_RST_WDT:
+    return "watchdog";
+  case ESP_RST_DEEPSLEEP:
+    return "deep-sleep";
+  case ESP_RST_BROWNOUT:
+    return "brownout";
+  default:
+    return "other";
+  }
+}
+
+/// Mirror the log onto the microSD card, on a board that has one. Needs the
+/// SPI bus and the expander up, so it runs after the early paint.
+///
+/// A wake from deep sleep appends to the file of the boot it belongs to; only
+/// a real boot starts a new one, or a unit that wakes every few minutes would
+/// leave hundreds of files a day. Timer wakes never get here at all — the fast
+/// path does not bring SPI up, and mounting a card on every wake would cost
+/// more battery than the log is worth.
+static void start_sd_log(GoBoard &board, const char *path) {
+  SdCardStorage *card = board.sd_card();
+  if (card == nullptr) {
+    return;
+  }
+  const esp_reset_reason_t reason = esp_reset_reason();
+  const bool new_file = reason != ESP_RST_DEEPSLEEP;
+  char header[160];
+  std::snprintf(header, sizeof(header), "%s  sn %s  fw %s  reset %s  path %s",
+                new_file ? "boot" : "wake", board.serial_number().c_str(),
+                board.firmware_version(), reset_reason_name(reason), path);
+  sd_log::start(*card, new_file, header);
+}
+#else
+static void start_sd_log(GoBoard &, const char *) {}
+#endif
 
 void GoApp::run() {
   retained_uptime::init();
@@ -588,6 +641,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // Returns in ~10 ms.  Worker task handles the SPI full refresh (~3 s).
   const bool disp_ok = disp.init(wake_values, /* defer_refresh= */ true);
   _board.report_chip(Chip::Display, disp_ok && disp.panel_detected());
+  start_sd_log(_board, "button-wake");
 
   // Stop LP Core after SPI/display init, before I2C init.
   _board.ulp_stop();
@@ -800,6 +854,9 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
     _board.report_chip(Chip::Display, disp_ok && early_display.panel_detected());
     handoff.display_painted = true;
   }
+  // After the paint rather than inside it: a button wake that hands over to
+  // this path has already started the log, and a second start is a no-op.
+  start_sd_log(_board, "interactive");
 
   // --- Complete any missing core init (idempotent) ---
   _board.init_core();
