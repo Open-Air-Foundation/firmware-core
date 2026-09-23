@@ -11,17 +11,49 @@
 
 static constexpr const char *TAG = "TCA6408A";
 
+namespace {
+
+class Guard {
+public:
+  explicit Guard(SemaphoreHandle_t lock) : _lock(lock) {
+    if (_lock != nullptr) {
+      xSemaphoreTake(_lock, portMAX_DELAY);
+    }
+  }
+  ~Guard() {
+    if (_lock != nullptr) {
+      xSemaphoreGive(_lock);
+    }
+  }
+  Guard(const Guard &) = delete;
+  Guard &operator=(const Guard &) = delete;
+
+private:
+  SemaphoreHandle_t _lock;
+};
+
+} // namespace
+
 TCA6408A::TCA6408A(i2c_master_bus_handle_t bus, const Config &config)
-    : _bus(bus), _config(config) {}
+    : _bus(bus), _config(config), _lock(xSemaphoreCreateMutex()) {}
 
 TCA6408A::~TCA6408A() {
   if (_dev != nullptr) {
     i2c_master_bus_rm_device(_dev);
     _dev = nullptr;
   }
+  if (_lock != nullptr) {
+    vSemaphoreDelete(_lock);
+    _lock = nullptr;
+  }
 }
 
 bool TCA6408A::init() {
+  if (_lock == nullptr) {
+    ESP_LOGE(TAG, "mutex allocation failed");
+    return false;
+  }
+  Guard guard(_lock);
   if (_dev != nullptr) {
     return true;
   }
@@ -62,6 +94,11 @@ bool TCA6408A::init() {
 }
 
 bool TCA6408A::apply(uint8_t output, uint8_t config) {
+  Guard guard(_lock);
+  return _apply_unlocked(output, config);
+}
+
+bool TCA6408A::_apply_unlocked(uint8_t output, uint8_t config) {
   if (!_write_register(REG_OUTPUT, output)) {
     return false;
   }
@@ -77,6 +114,7 @@ bool TCA6408A::set_direction(uint8_t pin, bool output) {
   if (pin > 7) {
     return false;
   }
+  Guard guard(_lock);
   const uint8_t mask = static_cast<uint8_t>(1u << pin);
   const uint8_t next =
       output ? static_cast<uint8_t>(_config_reg & ~mask) : static_cast<uint8_t>(_config_reg | mask);
@@ -94,6 +132,7 @@ bool TCA6408A::set_level(uint8_t pin, bool high) {
   if (pin > 7) {
     return false;
   }
+  Guard guard(_lock);
   const uint8_t mask = static_cast<uint8_t>(1u << pin);
   const uint8_t next =
       high ? static_cast<uint8_t>(_output | mask) : static_cast<uint8_t>(_output & ~mask);
@@ -119,6 +158,7 @@ bool TCA6408A::get_level(uint8_t pin, bool &high) {
 }
 
 bool TCA6408A::check_and_restore() {
+  Guard guard(_lock);
   if (_config_reg == 0xFF) {
     return false; // no outputs expected, nothing to restore
   }
@@ -131,7 +171,7 @@ bool TCA6408A::check_and_restore() {
   }
   ESP_LOGW(TAG, "config reads 0x%02X, expected 0x%02X — chip reset? restoring", config,
            _config_reg);
-  return apply(_output, _config_reg);
+  return _apply_unlocked(_output, _config_reg); // apply() would take the lock twice
 }
 
 bool TCA6408A::read_register(uint8_t reg, uint8_t &out) {

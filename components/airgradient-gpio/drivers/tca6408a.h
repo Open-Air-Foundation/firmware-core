@@ -11,6 +11,8 @@
 #include <cstdint>
 
 #include "driver/i2c_master.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 // TI TCA6408A 8-bit I2C I/O expander (SCPS192E).
 //
@@ -22,7 +24,16 @@
 // pin to input mode.  check_and_restore() detects that (configuration reads
 // back 0xFF while outputs are expected) and re-applies the cached registers.
 //
-// ISR-safe: no.  Thread-safe: no.  Blocking: yes (I2C).  Allocates: no after init().
+// Every change to a pin is a read-modify-write of one cached byte followed by
+// an I2C write, and the pins belong to unrelated owners — NAND and SD
+// chip-selects, the e-paper D/C, PM power — that run on different tasks.  Two
+// of them interleaving would each write back a byte computed from the same
+// stale cache, and the second write silently undoes the first; for a
+// chip-select that means a transaction clocked into the wrong device.  So the
+// cache and the write are held under one mutex.
+//
+// ISR-safe: no.  Thread-safe: yes.  Blocking: yes (mutex, then I2C).
+// Allocates: the mutex, in the constructor.
 class TCA6408A {
 public:
   static constexpr uint8_t DEFAULT_ADDRESS = 0x20; // ADDR pin tied to GND
@@ -73,7 +84,10 @@ private:
   uint8_t _output = 0xFF;
   uint8_t _config_reg = 0xFF;
 
+  SemaphoreHandle_t _lock = nullptr;
+
   bool _write_register(uint8_t reg, uint8_t value);
+  bool _apply_unlocked(uint8_t output, uint8_t config);
 };
 
 #endif // TCA6408A_H
