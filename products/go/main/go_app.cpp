@@ -168,6 +168,18 @@ static const char *reset_reason_name(esp_reset_reason_t r) {
     return "deep-sleep";
   case ESP_RST_BROWNOUT:
     return "brownout";
+  case ESP_RST_USB:
+    return "usb"; // what flashing over the USB port looks like
+  case ESP_RST_JTAG:
+    return "jtag";
+  case ESP_RST_SDIO:
+    return "sdio";
+  case ESP_RST_EFUSE:
+    return "efuse";
+  case ESP_RST_PWR_GLITCH:
+    return "power-glitch";
+  case ESP_RST_CPU_LOCKUP:
+    return "cpu-lockup";
   default:
     return "other";
   }

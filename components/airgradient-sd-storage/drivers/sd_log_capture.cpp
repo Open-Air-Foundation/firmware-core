@@ -33,7 +33,12 @@ namespace {
 
 // Room for a few seconds of a busy boot while the e-paper holds the bus.
 constexpr size_t RING_BYTES = 16 * 1024;
-constexpr uint32_t WRITER_STACK_BYTES = 4096;
+// The first bench run reported 1348 B left of 4096 after a sync. The deepest
+// path is deeper than that: an I2C error while moving the chip-select logs
+// from inside the expander, inside the SD host, inside FATFS, and that log
+// line runs a full printf formatter on this stack. Sized for that, not for
+// the path that happened to be measured.
+constexpr uint32_t WRITER_STACK_BYTES = 6144;
 constexpr UBaseType_t WRITER_PRIORITY = 2;
 constexpr uint32_t RECEIVE_WAIT_MS = 250;
 // Lines reach the card's sector buffer as they come, but the directory entry
