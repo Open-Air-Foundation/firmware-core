@@ -84,3 +84,7 @@ inline constexpr const char *BOOT_SPLASH_TEXT = "Getting Ready";
 /// Determine whether GPS should be active based on settings and RTC state.
 /// Used by all three boot paths — eliminates the duplicated inline check.
 bool is_gps_active_at_boot(const GoSettings &settings, const RtcAppState &state);
+
+// Minimum and Maximum Frequency Values in MHz used for this application.
+inline int min_esp32c5_cpu = 40;
+inline int max_esp32c5_cpu = 240;
