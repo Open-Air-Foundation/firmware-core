@@ -202,6 +202,7 @@ uint32_t wifi_stop_local_endpoint_count = 0;
 bool wifi_tick_called = false;
 uint32_t wifi_next_deadline_ms = 0;
 bool wifi_is_online = false;
+bool wifi_is_connecting = false;
 bool wifi_has_been_online = false;
 int wifi_rssi = WIFI_RSSI_INVALID;
 bool wifi_schedule_reconnect_called = false;
@@ -398,6 +399,7 @@ void reset() {
   wifi_tick_called = false;
   wifi_next_deadline_ms = 0;
   wifi_is_online = false;
+  wifi_is_connecting = false;
   wifi_has_been_online = false;
   wifi_rssi = WIFI_RSSI_INVALID;
   wifi_schedule_reconnect_called = false;
@@ -1045,7 +1047,7 @@ void WifiService::shutdown() {
 void WifiService::clear_credentials() { test_spy::wifi_clear_credentials_called = true; }
 
 bool WifiService::is_online() const { return test_spy::wifi_is_online; }
-bool WifiService::is_connecting() const { return false; }
+bool WifiService::is_connecting() const { return test_spy::wifi_is_connecting; }
 bool WifiService::is_provisioning() const { return test_spy::wifi_provisioning_active; }
 ProvisioningTransport WifiService::current_transport() const {
   return ProvisioningTransport::BleOnly;
@@ -1067,7 +1069,7 @@ void WifiService::_on_disconnected(WifiDisconnectReason /*r*/) {}
 void WifiService::_reset_deadline() {}
 void WifiService::_arm_deadline(uint32_t /*window_ms*/) {}
 void WifiService::_reset_online_latches() {}
-void WifiService::_post_wifi_disconnected(WifiDisconnectReason /*r*/) {}
+bool WifiService::_post_wifi_disconnected(WifiDisconnectReason /*r*/) { return true; }
 
 // ============================================================================
 // PortableWifiProvisioner stubs

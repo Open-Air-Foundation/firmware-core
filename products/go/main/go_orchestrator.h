@@ -378,14 +378,12 @@ private:
 
   /// Idempotent session-entry preamble: silent unlock + snackbar clear.
   /// No-op when _setup_session_active is already true.  Called by both
-  /// enter_stationary() (Info path) and enter_provisioning_page()
-  /// (post-online auth_failed path).
+  /// enter_stationary() and enter_provisioning_page().
   void begin_session_if_needed();
 
   /// Open Screen::Provisioning, pause sensitive services, start the
-  /// requested transport, and render wait=true.  Called from both the
-  /// bring-up failure path (Info -> Provisioning, session already active)
-  /// and post-online auth_failed (Home -> Provisioning, session starts).
+  /// requested transport, and render wait=true. Normal mode only: called
+  /// without saved credentials or after initial saved-network failure.
   void enter_provisioning_page(ProvisioningTransport transport);
 
   /// Session-leave helpers.  Both poll the battery once for a fresh

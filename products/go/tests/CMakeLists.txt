@@ -338,6 +338,9 @@ add_executable(go_orchestrator_tests
     go_accel.tests.cpp
 )
 
+# Observe the common reboot() boundary without changing its production API.
+target_link_options(go_orchestrator_tests PRIVATE "-Wl,--wrap=_Z6rebootv")
+
 target_link_libraries(go_orchestrator_tests PRIVATE
     go_orchestrator_test_support
     Catch2::Catch2WithMain

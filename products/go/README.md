@@ -108,6 +108,19 @@ and humidity corrections. BLE bond deletion is a safe no-op once Stationary
 mode has torn down the BLE host. A plain reboot likewise returns to fresh
 onboarding. Button 2 long press remains factory reset.
 
+Manufacturing connects only to the transient factory Wi-Fi (`airgradient` /
+`cleanair`), even when saved networks exist. If no IP is obtained within the
+15-second startup window, the display paints `Wi-Fi connection failed`, holds
+it for one second after painting, and the device reboots to Getting Started.
+The operator must press Button 2 again to re-enter manufacturing. This path
+never starts provisioning. After a successful connection, later Wi-Fi drops
+use the normal reconnect policy without a startup-timeout reboot.
+
+Normal Stationary mode uses saved networks only and opens BLE provisioning
+immediately when none are saved. Initial saved-network failures retain the
+existing provisioning flow. Normal startup and runtime reconnect never select
+factory credentials automatically.
+
 ### Cell Safety
 
 - **EDV (over-discharge):** ship mode requested when cell voltage stays
