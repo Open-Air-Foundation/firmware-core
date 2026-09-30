@@ -376,8 +376,8 @@ rules layered on top of the general matrix:
   partial-op counter and `_menu_exited` flag are reset at the boundary.
 - **All intra-session transitions are Partial, regardless of layout
   change.** This includes `Info` text updates
-  (`Connecting to saved Wi-Fi...` → `Trying default Wi-Fi...` →
-  `Connected!\n<ip>`), Provisioning status updates, the
+  (`Connecting to saved Wi-Fi...` or manufacturing's `Trying default Wi-Fi...`
+  → `Connected!\n<ip>` or a connection-failure message), Provisioning status updates, the
   `Provisioning ↔ ProvisioningConfirm` overlay, the No ↔ Yes toggle in
   the confirmation overlay, and the in-session `Info → Provisioning`
   jump. The partial worker writes the **full canvas** (y = 0..249) for

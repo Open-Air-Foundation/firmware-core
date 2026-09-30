@@ -624,9 +624,12 @@ again.
 ```mermaid
 stateDiagram-v2
     [*] --> EnterStationary
-    EnterStationary --> Info: show "Connecting to saved Wi-Fi..." or "Trying default Wi-Fi..."
+    EnterStationary --> Info: saved Wi-Fi or manufacturing factory Wi-Fi
+    EnterStationary --> Provisioning: normal mode without saved networks
     Info --> Home: STA success -- Connected! + 1 s hold + leave to Home unlocked
-    Info --> Provisioning: STA failure (auth or window expiry) -- pause sensitive services
+    Info --> Provisioning: normal STA failure -- pause sensitive services
+    Info --> Reboot: manufacturing timeout -- paint failure + 1 s hold
+    Reboot --> GettingStarted: operator must re-enter manufacturing
     Provisioning --> ProvisioningConfirm: TouchEnter on row 0 or 1
     ProvisioningConfirm --> Provisioning: No
     ProvisioningConfirm --> Provisioning: Yes on row 0 -- switch transport
@@ -640,15 +643,17 @@ stateDiagram-v2
 `_board.init_wifi_subsystem()` (idempotent), runs the silent session
 preamble, sets `_bring_up_pending`, opens `Screen::Info` with the
 attempt-specific narration text, and starts the STA attempt with
-`update_display(wait=true)`. STA success goes through
-`on_wifi_connected()`; STA failure routes through the disconnect policy.
+`update_display(wait=true)`. Manufacturing explicitly selects factory Wi-Fi,
+even if saved networks exist. Normal mode without saved networks instead enters
+BLE provisioning immediately, without a factory-Wi-Fi attempt. STA success goes
+through `on_wifi_connected()`; STA failure routes through the disconnect policy.
 
 ### Session State Helpers
 
 | Helper | Role |
 |---|---|
 | `begin_session_if_needed()` | Idempotent session preamble. Sets `_setup_session_active`, silently flips `_lock_state = Unlocked` (no `"Unlocked"` snackbar), and clears any pending snackbar so leftover `"Mode changed"` / `"Locked"` / stale `"Wi-Fi connected"` cannot leak onto session screens. Called by `enter_stationary()` and `enter_provisioning_page()`. |
-| `enter_provisioning_page(transport)` | Entry into `Screen::Provisioning`. Calls `begin_session_if_needed()`, clears `_bring_up_pending` (defangs the on-Info success arm), runs `pause_provisioning_sensitive_services()`, opens the page via `UIManager::open_provisioning()`, kicks off the transport, and ends with `update_display(wait=true)`. Used by the pre-online STA-fail bring-up path. |
+| `enter_provisioning_page(transport)` | Entry into `Screen::Provisioning`. Calls `begin_session_if_needed()`, clears `_bring_up_pending` (defangs the on-Info success arm), runs `pause_provisioning_sensitive_services()`, opens the page via `UIManager::open_provisioning()`, kicks off the transport, and ends with `update_display(wait=true)`. Used by normal entry without saved networks and normal pre-online STA failure. |
 | `leave_session_to_home()` | Success-path leave. Clears the `Connected!` page state, calls `UIManager::reset_to_home()`, polls the BMS once for a fresh battery icon, resumes paused services, rebases periodic clocks, silently unlocks, clears the session gate, and ends with `update_display(wait=true) + DisplayService::flush()`. Used by both STA-only success (Info) and provisioning-success (Provisioning). |
 | `leave_session_to_portable()` | Cancel / abort path. Mirrors the success leave but routes through `change_mode(Portable)` (which fires its own `"Mode changed"` snackbar). The session gate stays true through `change_mode()` so any background-render path that fires mid-teardown still no-ops. |
 | `rebase_periodic_clocks()` | Roll `_last_measurement_ms` / `_last_bms_poll_ms` / `_last_bms_status_poll_ms` forward to `now` on resume so paused timers do not fire back-to-back catching up. The external watchdog clock is deliberately not rebased. |
@@ -680,6 +685,17 @@ gated on the broader `_setup_session_active` so users on
 `on_wifi_disconnected(reason)` runs only in Stationary mode and reads
 `WifiService::has_been_online()` to split the policy:
 
+Manufacturing startup waits for the 15-second factory connection window,
+including after an immediate connection error. When that deadline expires
+without any successful IP, Wi-Fi shuts down, `Wi-Fi connection failed` is
+painted with `update_display(wait=true)` and `flush()`, and the message is held
+for `STA_RESULT_HOLD_MS` (one second) before `reboot()`. Nothing is persisted;
+the next boot returns to onboarding and needs another operator button press.
+Manufacturing never opens provisioning. Once any IP has been obtained, the
+runtime column below applies to manufacturing too: no timeout reboot.
+
+The before-online column below describes normal mode:
+
 | Reason | Before First Online (bring-up) | After First Online (runtime) |
 |---|---|---|
 | `auth_failed` | Open provisioning | Schedule reconnect |
@@ -692,7 +708,7 @@ gated on the broader `_setup_session_active` so users on
 
 The policy splits on `has_been_online()`:
 
-- **Bring-up** (before the first successful IP for the current Stationary
+- **Normal Bring-up** (before the first successful IP for the current Stationary
   entry — cold boot into Stationary or a mode change to Stationary):
   provisioning is the fallback. The connectivity-class reasons reach this
   table only after the `WifiManager` retry budget and the 30 s connect
@@ -704,8 +720,9 @@ The policy splits on `has_been_online()`:
 - **Runtime** (after the first online): the orchestrator never opens
   provisioning and never gives up. Any reason except `requested_by_user`
   schedules a reconnect via `WifiService::schedule_reconnect()`, which
-  retries saved networks when present or the transient factory-default
-  network otherwise (see the Wi-Fi service doc).
+  retains the credential source selected on entry: saved networks in normal
+  mode, transient factory credentials in manufacturing (see the Wi-Fi service
+  doc). An empty saved-network store never enables factory credentials.
   `requested_by_user` is the service's own teardown and is left alone.
 
 A runtime reconnect preserves the `has_been_online()` latch, so repeated
