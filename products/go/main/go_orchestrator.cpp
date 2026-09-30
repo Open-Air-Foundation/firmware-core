@@ -2003,10 +2003,8 @@ void Orchestrator::apply_mode_transition(OperatingMode old_mode, OperatingMode n
   prepare_pm();
 
   if (new_mode == OperatingMode::Stationary && old_mode != OperatingMode::Stationary) {
-    // enter_stationary() opens Screen::Info with the bring-up text and
-    // calls update_display(wait=true) itself.  Skip the generic
-    // "Mode changed" snackbar + update_display() so the Info text is
-    // not stomped.
+    // enter_stationary() renders its Info or Provisioning page itself.
+    // Skip the generic "Mode changed" snackbar and display update.
     enter_stationary();
     return;
   }
@@ -2592,15 +2590,19 @@ void Orchestrator::enter_stationary() {
   // is due as soon as the connection settles, not one hour after entry.
   _last_ota_check_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - OTA_WIFI_CHECK_INTERVAL_MS;
 
-  if (_svc.wifi.has_saved_networks()) {
+  if (_manufacturing_mode) {
+    AG_LOGI(TAG, "stationary: manufacturing — trying default Wi-Fi");
+    _svc.ui_manager.show_info("Trying default Wi-Fi...");
+    _svc.wifi.try_default_fallback_credentials();
+  } else if (_svc.wifi.has_saved_networks()) {
     const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
     AG_LOGI(TAG, "stationary: saved credentials %s static IP", ip != nullptr ? "with" : "without");
     _svc.ui_manager.show_info("Connecting to saved Wi-Fi...");
     _svc.wifi.connect_with_saved_credentials(ip);
   } else {
-    AG_LOGI(TAG, "stationary: no credentials — trying default fallback");
-    _svc.ui_manager.show_info("Trying default Wi-Fi...");
-    _svc.wifi.try_default_fallback_credentials();
+    AG_LOGI(TAG, "stationary: no credentials — opening provisioning");
+    enter_provisioning_page(ProvisioningTransport::BleOnly);
+    return;
   }
 
   // Full refresh — entering the setup session boundary.  wait=true so
@@ -2635,8 +2637,7 @@ void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
   _svc.local_api.set_access(ConfigAccess::Disabled);
   discard_local_requests("entering provisioning");
   // Idempotent — no-op if Info already set up the session; otherwise
-  // performs silent unlock + snackbar clear so a post-online auth_failed
-  // entry from Home lands on the page in a clean state.
+  // performs silent unlock + snackbar clear for direct entry without credentials.
   begin_session_if_needed();
 
   // Stop the on-Info bring-up arm from acting on any further events
@@ -2785,7 +2786,24 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
     return;
   }
 
-  // Bring-up (before first IP): provisioning is the fallback. The connectivity
+  if (_manufacturing_mode) {
+    // Early failures leave the bounded factory attempt armed. Only its expiry
+    // ends the session; a successful IP routes through runtime policy above.
+    if (reason == WifiDisconnectReason::requested_by_user || _svc.wifi.is_connecting()) {
+      return;
+    }
+    AG_LOGW(TAG, "manufacturing Wi-Fi timed out; showing failure before reboot");
+    _bring_up_pending = false;
+    _svc.wifi.shutdown();
+    _svc.ui_manager.show_info("Wi-Fi connection failed");
+    update_display(/*wait=*/true);
+    _svc.display_service.flush();
+    RTOS::delay_ms(STA_RESULT_HOLD_MS);
+    reboot();
+    return;
+  }
+
+  // Normal bring-up (before first IP): provisioning is the fallback. Connectivity
   // reasons reach here only after the WifiManager retry budget / connect
   // window are spent; auth_failed routes here immediately (bad creds).
   // ap_disconnected / handshake_failed / unknown stay — the window

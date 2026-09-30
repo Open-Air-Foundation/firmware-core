@@ -690,7 +690,7 @@ void WifiService::_on_disconnected(WifiDisconnectReason /*r*/) {}
 void WifiService::_reset_deadline() {}
 void WifiService::_arm_deadline(uint32_t /*window_ms*/) {}
 void WifiService::_reset_online_latches() {}
-void WifiService::_post_wifi_disconnected(WifiDisconnectReason /*r*/) {}
+bool WifiService::_post_wifi_disconnected(WifiDisconnectReason /*r*/) { return true; }
 
 // ============================================================================
 // AgClient stubs

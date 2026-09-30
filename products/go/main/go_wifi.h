@@ -92,14 +92,15 @@ public:
   void connect_with_saved_credentials(const WifiStaticIpConfig *static_ip = nullptr);
 
   /// Arm a runtime reconnect, issued from tick() after reconnect_delay_ms.
-  /// Reconnects saved networks when present, otherwise retries the transient
-  /// factory-default network. Keeps has_been_online() latched (stays
+  /// Reuses the credential source selected at entry: saved networks or the
+  /// manufacturing-only factory network. Keeps has_been_online() latched (stays
   /// "runtime") and arms no connect window.
   void schedule_reconnect(const WifiStaticIpConfig *static_ip = nullptr);
 
   /// Connect to the factory-default airgradient/cleanair AP. Explicit SSID,
   /// so the connect is transient and never written to the saved-networks
-  /// store. Single-shot per Stationary entry, bounded by the fallback window.
+  /// store. Manufacturing only; single-shot, bounded by the fallback window
+  /// even when connect fails immediately.
   void try_default_fallback_credentials();
 
   // --- Provisioning (full impl lands in CP2.3) ---
@@ -180,7 +181,7 @@ private:
   void _reset_deadline();
   void _arm_deadline(uint32_t window_ms);
   void _reset_online_latches();
-  void _post_wifi_disconnected(WifiDisconnectReason reason);
+  bool _post_wifi_disconnected(WifiDisconnectReason reason);
   void _post_provisioning_event(const struct ProvisioningEventInfo &info);
   void _ensure_provisioning_manager();
   bool _start_provisioning_internal(ProvisioningTransport transport);
@@ -225,6 +226,8 @@ private:
   uint32_t _reconnect_at_ms = 0;
   WifiStaticIpConfig _reconnect_static_ip{};
   bool _reconnect_has_static_ip = false;
+  // Selected explicitly by the entry action, never inferred from an empty store.
+  bool _use_default_credentials = false;
 
   // Provisioning state
   bool _provisioning_active = false;

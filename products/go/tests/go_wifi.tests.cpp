@@ -57,7 +57,7 @@ public:
     ++connect_calls;
     last_ssid = ssid != nullptr ? ssid : "";
     last_password = password != nullptr ? password : "";
-    return WifiStatus::Ok;
+    return connect_status;
   }
   WifiStatus disconnect_sta() override {
     ++disconnect_calls;
@@ -134,6 +134,7 @@ public:
 
   // Observables
   int connect_calls = 0;
+  WifiStatus connect_status = WifiStatus::Ok;
   int disconnect_calls = 0;
   int set_static_ip_calls = 0;
   int clear_static_ip_calls = 0;
@@ -451,6 +452,42 @@ TEST_CASE("Stationary connect continues when disabling power save fails",
   CHECK(f.hal.connect_calls == 1);
 }
 
+TEST_CASE("factory startup keeps its deadline after an immediate driver failure",
+          "[go_wifi][fallback][tick]") {
+  Fixture f;
+  f.hal.connect_status = WifiStatus::Failed;
+  f.rtos.set_now(1000);
+  f.svc.try_default_fallback_credentials();
+  REQUIRE(f.svc.is_connecting());
+  REQUIRE(f.svc.next_deadline_ms() == 16000);
+  REQUIRE(f.rtos.has_event(EventType::WifiDisconnected));
+  f.rtos.captured.clear();
+
+  f.svc.tick(15999);
+  CHECK(f.rtos.captured.empty());
+  f.svc.tick(16000);
+  const auto *event = f.rtos.first_event(EventType::WifiDisconnected);
+  REQUIRE(event != nullptr);
+  CHECK(event->wifi_disconnect_reason ==
+        static_cast<uint8_t>(WifiDisconnectReason::connection_lost));
+  CHECK_FALSE(f.svc.is_connecting());
+  CHECK(f.hal.connect_calls == 1);
+}
+
+TEST_CASE("factory success cancels its startup timeout even if the link drops before tick",
+          "[go_wifi][fallback][tick]") {
+  Fixture f;
+  f.svc.try_default_fallback_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+  f.hal.sta_disconnected_cb(/*WIFI_REASON_AUTH_EXPIRE*/ 2);
+  f.rtos.captured.clear();
+
+  f.svc.tick(15000);
+  CHECK(f.rtos.captured.empty());
+  CHECK(f.svc.next_deadline_ms() == 0);
+  CHECK(f.svc.has_been_online());
+}
+
 TEST_CASE("fallback path does not request static IP", "[go_wifi][fallback]") {
   Fixture f;
   f.svc.try_default_fallback_credentials();
@@ -554,6 +591,25 @@ TEST_CASE("tick is a no-op when no deadline armed", "[go_wifi][tick]") {
   CHECK(f.rtos.captured.empty());
 }
 
+TEST_CASE("connect timeout retries event delivery when the central queue is full",
+          "[go_wifi][fallback][tick][queue_retry]") {
+  Fixture f;
+  f.svc.try_default_fallback_credentials();
+  f.rtos.captured.clear();
+  f.rtos.accept_queue_sends = false;
+  f.svc.tick(15000);
+  REQUIRE(f.svc.next_deadline_ms() == 15000);
+  REQUIRE(f.rtos.captured.empty());
+
+  f.rtos.accept_queue_sends = true;
+  f.svc.tick(15001);
+  REQUIRE(f.rtos.captured.size() == 1);
+  CHECK(f.rtos.captured.front().type == EventType::WifiDisconnected);
+  CHECK(f.svc.next_deadline_ms() == 0);
+  f.svc.tick(15002);
+  CHECK(f.rtos.captured.size() == 1);
+}
+
 // ---------------------------------------------------------------------------
 // Runtime reconnect
 // ---------------------------------------------------------------------------
@@ -572,14 +628,17 @@ TEST_CASE("schedule_reconnect arms the reconnect timer reconnect_delay_ms out",
   CHECK(f.hal.connect_calls == 0);
 }
 
-TEST_CASE("schedule_reconnect arms the reconnect timer without saved networks",
-          "[go_wifi][reconnect][fallback]") {
+TEST_CASE("schedule_reconnect without saved networks never selects factory credentials",
+          "[go_wifi][reconnect][saved]") {
   Fixture f; // store empty
   f.rtos.set_now(1000);
 
   f.svc.schedule_reconnect();
 
   CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 1000 + 5000);
+  f.svc.tick(6000);
+  CHECK(f.hal.connect_calls == 0);
+  CHECK(f.rtos.has_event(EventType::WifiDisconnected));
 }
 
 TEST_CASE("tick fires the reconnect without resetting has_been_online", "[go_wifi][reconnect]") {
@@ -656,6 +715,61 @@ TEST_CASE("tick reconnects a fallback-only session without saving credentials",
   CHECK(f.hal.last_ssid == "airgradient");
   CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
   CHECK(f.svc.has_been_online());
+}
+
+TEST_CASE("normal runtime reconnect never uses factory Wi-Fi when saved networks disappear",
+          "[go_wifi][reconnect][saved]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+  f.hal.sta_disconnected_cb(/*WIFI_REASON_AUTH_EXPIRE*/ 2);
+  f.wifi.clear_networks();
+  f.rtos.captured.clear();
+
+  f.svc.schedule_reconnect();
+  f.svc.tick(5000);
+
+  CHECK(f.hal.connect_calls == 1); // only the original saved-network attempt
+  CHECK(f.hal.last_ssid == "saved");
+  CHECK(f.svc.has_been_online());
+  const auto *event = f.rtos.first_event(EventType::WifiDisconnected);
+  REQUIRE(event != nullptr);
+  CHECK(event->wifi_disconnect_reason == static_cast<uint8_t>(WifiDisconnectReason::no_ap_found));
+}
+
+TEST_CASE("manufacturing runtime reconnect retains factory credentials with saved networks present",
+          "[go_wifi][reconnect][fallback]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.try_default_fallback_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+  f.hal.sta_disconnected_cb(/*WIFI_REASON_AUTH_EXPIRE*/ 2);
+
+  f.svc.schedule_reconnect();
+  f.svc.tick(5000);
+
+  CHECK(f.hal.connect_calls == 2);
+  CHECK(f.hal.last_ssid == "airgradient");
+  CHECK(f.svc.has_been_online());
+  CHECK(f.svc.next_deadline_ms() == 0);
+}
+
+TEST_CASE("factory credential source does not leak across lifecycle boundaries",
+          "[go_wifi][reconnect][fallback][lifecycle]") {
+  Fixture f;
+  f.svc.try_default_fallback_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+
+  SECTION("fresh saved-network attempt") { f.svc.connect_with_saved_credentials(); }
+  SECTION("provisioning") { f.svc.start_provisioning(); }
+  SECTION("shutdown") { f.svc.shutdown(); }
+  SECTION("credential reset") { f.svc.clear_credentials(); }
+
+  const int connects_before = f.hal.connect_calls;
+  f.svc.schedule_reconnect();
+  f.svc.tick(5000);
+  CHECK(f.hal.connect_calls == connects_before);
 }
 
 TEST_CASE("next_deadline_ms returns the nearer of connect window and reconnect timer",

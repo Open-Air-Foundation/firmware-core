@@ -34,6 +34,16 @@
 
 static constexpr uint32_t TEST_OTA_WIFI_CHECK_INTERVAL_MS = 3'600'000;
 
+static uint32_t reboot_count = 0;
+static std::function<void()> during_reboot;
+
+extern "C" void __wrap__Z6rebootv() {
+  ++reboot_count;
+  if (during_reboot) {
+    during_reboot();
+  }
+}
+
 // ============================================================================
 // External test_spy state (defined in go_orchestrator_stubs.cpp)
 // ============================================================================
@@ -214,6 +224,7 @@ extern uint32_t wifi_stop_local_endpoint_count;
 extern bool wifi_tick_called;
 extern uint32_t wifi_next_deadline_ms;
 extern bool wifi_is_online;
+extern bool wifi_is_connecting;
 extern bool wifi_has_been_online;
 extern int wifi_rssi;
 extern bool wifi_schedule_reconnect_called;
@@ -741,6 +752,8 @@ struct TestFixture {
                  local_api,         serial_command,       portable_provisioner, stub_board,
                  ota_service,       accel_service} {
     test_spy::reset();
+    reboot_count = 0;
+    during_reboot = nullptr;
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
     _exp_delay = NAMED_ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
@@ -751,6 +764,7 @@ struct TestFixture {
   }
 
   ~TestFixture() {
+    during_reboot = nullptr;
     accel_service.stop();
     mock_rtos.queue_delete_impl(event_queue);
     RTOS::set_instance(nullptr);
@@ -5768,6 +5782,7 @@ TEST_CASE("PM sleep: on_sensor_data requests PM sleep in Stationary mode",
   PmSleepFixture f;
   f.settings.measure_interval_seconds = 60;
   f.settings.operating_mode = OperatingMode::Stationary;
+  test_spy::wifi_has_saved_networks = true; // keep provisioning from pausing sensors
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
 
@@ -5781,6 +5796,7 @@ TEST_CASE("PM sleep: on_sensor_data requests PM sleep in Stationary mode",
 
 TEST_CASE("PM sleep: mode change powers on and wakes PM", "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
+  test_spy::wifi_has_saved_networks = true;
   f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
@@ -6198,7 +6214,7 @@ TEST_CASE("Stationary entry with saved credentials calls connect_with_saved_cred
   CHECK(test_spy::wifi_static_ip_was_null); // settings.static_ip.ip == 0
 }
 
-TEST_CASE("Stationary entry without saved credentials calls try_default_fallback_credentials",
+TEST_CASE("Stationary entry without saved credentials opens BLE provisioning immediately",
           "[Orchestrator][stationary][entry]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -6207,8 +6223,11 @@ TEST_CASE("Stationary entry without saved credentials calls try_default_fallback
 
   A::change_mode(orch, OperatingMode::Stationary);
 
-  CHECK(test_spy::wifi_try_fallback_called);
+  CHECK_FALSE(test_spy::wifi_try_fallback_called);
   CHECK_FALSE(test_spy::wifi_connect_saved_called);
+  CHECK(test_spy::wifi_start_provisioning_called);
+  CHECK(test_spy::wifi_start_provisioning_transport == ProvisioningTransport::BleOnly);
+  CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
 }
 
 TEST_CASE("Stationary entry forwards static IP when settings.static_ip.ip != 0",
@@ -6267,7 +6286,8 @@ TEST_CASE("Cold-boot Stationary calls init_wifi_subsystem exactly once",
   orch.init(WakeCause::PowerOn);
 
   CHECK(f.stub_board.init_wifi_subsystem_calls == 1);
-  CHECK(test_spy::wifi_try_fallback_called);
+  CHECK(test_spy::wifi_start_provisioning_called);
+  CHECK_FALSE(test_spy::wifi_try_fallback_called);
 }
 
 TEST_CASE("Portable -> Stationary tears down BLE before bringing up Wi-Fi",
@@ -6786,18 +6806,23 @@ TEST_CASE("enter_stationary initializes both cloud runtime gates from active set
   CHECK_FALSE(test_spy::cloud_last_config_fetch_enabled);
 }
 
-TEST_CASE("enter_stationary without saved credentials shows fallback Info text",
+TEST_CASE("manufacturing entry uses factory Wi-Fi even with saved credentials",
           "[Orchestrator][session][bring_up]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_networks = false;
+  A::set_manufacturing_mode(orch, true);
+  test_spy::wifi_has_saved_networks = true;
 
   A::enter_stationary(orch);
 
   CHECK(f.ui_manager.current_screen() == Screen::Info);
   CHECK(test_spy::wifi_try_fallback_called);
+  CHECK_FALSE(test_spy::wifi_connect_saved_called);
+  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+  const auto values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(std::string(values.info_text) == "Trying default Wi-Fi...");
 }
 
 TEST_CASE("enter_stationary clears any pre-existing snackbar on entry",
@@ -6897,6 +6922,93 @@ TEST_CASE("bring-up disconnect shows failure Info before opening provisioning",
   CHECK(DisplayService::spy_flush_count >= 1);
   CHECK(test_spy::wifi_start_provisioning_called);
   CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
+}
+
+TEST_CASE("manufacturing startup failures wait for the connection window",
+          "[Orchestrator][manufacturing][wifi]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::enter_manufacturing_mode(orch);
+  test_spy::wifi_is_connecting = true;
+
+  for (const auto reason :
+       {WifiDisconnectReason::auth_failed, WifiDisconnectReason::no_ap_found,
+        WifiDisconnectReason::assoc_failed, WifiDisconnectReason::dhcp_failed,
+        WifiDisconnectReason::connection_lost, WifiDisconnectReason::unknown,
+        WifiDisconnectReason::handshake_failed, WifiDisconnectReason::ap_disconnected}) {
+    A::dispatch(orch, make_wifi_disconnected(reason));
+    CHECK(reboot_count == 0);
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_schedule_reconnect_called);
+    CHECK(f.ui_manager.current_screen() == Screen::Info);
+  }
+
+  test_spy::wifi_is_connecting = false;
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::requested_by_user));
+  CHECK(reboot_count == 0);
+  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+}
+
+TEST_CASE("manufacturing timeout paints and holds failure before reboot without persisting",
+          "[Orchestrator][manufacturing][wifi]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  FORBID_CALL(f.mock_config, commit());
+  A::enter_manufacturing_mode(orch);
+  DisplayService::spy_flush_count = 0;
+  bool held_failure = false;
+  auto check_failure = [&] {
+    CHECK(f.ui_manager.current_screen() == Screen::Info);
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    REQUIRE(values.info_text != nullptr);
+    CHECK(std::string(values.info_text) == "Wi-Fi connection failed");
+    CHECK(DisplayService::spy_last_screen == Screen::Info);
+    CHECK(DisplayService::spy_flush_count == 1);
+    CHECK(test_spy::wifi_shutdown_called);
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_schedule_reconnect_called);
+  };
+  REQUIRE_CALL(f.mock_rtos, delay_ms_impl(1000)).LR_SIDE_EFFECT({
+    check_failure();
+    CHECK(reboot_count == 0);
+    held_failure = true;
+  });
+  during_reboot = [&] {
+    check_failure();
+    CHECK(held_failure);
+  };
+
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::connection_lost));
+
+  CHECK(reboot_count == 1);
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+  CHECK_FALSE(test_spy::wifi_clear_credentials_called);
+}
+
+TEST_CASE("manufacturing after first IP keeps runtime reconnect even for a queued timeout",
+          "[Orchestrator][manufacturing][wifi][reconnect]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::enter_manufacturing_mode(orch);
+  test_spy::wifi_has_been_online = true;
+  test_spy::wifi_is_online = true;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+  test_spy::wifi_is_online = false;
+
+  for (const auto reason :
+       {WifiDisconnectReason::connection_lost, WifiDisconnectReason::auth_failed,
+        WifiDisconnectReason::no_ap_found, WifiDisconnectReason::assoc_failed,
+        WifiDisconnectReason::dhcp_failed, WifiDisconnectReason::unknown,
+        WifiDisconnectReason::handshake_failed, WifiDisconnectReason::ap_disconnected}) {
+    const int reconnects = test_spy::wifi_schedule_reconnect_count;
+    A::dispatch(orch, make_wifi_disconnected(reason));
+    CHECK(test_spy::wifi_schedule_reconnect_count == reconnects + 1);
+    CHECK(reboot_count == 0);
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_shutdown_called);
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
 }
 
 TEST_CASE("on_wifi_connected reconnect on Home arms the \"Wi-Fi connected\" snackbar",
