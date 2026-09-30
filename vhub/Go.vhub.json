@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "shake-refresh-20260923-2",
+  "rev": "go-wifi-mode-policy-20260930-2",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -383,18 +383,18 @@
       "category": "Stationary Networking",
       "sub_category": "Provisioning",
       "applies_to": ["V1"],
-      "description": "A fresh manufacturing-mode unit reconnects to the transient factory-default Wi-Fi fallback",
-      "expected_result": "With no saved credentials and a 2.4 GHz WPA2 AP named airgradient with password cleanair, short-press BOOT before onboarding. Stationary manufacturing mode shows \"Trying default Wi-Fi...\", associates within the 15-second fallback window, reaches Home, and never opens provisioning. Disable the AP until the disconnected Wi-Fi glyph appears and serial logs \"runtime link lost; scheduling reconnect\" plus \"runtime reconnect: attempting default fallback\". Restore the AP: within 15 seconds the device reconnects, shows \"Wi-Fi connected\", and logs \"wifi reconnected\" without opening provisioning. Remove the AP, perform a Power-button shutdown and cold start, then re-enter manufacturing mode: after the fallback window, provisioning opens and no saved-network entry for airgradient is present.",
-      "notes": "Use a dedicated factory-reset unit and an AP that can be fully disabled. Keep the AP unavailable through at least one runtime reconnect attempt, capture association records and serial throughout, and reset the unit after the case."
+      "description": "Manufacturing reconnects after a Wi-Fi drop, but restarts if the first connection fails",
+      "expected_result": "1. Turn on the factory Wi-Fi and briefly press BOOT at Getting Started. Go shows \"Trying default Wi-Fi...\", connects within 15 seconds, and reaches Home. 2. Turn that Wi-Fi off for 30 seconds. The Wi-Fi icon shows disconnected; Go keeps trying to reconnect without restarting or opening Wi-Fi setup. 3. Turn the Wi-Fi back on. Go reconnects within 15 seconds and shows \"Wi-Fi connected\". 4. Turn the Wi-Fi off again, power Go off and on, then briefly press BOOT. After the 15-second connection timeout, Go shows \"Wi-Fi connection failed\" for one second after the display finishes updating, then restarts to Getting Started. No Wi-Fi setup page appears. 5. Wait 30 seconds without pressing BOOT: Go stays at Getting Started. Press BOOT again to confirm a new manufacturing attempt starts. Repeat the failed-start check with the factory Wi-Fi on but its password changed; the result is the same.",
+      "notes": "Setup: use a test unit at Getting Started with no saved networks. Factory Wi-Fi means a 2.4 GHz WPA2 network named airgradient with password cleanair. Turn the network itself off, not just its internet connection. Record the screen and serial logs; allow extra time for the e-paper refresh. The timeout log is \"manufacturing Wi-Fi timed out; showing failure before reboot\". Also repeat entry with an unrelated saved network: Go must still choose factory Wi-Fi. Check that manufacturing does not save the factory credentials and that existing production corrections survive the timeout restart. Restore the factory password after testing."
     },
     {
       "id": "stationary.provisioning.first-connect",
       "category": "Stationary Networking",
       "sub_category": "Provisioning",
       "applies_to": ["V1"],
-      "description": "First entry into Stationary mode provisions Wi-Fi and persists the network",
-      "expected_result": "With the fallback AP absent, Stationary shows \"Trying default Wi-Fi...\" and then, within 20 seconds, standalone BLE provisioning advertises AirGradient Go <last4> with manufacturer data P-1PSG#<serial>. Encrypted DIS reads the same model, serial, and firmware after Just Works pairing, without deleting the existing Portable bond. Submitting the recorded 2.4 GHz credentials changes the display to Connecting, BLE Provisioning Credentials/Status notifies status=0 within 30 seconds, shows \"Connected! <DHCP IP>\", and reaches Home. After cold reboot, Stationary reconnects to the same SSID without provisioning.",
-      "notes": "Use the approved release provisioning client and record its name/version, a bonded Portable client, and a controllable WPA2 AP. BLE Provisioning Credentials/Status status=0 proves association and IP only. Restore the prior mode or factory-reset after the case."
+      "description": "Normal Stationary mode uses Wi-Fi setup and saved networks, never automatic factory Wi-Fi",
+      "expected_result": "1. With no saved networks, complete Getting Started and select Stationary mode. Go opens app Wi-Fi setup directly, without showing \"Trying default Wi-Fi...\" or joining factory Wi-Fi. 2. Use the provisioning app to save the test Wi-Fi. Go shows Connecting, then \"Connected!\" with an IP address, and reaches Home. The app reports success within 30 seconds. 3. Turn only the test Wi-Fi off for 30 seconds. Go keeps trying the saved network without restarting, opening setup, or joining factory Wi-Fi. Turn the test Wi-Fi back on and confirm Go reconnects. 4. Power Go off and on with both networks available. It reconnects to the saved test Wi-Fi without setup. 5. Turn the test Wi-Fi off and power Go off and on again. The initial saved-network connection fails, Go shows the failure reason, then opens Wi-Fi setup. It never tries factory Wi-Fi during any step.",
+      "notes": "Setup: use two independently controlled 2.4 GHz WPA2 networks. Keep factory Wi-Fi (airgradient / cleanair) on throughout; give the test Wi-Fi a different name. Use the approved provisioning app and record its version. Turn off the test network itself, not just its internet connection. Check serial and router connection logs to confirm factory Wi-Fi is never attempted or joined. Retain the existing BLE checks: AirGradient Go <last4> advertisement, P-1PSG#<serial> manufacturer data, correct model/serial/firmware after pairing, the existing Portable bond preserved, and provisioning status=0 on success. That status confirms Wi-Fi connection and an IP address, not Cloud delivery. Restore both networks and the prior operating mode afterward."
     },
     {
       "id": "stationary.provisioning.portal-success",
