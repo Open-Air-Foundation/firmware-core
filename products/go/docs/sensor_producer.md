@@ -38,7 +38,7 @@ of which sensors are wired — that is the product wiring layer's responsibility
 |---|---|
 | `start()` / `stop(sleep_pm)` | Manage the producer task and PM shutdown policy |
 | `request_measurement(iterations, groups, origin = MeasurementOrigin::Scheduled)` | Request readings tagged as scheduled or manual refresh |
-| `request_prepare()` | Wake PM, run blocking warmup, and report preparation boundaries |
+| `request_prepare()` | Wake PM, schedule PM-only warmup steps, and report preparation boundaries |
 | `request_pm_sleep()` | Sleep PM and report completion before the orchestrator isolates the bus |
 | `request_self_test()` | Run the Hardware Test sensor sweep |
 
@@ -105,7 +105,7 @@ sensor_producer.start();
 sensor_producer.request_measurement(1, SensorGroup::All);  // single iteration, all sensors
 
 // Orchestrator triggers PM warmup after powering on the sensor via GPIO:
-sensor_producer.request_prepare();  // blocks task for ~10 s warmup
+sensor_producer.request_prepare();  // schedules ~10 s of PM-only warmup
 
 // BLE, local HTTP, or UI requests CO2 calibration asynchronously:
 sensor_producer.request_co2_calibration();
@@ -147,9 +147,11 @@ request; a scheduled measurement reused for a shake keeps `Scheduled`.
 Both origins update current readings, while only `Scheduled` writes chart
 cache and route points.
 
-At boot and for `request_prepare()`, the producer posts `PmPreparationStarted`,
-calls `pm_wake()` and blocking `warmup()`, then posts `PmPrepared`.
-`request_pm_sleep()` posts `PmSensorAsleep` after the sleep call. These events
+At startup, the producer posts `PmPreparationStarted`, calls `pm_wake()` and
+blocking `warmup()` to condition the gas sensor, then posts `PmPrepared`.
+Subsequent `request_prepare()` calls report the same boundaries while scheduling
+PM-only warmup steps alongside gas sampling. `request_pm_sleep()` cancels any
+active preparation and posts `PmSensorAsleep` after the sleep call. These events
 report operation boundaries, not guaranteed sensor validity. Measurement and
 PM boundary posts wait for central queue space. Calibration completion keeps
 its existing zero-wait delivery.
@@ -210,23 +212,42 @@ converts the indefinite `task_notify_wait` into a timeout-driven loop so
 the Sensirion algorithm is fed at a fixed cadence (Kconfig-configurable,
 default 10 s) independent of the measurement interval.
 
-```text
-SensorProducer::run():
-  warmup()
-  sampler_enabled = has_tvoc_nox_sensor() && configure_tvoc_nox_index(TICK_MS)
-
-  while _running:
-    timeout = time_until_next_tick if sampler_enabled else UINT32_MAX
-    notified = task_notify_wait(&notify_value, timeout)
-
-    if !_running: break
-
-    if notified:
-      dispatch calibration / prepare / PM sleep / self-test / measurement
-
-    if sampler_enabled && tick_due:
-      handle_sampler_tick()
+```mermaid
+flowchart TD
+    Startup[Startup warmup and sampler configuration] --> Wait
+    Wait[Wait for notification or earliest active deadline] --> Running{Still running?}
+    Running -->|No| Exit[Exit loop]
+    Running -->|Yes| Notify{Notification received?}
+    Notify -->|Yes| Dispatch[Dispatch handler]
+    Notify -->|No| Gas
+    Dispatch --> Gas{Gas sample due?}
+    Gas -->|Yes| Sample[Read gas and update cached indexes]
+    Gas -->|No| PM
+    Sample --> PM[Advance due PM warmup step or report completion]
+    PM --> Wait
 ```
+
+While PM preparation is active, the wait timeout includes its next discard-read
+or iteration-completion deadline, even when no gas sensor is wired. If both
+sensors are due, the gas sample runs first.
+
+#### `handle_prepare()` And `handle_pm_warmup_tick()`
+
+`handle_prepare()` wakes PM, sets the remaining iteration count using the same
+duration / interval calculation as `SensorManager::warmup()`, and schedules the
+first step. It ignores duplicate prepare requests while warmup is active.
+The task loop calls `warmup_step(false)` once per iteration, discarding PM
+readings without repeating SGP41 conditioning or advancing its algorithm.
+After the final iteration's pacing interval, it posts `PmPrepared` exactly once.
+Failed discard reads do not abort preparation.
+
+| Symbol | Default | Purpose |
+|---|---|---|
+| `CONFIG_SENSOR_WARMUP_DURATION_MS` | `10000` | Divided by the warmup interval to determine the iteration count |
+| `CONFIG_SENSOR_WARMUP_INTERVAL_MS` | `1000` | Interval between PM discard reads during preparation |
+
+Sleep cancels active preparation without posting `PmPrepared`. Restarting the
+producer clears pending preparation and performs the normal startup warmup.
 
 #### `handle_measurement(notify_value)`
 
@@ -279,8 +300,9 @@ RTOS::task_notify_send(_task_handle, value);
 ```
 
 All requests share one task-notification value with overwrite semantics. There
-is no request FIFO, busy response, in-flight calibration owner, or duplicate
-gate. A new request replaces any unconsumed measurement, prepare, sleep,
+is no request FIFO, busy response, or in-flight calibration owner. Duplicate
+prepare requests are ignored once preparation is active. A new request replaces
+any unconsumed measurement, prepare, sleep,
 self-test, or calibration request. While a handler is blocking, at most the
 latest request remains latched for the next loop iteration; repeated requests
 can therefore coalesce and do not guarantee one completion per call.
@@ -291,9 +313,9 @@ PM completion event before requesting a refresh measurement, and reuses an
 already-requested measurement instead of sending another. The notification
 transport remains unchanged; there is no command queue.
 
-PM preparation still blocks this task in `warmup()`. Gas-index sampler ticks
-run between command handlers, not during warmup. Refresh results use the
-latest sampler cache when the sampler is active.
+PM preparation after startup advances between command handlers, allowing
+gas-index sampler ticks throughout warmup. Refresh results use the latest
+sampler cache when the sampler is active. CO2 calibration remains blocking.
 
 ### Task Duration
 
