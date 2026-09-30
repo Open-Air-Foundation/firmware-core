@@ -259,11 +259,13 @@ stateDiagram-v2
     Ready --> Ready: Measurement requested and completed
 ```
 
-The producer reports `PmPreparationStarted` before `pm_wake()` + blocking
-`warmup()` (about 10 s by default), and `PmPrepared` afterward. The orchestrator
-waits for preparation before requesting a refresh measurement. Preparation
-completion does not guarantee a valid reading; normal field validation still
-applies.
+The producer reports `PmPreparationStarted` before `pm_wake()` and schedules
+PM-only discard reads in its task loop during warmup (about 10 s by default).
+Gas-index sampling continues during this preparation. `PmPrepared` reports
+completion; the orchestrator waits for it before requesting a refresh
+measurement. Startup still uses blocking warmup to condition the gas sensor
+before enabling the sampler. Preparation completion does not guarantee a valid
+reading; normal field validation still applies.
 
 ### Eligibility
 

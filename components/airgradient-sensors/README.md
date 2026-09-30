@@ -175,8 +175,7 @@ measurement:
 
 `warmup_step()` performs one cycle without pacing; its caller controls timing.
 Passing `condition_gas=false` skips TVOC/NOx conditioning while retaining the
-PM discard reads. The blocking `warmup()` uses the default `true`. Go's sensor
-producer continues to use that blocking warmup, including after PM wake.
+PM discard reads. The blocking `warmup()` uses the default `true`.
 
 ## Configuration
 

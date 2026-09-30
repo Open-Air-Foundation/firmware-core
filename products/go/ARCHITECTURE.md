@@ -350,27 +350,19 @@ In Portable and Stationary modes (always-awake), the producer also drives
 a gas-index sampler that feeds the Sensirion algorithm at a fixed cadence
 (default 10 s) independent of the measurement interval.
 
-```text
-Sensor Task:
-  warmup()
-  configure gas-index sampler (if SGP41 is wired)
-
-  loop:
-    Wait for task notification (with sampler timeout when active)
-
-    If notified:
-      handle_calibration / handle_prepare / handle_measurement
-
-    If sampler tick due:
-      handle_sampler_tick → read SGP41, advance algorithm, cache result
-```
+The task performs startup warmup and configures the gas-index sampler before
+entering its loop. Each iteration waits for a notification or the earliest
+active deadline: a gas sample or a PM warmup step. It dispatches the notification,
+services any due gas sample, then advances PM warmup. See the
+[task loop](docs/sensor_producer.md#task-loop) for the control flow.
 
 The orchestrator controls when to measure by sending a task notification
 that encodes the iteration count (always 1), measurement origin, and which sensor groups
 to poll (`SensorGroup::PM`, `SensorGroup::Other`, `SensorGroup::TvocNox`,
 or `SensorGroup::All`). When the sampler is active, the producer strips
 `TvocNox` from measurement masks and splices its cached TVOC/NOx into
-the result. PM preparation remains blocking and reports start/completion events.
+the result. After startup, PM preparation uses timed PM-only warmup steps and
+reports start/completion events while gas-index sampling continues.
 The orchestrator tracks PM state and one outstanding measurement so shake
 refresh can reuse a scheduled request or wait for PM preparation before sending
 its own request. See [Sensor Producer](docs/sensor_producer.md) for details.

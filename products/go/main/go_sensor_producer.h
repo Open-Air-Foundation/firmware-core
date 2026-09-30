@@ -77,8 +77,8 @@ public:
   void request_co2_calibration();
 
   /// Trigger PM sensor warmup after a power cycle.
-  /// Non-blocking: returns immediately.  The task runs blocking
-  /// SensorManager::warmup() (~10 s) in its own context.
+  /// Non-blocking: the task advances PM-only warmup steps (~10 s total)
+  /// alongside gas-index sampling in its run loop.
   ///
   /// The orchestrator sends this notification `CONFIG_SENSOR_WARMUP_DURATION_MS`
   /// before the next measurement deadline.  The subsequent measurement
@@ -130,6 +130,11 @@ private:
   // A flag that indicate TVOC and NOx sampling enabled or not
   bool _sampler_enabled = false;
 
+  /// PM preparation after startup shares the task loop with the gas sampler.
+  bool _pm_warmup_active = false;
+  int _pm_warmup_iterations_remaining = 0;
+  uint32_t _next_pm_warmup_step_ms = 0;
+
   /// Measurement notifications use bits 0-7 for iterations and 8-15 for groups.
   static constexpr uint32_t NOTIFY_REFRESH = 1u << 16;
 
@@ -167,5 +172,6 @@ private:
   void handle_tvoc_nox_learning_offsets();
   void handle_measurement(uint32_t notify_value);
   void handle_sampler_tick();
+  void handle_pm_warmup_tick();
   void post_pm_event(EventType type);
 };
