@@ -51,12 +51,12 @@ SensorManager::SensorManager(Sensors &sensor) : _sensors(sensor) {}
 
 SensorManager::~SensorManager() {}
 
-void SensorManager::warmup_step() {
+void SensorManager::warmup_step(bool condition_gas) {
   if (!_sensors.tvoc_nox && !_sensors.pms_a && !_sensors.pms_b) {
     return;
   }
 
-  if (_sensors.tvoc_nox) {
+  if (condition_gas && _sensors.tvoc_nox) {
     if (!_sensors.tvoc_nox->run_conditioning()) {
       AG_LOGW(TAG, "TVOC/NOx conditioning failed");
     }

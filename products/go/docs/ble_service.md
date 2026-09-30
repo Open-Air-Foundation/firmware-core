@@ -1170,7 +1170,7 @@ mechanism from `shutdown()` (see the disconnect-notice table under
     Notify["ble_service.notify_measures<br/>(always set_value; notify only when connected)"]
 
     Event --> Raw
-    Raw --> Cache
+    Raw -->|Scheduled origin only| Cache
     Raw --> Notify
     Raw --> Corrected
     Corrected --> Display

@@ -101,6 +101,23 @@ User navigation is handled through three touch areas and physical buttons.
 Common actions include opening the menu, changing settings, starting or stopping
 tracking, confirming actions, and locking or unlocking the interface.
 
+### Shake-To-Refresh
+
+While Go is awake, shake it side to side using a natural forearm swing, roughly
+three left/right pairs in about one second. An accepted shake gives a short
+beep when the buzzer is enabled and requests fresh readings. If a regular
+measurement is already requested, its result satisfies the refresh.
+
+The display shows persistent `Waiting...`, `Preparing...`, or `Measuring...`
+progress until the result arrives. Progress remains visible when opening menus,
+and ordinary snackbar messages cannot replace it. Further shakes while refresh
+is pending do not queue more measurements or beep again.
+
+Manual refresh updates current readings without adding chart-history samples
+or route points, changing the regular measurement timer, or triggering an extra
+cloud upload. PM warmup can delay the result. Shake-to-wake from deep sleep is
+not implemented.
+
 ## Lock And Power Button Behavior
 
 The device has a lock state so accidental touches do not change settings while
@@ -262,6 +279,7 @@ Buzzer and melody features:
 - Buzzer on/off setting.
 - Boot sound pattern.
 - First-time welcome chime.
+- Short acknowledgment beep for an accepted shake refresh.
 - Play Melody under Settings > Hardware Test.
 - Built-in melody choices such as Chime and Tetris.
 - Synchronized buzzer and LED effects for selected melodies.

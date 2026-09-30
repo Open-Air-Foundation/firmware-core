@@ -18,12 +18,13 @@
 // Defaults to RUN_TEST_SENSORS when nothing is defined.
 // ============================================================
 // #define RUN_TEST_SENSORS
+#define RUN_TEST_ACCEL
 // #define RUN_TEST_AIRGRADIENT_CLIENT
 // #define RUN_TEST_BLE
 // #define RUN_TEST_CONFIG
 // #define RUN_TEST_GPIO
 // #define RUN_TEST_HTTP_SERVER
-#define RUN_TEST_LOCAL_SERVER
+// #define RUN_TEST_LOCAL_SERVER
 // #define RUN_TEST_NAND_STORAGE
 // #define RUN_TEST_OTA
 // #define RUN_TEST_PAYLOAD_CACHE
@@ -37,11 +38,15 @@
     !defined(RUN_TEST_NAND_STORAGE) && !defined(RUN_TEST_OTA) &&                                   \
     !defined(RUN_TEST_PAYLOAD_CACHE) && !defined(RUN_TEST_PROVISIONING) &&                         \
     !defined(RUN_TEST_SERIAL) && !defined(RUN_TEST_TOUCH) && !defined(RUN_TEST_WIFI) &&            \
-    !defined(RUN_TEST_HTTP_SERVER) && !defined(RUN_TEST_LOCAL_SERVER)
+    !defined(RUN_TEST_HTTP_SERVER) && !defined(RUN_TEST_LOCAL_SERVER) && !defined(RUN_TEST_ACCEL)
 #define RUN_TEST_SENSORS
 #endif
 
 // --- Conditional test headers --------------------------------
+#ifdef RUN_TEST_ACCEL
+#include "test_accel.h"
+#endif
+
 #ifdef RUN_TEST_SENSORS
 #include "test_sensors.h"
 #endif
@@ -106,7 +111,8 @@
 #endif
 
 // I2C is only initialised when the selected test requires it.
-#if defined(RUN_TEST_SENSORS) || defined(RUN_TEST_SERIAL) || defined(RUN_TEST_TOUCH)
+#if defined(RUN_TEST_SENSORS) || defined(RUN_TEST_SERIAL) || defined(RUN_TEST_TOUCH) ||            \
+    defined(RUN_TEST_ACCEL)
 #define NEEDS_I2C 1
 #endif
 
@@ -121,6 +127,8 @@ static bool init_nvs();
 extern "C" void app_main(void) {
 #ifdef RUN_TEST_SENSORS
   ESP_LOGI(TAG, "=== Test: SENSORS ===");
+#elif defined(RUN_TEST_ACCEL)
+  ESP_LOGI(TAG, "=== Test: ACCEL ===");
 #elif defined(RUN_TEST_BLE)
   ESP_LOGI(TAG, "=== Test: BLE ===");
 #elif defined(RUN_TEST_CONFIG)
@@ -191,6 +199,9 @@ extern "C" void app_main(void) {
   // ---- Run the selected test --------------------------------
 #ifdef RUN_TEST_SENSORS
   run_test_sensors(i2c_bus);
+
+#elif defined(RUN_TEST_ACCEL)
+  run_test_accel(i2c_bus, gpio::native::hal);
 
 #elif defined(RUN_TEST_BLE)
 #ifdef CONFIG_BT_NIMBLE_ENABLED

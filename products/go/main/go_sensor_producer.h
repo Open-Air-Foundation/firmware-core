@@ -66,7 +66,9 @@ public:
   /// @param iterations Number of averaging iterations (minimum 1 enforced
   ///                   inside the task).
   /// @param groups     Which sensor groups to poll.
-  void request_measurement(uint8_t iterations, SensorGroup groups);
+  /// @param origin     Purpose of this measurement, carried into its result.
+  void request_measurement(uint8_t iterations, SensorGroup groups,
+                           MeasurementOrigin origin = MeasurementOrigin::Scheduled);
 
   /// Trigger a CO2 background calibration.
   /// Non-blocking: returns immediately.  The task runs the blocking
@@ -80,8 +82,7 @@ public:
   ///
   /// The orchestrator sends this notification `CONFIG_SENSOR_WARMUP_DURATION_MS`
   /// before the next measurement deadline.  The subsequent measurement
-  /// notification latches while warmup is running and is consumed
-  /// immediately after warmup completes.
+  /// request waits for PmPrepared before notifying the worker.
   void request_prepare();
 
   /// Put the PM sensor into low-power sleep, then post PmSensorAsleep so the
@@ -129,6 +130,9 @@ private:
   // A flag that indicate TVOC and NOx sampling enabled or not
   bool _sampler_enabled = false;
 
+  /// Measurement notifications use bits 0-7 for iterations and 8-15 for groups.
+  static constexpr uint32_t NOTIFY_REFRESH = 1u << 16;
+
   /// Sentinel notification value that triggers calibration instead of measurement.
   static constexpr uint32_t NOTIFY_CALIBRATION = UINT32_MAX;
 
@@ -163,4 +167,5 @@ private:
   void handle_tvoc_nox_learning_offsets();
   void handle_measurement(uint32_t notify_value);
   void handle_sampler_tick();
+  void post_pm_event(EventType type);
 };

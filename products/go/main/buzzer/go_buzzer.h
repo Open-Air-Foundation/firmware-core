@@ -47,7 +47,10 @@ public:
   /// Single tone at given frequency for given duration.
   void beep(uint32_t freq_hz, uint32_t duration_ms);
 
-  /// Enable or disable sound output. When disabled, play()/beep() are
+  /// Acknowledge an accepted shake/refresh request with a short beep.
+  void acknowledge_refresh();
+
+  /// Enable or disable sound output. When disabled, sound requests are
   /// silently dropped (stop() still works).
   void set_enabled(bool enabled);
 

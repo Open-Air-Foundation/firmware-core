@@ -21,7 +21,7 @@ synchronized buzzer/LED playback.
 | `products/go/main/go_orchestrator.h` / `go_orchestrator.cpp` | Flow state machines, actuator drives, AQ trigger, GPS/accel polling, cues, FG-learning arm |
 | `products/go/main/go_sensor_producer.h` / `go_sensor_producer.cpp` | `request_self_test()` — bulk AQ sweep in the producer task |
 | `products/go/main/go_events.h` | `SensorTestResults`, `EventType::SensorTestDone` |
-| `products/go/main/accel/` | LIS2DH12 accelerometer HAL + driver + pure sanity helpers |
+| `products/go/main/accel/` | LIS2DH12 driver, shared worker, shake detector, and pure sanity helpers |
 
 ## Dependencies
 
@@ -33,7 +33,7 @@ synchronized buzzer/LED playback.
 | `BuzzerService` | `buzzer/go_buzzer.h` | Actuator tone + success/alert cues |
 | `SensorProducer` | `go_sensor_producer.h` | `request_self_test()` runs the AQ sweep as the single I2C bus owner |
 | `GpsService` | `gps/gps_service.h` | Ungates the receiver + fast posting for the live GPS screen |
-| `AccelSensor` (LIS2DH12) | `accel/accel_sensor.h` | Live X/Y/Z + WHO_AM_I; created via `GoBoard::new_accel_sensor()` |
+| `AccelService` | `accel/accel_service.h` | Worker-owned configuration and live X/Y/Z + WHO_AM_I reads |
 | `accel_sanity.h` | `accel/accel_sanity.h` | Pure identity + rest-magnitude classification |
 | `ConfigStore` | `airgradient-config` | FG Learning writes `FactorySettings` before reboot |
 
@@ -49,7 +49,7 @@ orchestrator consumes. Opening the submenu is internal navigation
 | `PeripheralStepPass` / `PeripheralStepFail` | Actuator step Pass/Fail | `peripheral_step_result()` — record + advance |
 | `PeripheralTestExit` | Summary tap | `finish_peripheral_test()` — restore hardware |
 | `OpenGpsTest` | GPS Test row | `start_gps_test()` — ungate receiver, fast posting, TTFF timer |
-| `OpenAccelTest` | Accel Test row | `start_accel_test()` — create driver, sample, classify, cue |
+| `OpenAccelTest` | Accel Test row | `start_accel_test()` — request test mode, sample, classify, cue |
 | `ArmFgLearning` | FG Learning confirm → Yes | Write `FactorySettings` + reboot into `FgLearningRunner` |
 
 Cross-service hooks used by the flows:
@@ -57,7 +57,9 @@ Cross-service hooks used by the flows:
 | Method | Source | Purpose |
 |---|---|---|
 | `SensorProducer::request_self_test()` | `go_sensor_producer.h` | Kick the AQ sweep; posts one `SensorTestDone` |
-| `GoBoard::new_accel_sensor()` | `go_board.h` | Create + init the LIS2DH12 on the shared I2C bus; `nullptr` when absent |
+| `AccelService::begin_hardware_test(out)` | `accel/accel_service.h` | Select unfiltered ±4 g configuration and return the first sample |
+| `AccelService::read_hardware_test(out)` | `accel/accel_service.h` | Poll the live test sample through the worker |
+| `AccelService::end_hardware_test()` | `accel/accel_service.h` | Restore filtered interrupt capture |
 
 See [`go_ui.h`](../main/go_ui.h) and [`go_orchestrator.h`](../main/go_orchestrator.h)
 for full signatures.
@@ -112,6 +114,10 @@ carrying `SensorTestResults`. The summary cue fires on the overall result —
 **PASS**: green back LED + `PATTERN_CHARGE_DONE`; **FAIL**: red back LED +
 `PATTERN_UNPLUG`. On exit the LED/buzzer are restored to persisted settings.
 
+`on_sensor_test_done()` clears `_measurement_pending` before checking the test
+screen state, allowing the regular scheduler to continue if the self-test
+notification replaced a pending measurement request.
+
 ### GPS Test
 
 `start_gps_test()` starts a TTFF timer from screen entry, ungates the receiver
@@ -133,9 +139,15 @@ See [`gps_service.md`](gps_service.md) for the receiver lifecycle.
 
 ### Accelerometer Test
 
-`start_accel_test()` lazily creates the LIS2DH12 (kept for the process lifetime),
-takes one sample, classifies it, and fires a one-shot cue. A 500 ms poll from
+The application creates the LIS2DH12 and starts `AccelService` at startup.
+`start_accel_test()` asks that worker to switch from filtered motion capture
+to unfiltered ±4 g test readings, classifies the first sample, and fires a
+one-shot cue. A 500 ms poll from
 `check_timers()` refreshes the live X/Y/Z while the screen is open (no re-cue).
+All test configuration and reads use synchronous worker requests; the
+orchestrator does not access the driver directly. On exit, the worker restores
+interrupt capture and honors any remaining shake cooldown. See
+[Accelerometer Service](accel_service.md).
 
 ```text
 WHO_AM_I -> read X/Y/Z -> rest-magnitude (~1 g) -> classify
@@ -163,11 +175,10 @@ See [`fg_learning.md`](fg_learning.md) for the runner.
 
 ## Edge Cases / Errors
 
-- **Absent accelerometer.** `new_accel_sensor()` returns `nullptr` on init
-  failure (absent / wrong device / bus error). The screen then shows
-  `WHO_AM_I: 0x00 (BAD)`, `X/Y/Z/|a|: --`, `Result: FAIL`, with the alert cue.
-  Entry re-probes each time, so a late/intermittent part is picked up on a later
-  entry.
+- **Unavailable accelerometer worker.** Test requests fail and leave an invalid
+  reading, producing the FAIL screen and alert cue. Opening the screen does
+  not create or reprobe a sensor. A failed test configuration keeps the worker
+  available for commands; a failed restore leaves motion capture unavailable.
 - **Live accel re-classification.** The magnitude check assumes the device is at
   rest, so moving it during the test can flip Result PASS↔FAIL on the next poll.
   The buzzer/LED cue fires only once (on entry); later polls refresh the screen

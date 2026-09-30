@@ -12,6 +12,7 @@ portable air quality monitor with GPS, e-paper display, BLE, and battery.
 - **Temp / Humidity** — SHT40 on V1, then fallback from CO2 and pressure
   sensors
 - **Pressure** — Infineon DPS368
+- **Motion** — ST LIS2DH12 accelerometer (interrupt-driven shake detection)
 - **Battery** — TI BQ25629 charger IC; TI BQ27427 Impedance Track fuel gauge
   (V1 board only)
 
@@ -50,8 +51,9 @@ PMID → SPS30 VDD; on V1 it only isolates the SPS30 from the shared I2C
 bus — the sensor stays powered by always-on PMID.
 
 On V1 the ~50 mA fan current is cut between measurements by the SPS30's
-native **Sleep** command (`0x1001`), not the GPIO. After each measurement
-the orchestrator calls `request_pm_sleep()`; the sensor producer sleeps
+native **Sleep** command (`0x1001`), not the GPIO. When enough time remains
+before the next scheduled measurement, the orchestrator calls
+`request_pm_sleep()`; the sensor producer sleeps
 the SPS30 and posts `PmSensorAsleep`, after which the orchestrator
 isolates the bus with `set_pm_power(false)`. The pre-wake path connects
 the bus (`set_pm_power(true)`) then wakes + warms via `request_prepare()`.
@@ -174,6 +176,8 @@ partition table, and merged factory-flash binary.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — boot paths, event model, module
   structure
 - [`feature_overview.md`](feature_overview.md) — product-facing feature summary
+- [`docs/accel_service.md`](docs/accel_service.md) — interrupt-burst shake
+  detection, cooldown, and shared Hardware Test access
 - [`docs/`](docs) — per-service implementation notes (BLE, cloud, display,
   GPS, input, Local Server, orchestrator, OTA, power, sensor producer,
   settings, storage, UI, Wi-Fi)

@@ -14,11 +14,14 @@
 
 enum class EventType : uint8_t {
   // --- Producer events ---
-  SensorDataReady, // payload: MeasuresAGo
-  PmSensorAsleep,  // no payload (PM sleep done; orchestrator may isolate now)
-  SensorTestDone,  // payload: SensorTestResults sensor_test_results (bulk AQ self-test)
-  GpsFixUpdate,    // payload: GpsData
-  InputPress,      // payload: InputEventData
+  SensorDataReady,      // payload: SensorEventData
+  PmPreparationStarted, // no payload (PM warmup started)
+  PmPrepared,           // no payload (PM warmup finished)
+  PmSensorAsleep,       // no payload (PM sleep done; orchestrator may isolate now)
+  SensorTestDone,       // payload: SensorTestResults sensor_test_results (bulk AQ self-test)
+  GpsFixUpdate,         // payload: GpsData
+  InputPress,           // payload: InputEventData
+  ShakeDetected,        // payload: uint32_t shake_detected_ms (monotonic uptime)
 
   // --- System events ---
   InactivityTimeout, // no payload
@@ -68,6 +71,13 @@ enum class EventType : uint8_t {
 
 // --- Event payload structs ---
 
+enum class MeasurementOrigin : uint8_t { Scheduled, Refresh };
+
+struct SensorEventData {
+  MeasuresAGo measures{};
+  MeasurementOrigin origin = MeasurementOrigin::Scheduled;
+};
+
 struct InputEventData {
   InputSource source;
   InputType type;
@@ -106,9 +116,10 @@ struct Event {
   EventType type;
 
   union {
-    MeasuresAGo sensor_data;                 // SensorDataReady
+    SensorEventData sensor_data;             // SensorDataReady
     GpsData gps_data;                        // GpsFixUpdate (~68 bytes)
     InputEventData input;                    // InputPress (2 bytes)
+    uint32_t shake_detected_ms;              // ShakeDetected
     OperatingMode mode_change;               // UserChangeMode (1 byte)
     WakeEventData wake;                      // WakeFromSleep (1 byte)
     bool gps_enabled;                        // UserToggleGps (1 byte)

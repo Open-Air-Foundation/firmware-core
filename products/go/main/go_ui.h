@@ -207,7 +207,10 @@ public:
 
   /// Show a snackbar message. Duration is armed on the next
   /// clear_expired_snackbar() call (3 seconds from that point).
-  void show_snackbar(const char *text);
+  /// Persistent messages stay on Home and menus; only persistent=true calls
+  /// can replace or clear them (text=nullptr clears).
+  void show_snackbar(const char *text, bool persistent = false);
+  bool snackbar_persistent() const;
 
   /// Clear snackbar if expired. Called by orchestrator before build_values.
   void clear_expired_snackbar(uint32_t now_ms);

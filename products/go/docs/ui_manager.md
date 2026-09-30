@@ -62,7 +62,8 @@ on-screen password line agree.
 | `sync_tracking_state(state)` | Refresh the cached tracking enum; return from TrackingMenu when the session becomes Idle. |
 | `current_screen()` | Read current screen. |
 | `is_on_menu_screen()` | True when the current screen is a menu-navigation screen (MainMenu, TrackingMenu, Settings, Operations, DisplayTouch, SettingsChoice, TagList, Confirm, About) or `GettingStarted`. Used by the orchestrator to suppress background display updates. |
-| `show_snackbar(text)` | Show a 3-second snackbar message. Pass `nullptr` to clear (used by the session-entry preamble). Snackbars never render on `Info` / `Provisioning` / `ProvisioningConfirm`. |
+| `show_snackbar(text, persistent = false)` | Show a 3-second message, or persistent text until explicitly cleared. A persistent message ignores ordinary replacement and clear calls. |
+| `snackbar_persistent()` | True when the buffer contains text with no expiry deadline. |
 | `clear_expired_snackbar(now_ms)` | Expire stale snackbar. Call before `build_values`. |
 | `sync_settings(settings)` | Synchronise internal state from persisted `GoSettings`, retaining exact measurement-interval seconds. Called by the orchestrator on boot and after settings activation. |
 | `apply_to_settings(settings)` | Convert internal state back to `GoSettings` field values without normalizing a custom measurement interval. Reverse of `sync_settings`. |
@@ -301,6 +302,20 @@ an unrelated UI setting therefore preserves an active custom interval.
    call, then clears when expired
 3. `build_values()` sets `v.snackbar_text` if the snackbar is active
 
+`show_snackbar(text, true)` creates a persistent message with no expiry.
+While it is active, ordinary `show_snackbar(text)` calls, including
+`show_snackbar(nullptr)`, are ignored rather than queued. Another persistent
+call can update the text; `show_snackbar(nullptr, true)` explicitly clears it.
+The `true` argument allows the clear through the priority guard; it does not
+leave an empty persistent message.
+
+The orchestrator owns refresh wording (`Waiting...`, `Preparing...`,
+`Measuring...`) and clears it on completion or cancellation. Persistent
+progress renders on Home and menu screens while the display is on and survives
+menu navigation. Refresh progress changes and completion explicitly redraw
+menus; ordinary background updates retain their existing suppression.
+Pairing and setup screens do not display persistent progress.
+
 ## Stationary Networking Surface
 
 The Stationary setup session uses three screens that the orchestrator
@@ -387,7 +402,8 @@ The switch question describes the action the user is about to take
 ### Snackbar Suppression on Session Screens
 
 `build_values()` forces `v.snackbar_text = nullptr` whenever the
-current screen is `Info`, `Provisioning`, or `ProvisioningConfirm` —
+current screen is `Info`, `Provisioning`, `ProvisioningConfirm`, or
+`GettingStarted` —
 even when a snackbar string is currently armed in the manager buffer.
 This is a belt-and-braces guard against a stale `Mode changed`,
 `Locked`, `Unlocked`, or `Wi-Fi connected` snackbar leaking onto the

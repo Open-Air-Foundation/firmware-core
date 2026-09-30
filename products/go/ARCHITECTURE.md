@@ -272,7 +272,9 @@ Posted into the queue by background tasks.
 
 | Event | Source | Payload |
 |---|---|---|
-| `SensorDataReady` | Sensor Task | `MeasuresAGo` struct |
+| `SensorDataReady` | Sensor Task | `SensorEventData`: `MeasuresAGo` plus `MeasurementOrigin` (`Scheduled` or `Refresh`) |
+| `PmPreparationStarted`, `PmPrepared`, `PmSensorAsleep` | Sensor Task | PM operation boundary; no payload |
+| `ShakeDetected` | Accelerometer Worker | Monotonic detection timestamp in milliseconds |
 | `GpsFixUpdate` | GPS Task | `GpsData` from `airgradient-gps` — position, altitude, fix type, DOP, satellite count, timestamp |
 | `InputPress` | Input Task | source (touch_up / down / enter, btn_power, btn_boot), type (short / long) |
 | `BleConnected` | BLE Service | client connected |
@@ -323,7 +325,8 @@ orchestrator-level state changes.
 | Task | Role | Blocks? | Posts to Queue | Notes |
 |---|---|---|---|---|
 | Orchestrator | Main event loop | Yes | -- | Usually waits on its event queue; also performs explicit bounded lifecycle waits and foreground OTA calls |
-| Sensor Producer | Wraps SensorManager | Yes | `SensorDataReady` | Waits for RTOS task notification from orchestrator |
+| Sensor Producer | Wraps SensorManager | Yes | `SensorDataReady`, PM boundary and diagnostic events | Waits for RTOS task notification from orchestrator |
+| Accelerometer Worker | Interrupt-burst motion capture and Hardware Test access | Yes | `ShakeDetected` | No idle XYZ polling; stops burst on shake, then waits through a 1 s cooldown |
 | GPS Producer | UART NMEA read loop | Yes | `GpsFixUpdate` | Product-specific, uses `airgradient-gps` (`GpsSensor` / `NmeaGps`) |
 | Input Producer | Classifies raw ISR events | Yes | `InputPress` | Debounce + long-press detection |
 | Cloud Task | HTTP POST + FETCH via AgClient | Yes | `PostMeasuresResult`, `FetchConfigResult` | Stationary + online only; heap deferred to `start()` |
@@ -363,11 +366,24 @@ Sensor Task:
 ```
 
 The orchestrator controls when to measure by sending a task notification
-that encodes both the iteration count (always 1) and which sensor groups
+that encodes the iteration count (always 1), measurement origin, and which sensor groups
 to poll (`SensorGroup::PM`, `SensorGroup::Other`, `SensorGroup::TvocNox`,
 or `SensorGroup::All`). When the sampler is active, the producer strips
 `TvocNox` from measurement masks and splices its cached TVOC/NOx into
-the result. See [Sensor Producer](docs/sensor_producer.md) for details.
+the result. PM preparation remains blocking and reports start/completion events.
+The orchestrator tracks PM state and one outstanding measurement so shake
+refresh can reuse a scheduled request or wait for PM preparation before sending
+its own request. See [Sensor Producer](docs/sensor_producer.md) for details.
+
+### Accelerometer Worker
+
+`AccelService` owns LIS2DH12 access, including Hardware Test configuration and
+reads. GPIO3 interrupts start filtered 100 Hz capture; a Y-axis side-to-side
+shake posts `ShakeDetected` and immediately ends polling. The detector owns
+the one-second cooldown timing, and the service keeps the interrupt masked
+during that wait. Application startup starts the worker; the orchestrator
+handles accepted-shake ACK and measurement requests. No accelerometer wake
+from deep sleep is configured. See [Accelerometer Service](docs/accel_service.md).
 
 ### Gas Index in Offline Mode
 
@@ -520,6 +536,13 @@ corrections. Corrections do not rewrite stored or transmitted raw history.
 The Offline fast path follows the same boundary: storage receives raw values,
 while the display receives a corrected copy. See
 [`docs/measurement_corrections.md`](docs/measurement_corrections.md).
+
+Manual refresh results update the current readings, BLE, local API, AQI LEDs,
+and cloud snapshot. Only scheduled results enter the RTC chart cache and route
+files. A regular measurement already requested when a shake is accepted serves
+the refresh and retains its scheduled origin. Manual refresh does not reset
+regular measurement or cloud-post timers. See
+[Shake-To-Refresh](docs/orchestrator.md#shake-to-refresh).
 
 ## Power Management
 
@@ -1156,6 +1179,7 @@ Detailed implementation documentation for each service:
 
 - [Settings Service](docs/settings.md)
 - [Sensor Producer](docs/sensor_producer.md)
+- [Accelerometer Service](docs/accel_service.md)
 - [GPS Service](docs/gps_service.md)
 - [Input Service](docs/input_service.md)
 - [Storage Service](docs/storage_service.md)
