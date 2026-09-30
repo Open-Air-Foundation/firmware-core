@@ -6,6 +6,7 @@
  * (task_notify_wait_impl, queue_send_impl, get_time_ms_impl, delay_ms_impl).
  */
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <trompeloeil.hpp>
 #include <trompeloeil/mock.hpp>
@@ -125,6 +126,9 @@ public:
   void handle_measurement(uint32_t v) { _p.handle_measurement(v); }
   void handle_sampler_tick() { _p.handle_sampler_tick(); }
   void run() { _p.run(); }
+
+  static uint32_t notify_prepare() { return SensorProducer::NOTIFY_PREPARE; }
+  static uint32_t notify_pm_sleep() { return SensorProducer::NOTIFY_PM_SLEEP; }
 
   static uint32_t encode_notify(uint8_t iterations, SensorGroup groups,
                                 MeasurementOrigin origin = MeasurementOrigin::Scheduled) {
@@ -259,23 +263,18 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
   // handle_prepare
   // -----------------------------------------------------------------------
 
-  SECTION("handle_prepare wakes PM, warms up, and reports preparation") {
+  SECTION("handle_prepare wakes PM and reports start without blocking") {
     REQUIRE_CALL(mock_pm, wake()).RETURN(true);
-    // warmup() calls warmup_step() in a loop — expect conditioning + PM reads
-    REQUIRE_CALL(mock_tvoc_nox, run_conditioning()).TIMES(AT_LEAST(1)).RETURN(true);
-    ALLOW_CALL(mock_pm, read(trompeloeil::_)).RETURN(false);
-    uint64_t now = 0;
-    ALLOW_CALL(mock_rtos, get_time_ms_impl()).LR_RETURN(now);
-    ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_)).LR_SIDE_EFFECT(now += _1);
+    FORBID_CALL(mock_tvoc_nox, run_conditioning());
+    FORBID_CALL(mock_pm, read(trompeloeil::_));
+    FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
     std::vector<EventType> events;
     REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
-        .TIMES(2)
         .LR_SIDE_EFFECT(events.push_back(static_cast<const Event *>(_2)->type))
         .RETURN(true);
 
     access.handle_prepare();
-    CHECK(events == std::vector<EventType>{EventType::PmPreparationStarted, EventType::PmPrepared});
-    CHECK(now >= CONFIG_SENSOR_WARMUP_DURATION_MS);
+    CHECK(events == std::vector<EventType>{EventType::PmPreparationStarted});
   }
 
   SECTION("handle_pm_sleep sleeps PM and posts PmSensorAsleep") {
@@ -522,6 +521,143 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
 // ===========================================================================
 // run() integration tests
 // ===========================================================================
+
+TEST_CASE("SensorProducer PM preparation preserves gas sampling cadence", "[SensorProducer]") {
+  constexpr uint64_t warmup_interval_ms = CONFIG_SENSOR_WARMUP_INTERVAL_MS;
+  constexpr uint64_t warmup_duration_ms = CONFIG_SENSOR_WARMUP_DURATION_MS;
+  constexpr uint64_t sampler_interval_ms = SGP41_INDEX_SAMPLING_INTERVAL_MS;
+  constexpr int boot_warmup_steps = warmup_duration_ms / warmup_interval_ms;
+
+  uint64_t now = 0;
+  uint64_t prepare_offset_ms = sampler_interval_ms - warmup_interval_ms / 2;
+  bool sampler_wired = true;
+  bool cancel_warmup = false;
+  bool repeat_prepare = false;
+
+  SECTION("gas deadline falls between PM discard reads") {}
+  SECTION("gas deadline coincides with PM discard reads") {
+    prepare_offset_ms = sampler_interval_ms;
+  }
+  SECTION("PM preparation completes without a gas sensor") { sampler_wired = false; }
+  SECTION("sleep cancels pending preparation while gas sampling continues") {
+    cancel_warmup = true;
+  }
+  SECTION("duplicate preparation does not restart warmup") { repeat_prepare = true; }
+
+  const uint64_t boot_end_ms = now + boot_warmup_steps * warmup_interval_ms;
+  const uint64_t prepare_ms = boot_end_ms + prepare_offset_ms;
+  const uint64_t prepared_ms = prepare_ms + warmup_duration_ms;
+  const uint64_t sleep_ms = prepare_ms + warmup_duration_ms / 2;
+  const uint64_t finish_ms = prepared_ms + sampler_interval_ms + 1;
+
+  struct Notification {
+    uint64_t at_ms;
+    uint32_t value;
+  };
+  std::vector<Notification> notifications{{prepare_ms, SensorProducerTestAccess::notify_prepare()}};
+  if (repeat_prepare) {
+    notifications.push_back(
+        {prepare_ms + warmup_interval_ms / 2, SensorProducerTestAccess::notify_prepare()});
+  }
+  if (cancel_warmup) {
+    notifications.push_back({sleep_ms, SensorProducerTestAccess::notify_pm_sleep()});
+  }
+
+  MockTVOCNOxSensor mock_tvoc_nox;
+  MockPMSensor mock_pm;
+  Sensors sensors{};
+  sensors.tvoc_nox = sampler_wired ? &mock_tvoc_nox : nullptr;
+  sensors.pms_a = &mock_pm;
+  SensorManager manager(sensors);
+  MockRTOS mock_rtos;
+  RTOS::set_instance(&mock_rtos);
+  SensorProducer producer(manager, &event_queue_sentinel, {});
+  SensorProducerTestAccess access(producer);
+
+  bool boot_complete = false;
+  std::vector<uint64_t> pm_read_times;
+  std::vector<uint64_t> gas_read_times;
+  std::vector<EventType> events;
+  std::vector<uint64_t> event_times;
+  int conditioning_calls = 0;
+  int sleep_calls = 0;
+
+  // Only startup may condition SGP41 or delay the producer task.
+  ALLOW_CALL(mock_tvoc_nox, run_conditioning())
+      .LR_WITH(!boot_complete)
+      .LR_SIDE_EFFECT(++conditioning_calls)
+      .RETURN(true);
+  ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_))
+      .LR_WITH(!boot_complete)
+      .LR_SIDE_EFFECT(now += _1);
+  ALLOW_CALL(mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  REQUIRE_CALL(mock_pm, wake()).TIMES(2).RETURN(true);
+  ALLOW_CALL(mock_pm, supports_temp_hum()).RETURN(false);
+  ALLOW_CALL(mock_pm, sleep()).LR_SIDE_EFFECT(++sleep_calls).RETURN(true);
+  ALLOW_CALL(mock_pm, read(trompeloeil::_))
+      .LR_SIDE_EFFECT(if (boot_complete) { pm_read_times.push_back(now); })
+      .RETURN(false); // Failed discard reads must not abort preparation.
+  ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_))
+      .LR_SIDE_EFFECT(gas_read_times.push_back(now))
+      .SIDE_EFFECT(_1 = TVOCNOxData{MeasuresInvalid::TVOC, 25000, MeasuresInvalid::NOX, 18000})
+      .RETURN(true);
+  ALLOW_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+      .LR_SIDE_EFFECT(if (boot_complete) {
+        events.push_back(static_cast<const Event *>(_2)->type);
+        event_times.push_back(now);
+      })
+      .RETURN(true);
+
+  size_t notification_index = 0;
+  unsigned wait_count = 0;
+  auto wait_for_notification = [&](uint32_t *value, uint32_t timeout) {
+    boot_complete = true;
+    // Guard against a busy loop instead of a scheduled wait.
+    REQUIRE(timeout > 0);
+    REQUIRE(++wait_count < 100);
+    const uint64_t timeout_ms = timeout == UINT32_MAX ? finish_ms : now + timeout;
+    if (notification_index < notifications.size() &&
+        notifications[notification_index].at_ms <= timeout_ms) {
+      now = notifications[notification_index].at_ms;
+      *value = notifications[notification_index++].value;
+      return true;
+    }
+    now = std::min(timeout_ms, finish_ms);
+    if (now == finish_ms) {
+      access.set_running(false);
+    }
+    return false;
+  };
+  ALLOW_CALL(mock_rtos, task_notify_wait_impl(trompeloeil::_, trompeloeil::_))
+      .LR_RETURN(wait_for_notification(_1, _2));
+
+  access.set_running(true);
+  access.run();
+
+  CHECK(notification_index == notifications.size());
+  CHECK(conditioning_calls == (sampler_wired ? boot_warmup_steps : 0));
+  CHECK(sleep_calls == (cancel_warmup ? 1 : 0));
+  CHECK(events ==
+        std::vector<EventType>{EventType::PmPreparationStarted,
+                               cancel_warmup ? EventType::PmSensorAsleep : EventType::PmPrepared});
+  CHECK(event_times == std::vector<uint64_t>{prepare_ms, cancel_warmup ? sleep_ms : prepared_ms});
+
+  std::vector<uint64_t> expected_pm_read_times;
+  for (uint64_t at = prepare_ms; at < (cancel_warmup ? sleep_ms : prepared_ms);
+       at += warmup_interval_ms) {
+    expected_pm_read_times.push_back(at);
+  }
+  CHECK(pm_read_times == expected_pm_read_times);
+
+  std::vector<uint64_t> expected_gas_read_times;
+  if (sampler_wired) {
+    for (uint64_t at = boot_end_ms + sampler_interval_ms; at < finish_ms;
+         at += sampler_interval_ms) {
+      expected_gas_read_times.push_back(at);
+    }
+  }
+  CHECK(gas_read_times == expected_gas_read_times);
+}
 
 TEST_CASE("SensorProducer run()", "[SensorProducer]") {
   MockTVOCNOxSensor mock_tvoc_nox;

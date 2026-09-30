@@ -13,6 +13,8 @@
 #include "go_events.h"
 #include "rtos.h"
 
+#include <algorithm>
+
 static constexpr const char *TAG = "SensorProducer";
 
 // ---------------------------------------------------------------------------
@@ -141,6 +143,7 @@ void SensorProducer::task_entry(void *arg) {
 // ---------------------------------------------------------------------------
 
 void SensorProducer::run() {
+  _pm_warmup_active = false;
   const Co2AbcPeriodResult abc_result = _manager.set_co2_abc_period_days(_config.co2_abc_days);
   if (abc_result != Co2AbcPeriodResult::Success) {
     AG_LOGW(TAG, "boot CO2 ABC period (%d days) not applied: result=%u", _config.co2_abc_days,
@@ -175,6 +178,11 @@ void SensorProducer::run() {
     if (_sampler_enabled) {
       timeout = (next_tick_ms > now) ? (next_tick_ms - now) : 0;
     }
+    if (_pm_warmup_active) {
+      const uint32_t warmup_timeout =
+          (_next_pm_warmup_step_ms > now) ? (_next_pm_warmup_step_ms - now) : 0;
+      timeout = std::min(timeout, warmup_timeout);
+    }
 
     uint32_t notify_value = 0;
     const bool notified = RTOS::task_notify_wait(&notify_value, timeout);
@@ -208,6 +216,10 @@ void SensorProducer::run() {
       handle_sampler_tick();
       next_tick_ms = now + SAMPLER_TICK_MS;
     }
+
+    // Service gas first when both deadlines coincide. PM warmup never waits
+    // here; task_notify_wait paces its warmup iterations.
+    handle_pm_warmup_tick();
   }
 }
 
@@ -235,15 +247,21 @@ void SensorProducer::handle_calibration() {
 }
 
 void SensorProducer::handle_prepare() {
+  if (_pm_warmup_active) {
+    return;
+  }
+
   AG_LOGI(TAG, "PM prepare: waking and warming up after power-on");
   post_pm_event(EventType::PmPreparationStarted);
   _manager.pm_wake();
-  _manager.warmup();
-  AG_LOGI(TAG, "PM prepare: complete");
-  post_pm_event(EventType::PmPrepared);
+  _pm_warmup_iterations_remaining =
+      CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS;
+  _next_pm_warmup_step_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  _pm_warmup_active = true;
 }
 
 void SensorProducer::handle_pm_sleep() {
+  _pm_warmup_active = false;
   _manager.pm_sleep();
   post_pm_event(EventType::PmSensorAsleep);
 }
@@ -350,4 +368,31 @@ void SensorProducer::handle_sampler_tick() {
 
   Measures sampler = _manager.start_measures(1, SensorGroup::TvocNox);
   _last_tvoc_nox = sampler.tvoc_nox;
+}
+
+void SensorProducer::handle_pm_warmup_tick() {
+  if (!_pm_warmup_active) {
+    return;
+  }
+
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  if (now < _next_pm_warmup_step_ms) {
+    return;
+  }
+
+  if (_pm_warmup_iterations_remaining == 0) {
+    // Like warmup(), finish only after the final iteration's pacing interval.
+    _pm_warmup_active = false;
+    AG_LOGI(TAG, "PM prepare: complete");
+    post_pm_event(EventType::PmPrepared);
+  } else {
+    AG_LOGI(TAG, "warmup: iteration %d/%d",
+            CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS -
+                _pm_warmup_iterations_remaining + 1,
+            CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS);
+    // Startup already conditioned SGP41; PM wake must not condition it again.
+    _manager.warmup_step(false);
+    --_pm_warmup_iterations_remaining;
+    _next_pm_warmup_step_ms = now + CONFIG_SENSOR_WARMUP_INTERVAL_MS;
+  }
 }
