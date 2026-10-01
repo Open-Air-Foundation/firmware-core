@@ -76,7 +76,7 @@ static constexpr uint32_t BMS_INIT_RETRY_DELAY_MS = 100;
 
 static constexpr uint8_t CHARGING_BOOT_STATUS_ATTEMPTS = 3;
 static constexpr uint32_t CHARGING_BOOT_STATUS_RETRY_MS = 100;
-static constexpr uint32_t CHARGING_ONLY_POLL_INTERVAL_MS = 1000;
+static constexpr uint32_t CHARGING_ONLY_POLL_INTERVAL_MS = 2000;
 
 // Strings owned by GoApp that WifiService::Config holds pointers into.
 // Stack-allocated in run_*; lifetime = process (functions never return).

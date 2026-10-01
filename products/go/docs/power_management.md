@@ -205,7 +205,7 @@ initializer and begin a new session. Uptime is not part of `RtcAppState`, and
 present. After boot detection initializes the charger, the runner initializes
 the fuel gauge, disables PM power, paints `ShutdownCharging`, stops the display
 worker, and puts the panel to sleep. Each iteration feeds the external watchdog
-from the main CPU and calls `enter_light_sleep(1000)`. The LP-core watchdog
+from the main CPU and calls `enter_light_sleep(2000)`. The LP-core watchdog
 feeder is not started, and the charger is not reinitialized on each poll.
 
 `enter_light_sleep()` uses the existing timer and EXT1 button-mask wake setup.

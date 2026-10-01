@@ -66,7 +66,7 @@ this decision; software resets and deep-sleep wakes skip detection.
 
 `run_charging_only()` initializes the fuel gauge and display, disables PM power,
 and shows the static charging page. It feeds the external watchdog from the
-main CPU, sleeps in one-second light-sleep intervals, and polls the initialized
+main CPU, sleeps in two-second light-sleep intervals, and polls the initialized
 charger after timer wake. It starts no sensor, radio, storage, orchestrator, or
 LP-core task. Button wake restarts the ESP into normal startup. A valid unplug
 reading triggers the Powered off page and shutdown without another charger

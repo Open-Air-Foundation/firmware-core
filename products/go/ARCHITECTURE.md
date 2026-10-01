@@ -613,7 +613,7 @@ charging_only_eligible)` function:
 Charging-only boot shows a static battery-and-bolt icon with "Charging" and
 "Hold power button / to turn on". The charger is initialized once, PM power is
 disabled, and sensors, radios, storage, and the orchestrator remain unstarted.
-The main CPU feeds the external watchdog and uses one-second light sleeps to
+The main CPU feeds the external watchdog and uses two-second light sleeps to
 poll external-power status; no LP-core feeder runs. Button wake restarts into
 normal startup. A valid unplug reading refreshes "Powered off" and calls
 `shutdown()` without rechecking the cable or button after the refresh.

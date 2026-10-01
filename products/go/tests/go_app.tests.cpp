@@ -608,7 +608,7 @@ TEST_CASE("Charging-only boot: light sleep retains charger until unplug, then pa
       CHECK(DisplayService::spy_last_screen == Screen::ShutdownUser);
       CHECK(DisplayService::spy_sync_update_count == 1);
       CHECK(test_spy::light_sleep_count == 2);
-      CHECK(test_spy::light_sleep_duration_ms == 1000);
+      CHECK(test_spy::light_sleep_duration_ms == 2000);
       CHECK(test_spy::light_sleep_prepared);
       CHECK(board.bms_init_attempts == 1);
       CHECK(board._bms.status_reads == 3);
