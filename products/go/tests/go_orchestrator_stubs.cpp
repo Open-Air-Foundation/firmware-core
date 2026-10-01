@@ -449,6 +449,7 @@ void reset() {
   DisplayService::spy_deep_sleep_called = false;
   DisplayService::spy_init_count = 0;
   DisplayService::spy_update_count = 0;
+  DisplayService::spy_sync_update_count = 0;
   DisplayService::spy_flush_count = 0;
   DisplayService::spy_last_screen = Screen::Home;
 }

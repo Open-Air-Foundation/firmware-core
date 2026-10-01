@@ -8,6 +8,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,7 @@
 #include "services/sensor_manager.h"
 
 #include "cap_touch_sensor.h"
+#include "config_store.h"
 #include "hal/bms_device.h"
 #include "rtos.h"
 
@@ -80,6 +82,17 @@ extern bool enter_sleep_called;
 extern uint32_t enter_sleep_duration_ms;
 extern bool should_hold_pm_result;
 extern bool shutdown_called;
+extern bool power_on_reset;
+extern int power_button_level;
+extern bool pm_power_enabled;
+extern bool ext_watchdog_fed;
+extern bool lp_feeder_started;
+extern bool shutdown_prepared;
+extern int light_sleep_count;
+extern uint32_t light_sleep_duration_ms;
+extern bool light_sleep_prepared;
+extern std::function<bool()> light_sleep_callback;
+extern WakeCause wake_cause;
 extern bool orchestrator_init_called;
 extern bool orchestrator_run_called;
 extern WakeCause orchestrator_wake_cause;
@@ -111,13 +124,25 @@ extern void reset();
 
 class StubBmsDevice : public BmsDevice {
 public:
+  BmsStatus status{};
+  int status_failures_remaining = 0;
+  int status_reads = 0;
+  std::function<bool(BmsStatus &)> status_callback;
   bool init() override { return true; }
   bool read_telemetry(BmsTelemetry &out) override {
     out = BmsTelemetry{};
     return true;
   }
   bool read_status(BmsStatus &out) override {
-    out = BmsStatus{};
+    ++status_reads;
+    out = status;
+    if (status_callback) {
+      return status_callback(out);
+    }
+    if (status_failures_remaining > 0) {
+      --status_failures_remaining;
+      return false;
+    }
     return true;
   }
   bool get_charging_state(BmsChargingState &state) override {
@@ -157,7 +182,7 @@ public:
 // ============================================================================
 
 static bool stub_configure(int, gpio::Mode, gpio::PullMode, gpio::InterruptType) { return true; }
-static int stub_get_level(int) { return 0; }
+static int stub_get_level(int) { return test_spy::power_button_level; }
 static bool stub_set_level(int, int) { return true; }
 static bool stub_add_handler(int, gpio::InterruptHandler, void *) { return true; }
 static bool stub_remove_handler(int) { return true; }
@@ -177,6 +202,26 @@ static const gpio::Hal stub_gpio_hal = {
 // ============================================================================
 // MockBoard
 // ============================================================================
+
+class EmptyConfigStore : public ConfigStore {
+public:
+  ConfigStoreResult get_int(const char *, int &) override { return ConfigStoreResult::NOT_FOUND; }
+  ConfigStoreResult get_bool(const char *, bool &) override { return ConfigStoreResult::NOT_FOUND; }
+  ConfigStoreResult get_string(const char *, std::string &) override {
+    return ConfigStoreResult::NOT_FOUND;
+  }
+  ConfigStoreResult get_float(const char *, float &) override {
+    return ConfigStoreResult::NOT_FOUND;
+  }
+  ConfigStoreResult set_int(const char *, int) override { return ConfigStoreResult::ERROR; }
+  ConfigStoreResult set_bool(const char *, bool) override { return ConfigStoreResult::ERROR; }
+  ConfigStoreResult set_string(const char *, const std::string &) override {
+    return ConfigStoreResult::ERROR;
+  }
+  ConfigStoreResult set_float(const char *, float) override { return ConfigStoreResult::ERROR; }
+  ConfigStoreResult erase(const char *) override { return ConfigStoreResult::ERROR; }
+  ConfigStoreResult commit() override { return ConfigStoreResult::ERROR; }
+};
 
 class MockBoard : public GoBoard {
 public:
@@ -202,6 +247,7 @@ public:
   bool isr_installed = false;
   bool isr_removed = false;
   bool press_button_on_isr_install = false;
+  bool return_null_bms = false;
 
   // GPS
   bool new_gps_driver_called = false;
@@ -259,7 +305,7 @@ public:
   // Service accessors
   ConfigStore &config_store() override {
     call_log.push_back("config_store");
-    return *reinterpret_cast<ConfigStore *>(&_config_store_buf);
+    return _config_store;
   }
   GoSettings load_settings() override {
     call_log.push_back("load_settings");
@@ -267,7 +313,7 @@ public:
   }
   BmsDevice *bms() override {
     call_log.push_back("bms");
-    return bms_available ? &_bms : nullptr;
+    return bms_available && !return_null_bms ? &_bms : nullptr;
   }
   SensorManager &sensors(bool warm) override {
     call_log.push_back("sensors");
@@ -339,10 +385,19 @@ public:
   BoardVariant variant() const override { return BoardVariant::Prototype; }
   std::string serial_number() override { return "test-serial"; }
   const char *firmware_version() override { return "0.0.0-test"; }
-  const gpio::Hal &gpio_hal() override { return stub_gpio_hal; }
+  const gpio::Hal &gpio_hal() override {
+    call_log.push_back("gpio_hal");
+    return stub_gpio_hal;
+  }
   void release_gpio_holds() override { call_log.push_back("release_gpio_holds"); }
-  void ulp_stop() override {}
-  void ulp_start() override {}
+  void ulp_stop() override {
+    call_log.push_back("ulp_stop");
+    test_spy::lp_feeder_started = false;
+  }
+  void ulp_start() override {
+    call_log.push_back("ulp_start");
+    test_spy::lp_feeder_started = true;
+  }
   void restart() override {
     call_log.push_back("restart");
     restart_called = true;
@@ -356,7 +411,10 @@ public:
       *flag = true;
     }
   }
-  void remove_button_isr(int /*pin*/) override { isr_removed = true; }
+  void remove_button_isr(int /*pin*/) override {
+    isr_removed = true;
+    isr_flag = nullptr;
+  }
 
   // --- Test helpers ---
   void press_button() {
@@ -377,12 +435,12 @@ public:
   // Configurable test state
   GoSettings settings{};
   bool bms_available = false;
+  StubBmsDevice _bms;
 
 private:
   // Stub service instances.
   // The stub constructors store refs but never dereference them, so
   // we use a helper to produce "valid" dummy references for construction.
-  StubBmsDevice _bms;
   Sensors _sensors_struct{};
   SensorManager _sensor_manager{_sensors_struct};
   StubTouch _touch;
@@ -391,7 +449,7 @@ private:
   // The stubs never actually use these objects.
   alignas(PayloadCache) static inline char s_cache_buf[sizeof(PayloadCache)];
   alignas(NandStorage) static inline char s_nand_buf[sizeof(NandStorage)];
-  alignas(8) static inline char _config_store_buf[64];
+  EmptyConfigStore _config_store;
   alignas(8) static inline char _gps_driver_buf[512];
   // Radio dummy buffers — never dereferenced through the abstract types.
   alignas(8) static inline char _wifi_hal_buf[64];
@@ -420,6 +478,8 @@ public:
 
   explicit GoAppTestAccess(GoApp &app) : _app(app) {}
 
+  bool detect_charging_only_boot() { return _app.detect_charging_only_boot(); }
+
   FastPathResult execute_fast_path(const RtcAppState &state, const volatile bool &button,
                                    const RtcDisplaySnapshot *snapshot = nullptr,
                                    bool snapshot_valid = false) {
@@ -445,30 +505,268 @@ private:
 TEST_CASE("select_boot_path: Timer + Locked -> FastPath") {
   RtcAppState state{};
   state.lock_state = LockState::Locked;
-  CHECK(select_boot_path(WakeCause::Timer, state) == BootPath::FastPath);
+  CHECK(select_boot_path(WakeCause::Timer, state, false) == BootPath::FastPath);
 }
 
 TEST_CASE("select_boot_path: Timer + Unlocked -> Interactive") {
   RtcAppState state{};
   state.lock_state = LockState::Unlocked;
-  CHECK(select_boot_path(WakeCause::Timer, state) == BootPath::Interactive);
+  CHECK(select_boot_path(WakeCause::Timer, state, false) == BootPath::Interactive);
 }
 
 TEST_CASE("select_boot_path: Button + Offline -> ButtonWake") {
   RtcAppState state{};
   state.mode = OperatingMode::Offline;
-  CHECK(select_boot_path(WakeCause::Button, state) == BootPath::ButtonWake);
+  CHECK(select_boot_path(WakeCause::Button, state, false) == BootPath::ButtonWake);
 }
 
 TEST_CASE("select_boot_path: Button + Portable -> Interactive") {
   RtcAppState state{};
   state.mode = OperatingMode::Portable;
-  CHECK(select_boot_path(WakeCause::Button, state) == BootPath::Interactive);
+  CHECK(select_boot_path(WakeCause::Button, state, false) == BootPath::Interactive);
 }
 
 TEST_CASE("select_boot_path: PowerOn -> Interactive") {
   RtcAppState state{};
-  CHECK(select_boot_path(WakeCause::PowerOn, state) == BootPath::Interactive);
+  CHECK(select_boot_path(WakeCause::PowerOn, state, false) == BootPath::Interactive);
+}
+
+TEST_CASE("select_boot_path: eligible USB cold boot -> ChargingOnly") {
+  RtcAppState state{};
+  CHECK(select_boot_path(WakeCause::PowerOn, state, true) == BootPath::ChargingOnly);
+}
+
+// ============================================================================
+// Tests: charging-only boot
+// ============================================================================
+
+TEST_CASE("Charging-only detection: probes eligibility without running a boot path") {
+  test_spy::reset();
+  test_spy::power_on_reset = true;
+  MockBoard board;
+  board._bms.status.power_source = BmsPowerSource::UsbDcp;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  SECTION("button released") { test_spy::power_button_level = 1; }
+  SECTION("button held") { test_spy::power_button_level = 0; }
+
+  REQUIRE(access.detect_charging_only_boot());
+  CHECK(board.bms_init_attempts == 1);
+  CHECK(DisplayService::spy_init_count == 0);
+  CHECK(test_spy::light_sleep_count == 0);
+  CHECK_FALSE(test_spy::shutdown_called);
+  CHECK_FALSE(test_spy::orchestrator_run_called);
+  CHECK_FALSE(board.sensors_called);
+  CHECK(board.call_index("gpio_hal") == -1);
+  CHECK_FALSE(board.isr_installed);
+}
+
+TEST_CASE("GoApp::run: ineligible charging boots start the application normally") {
+  test_spy::reset();
+  MockBoard board;
+  SECTION("software reset with USB connected") {
+    board._bms.status.power_source = BmsPowerSource::UsbDcp;
+  }
+  SECTION("cold boot on battery") {
+    test_spy::power_on_reset = true;
+    board._bms.status.power_source = BmsPowerSource::None;
+  }
+  GoApp app(board);
+  app.run();
+
+  CHECK(test_spy::orchestrator_run_called);
+  CHECK(test_spy::orchestrator_wake_cause == WakeCause::PowerOn);
+  CHECK(test_spy::light_sleep_count == 0);
+  CHECK_FALSE(test_spy::shutdown_called);
+  CHECK(board.bms_init_attempts == 1);
+  CHECK(board.isr_flag == nullptr);
+}
+
+TEST_CASE("Charging-only boot: light sleep retains charger until unplug, then paints before ship") {
+  for (auto source : {BmsPowerSource::UsbSdp, BmsPowerSource::UsbCdp, BmsPowerSource::UsbDcp,
+                      BmsPowerSource::UnknownAdapter, BmsPowerSource::NonStandard}) {
+    for (auto charge : {BmsChargingState::FastCharge, BmsChargingState::NotCharging,
+                        BmsChargingState::ChargeTerminationDone}) {
+      test_spy::reset();
+      test_spy::power_on_reset = true;
+      MockBoard board;
+      board._bms.status.power_source = source;
+      board._bms.status.charging_state = charge;
+      test_spy::light_sleep_callback = [&] {
+        if (test_spy::light_sleep_count == 2) {
+          board._bms.status.power_source = BmsPowerSource::None;
+        }
+        CHECK(DisplayService::spy_last_screen == Screen::ShutdownCharging);
+        CHECK(DisplayService::spy_sync_update_count == 0);
+        return false;
+      };
+      GoApp app(board);
+      app.run();
+      CHECK(test_spy::shutdown_called);
+      CHECK(test_spy::shutdown_prepared);
+      CHECK(DisplayService::spy_last_screen == Screen::ShutdownUser);
+      CHECK(DisplayService::spy_sync_update_count == 1);
+      CHECK(test_spy::light_sleep_count == 2);
+      CHECK(test_spy::light_sleep_duration_ms == 1000);
+      CHECK(test_spy::light_sleep_prepared);
+      CHECK(board.bms_init_attempts == 1);
+      CHECK(board._bms.status_reads == 3);
+      CHECK(board.call_index("ulp_start") == -1);
+      CHECK_FALSE(board.isr_installed);
+      CHECK_FALSE(board.sensors_called);
+      CHECK_FALSE(board.new_gps_driver_called);
+      CHECK_FALSE(board.wifi_subsystem_init_called);
+      CHECK(board.call_index("storage") == -1);
+      CHECK(board.call_index("ble_server") == -1);
+      CHECK(board.call_index("led_service") == -1);
+      CHECK(board.call_index("buzzer_service") == -1);
+      CHECK_FALSE(test_spy::bms_polled);         // No runtime charging-policy poll.
+      CHECK_FALSE(test_spy::enter_sleep_called); // No measurement timer sleep.
+    }
+  }
+}
+
+TEST_CASE("Charging-only boot: non-power-on resets leave the boot path untouched") {
+  test_spy::reset();
+  MockBoard board;
+  board._bms.status.power_source = BmsPowerSource::UsbDcp;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  CHECK_FALSE(access.detect_charging_only_boot());
+  CHECK(board.call_log.empty());
+  CHECK_FALSE(board.isr_installed);
+  CHECK_FALSE(test_spy::shutdown_called);
+}
+
+TEST_CASE("Charging-only boot: unconfirmed USB input falls through to normal startup") {
+  test_spy::reset();
+  test_spy::power_on_reset = true;
+  MockBoard board;
+  board._bms.status.power_source = BmsPowerSource::UsbDcp;
+
+  SECTION("battery") { board._bms.status.power_source = BmsPowerSource::None; }
+  SECTION("OTG is not external power") { board._bms.status.power_source = BmsPowerSource::OtgMode; }
+  SECTION("unknown status") { board._bms.status.power_source = BmsPowerSource::Unknown; }
+  SECTION("failed reads cannot use populated status") { board._bms.status_failures_remaining = 10; }
+  SECTION("charger init fails") { board.bms_failures_remaining = 10; }
+  SECTION("null charger") { board.return_null_bms = true; }
+
+  GoApp app(board);
+  GoAppTestAccess access(app);
+  CHECK_FALSE(access.detect_charging_only_boot());
+  CHECK_FALSE(test_spy::shutdown_called);
+  CHECK_FALSE(test_spy::lp_feeder_started);
+  CHECK(DisplayService::spy_init_count == 0);
+  CHECK(board._bms.status_reads <= 3);
+  CHECK(board.bms_init_attempts <= 2);
+  CHECK_FALSE(board.isr_installed);
+  CHECK(board.call_index("gpio_hal") == -1);
+}
+
+TEST_CASE("Charging-only boot: transient charger failures recover within the boot") {
+  test_spy::reset();
+  test_spy::power_on_reset = true;
+  MockBoard board;
+  board._bms.status.power_source = BmsPowerSource::UsbDcp;
+  board.bms_failures_remaining = 1;
+  board._bms.status_failures_remaining = 1;
+  test_spy::light_sleep_callback = [&] {
+    board._bms.status.power_source = BmsPowerSource::None;
+    return false;
+  };
+  GoApp app(board);
+  app.run();
+  CHECK(board.bms_init_attempts == 2);
+  CHECK(board._bms.status_reads == 3); // Two boot attempts and the unplug poll.
+  CHECK(test_spy::shutdown_prepared);
+}
+
+TEST_CASE("Charging-only boot: a startup button press does not override USB detection") {
+  test_spy::reset();
+  test_spy::power_on_reset = true;
+  test_spy::power_button_level = 0;
+  MockBoard board;
+  board._bms.status.power_source = BmsPowerSource::UsbDcp;
+  board._bms.status_callback = [&](BmsStatus &) {
+    // Release the startup press during detection, before normal sleep wake is armed.
+    test_spy::power_button_level = 1;
+    return true;
+  };
+  test_spy::light_sleep_callback = [&] {
+    CHECK(DisplayService::spy_last_screen == Screen::ShutdownCharging);
+    board._bms.status.power_source = BmsPowerSource::None;
+    return false;
+  };
+
+  GoApp app(board);
+  app.run();
+  CHECK_FALSE(board.isr_installed);
+  CHECK(test_spy::shutdown_prepared);
+  CHECK_FALSE(test_spy::lp_feeder_started);
+  CHECK(test_spy::light_sleep_count == 1);
+  CHECK_FALSE(test_spy::orchestrator_run_called);
+}
+
+TEST_CASE("Charging-only button wake: restarts for normal startup") {
+  test_spy::reset();
+  test_spy::power_on_reset = true;
+  MockBoard board;
+  board._bms.status.power_source = BmsPowerSource::UsbDcp;
+  test_spy::light_sleep_callback = [&] {
+    if (test_spy::light_sleep_count != 3) {
+      return false;
+    }
+    return true; // Button wake even if released before GPIO is sampled.
+  };
+  GoApp app(board);
+  app.run();
+
+  CHECK_FALSE(test_spy::shutdown_called);
+  CHECK_FALSE(test_spy::lp_feeder_started);
+  CHECK(board.bms_init_attempts == 1);
+  CHECK(test_spy::light_sleep_count == 3);
+  CHECK(test_spy::light_sleep_prepared);
+  CHECK(DisplayService::spy_sync_update_count == 0);
+  CHECK(board.restart_called);
+  CHECK_FALSE(board.sensors_called);
+  CHECK_FALSE(test_spy::orchestrator_run_called);
+}
+
+TEST_CASE("Charging-only polling: failed and unknown readings keep the application off") {
+  test_spy::reset();
+  test_spy::power_on_reset = true;
+  MockBoard board;
+  board._bms.status.power_source = BmsPowerSource::UsbDcp;
+  test_spy::light_sleep_callback = [&] {
+    REQUIRE(test_spy::light_sleep_count <= 4);
+    CHECK_FALSE(test_spy::shutdown_called);
+    CHECK(DisplayService::spy_last_screen == Screen::ShutdownCharging);
+    switch (test_spy::light_sleep_count) {
+    case 1:
+      board._bms.status.power_source = BmsPowerSource::None;
+      board._bms.status_failures_remaining = 1;
+      break;
+    case 2:
+      board._bms.status.power_source = BmsPowerSource::Unknown;
+      break;
+    case 3:
+      board._bms.status.power_source = BmsPowerSource::UsbDcp;
+      break;
+    default:
+      board._bms.status.power_source = BmsPowerSource::None;
+      break;
+    }
+    return false;
+  };
+  GoApp app(board);
+  app.run();
+  CHECK(test_spy::shutdown_prepared);
+  CHECK(test_spy::light_sleep_count == 4);
+  CHECK(test_spy::light_sleep_prepared);
+  CHECK(board.bms_init_attempts == 1);
+  CHECK_FALSE(board.sensors_called);
 }
 
 // ============================================================================

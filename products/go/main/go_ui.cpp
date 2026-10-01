@@ -246,6 +246,7 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
   case Screen::AccelTest:
     return dispatch_accel_test(source, type);
   case Screen::ShutdownUser:
+  case Screen::ShutdownCharging:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
   case Screen::ShutdownTemperatureLow:
@@ -337,6 +338,7 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     populate_confirm_rows(v);
     break;
   case Screen::ShutdownUser:
+  case Screen::ShutdownCharging:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
   case Screen::ShutdownTemperatureLow:

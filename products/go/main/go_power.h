@@ -381,6 +381,12 @@ public:
   /// @param sleep_duration_ms How long to sleep before timer wake.
   void enter_sleep(uint32_t sleep_duration_ms);
 
+  /// Light sleep using the same timer and EXT1 button mask as deep sleep.
+  /// Returns true for a button wake or a held power button. Wake sources are
+  /// cleared and digital GPIO restored before returning. A sleep error falls
+  /// back to a bounded RTOS delay.
+  bool enter_light_sleep(uint32_t sleep_duration_ms);
+
   // -------------------------------------------------------------------------
   // Boot path (static — call before any service is constructed)
   // -------------------------------------------------------------------------
@@ -388,6 +394,9 @@ public:
   /// Determine wake cause early in app_main.
   /// Translates esp_sleep_get_wakeup_cause() to WakeCause.
   static WakeCause get_wake_cause();
+
+  /// True only for a hardware power-on reset, not a software reset or sleep wake.
+  static bool is_power_on_reset();
 
   /// Returns true when this boot should follow the abbreviated fast path:
   ///   cause == WakeCause::Timer && state.lock_state == LockState::Locked
