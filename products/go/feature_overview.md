@@ -251,6 +251,8 @@ User-visible battery features:
 
 - Battery percentage display.
 - Charging status display.
+- Charging while powered off, with a charging screen. Hold the power button
+  to turn on, or unplug to power off.
 - USB plugged-in indication.
 - Low-battery warnings.
 - Automatic protective shutdown when the battery is critically low.

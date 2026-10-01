@@ -43,27 +43,34 @@ flowchart TD
 
 ## Boot Path Selection
 
-`GoApp::run()` determines the boot path using the pure function
-`select_boot_path()`:
-
-```text
-GoApp::run():
-    cause = PowerService::get_wake_cause()
-    path = select_boot_path(cause, load_rtc_app_state())
-
-    switch (path):
-        FastPath    → run_fast_path(state)
-        ButtonWake  → run_button_wake_path(state)
-        Interactive → run_interactive(cause, {})
-```
+After checking for active factory fuel-gauge learning, `GoApp::run()` probes
+charging-only eligibility with `detect_charging_only_boot()`. It passes that
+result, the wake cause, and RTC state to the pure function
+`select_boot_path(cause, state, charging_only_eligible)`:
 
 | Wake Cause | Condition | Path |
 |---|---|---|
-| `PowerOn` | -- | `Interactive` with empty BootHandoff |
+| `PowerOn` | Hardware power-on reset with confirmed external input | `ChargingOnly` |
+| `PowerOn` | Otherwise, including software reset | `Interactive` with empty BootHandoff |
 | `Timer` + `Locked` | `is_fast_path_wake()` | `FastPath` — measure, display, sleep or promote |
 | `Timer` + `Unlocked` | Not fast-path eligible | `Interactive` |
 | `Button` + `Offline` | -- | `ButtonWake` — four-phase early paint |
 | `Button` + non-Offline | -- | `Interactive` |
+
+Charging-only detection checks `ESP_RST_POWERON`, not just the broader
+`WakeCause::PowerOn` mapping. It initializes buses and the BMS, then makes up
+to three status-read attempts, 100 ms apart. A valid external input qualifies
+even if charging has completed. Invalid or failed reads, charger-init failure,
+battery power, and OTG output do not qualify. The power button does not override
+this decision; software resets and deep-sleep wakes skip detection.
+
+`run_charging_only()` initializes the fuel gauge and display, disables PM power,
+and shows the static charging page. It feeds the external watchdog from the
+main CPU, sleeps in one-second light-sleep intervals, and polls the initialized
+charger after timer wake. It starts no sensor, radio, storage, orchestrator, or
+LP-core task. Button wake restarts the ESP into normal startup. A valid unplug
+reading triggers the Powered off page and shutdown without another charger
+check. See [Power Management](power_management.md#charging-only-light-sleep).
 
 ### load_rtc_app_state()
 
@@ -140,6 +147,7 @@ not be called before `init_buses()` has completed. Fail-safe default is
 
 | Boot path | Init sequence |
 |---|---|
+| **Charging only** | Detection: `init_buses()` → BMS retry; runner: `init_fuel_gauge()` → `power().set_pm_power(false)` → `init_spi()` → `display()` → light-sleep polling |
 | **Fast path** | `init_core()` → `init_fuel_gauge()` → BMS retry → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors(warm)` → `storage()` → `display()`; may sleep degraded after BMS failure |
 | **Button wake** | `init_spi()` → `display()` → early paint → `init_core()` → `init_fuel_gauge()` → BMS retry → restart on failure → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors()` → ... |
 | **Interactive** | `init_core()` → `init_fuel_gauge()` → BMS retry → restart on failure → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors()` → `storage()` → `display()` → orchestrator may call `init_wifi_subsystem()` on first `enter_stationary()` |
@@ -152,7 +160,9 @@ Hardware sequencing constraints:
   `init_buses()` also runs board variant detection (BQ27427 probe at
   `0x55`) and writes the variant-appropriate PM enable GPIO level
 - **SPI** must be ready before display and NAND flash
-- **Fuel gauge** is initialized independently before the charger retry. Its
+- **Fuel gauge** is initialized independently before the charger retry in
+  measurement and factory-learning paths. Charging-only detection probes the
+  charger first, then initializes the fuel gauge in its runner. Fuel-gauge
   failure leaves FG telemetry offline without preventing the charger from
   operating
 - **BMS** must be attempted before `power()` and `sensors()`. `GoApp` tries
@@ -366,7 +376,7 @@ Host-testable free functions co-located with GoApp:
 
 | Function | Purpose |
 |---|---|
-| `select_boot_path()` | Determine FastPath / ButtonWake / Interactive |
+| `select_boot_path()` | Determine ChargingOnly / FastPath / ButtonWake / Interactive |
 | `is_gps_active_at_boot()` | GPS mode + tracking state → bool |
 | `measures_to_ago()` | Convert shared `Measures` → product `MeasuresAGo` |
 | `build_fast_path_display()` | Build `DisplayValues` for locked dashboard |

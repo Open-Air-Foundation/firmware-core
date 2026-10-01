@@ -595,34 +595,31 @@ sleep) and the full 10 s warmup runs on wake.
 
 ### Wake and Boot Path
 
-Deep sleep reboots the CPU. All tasks restart from `app_main`. Two
-abbreviated paths exist to avoid the full event-loop overhead when it is
-not needed.
-
-```text
-app_main:
-  GoHardwareBoard board;
-  GoApp app(board);
-  app.run();
-
-GoApp::run():
-  cause = PowerService::get_wake_cause()
-  path = select_boot_path(cause, load_rtc_app_state())
-
-  FastPath    → run_fast_path(state)        // never returns
-  ButtonWake  → run_button_wake_path(state) // never returns
-  Interactive → run_interactive(cause, {})  // never returns
-```
-
-`select_boot_path()` is a pure function (host-testable):
+Deep sleep reboots the CPU. All tasks restart from `app_main`, which creates
+the board and calls `GoApp::run()`. Active factory fuel-gauge learning takes
+priority. Otherwise, the app probes charging-only eligibility and passes it
+to the pure, host-testable `select_boot_path(cause, state,
+charging_only_eligible)` function:
 
 | Wake Cause | Condition | Path |
 |---|---|---|
+| `PowerOn` | Hardware power-on reset with confirmed external input | `ChargingOnly` |
 | `Timer` + `Locked` | `is_fast_path_wake()` | `FastPath` — measure, display, sleep or promote |
 | `Timer` + `Unlocked` | Not fast-path eligible | `Interactive` |
 | `Button` + `Offline` | -- | `ButtonWake` — four-phase early paint |
 | `Button` + non-Offline | -- | `Interactive` |
-| `PowerOn` | -- | `Interactive` |
+| `PowerOn` | Not charging-only eligible, including software reset | `Interactive` |
+
+Charging-only boot shows a static battery-and-bolt icon with "Charging" and
+"Hold power button / to turn on". The charger is initialized once, PM power is
+disabled, and sensors, radios, storage, and the orchestrator remain unstarted.
+The main CPU feeds the external watchdog and uses one-second light sleeps to
+poll external-power status; no LP-core feeder runs. Button wake restarts into
+normal startup. A valid unplug reading refreshes "Powered off" and calls
+`shutdown()` without rechecking the cable or button after the refresh.
+Charging-only eligibility requires `ESP_RST_POWERON` and external input,
+regardless of charge completion; there is no startup button override. See
+[Hardware Init](docs/hardware_init.md#boot-path-selection) for detection rules.
 
 Hardware initialization is managed by **GoHardwareBoard** through
 fine-grained init methods and lazy service accessors. `init_nvs()`,
