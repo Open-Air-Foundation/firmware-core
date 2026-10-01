@@ -1575,6 +1575,9 @@ TEST_CASE("UIManager: set_screen", "[UIManager][screen]") {
   ui.set_screen(Screen::ShutdownCharging);
   CHECK(ui.current_screen() == Screen::ShutdownCharging);
 
+  ui.set_screen(Screen::ShutdownCharged);
+  CHECK(ui.current_screen() == Screen::ShutdownCharged);
+
   ui.set_screen(Screen::ShutdownDischarge);
   CHECK(ui.current_screen() == Screen::ShutdownDischarge);
 

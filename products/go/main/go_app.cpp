@@ -81,6 +81,15 @@ static constexpr uint32_t CHARGING_ONLY_POLL_INTERVAL_MS = 2000;
 // Strings owned by GoApp that WifiService::Config holds pointers into.
 // Stack-allocated in run_*; lifetime = process (functions never return).
 namespace {
+Screen charging_screen(const BmsStatus &status, Screen current) {
+  if (!status.is_charging_state_valid() || status.charging_state == BmsChargingState::NotCharging) {
+    return current;
+  }
+  return status.charging_state == BmsChargingState::ChargeTerminationDone
+             ? Screen::ShutdownCharged
+             : Screen::ShutdownCharging;
+}
+
 struct StationaryStrings {
   std::string ap_ssid;               // "airgradient-<12-hex>"
   std::string hostname;              // "airgradient_<12-hex>"
@@ -171,7 +180,8 @@ void GoApp::run() {
 
   WakeCause cause = PowerService::get_wake_cause();
   RtcAppState state = load_rtc_app_state();
-  const bool charging_only_eligible = detect_charging_only_boot();
+  BmsStatus charging_status{};
+  const bool charging_only_eligible = detect_charging_only_boot(charging_status);
 
   AG_LOGI(TAG,
           "reset_reason=%d wake_cause=%d rtc_state: mode=%d behavior=%d lock=%d gps=%d "
@@ -184,7 +194,7 @@ void GoApp::run() {
   BootPath path = select_boot_path(cause, state, charging_only_eligible);
   switch (path) {
   case BootPath::ChargingOnly:
-    run_charging_only();
+    run_charging_only(charging_status);
     break; // never reached
   case BootPath::FastPath:
     run_fast_path(state);
@@ -203,7 +213,7 @@ void GoApp::run() {
 // Charging-only boot — USB power alone does not start the application
 // ===========================================================================
 
-bool GoApp::detect_charging_only_boot() {
+bool GoApp::detect_charging_only_boot(BmsStatus &status) {
   if (!PowerService::is_power_on_reset()) {
     return false;
   }
@@ -214,7 +224,7 @@ bool GoApp::detect_charging_only_boot() {
     auto *bms = _board.bms();
     for (uint8_t attempt = 0; bms != nullptr && attempt < CHARGING_BOOT_STATUS_ATTEMPTS;
          ++attempt) {
-      BmsStatus status{};
+      status = {};
       if (bms->read_status(status) && status.is_power_source_valid()) {
         plugged_in = bms_power_source_has_external_input(status.power_source);
         break;
@@ -227,7 +237,7 @@ bool GoApp::detect_charging_only_boot() {
   return plugged_in;
 }
 
-void GoApp::run_charging_only() {
+void GoApp::run_charging_only(const BmsStatus &initial_status) {
   AG_LOGI(TAG, "charging-only boot: external power present");
   const auto &gpio = _board.gpio_hal();
   _board.init_fuel_gauge();
@@ -237,7 +247,7 @@ void GoApp::run_charging_only() {
   _board.init_spi();
   auto &display = _board.display();
   DisplayValues values{};
-  values.screen = Screen::ShutdownCharging;
+  values.screen = charging_screen(initial_status, Screen::ShutdownCharging);
   display.init(values);
   display.flush();
   display.stop();
@@ -258,6 +268,12 @@ void GoApp::run_charging_only() {
       continue; // A failed read is not evidence of an unplug.
     }
     if (bms_power_source_has_external_input(status.power_source)) {
+      const Screen next_screen = charging_screen(status, values.screen);
+      if (next_screen != values.screen) {
+        values.screen = next_screen;
+        display.update_sync(values);
+        display.deep_sleep();
+      }
       continue;
     }
 

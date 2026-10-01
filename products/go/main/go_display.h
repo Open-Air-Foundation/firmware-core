@@ -48,6 +48,7 @@ enum class Screen : uint8_t {
   FgLearnComplete,   ///< Learning: verified pass (terminal)
   FgLearnFailed,     ///< Learning: rejected (terminal, sticky)
   ShutdownCharging,  ///< USB-powered cold boot; application remains off
+  ShutdownCharged,   ///< Charging-only mode; charger reports charge complete
 };
 
 enum class Metric : uint8_t {

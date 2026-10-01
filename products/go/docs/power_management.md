@@ -203,7 +203,8 @@ initializer and begin a new session. Uptime is not part of `RtcAppState`, and
 
 `GoApp::run_charging_only()` keeps the application off while external power is
 present. After boot detection initializes the charger, the runner initializes
-the fuel gauge, disables PM power, paints `ShutdownCharging`, stops the display
+the fuel gauge, disables PM power, paints `ShutdownCharging` or `ShutdownCharged`
+from the boot-detection status, stops the display
 worker, and puts the panel to sleep. Each iteration feeds the external watchdog
 from the main CPU and calls `enter_light_sleep(2000)`. The LP-core watchdog
 feeder is not started, and the charger is not reinitialized on each poll.
@@ -222,7 +223,12 @@ a full `ShutdownUser` refresh, puts the panel to sleep, and calls `shutdown()`.
 There is no cable or button recheck after the refresh, so reconnecting during
 that refresh does not cancel shutdown.
 
-The static "Charging" page also covers a full battery. This loop uses status
+`ChargeTerminationDone` selects "Battery Full" with a filled-battery icon.
+Active charging selects "Charging" with a battery-and-bolt icon. The display
+refreshes only when the selected page changes and sleeps afterward. Unknown
+charging state, failed reads, and `NotCharging` retain the current page;
+`NotCharging` alone is not evidence of a full battery. At startup, Charging is
+the default unless charge completion is confirmed. This loop uses status
 polling only; the orchestrator's runtime thermal and full-charge-pause policies
 do not run here. Charger-chip protections and charge termination remain active.
 This boot path is separate from user-requested shutdown while already running

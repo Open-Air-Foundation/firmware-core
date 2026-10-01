@@ -478,7 +478,10 @@ public:
 
   explicit GoAppTestAccess(GoApp &app) : _app(app) {}
 
-  bool detect_charging_only_boot() { return _app.detect_charging_only_boot(); }
+  bool detect_charging_only_boot() {
+    BmsStatus status{};
+    return _app.detect_charging_only_boot(status);
+  }
 
   FastPathResult execute_fast_path(const RtcAppState &state, const volatile bool &button,
                                    const RtcDisplaySnapshot *snapshot = nullptr,
@@ -597,7 +600,9 @@ TEST_CASE("Charging-only boot: light sleep retains charger until unplug, then pa
         if (test_spy::light_sleep_count == 2) {
           board._bms.status.power_source = BmsPowerSource::None;
         }
-        CHECK(DisplayService::spy_last_screen == Screen::ShutdownCharging);
+        CHECK(DisplayService::spy_last_screen == (charge == BmsChargingState::ChargeTerminationDone
+                                                      ? Screen::ShutdownCharged
+                                                      : Screen::ShutdownCharging));
         CHECK(DisplayService::spy_sync_update_count == 0);
         return false;
       };
@@ -624,6 +629,58 @@ TEST_CASE("Charging-only boot: light sleep retains charger until unplug, then pa
       CHECK_FALSE(test_spy::bms_polled);         // No runtime charging-policy poll.
       CHECK_FALSE(test_spy::enter_sleep_called); // No measurement timer sleep.
     }
+  }
+}
+
+TEST_CASE("Charging-only polling: repaint only on completion and charging resumption") {
+  for (auto resumed :
+       {BmsChargingState::TrickleCharge, BmsChargingState::PreCharge, BmsChargingState::FastCharge,
+        BmsChargingState::TaperCharge, BmsChargingState::TopOffTimerActiveCharging}) {
+    test_spy::reset();
+    test_spy::power_on_reset = true;
+    MockBoard board;
+    board._bms.status.power_source = BmsPowerSource::UsbDcp;
+    board._bms.status.charging_state = BmsChargingState::FastCharge;
+    test_spy::light_sleep_callback = [&] {
+      const auto count = test_spy::light_sleep_count;
+      REQUIRE(count <= 9);
+      CHECK(DisplayService::spy_last_screen ==
+            (count >= 3 && count <= 7 ? Screen::ShutdownCharged : Screen::ShutdownCharging));
+      CHECK(DisplayService::spy_sync_update_count == (count <= 2 ? 0 : count <= 7 ? 1 : 2));
+      switch (count) {
+      case 1:
+      case 6:
+        board._bms.status.charging_state = BmsChargingState::NotCharging;
+        break;
+      case 2:
+      case 3:
+        board._bms.status.charging_state = BmsChargingState::ChargeTerminationDone;
+        break;
+      case 4:
+        board._bms.status.charging_state = resumed;
+        board._bms.status_failures_remaining = 1;
+        break;
+      case 5:
+        board._bms.status.charging_state = BmsChargingState::Unknown;
+        break;
+      case 7:
+      case 8:
+        board._bms.status.charging_state = resumed;
+        break;
+      case 9:
+        board._bms.status.power_source = BmsPowerSource::None;
+        break;
+      }
+      return false;
+    };
+    GoApp app(board);
+    app.run();
+
+    CHECK(test_spy::shutdown_prepared);
+    CHECK(DisplayService::spy_sync_update_count == 3); // Full, charging, powered off.
+    CHECK(test_spy::light_sleep_prepared);
+    CHECK(board.bms_init_attempts == 1);
+    CHECK(board._bms.status_reads == 10);
   }
 }
 
@@ -714,6 +771,10 @@ TEST_CASE("Charging-only button wake: restarts for normal startup") {
   test_spy::power_on_reset = true;
   MockBoard board;
   board._bms.status.power_source = BmsPowerSource::UsbDcp;
+  SECTION("charging") { board._bms.status.charging_state = BmsChargingState::FastCharge; }
+  SECTION("fully charged") {
+    board._bms.status.charging_state = BmsChargingState::ChargeTerminationDone;
+  }
   test_spy::light_sleep_callback = [&] {
     if (test_spy::light_sleep_count != 3) {
       return false;

@@ -611,7 +611,9 @@ charging_only_eligible)` function:
 | `PowerOn` | Not charging-only eligible, including software reset | `Interactive` |
 
 Charging-only boot shows a static battery-and-bolt icon with "Charging" and
-"Hold power button / to turn on". The charger is initialized once, PM power is
+"Hold power button / to turn on". Charge completion shows a filled battery
+and "Battery Full", including when already full at boot. Only charging-state
+transitions repaint the page. The charger is initialized once, PM power is
 disabled, and sensors, radios, storage, and the orchestrator remain unstarted.
 The main CPU feeds the external watchdog and uses two-second light sleeps to
 poll external-power status; no LP-core feeder runs. Button wake restarts into

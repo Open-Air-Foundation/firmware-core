@@ -670,8 +670,8 @@ bool is_list_screen(Screen screen) {
 // Any reason-specific shutdown screen.
 bool is_shutdown_screen(Screen screen) {
   return screen == Screen::ShutdownUser || screen == Screen::ShutdownCharging ||
-         screen == Screen::ShutdownDischarge || screen == Screen::ShutdownTemperature ||
-         screen == Screen::ShutdownTemperatureLow;
+         screen == Screen::ShutdownCharged || screen == Screen::ShutdownDischarge ||
+         screen == Screen::ShutdownTemperature || screen == Screen::ShutdownTemperatureLow;
 }
 
 // A "navigable" screen is one the user reaches through normal menu interaction.
@@ -961,7 +961,7 @@ void draw_shutdown_power_icon(u8g2_t *u, int center_x, int center_y) {
   u8g2_DrawBox(u, center_x - 1, center_y - RADIUS - 4, STROKE_W, RADIUS + 5);
 }
 
-void draw_shutdown_charging_icon(u8g2_t *u, int center_x, int center_y) {
+void draw_shutdown_charge_icon(u8g2_t *u, int center_x, int center_y, bool full) {
   constexpr int BODY_W = 48;
   constexpr int BODY_H = 30;
   constexpr int STROKE_W = 2;
@@ -980,6 +980,13 @@ void draw_shutdown_charging_icon(u8g2_t *u, int center_x, int center_y) {
   u8g2_DrawBox(u, x, y, STROKE_W, BODY_H);
   u8g2_DrawBox(u, x + BODY_W - STROKE_W, y, STROKE_W, BODY_H);
   u8g2_DrawBox(u, x + BODY_W, center_y - TERMINAL_H / 2, TERMINAL_W, TERMINAL_H);
+
+  if (full) {
+    constexpr int FILL_INSET = 5;
+    u8g2_DrawBox(u, x + FILL_INSET, y + FILL_INSET, BODY_W - 2 * FILL_INSET,
+                 BODY_H - 2 * FILL_INSET);
+    return;
+  }
 
   // Overlapping filled triangles keep the lightning bolt solid at this size.
   u8g2_DrawTriangle(u, bolt_x + BOLT_TIP_X, center_y - BOLT_TIP_Y, bolt_x - BOLT_SHOULDER_X,
@@ -1481,6 +1488,7 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     break;
   case Screen::ShutdownUser:
   case Screen::ShutdownCharging:
+  case Screen::ShutdownCharged:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
   case Screen::ShutdownTemperatureLow:
@@ -1826,8 +1834,12 @@ void DisplayService::_draw_shutdown(Screen s) {
   // Reason-specific icon + text.
   switch (s) {
   case Screen::ShutdownCharging:
-    draw_shutdown_charging_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y);
+    draw_shutdown_charge_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y, false);
     draw_shutdown_text(&_u8g2, "Charging", "", "Hold power button", "to turn on");
+    break;
+  case Screen::ShutdownCharged:
+    draw_shutdown_charge_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y, true);
+    draw_shutdown_text(&_u8g2, "Battery Full", "", "Hold power button", "to turn on");
     break;
   case Screen::ShutdownDischarge:
     draw_shutdown_battery_low_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y);
