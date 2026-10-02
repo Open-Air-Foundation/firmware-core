@@ -874,7 +874,7 @@ TEST_CASE("snapshot_state: captures current application state", "[Orchestrator][
   REQUIRE(state.mode == OperatingMode::Portable);
   REQUIRE(state.behavior == Behavior::Idle);
   REQUIRE(state.lock_state == LockState::Locked);
-  REQUIRE(state.gps_enabled == true);
+  REQUIRE(state.has_flag(RtcAppFlag::GpsEnabled) == true);
   REQUIRE(state.tracking_state == TrackingState::Idle);
   REQUIRE(state.tracking_session_id == 0);
 }
@@ -1310,10 +1310,10 @@ TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][i
       .mode = OperatingMode::Portable,
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
-      .gps_enabled = true,
       .tracking_state = TrackingState::Recording,
       .tracking_session_id = 12345,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, true);
 
   auto orch = f.make_orchestrator();
 
@@ -1350,10 +1350,10 @@ TEST_CASE(
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
-      .gps_enabled = false,
       .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, false);
 
   auto orch = f.make_orchestrator();
 
@@ -1406,10 +1406,10 @@ TEST_CASE("init(Button, display_painted + unlocked): resumes route when tracking
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
-      .gps_enabled = true,
       .tracking_state = TrackingState::Recording,
       .tracking_session_id = 42000,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, true);
 
   auto orch = f.make_orchestrator();
 
@@ -2992,10 +2992,10 @@ TEST_CASE("button wake: pre-armed snackbar clears in single timer fire",
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
-      .gps_enabled = false,
       .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, false);
 
   auto orch = f.make_orchestrator();
 
@@ -3562,7 +3562,7 @@ TEST_CASE("shutdown: USB user request saves RTC handoff and reboots", "[Orchestr
     A::shutdown(orch);
     CHECK(test_spy::cache_backed_up);
     CHECK(test_spy::state_saved);
-    CHECK(test_spy::last_saved_state.charging_only_requested);
+    CHECK(test_spy::last_saved_state.has_flag(RtcAppFlag::ChargingOnlyRequested));
     CHECK(test_spy::power_reboot_called);
     CHECK_FALSE(test_spy::shutdown_called);
     CHECK(f.ui_manager.current_screen() == Screen::ShutdownUser);
@@ -3571,7 +3571,7 @@ TEST_CASE("shutdown: USB user request saves RTC handoff and reboots", "[Orchestr
   SECTION("protective shutdown keeps ship mode") {
     A::shutdown(orch, ShipModeRequest::OverTemperature);
     CHECK_FALSE(test_spy::power_reboot_called);
-    CHECK_FALSE(test_spy::last_saved_state.charging_only_requested);
+    CHECK_FALSE(test_spy::last_saved_state.has_flag(RtcAppFlag::ChargingOnlyRequested));
     CHECK(test_spy::shutdown_called);
   }
 }
@@ -4947,7 +4947,7 @@ TEST_CASE("prepare_for_sleep: short sleep keeps PM measuring and saves warm stat
   CHECK(test_spy::sensor_stopped);
   CHECK_FALSE(test_spy::sensor_stop_sleep_pm);
   CHECK(test_spy::state_saved);
-  CHECK(test_spy::last_saved_state.sensors_warm);
+  CHECK(test_spy::last_saved_state.has_flag(RtcAppFlag::SensorsWarm));
 }
 
 TEST_CASE("prepare_for_sleep: long sleep sleeps PM and saves cold state",
@@ -4962,7 +4962,7 @@ TEST_CASE("prepare_for_sleep: long sleep sleeps PM and saves cold state",
   CHECK(test_spy::sensor_stopped);
   CHECK(test_spy::sensor_stop_sleep_pm);
   CHECK(test_spy::state_saved);
-  CHECK_FALSE(test_spy::last_saved_state.sensors_warm);
+  CHECK_FALSE(test_spy::last_saved_state.has_flag(RtcAppFlag::SensorsWarm));
 }
 
 TEST_CASE("prepare_for_sleep: flushes and closes route file when tracking is active",
@@ -5013,10 +5013,10 @@ TEST_CASE("init(Timer, promoted, locked): RTC restored, measures seeded, no meas
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
-      .gps_enabled = true,
       .tracking_state = TrackingState::Recording,
       .tracking_session_id = 55555,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, true);
 
   auto orch = f.make_orchestrator();
 
@@ -5070,10 +5070,10 @@ TEST_CASE("init(Timer, promoted, unlocked): RTC restored, unlock called, no meas
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
-      .gps_enabled = false,
       .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, false);
 
   auto orch = f.make_orchestrator();
 
@@ -5121,10 +5121,10 @@ TEST_CASE("init(Timer, promoted, unlocked, painted): state set directly, no upda
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
-      .gps_enabled = true,
       .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, true);
 
   auto orch = f.make_orchestrator();
 
@@ -5157,10 +5157,10 @@ TEST_CASE("init(Timer, promoted, no measures): RTC restored, measurement request
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
-      .gps_enabled = true,
       .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, true);
 
   auto orch = f.make_orchestrator();
 
@@ -5195,10 +5195,10 @@ TEST_CASE("init(PowerOn, default handoff): no RTC restored, locked, measurement 
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
-      .gps_enabled = false,
       .tracking_state = TrackingState::Recording,
       .tracking_session_id = 99999,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, false);
 
   auto orch = f.make_orchestrator();
 
@@ -5235,10 +5235,10 @@ TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with bu
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
-      .gps_enabled = false,
       .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, false);
 
   auto orch = f.make_orchestrator();
 

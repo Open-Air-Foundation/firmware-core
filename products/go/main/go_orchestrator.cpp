@@ -204,7 +204,7 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   if (cause != WakeCause::PowerOn) {
     RtcAppState state = _svc.power_service.load_state();
     _behavior = tracking_session_active(state.tracking_state) ? Behavior::Tracking : Behavior::Idle;
-    _gps_enabled = state.gps_enabled;
+    _gps_enabled = state.has_flag(RtcAppFlag::GpsEnabled);
     _tracking_state = state.tracking_state;
     _tracking_session_id = state.tracking_session_id;
   }
@@ -2254,7 +2254,7 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
   if (reason == ShipModeRequest::None &&
       bms_power_source_has_external_input(_latest_power.charger_status.power_source)) {
     RtcAppState state = snapshot_state();
-    state.charging_only_requested = true;
+    state.set_flag(RtcAppFlag::ChargingOnlyRequested, true);
     _svc.power_service.save_state(state);
     AG_LOGI(TAG, "shutdown: rebooting into charging-only mode");
     _svc.power_service.reboot();
@@ -3331,7 +3331,7 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 
   // Persist RTC state with the warm-sensor flag for the next wake cycle.
   RtcAppState state = snapshot_state();
-  state.sensors_warm = hold_pm_sensor;
+  state.set_flag(RtcAppFlag::SensorsWarm, hold_pm_sensor);
   _svc.power_service.save_state(state);
 
   // Reset external watchdog last — gives it the full timeout window during sleep.
@@ -3382,12 +3382,13 @@ uint32_t Orchestrator::generate_session_id() {
 }
 
 RtcAppState Orchestrator::snapshot_state() const {
-  return RtcAppState{
+  RtcAppState state{
       .mode = _mode,
       .behavior = _behavior,
       .lock_state = _lock_state,
-      .gps_enabled = _gps_enabled,
       .tracking_state = _tracking_state,
       .tracking_session_id = _tracking_session_id,
   };
+  state.set_flag(RtcAppFlag::GpsEnabled, _gps_enabled);
+  return state;
 }

@@ -557,63 +557,119 @@ TEST_CASE("reboot: waits for Power release without changing RTC state", "[PowerS
   gpio.get_level = [](int) { return ++button_reads < 3 ? 0 : 1; };
   PowerService svc(&bms, gpio, DEFAULT_CONFIG);
   RtcAppState state{};
-  state.charging_only_requested = true;
+  state.set_flag(RtcAppFlag::ChargingOnlyRequested, true);
   svc.save_state(state);
   FORBID_CALL(bms, read_status(trompeloeil::_));
   REQUIRE_CALL(rtos.mock, delay_ms_impl(50)).TIMES(2);
   svc.reboot();
   CHECK(button_reads == 3);
-  CHECK(svc.load_state().charging_only_requested);
+  CHECK(svc.load_state().has_flag(RtcAppFlag::ChargingOnlyRequested));
+}
+
+TEST_CASE("RtcAppState: defaults and independent flag updates", "[PowerService][rtc]") {
+  CHECK(static_cast<uint32_t>(RtcAppFlag::GpsEnabled) == 0x01);
+  CHECK(static_cast<uint32_t>(RtcAppFlag::SensorsWarm) == 0x02);
+  CHECK(static_cast<uint32_t>(RtcAppFlag::ChargingOnlyRequested) == 0x04);
+
+  const RtcAppState defaults{};
+  CHECK(defaults.mode == OperatingMode::Portable);
+  CHECK(defaults.behavior == Behavior::Idle);
+  CHECK(defaults.lock_state == LockState::Locked);
+  CHECK(defaults.tracking_state == TrackingState::Idle);
+  CHECK(defaults.tracking_session_id == 0);
+  CHECK(defaults.flags == static_cast<uint32_t>(RtcAppFlag::GpsEnabled));
+  CHECK(defaults.has_flag(RtcAppFlag::GpsEnabled));
+  CHECK_FALSE(defaults.has_flag(RtcAppFlag::SensorsWarm));
+  CHECK_FALSE(defaults.has_flag(RtcAppFlag::ChargingOnlyRequested));
+
+  constexpr uint32_t ALL_BITS = ~uint32_t{0};
+  for (const auto flag :
+       {RtcAppFlag::GpsEnabled, RtcAppFlag::SensorsWarm, RtcAppFlag::ChargingOnlyRequested}) {
+    const auto mask = static_cast<uint32_t>(flag);
+    CAPTURE(mask);
+    RtcAppState state{};
+    state.flags = ALL_BITS;
+    state.set_flag(flag, false);
+    state.set_flag(flag, false);
+    CHECK_FALSE(state.has_flag(flag));
+    CHECK(state.flags == (ALL_BITS & ~mask));
+    state.set_flag(flag, true);
+    state.set_flag(flag, true);
+    CHECK(state.has_flag(flag));
+    CHECK(state.flags == ALL_BITS);
+
+    state.flags = 0;
+    state.set_flag(flag, true);
+    CHECK(state.has_flag(flag));
+    CHECK(state.flags == mask);
+    state.set_flag(flag, false);
+    CHECK(state.flags == 0);
+  }
 }
 
 TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]") {
   MockBmsDevice mock_bms;
   PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
-  SECTION("load before any save — returns default RtcAppState") {
-    // Note: The static s_rtc_state_valid may carry state from previous
-    // sections.  This test relies on the FIRST test execution order; however,
-    // the default-constructed assertion still verifies the fallback path if
-    // no state has been saved (or if the test runner starts fresh).
-    //
-    // For robustness, we create a second PowerService instance that shares
-    // the same static variable — this is inherent to the file-scope design.
-    // We test the contract: if nothing was saved, defaults are returned.
+  SECTION("invalid RTC storage returns defaults through both loaders") {
+    RtcAppState stale{};
+    stale.mode = OperatingMode::Offline;
+    stale.behavior = Behavior::Tracking;
+    stale.lock_state = LockState::Unlocked;
+    stale.tracking_state = TrackingState::Recording;
+    stale.tracking_session_id = 42731;
+    stale.flags = ~uint32_t{0};
+    svc.save_state(stale);
+    invalidate_rtc_app_state_for_test();
 
-    // Intentionally do not call save_state().  If s_rtc_state_valid is false
-    // (first run), load_state() returns defaults.  If prior sections already
-    // saved, we skip this assertion and verify round-trip instead.
+    for (const auto loaded : {svc.load_state(), load_rtc_app_state()}) {
+      CHECK(loaded.mode == OperatingMode::Portable);
+      CHECK(loaded.behavior == Behavior::Idle);
+      CHECK(loaded.lock_state == LockState::Locked);
+      CHECK(loaded.tracking_state == TrackingState::Idle);
+      CHECK(loaded.tracking_session_id == 0);
+      CHECK(loaded.flags == static_cast<uint32_t>(RtcAppFlag::GpsEnabled));
+    }
   }
 
-  SECTION("save then load — round-trip fidelity") {
-    RtcAppState saved{};
-    saved.mode = OperatingMode::Portable;
-    saved.behavior = Behavior::Tracking;
-    saved.lock_state = LockState::Unlocked;
-    saved.gps_enabled = false;
-    saved.tracking_state = TrackingState::Recording;
-    saved.tracking_session_id = 42731;
-    saved.sensors_warm = true;
-    CHECK_FALSE(saved.charging_only_requested);
-    saved.charging_only_requested = true;
+  SECTION("all flag combinations and reserved bits survive both RTC loaders") {
+    constexpr uint32_t FLAG_COMBINATION_COUNT = 8;
+    constexpr uint32_t RESERVED_BITS = ~uint32_t{0x07};
+    for (const uint32_t reserved : {uint32_t{0}, RESERVED_BITS}) {
+      for (uint32_t combination = 0; combination < FLAG_COMBINATION_COUNT; ++combination) {
+        CAPTURE(combination, reserved);
+        RtcAppState saved{};
+        saved.mode = OperatingMode::Stationary;
+        saved.behavior = Behavior::Tracking;
+        saved.lock_state = LockState::Unlocked;
+        saved.tracking_state = TrackingState::Recording;
+        saved.tracking_session_id = 42731;
+        saved.flags = reserved;
+        saved.set_flag(RtcAppFlag::GpsEnabled, (combination & 0x01) != 0);
+        saved.set_flag(RtcAppFlag::SensorsWarm, (combination & 0x02) != 0);
+        saved.set_flag(RtcAppFlag::ChargingOnlyRequested, (combination & 0x04) != 0);
+        svc.save_state(saved);
 
-    svc.save_state(saved);
-    const RtcAppState loaded = svc.load_state();
-
-    CHECK(loaded.mode == OperatingMode::Portable);
-    CHECK(loaded.behavior == Behavior::Tracking);
-    CHECK(loaded.lock_state == LockState::Unlocked);
-    CHECK_FALSE(loaded.gps_enabled);
-    CHECK(loaded.tracking_state == TrackingState::Recording);
-    CHECK(loaded.tracking_session_id == 42731);
-    CHECK(loaded.sensors_warm);
-    CHECK(loaded.charging_only_requested);
+        for (const auto loaded : {svc.load_state(), load_rtc_app_state()}) {
+          CHECK(loaded.mode == saved.mode);
+          CHECK(loaded.behavior == saved.behavior);
+          CHECK(loaded.lock_state == saved.lock_state);
+          CHECK(loaded.tracking_state == saved.tracking_state);
+          CHECK(loaded.tracking_session_id == saved.tracking_session_id);
+          CHECK(loaded.flags == (reserved | combination));
+          CHECK(loaded.has_flag(RtcAppFlag::GpsEnabled) == ((combination & 0x01) != 0));
+          CHECK(loaded.has_flag(RtcAppFlag::SensorsWarm) == ((combination & 0x02) != 0));
+          CHECK(loaded.has_flag(RtcAppFlag::ChargingOnlyRequested) == ((combination & 0x04) != 0));
+        }
+      }
+    }
   }
 
   SECTION("overwrite with new state — load returns latest") {
     RtcAppState first{};
     first.mode = OperatingMode::Stationary;
     first.tracking_session_id = 11111;
+    first.flags = ~uint32_t{0};
     svc.save_state(first);
 
     RtcAppState second{};
@@ -625,6 +681,8 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
 
     CHECK(loaded.mode == OperatingMode::Offline);
     CHECK(loaded.tracking_session_id == 99999);
+    CHECK(loaded.flags == second.flags);
+    CHECK(load_rtc_app_state().flags == second.flags);
   }
 
   SECTION("sensors_warm defaults to false") {
@@ -633,7 +691,7 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
     svc.save_state(saved);
 
     const RtcAppState loaded = svc.load_state();
-    CHECK_FALSE(loaded.sensors_warm);
+    CHECK_FALSE(loaded.has_flag(RtcAppFlag::SensorsWarm));
   }
 
   SECTION("paused session survives RTC round-trip") {

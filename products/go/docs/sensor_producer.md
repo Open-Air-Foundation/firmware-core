@@ -118,10 +118,9 @@ sensor_producer.stop(true);
 ```
 
 The orchestrator selects the shutdown mode from the planned sleep duration.
-Short sleeps that hold PM power pass `sleep_pm=false` and persist
-`sensors_warm=true`. Long sleeps pass `sleep_pm=true` and persist
-`sensors_warm=false`, ensuring that the next timer boot performs the full PM
-warmup.
+Short sleeps that hold PM power pass `sleep_pm=false` and set the saved
+`RtcAppFlag::SensorsWarm` flag. Long sleeps pass `sleep_pm=true` and clear
+that flag, ensuring that the next timer boot performs the full PM warmup.
 
 ## Event Output
 

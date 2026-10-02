@@ -632,7 +632,7 @@ void PowerService::save_state(const RtcAppState &state) {
 
 RtcAppState PowerService::load_state() const {
   if (!s_rtc_state_valid) {
-    // Return defaults: Offline mode, Idle behavior, Locked, GPS on.
+    // Return defaults: Portable mode, Idle behavior, Locked, GPS on.
     return RtcAppState{};
   }
   RtcAppState out{};
@@ -801,3 +801,7 @@ RtcAppState load_rtc_app_state() {
   memcpy(&out, &s_rtc_state, sizeof(RtcAppState));
   return out;
 }
+
+#ifdef TEST_HOST
+void invalidate_rtc_app_state_for_test() { s_rtc_state_valid = false; }
+#endif

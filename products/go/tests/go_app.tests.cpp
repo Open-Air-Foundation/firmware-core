@@ -541,7 +541,7 @@ TEST_CASE("select_boot_path: eligible USB cold boot -> ChargingOnly") {
 
 TEST_CASE("select_boot_path: shutdown request overrides timer fast path") {
   RtcAppState state{};
-  state.charging_only_requested = true;
+  state.set_flag(RtcAppFlag::ChargingOnlyRequested, true);
   CHECK(select_boot_path(WakeCause::Timer, state, false) == BootPath::ChargingOnly);
 }
 
@@ -693,13 +693,13 @@ TEST_CASE("Charging-only polling: repaint only on completion and charging resump
 TEST_CASE("Charging-only shutdown handoff: consumes the request before entering the loop") {
   test_spy::reset();
   test_spy::wake_cause = WakeCause::Timer;
-  test_spy::rtc_state.charging_only_requested = true;
+  test_spy::rtc_state.set_flag(RtcAppFlag::ChargingOnlyRequested, true);
   MockBoard board;
   board._bms.status.power_source = BmsPowerSource::UsbDcp;
   SECTION("charging") { board._bms.status.charging_state = BmsChargingState::FastCharge; }
   SECTION("full") { board._bms.status.charging_state = BmsChargingState::ChargeTerminationDone; }
   test_spy::light_sleep_callback = [&] {
-    CHECK_FALSE(test_spy::rtc_state.charging_only_requested);
+    CHECK_FALSE(test_spy::rtc_state.has_flag(RtcAppFlag::ChargingOnlyRequested));
     CHECK(DisplayService::spy_init_count == 1);
     const bool full = board._bms.status.charging_state == BmsChargingState::ChargeTerminationDone;
     CHECK(DisplayService::spy_last_screen ==
@@ -709,7 +709,7 @@ TEST_CASE("Charging-only shutdown handoff: consumes the request before entering 
   };
   GoApp app(board);
   app.run();
-  CHECK_FALSE(test_spy::rtc_state.charging_only_requested);
+  CHECK_FALSE(test_spy::rtc_state.has_flag(RtcAppFlag::ChargingOnlyRequested));
   CHECK_FALSE(test_spy::orchestrator_run_called);
   CHECK_FALSE(board.sensors_called);
   CHECK(board.restart_called);
@@ -1118,7 +1118,7 @@ TEST_CASE("execute_fast_path: warm sensors, measure, sleep") {
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = true;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
   volatile bool button = false;
 
   auto result = access.execute_fast_path(state, button);
@@ -1142,7 +1142,7 @@ TEST_CASE("execute_fast_path: cold sensors full warmup, measure, sleep") {
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = false;
+  state.set_flag(RtcAppFlag::SensorsWarm, false);
   volatile bool button = false;
 
   auto result = access.execute_fast_path(state, button);
@@ -1168,7 +1168,7 @@ TEST_CASE("Offline fast path: temperature trip paints shutdown screen and shuts 
     RtcAppState state{};
     state.mode = OperatingMode::Offline;
     state.lock_state = LockState::Locked;
-    state.sensors_warm = true;
+    state.set_flag(RtcAppFlag::SensorsWarm, true);
 
     access.run_fast_path(state);
 
@@ -1197,7 +1197,7 @@ TEST_CASE("execute_fast_path: button during warmup -> promote unlocked") {
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = false;
+  state.set_flag(RtcAppFlag::SensorsWarm, false);
   volatile bool button = true; // already pressed
 
   auto result = access.execute_fast_path(state, button);
@@ -1217,7 +1217,7 @@ TEST_CASE("execute_fast_path: sleep too short -> promote locked") {
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = true;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
   volatile bool button = false;
 
   auto result = access.execute_fast_path(state, button);
@@ -1240,7 +1240,7 @@ TEST_CASE("execute_fast_path: tracking + GPS active -> route point stored") {
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = true;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
   state.tracking_state = TrackingState::Recording;
   state.tracking_session_id = 12345;
   volatile bool button = false;
@@ -1267,7 +1267,7 @@ TEST_CASE("execute_fast_path: paused session keeps GPS and display but writes no
   GoApp app(board);
   GoAppTestAccess access(app);
   RtcAppState state{};
-  state.sensors_warm = true;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
   state.tracking_state = TrackingState::Paused;
   state.tracking_session_id = 12345;
   volatile bool button = false;
@@ -1297,7 +1297,7 @@ TEST_CASE("execute_fast_path: degraded route uses fuel-gauge battery snapshot") 
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = true;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
   state.tracking_state = TrackingState::Recording;
   state.tracking_session_id = 12345;
   volatile bool button = false;
@@ -1322,7 +1322,7 @@ TEST_CASE("execute_fast_path: resume_route failure -> promote, no display painte
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = true;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
   state.tracking_state = TrackingState::Recording;
   state.tracking_session_id = 12345;
   volatile bool button = false;
@@ -1351,7 +1351,7 @@ TEST_CASE("execute_fast_path: append_route_point failure -> promote, no display 
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = true;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
   state.tracking_state = TrackingState::Recording;
   state.tracking_session_id = 12345;
   volatile bool button = false;
@@ -1378,7 +1378,7 @@ TEST_CASE("execute_fast_path: tracking + GPS off -> no GPS read") {
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = true;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
   state.tracking_state = TrackingState::Recording;
   volatile bool button = false;
 
@@ -1397,7 +1397,7 @@ TEST_CASE("execute_fast_path: no tracking -> no route") {
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = true;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
   state.tracking_state = TrackingState::Idle;
   volatile bool button = false;
 
@@ -1421,7 +1421,7 @@ TEST_CASE("execute_fast_path: retries BMS initialization once") {
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = true;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
   volatile bool button = false;
 
   const auto result = access.execute_fast_path(state, button);
@@ -1518,7 +1518,7 @@ TEST_CASE("execute_fast_path: init ordering — init_core before load_settings b
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = true;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
   volatile bool button = false;
 
   access.execute_fast_path(state, button);
@@ -1546,7 +1546,7 @@ TEST_CASE("execute_fast_path: sleep path ordering — sensors before storage bef
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = true;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
   volatile bool button = false;
 
   access.execute_fast_path(state, button);
@@ -1567,7 +1567,7 @@ TEST_CASE("execute_fast_path: release_gpio_holds after init_core") {
   GoAppTestAccess access(app);
 
   RtcAppState state{};
-  state.sensors_warm = true;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
   volatile bool button = false;
 
   access.execute_fast_path(state, button);

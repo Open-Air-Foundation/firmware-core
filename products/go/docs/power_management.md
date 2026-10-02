@@ -179,8 +179,9 @@ sleep) matches the configured interval.
      both button pins (ESP32-C5 target uses EXT1; no EXT0 support on this chip)
 3. Calls `esp_deep_sleep_start()` — does **not** return.
 
-The caller must set `RtcAppState::sensors_warm` via
-`should_hold_pm_sensor()` and call `save_state()` **before** `enter_sleep()`.
+The caller must set `RtcAppFlag::SensorsWarm` using `set_flag()` with the
+result of `should_hold_pm_sensor()`, then call `save_state()` **before**
+`enter_sleep()`.
 The same decision controls sensor-producer shutdown: held sleeps stop the task
 with `sleep_pm=false`, while longer sleeps use `sleep_pm=true`. This keeps the
 SPS30's internal measurement state consistent with the persisted warm flag.
@@ -242,9 +243,10 @@ per-pin hold persists through deep sleep automatically, so no global
 `gpio_deep_sleep_hold_en()` call is needed. The fan keeps spinning and the
 sensor stays in measurement mode.
 
-On the next timer wake the fast path reads `RtcAppState::sensors_warm`:
+On the next timer wake the fast path reads
+`state.has_flag(RtcAppFlag::SensorsWarm)`:
 
-| `sensors_warm` | Behavior |
+| `SensorsWarm` | Behavior |
 |---|---|
 | `true`  | `release_sleep_gpio_holds()` calls `gpio_hold_dis()` on the pin, `SPS30::init(skip_reset=true)` re-attaches without resetting, **warmup loop skipped entirely** — boot drops from ~14–17 s to ~4–7 s |
 | `false` | Normal cold boot: full `SPS30::init()` with `CMD_RESET`, 10 s interruptible warmup |
@@ -478,7 +480,7 @@ All init runs via idempotent GoBoard methods.
 
 Two separate RTC-memory regions survive deep sleep:
 
-### App state (`go_power.cpp`)
+### App State (`go_power.cpp`)
 
 ```cpp
 RTC_DATA_ATTR static RtcAppState s_rtc_state;
@@ -488,22 +490,51 @@ RTC_DATA_ATTR static bool s_rtc_state_valid = false;
 - `save_state(state)` — copies `state` into `s_rtc_state` and sets the valid flag.
 - `load_state()` — returns a copy of `s_rtc_state` if valid; otherwise returns
   a default-constructed `RtcAppState` (safe starting point for fresh power-on).
+- `load_rtc_app_state()` — provides the same load behavior during early boot,
+  before a `PowerService` exists.
+
+[`RtcAppState`](../main/go_types.h) stores boolean state in a four-byte
+`uint32_t flags` mask with explicit `RtcAppFlag` assignments:
+
+| Flag | Bit | Default | Purpose |
+|---|---|---|---|
+| `GpsEnabled` | 0 (`1u << 0`) | Set | Cached GPS-enabled setting |
+| `SensorsWarm` | 1 (`1u << 1`) | Clear | Sensors kept powered during deep sleep |
+| `ChargingOnlyRequested` | 2 (`1u << 2`) | Clear | One-shot charging-only boot request |
+| Reserved | 3–31 | Clear | Future flags |
+
+Call `has_flag(flag)` to read a flag and `set_flag(flag, enabled)` to change
+it. Reads have no side effects; updates preserve all other bits, including
+reserved bits. RTC save/load copies the complete state, preserving the mask.
+
+`mode`, `behavior`, `lock_state`, and `tracking_state` remain separate
+one-byte enums; `tracking_session_id` remains a separate four-byte integer.
+Their defaults are Portable, Idle, Locked, Idle, and zero respectively. The
+complete structure occupies 12 bytes, enforced by a size assertion in both
+host and firmware builds.
 
 The saved `tracking_state` enum and `tracking_session_id` preserve Recording or
 Paused across deep sleep. A Recording wake reopens the route for append; a
 Paused wake keeps it closed while continuing measurement, display, and configured
 GPS behavior. Only an explicit Resume returns a paused session to Recording.
 
-`charging_only_requested` defaults to false. User shutdown with confirmed USB
-power sets it before a brief timer-woken deep-sleep reboot. Charging-only mode
-clears the saved state before polling. The next Power-button software restart therefore
-starts the application normally. `RTC_DATA_ATTR` state survives deep sleep but
-is reinitialized on software restart, so the handoff does not use `esp_restart()`.
+`RtcAppFlag::ChargingOnlyRequested` defaults to clear. User shutdown with
+confirmed USB power sets it before a brief timer-woken deep-sleep reboot.
+Charging-only mode saves a default-constructed state before polling,
+consuming the request. The next Power-button software restart therefore
+starts the application normally. `RTC_DATA_ATTR` state survives deep sleep
+but is reinitialized on software restart, so the handoff does not use
+`esp_restart()`.
 
 Under `TEST_HOST`, `RTC_DATA_ATTR` is defined away so the variables become
 ordinary statics — `save_state()` / `load_state()` work identically.
+[Power-service host tests](../tests/go_power.tests.cpp) cover defaults,
+independent flag updates, all eight flag combinations through both loaders,
+reserved-bit preservation, invalid-state fallback, and paused-session
+persistence. [Boot tests](../tests/go_app.tests.cpp) verify that charging-only
+mode consumes its request before polling and the next restart boots normally.
 
-### Display snapshot (`go_display.cpp`)
+### Display Snapshot (`go_display.cpp`)
 
 ```cpp
 RTC_DATA_ATTR static RtcDisplaySnapshot s_rtc_display_snapshot;
@@ -519,11 +550,11 @@ including the altitude unit, from the last displayed frame. Allows the
 button-wake path to render a meaningful Home screen without reading NVS or
 sensors.
 
-### RTC memory budget
+### RTC Memory Budget
 
 | Region | Size | Location |
 |---|---|---|
-| `RtcAppState` + valid flag | 16 B + 1 B, excluding linker alignment | `go_power.cpp` |
+| `RtcAppState` + valid flag | 12 B + 1 B, excluding linker alignment | `go_power.cpp` |
 | `PayloadCacheStorageData` | ~1.5 KB | `rtc_payload_cache_storage.cpp` |
 | `RtcDisplaySnapshot` + valid flag | ~45 B | `go_display.cpp` |
 | **Total** | **~1.6 KB** | ESP32-C5: 8 KB available |
@@ -627,7 +658,7 @@ orchestrator and display. The status bar shows a plug icon when
 
 For user shutdown with external input in the latest power status, the
 orchestrator completes its normal shutdown page and cleanup, then saves
-`charging_only_requested` in RTC state and calls `PowerService::reboot()`.
+`RtcAppFlag::ChargingOnlyRequested` in RTC state and calls `PowerService::reboot()`.
 The power service waits for Power release while feeding the external watchdog,
 then enters deep sleep with only a 1 ms timer wake enabled. This preserves RTC
 memory and reboots into the existing charging-only loop without waiting for an
