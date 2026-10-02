@@ -63,18 +63,34 @@ enum class InputType : uint8_t {
 //
 // Saved to RTC memory before deep sleep; restored on wake to resume application
 // state without full re-initialization. Defaults represent a safe starting
-// point for a fresh power-on (Offline, Idle, Locked).
+// point for a fresh power-on (Portable, Idle, Locked).
+
+enum class RtcAppFlag : uint32_t {
+  GpsEnabled = 1u << 0,
+  SensorsWarm = 1u << 1,           ///< Sensors kept powered during last deep sleep
+  ChargingOnlyRequested = 1u << 2, ///< One-shot request after USB-powered user shutdown
+  // Bits 3–31 are reserved for future flags.
+};
 
 struct RtcAppState {
   OperatingMode mode = OperatingMode::Portable;
   Behavior behavior = Behavior::Idle;
   LockState lock_state = LockState::Locked;
-  bool gps_enabled = true;
   TrackingState tracking_state = TrackingState::Idle;
-  uint32_t tracking_session_id = 0;     ///< 5-digit session ID; 0 = no active session
-  bool sensors_warm = false;            ///< Sensors kept powered during last deep sleep
-  bool charging_only_requested = false; ///< One-shot request after USB-powered user shutdown
+  uint32_t tracking_session_id = 0; ///< 5-digit session ID; 0 = no active session
+  uint32_t flags = static_cast<uint32_t>(RtcAppFlag::GpsEnabled);
+
+  constexpr bool has_flag(RtcAppFlag flag) const {
+    return (flags & static_cast<uint32_t>(flag)) != 0;
+  }
+
+  constexpr void set_flag(RtcAppFlag flag, bool enabled) {
+    const auto mask = static_cast<uint32_t>(flag);
+    flags = enabled ? (flags | mask) : (flags & ~mask);
+  }
 };
+
+static_assert(sizeof(RtcAppState) == 12, "RTC app state layout must remain 12 bytes");
 
 // --- Forward declarations for BootHandoff pointer members ---
 

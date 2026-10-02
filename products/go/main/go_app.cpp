@@ -182,15 +182,16 @@ void GoApp::run() {
   RtcAppState state = load_rtc_app_state();
   BmsStatus charging_status{};
   const bool charging_only_eligible =
-      detect_charging_only_boot(charging_status, state.charging_only_requested);
+      detect_charging_only_boot(charging_status, state.has_flag(RtcAppFlag::ChargingOnlyRequested));
 
   AG_LOGI(TAG,
           "reset_reason=%d wake_cause=%d rtc_state: mode=%d behavior=%d lock=%d gps=%d "
           "tracking=%d session=%u warm=%d",
           static_cast<int>(esp_reset_reason()), static_cast<int>(cause),
           static_cast<int>(state.mode), static_cast<int>(state.behavior),
-          static_cast<int>(state.lock_state), state.gps_enabled,
-          static_cast<int>(state.tracking_state), state.tracking_session_id, state.sensors_warm);
+          static_cast<int>(state.lock_state), state.has_flag(RtcAppFlag::GpsEnabled),
+          static_cast<int>(state.tracking_state), state.tracking_session_id,
+          state.has_flag(RtcAppFlag::SensorsWarm));
 
   BootPath path = select_boot_path(cause, state, charging_only_eligible);
   switch (path) {
@@ -321,7 +322,8 @@ void GoApp::run_factory_learning_path(const RtcAppState & /*state*/) {
 // ===========================================================================
 
 void GoApp::run_fast_path(const RtcAppState &state) {
-  AG_LOGI(TAG, "run_fast_path: entering fast-path boot (sensors_warm=%d)", state.sensors_warm);
+  AG_LOGI(TAG, "run_fast_path: entering fast-path boot (sensors_warm=%d)",
+          state.has_flag(RtcAppFlag::SensorsWarm));
   log_heap(TAG, "boot:fast-path:enter");
 
   // ISR for button detection during blocking operations.
@@ -346,7 +348,7 @@ void GoApp::run_fast_path(const RtcAppState &state) {
 
   if (result.outcome == FastPathResult::Outcome::Sleep) {
     RtcAppState save = state;
-    save.sensors_warm = result.sensors_warm;
+    save.set_flag(RtcAppFlag::SensorsWarm, result.sensors_warm);
     _board.power().save_state(save);
 
     _board.display().stop();
@@ -396,12 +398,12 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
 
   GoSettings settings = _board.load_settings();
 
-  SensorManager &sm = _board.sensors(state.sensors_warm);
+  SensorManager &sm = _board.sensors(state.has_flag(RtcAppFlag::SensorsWarm));
 
   bool promote = false;
 
   // --- Warmup (interruptible) ---
-  if (state.sensors_warm) {
+  if (state.has_flag(RtcAppFlag::SensorsWarm)) {
     AG_LOGI(TAG, "fast-path: sensors warm — skipping warmup");
     RTOS::delay_ms(200);
   } else {
@@ -1034,7 +1036,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
 // ===========================================================================
 
 BootPath select_boot_path(WakeCause cause, const RtcAppState &state, bool charging_only_eligible) {
-  if (charging_only_eligible || state.charging_only_requested) {
+  if (charging_only_eligible || state.has_flag(RtcAppFlag::ChargingOnlyRequested)) {
     return BootPath::ChargingOnly;
   }
   if (cause == WakeCause::Timer) {

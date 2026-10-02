@@ -378,7 +378,7 @@ public:
   /// When `should_hold_pm_sensor(sleep_duration_ms)` is true, the PM power
   /// GPIO is held HIGH during deep sleep via `gpio_hold_en()`.  On ESP32-C5
   /// per-pin hold automatically persists through deep sleep.  The caller
-  /// must set `RtcAppState::sensors_warm`
+  /// must set `RtcAppFlag::SensorsWarm` in the saved state
   /// accordingly before calling `save_state()`.
   ///
   /// @param sleep_duration_ms How long to sleep before timer wake.
@@ -493,3 +493,8 @@ private:
 /// state has been saved.  No dependencies — safe to call early in app_main
 /// before PowerService is constructed.
 RtcAppState load_rtc_app_state();
+
+#ifdef TEST_HOST
+/// Simulate invalid RTC storage independently of host test execution order.
+void invalidate_rtc_app_state_for_test();
+#endif
