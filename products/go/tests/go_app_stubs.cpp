@@ -536,6 +536,7 @@ bool PowerService::set_watchdog_timeout_ms(uint32_t /*timeout_ms*/) { return tru
 void PowerService::save_state(const RtcAppState &state) {
   test_spy::state_saved = true;
   test_spy::last_saved_state = state;
+  test_spy::rtc_state = state;
 }
 
 RtcAppState PowerService::load_state() const { return test_spy::rtc_state; }

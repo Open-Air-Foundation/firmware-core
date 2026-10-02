@@ -231,8 +231,8 @@ charging state, failed reads, and `NotCharging` retain the current page;
 the default unless charge completion is confirmed. This loop uses status
 polling only; the orchestrator's runtime thermal and full-charge-pause policies
 do not run here. Charger-chip protections and charge termination remain active.
-This boot path is separate from user-requested shutdown while already running
-with USB attached, which retains the existing deep-sleep fallback.
+User-requested shutdown with USB attached also enters this boot path through
+the one-shot RTC request described under [Shutdown](#shutdown-qon--ship-mode).
 
 ## PM Sensor Warm-Hold
 
@@ -424,8 +424,10 @@ chip cannot trigger thrashing.
 After the active factory-learning check, `detect_charging_only_boot()` requires
 `is_power_on_reset()` (`esp_reset_reason() == ESP_RST_POWERON`) and a valid BMS
 status showing external input. Charge completion does not affect eligibility,
-and button state is not checked. Software resets and deep-sleep wakes bypass
-the probe. A true result selects `ChargingOnly` before the other boot rules;
+and button state is not checked. Software resets and ordinary deep-sleep wakes
+bypass the probe. A one-shot RTC shutdown request allows the probe on its timer
+wake and selects `ChargingOnly` even if the input cannot be confirmed. Otherwise,
+a true detection result selects `ChargingOnly` before the other boot rules;
 see [Hardware Init](hardware_init.md#boot-path-selection) for retry behavior.
 
 ### Fast-path (timer wake, locked)
@@ -492,6 +494,12 @@ Paused across deep sleep. A Recording wake reopens the route for append; a
 Paused wake keeps it closed while continuing measurement, display, and configured
 GPS behavior. Only an explicit Resume returns a paused session to Recording.
 
+`charging_only_requested` defaults to false. User shutdown with confirmed USB
+power sets it before a brief timer-woken deep-sleep reboot. Charging-only mode
+clears the saved state before polling. The next Power-button software restart therefore
+starts the application normally. `RTC_DATA_ATTR` state survives deep sleep but
+is reinitialized on software restart, so the handoff does not use `esp_restart()`.
+
 Under `TEST_HOST`, `RTC_DATA_ATTR` is defined away so the variables become
 ordinary statics — `save_state()` / `load_state()` work identically.
 
@@ -515,7 +523,7 @@ sensors.
 
 | Region | Size | Location |
 |---|---|---|
-| `RtcAppState` + valid flag | ~14 B | `go_power.cpp` |
+| `RtcAppState` + valid flag | 16 B + 1 B, excluding linker alignment | `go_power.cpp` |
 | `PayloadCacheStorageData` | ~1.5 KB | `rtc_payload_cache_storage.cpp` |
 | `RtcDisplaySnapshot` + valid flag | ~45 B | `go_display.cpp` |
 | **Total** | **~1.6 KB** | ESP32-C5: 8 KB available |
@@ -617,6 +625,17 @@ orchestrator and display. The status bar shows a plug icon when
 
 ## Shutdown (QoN / Ship Mode)
 
+For user shutdown with external input in the latest power status, the
+orchestrator completes its normal shutdown page and cleanup, then saves
+`charging_only_requested` in RTC state and calls `PowerService::reboot()`.
+The power service waits for Power release while feeding the external watchdog,
+then enters deep sleep with only a 1 ms timer wake enabled. This preserves RTC
+memory and reboots into the existing charging-only loop without waiting for an
+external watchdog reset. GoApp consumes the request and paints Charging or
+Battery Full using the existing display initialization. The existing loop
+handles charge completion and cable removal through status polling.
+
+Battery-only user shutdown and protective shutdowns keep the ship-mode path.
 `PowerService::shutdown()` triggers BMS QoN (ship mode) via
 `_bms.enter_ship_mode()`, which writes the BQ25629 registers to cut
 power to the entire system. If the I2C write fails (e.g. VBUS present
@@ -639,9 +658,9 @@ the gesture significant:
   cold-boot path. This is effectively a hardware power-cycle restart.
 
 Once the BATFET opens there is no firmware running to suppress the
-re-wake — it is autonomous BQ25629 behavior. With USB present, ship mode
-is refused (the deep-sleep fallback runs instead), so the restart
-behavior applies only on battery.
+re-wake — it is autonomous BQ25629 behavior. With confirmed USB present, user
+shutdown waits for release and reboots into charging-only mode instead. The
+hardware hold-to-restart behavior applies only on battery.
 
 Ship mode is no longer called directly from `poll_bms()`. Instead,
 safety trips (EDV and high- or low-battery-temperature) set

@@ -539,6 +539,12 @@ TEST_CASE("select_boot_path: eligible USB cold boot -> ChargingOnly") {
   CHECK(select_boot_path(WakeCause::PowerOn, state, true) == BootPath::ChargingOnly);
 }
 
+TEST_CASE("select_boot_path: shutdown request overrides timer fast path") {
+  RtcAppState state{};
+  state.charging_only_requested = true;
+  CHECK(select_boot_path(WakeCause::Timer, state, false) == BootPath::ChargingOnly);
+}
+
 // ============================================================================
 // Tests: charging-only boot
 // ============================================================================
@@ -682,6 +688,38 @@ TEST_CASE("Charging-only polling: repaint only on completion and charging resump
     CHECK(board.bms_init_attempts == 1);
     CHECK(board._bms.status_reads == 10);
   }
+}
+
+TEST_CASE("Charging-only shutdown handoff: consumes the request before entering the loop") {
+  test_spy::reset();
+  test_spy::wake_cause = WakeCause::Timer;
+  test_spy::rtc_state.charging_only_requested = true;
+  MockBoard board;
+  board._bms.status.power_source = BmsPowerSource::UsbDcp;
+  SECTION("charging") { board._bms.status.charging_state = BmsChargingState::FastCharge; }
+  SECTION("full") { board._bms.status.charging_state = BmsChargingState::ChargeTerminationDone; }
+  test_spy::light_sleep_callback = [&] {
+    CHECK_FALSE(test_spy::rtc_state.charging_only_requested);
+    CHECK(DisplayService::spy_init_count == 1);
+    const bool full = board._bms.status.charging_state == BmsChargingState::ChargeTerminationDone;
+    CHECK(DisplayService::spy_last_screen ==
+          (full ? Screen::ShutdownCharged : Screen::ShutdownCharging));
+    CHECK(DisplayService::spy_sync_update_count == 0);
+    return true; // Power button restarts into normal operation.
+  };
+  GoApp app(board);
+  app.run();
+  CHECK_FALSE(test_spy::rtc_state.charging_only_requested);
+  CHECK_FALSE(test_spy::orchestrator_run_called);
+  CHECK_FALSE(board.sensors_called);
+  CHECK(board.restart_called);
+  CHECK_FALSE(test_spy::shutdown_called);
+  CHECK(board.bms_init_attempts == 1);
+  // The following software restart has no request and starts normally.
+  test_spy::wake_cause = WakeCause::PowerOn;
+  app.run();
+  CHECK(test_spy::orchestrator_run_called);
+  CHECK(test_spy::light_sleep_count == 1);
 }
 
 TEST_CASE("Charging-only boot: non-power-on resets leave the boot path untouched") {

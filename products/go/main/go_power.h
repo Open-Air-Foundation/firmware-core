@@ -292,6 +292,9 @@ public:
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   void shutdown();
 
+  /// Wait for Power release, then reboot via timer-only deep sleep, preserving RTC memory.
+  void reboot();
+
   /// Re-configure the BMS watchdog timeout.  See
   /// BmsDevice::set_watchdog_timeout_ms for semantics.  Forwards directly;
   /// no policy or kick-cadence change is applied here.

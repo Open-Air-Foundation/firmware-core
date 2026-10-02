@@ -181,7 +181,8 @@ void GoApp::run() {
   WakeCause cause = PowerService::get_wake_cause();
   RtcAppState state = load_rtc_app_state();
   BmsStatus charging_status{};
-  const bool charging_only_eligible = detect_charging_only_boot(charging_status);
+  const bool charging_only_eligible =
+      detect_charging_only_boot(charging_status, state.charging_only_requested);
 
   AG_LOGI(TAG,
           "reset_reason=%d wake_cause=%d rtc_state: mode=%d behavior=%d lock=%d gps=%d "
@@ -213,36 +214,37 @@ void GoApp::run() {
 // Charging-only boot — USB power alone does not start the application
 // ===========================================================================
 
-bool GoApp::detect_charging_only_boot(BmsStatus &status) {
-  if (!PowerService::is_power_on_reset()) {
+bool GoApp::detect_charging_only_boot(BmsStatus &status, bool requested) {
+  if (!requested && !PowerService::is_power_on_reset()) {
     return false;
   }
 
   _board.init_buses();
-  bool plugged_in = false;
   if (init_bms_with_retry()) {
     auto *bms = _board.bms();
     for (uint8_t attempt = 0; bms != nullptr && attempt < CHARGING_BOOT_STATUS_ATTEMPTS;
          ++attempt) {
       status = {};
       if (bms->read_status(status) && status.is_power_source_valid()) {
-        plugged_in = bms_power_source_has_external_input(status.power_source);
-        break;
+        return bms_power_source_has_external_input(status.power_source);
       }
       if (attempt + 1 < CHARGING_BOOT_STATUS_ATTEMPTS) {
         RTOS::delay_ms(CHARGING_BOOT_STATUS_RETRY_MS);
       }
     }
   }
-  return plugged_in;
+  status = {};
+  return false;
 }
 
 void GoApp::run_charging_only(const BmsStatus &initial_status) {
-  AG_LOGI(TAG, "charging-only boot: external power present");
+  AG_LOGI(TAG, "charging-only boot");
   const auto &gpio = _board.gpio_hal();
   _board.init_fuel_gauge();
   auto &power = _board.power();
   power.set_pm_power(false);
+
+  power.save_state({}); // Consume the one-shot charging-only request.
 
   _board.init_spi();
   auto &display = _board.display();
@@ -1032,7 +1034,7 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
 // ===========================================================================
 
 BootPath select_boot_path(WakeCause cause, const RtcAppState &state, bool charging_only_eligible) {
-  if (charging_only_eligible) {
+  if (charging_only_eligible || state.charging_only_requested) {
     return BootPath::ChargingOnly;
   }
   if (cause == WakeCause::Timer) {

@@ -50,6 +50,7 @@ result, the wake cause, and RTC state to the pure function
 
 | Wake Cause | Condition | Path |
 |---|---|---|
+| Timer wake after user shutdown | `charging_only_requested` in RTC state | `ChargingOnly`; request consumed before polling |
 | `PowerOn` | Hardware power-on reset with confirmed external input | `ChargingOnly` |
 | `PowerOn` | Otherwise, including software reset | `Interactive` with empty BootHandoff |
 | `Timer` + `Locked` | `is_fast_path_wake()` | `FastPath` — measure, display, sleep or promote |
@@ -62,7 +63,11 @@ Charging-only detection checks `ESP_RST_POWERON`, not just the broader
 to three status-read attempts, 100 ms apart. A valid external input qualifies
 even if charging has completed. Invalid or failed reads, charger-init failure,
 battery power, and OTG output do not qualify. The power button does not override
-this decision; software resets and deep-sleep wakes skip detection.
+this decision; software resets and ordinary deep-sleep wakes skip detection.
+The one-shot RTC shutdown request permits detection on its timer wake and
+selects the charging-only path even when external power cannot be confirmed.
+GoApp consumes the request and uses the existing charging-only display and
+polling loop.
 
 `run_charging_only()` initializes the fuel gauge and display, disables PM power,
 and uses the detection status to show Charging or Battery Full. It feeds the

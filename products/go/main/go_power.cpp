@@ -532,6 +532,22 @@ bool PowerService::set_watchdog_timeout_ms(uint32_t timeout_ms) {
   return _bms != nullptr && _bms->set_watchdog_timeout_ms(timeout_ms);
 }
 
+void PowerService::reboot() {
+  constexpr uint32_t BUTTON_RELEASE_POLL_MS = 50;
+  while (_config.pin_wake_button_power >= 0 &&
+         _gpio.get_level(_config.pin_wake_button_power) == 0) {
+    reset_ext_watchdog();
+    RTOS::delay_ms(BUTTON_RELEASE_POLL_MS);
+  }
+  reset_ext_watchdog();
+#ifndef TEST_HOST
+  constexpr uint64_t REBOOT_DELAY_US = 1000;
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+  esp_sleep_enable_timer_wakeup(REBOOT_DELAY_US);
+  esp_deep_sleep_start();
+#endif
+}
+
 void PowerService::shutdown() {
 #ifndef TEST_HOST
   AG_LOGI(TAG, "shutdown: entering BMS ship mode (QoN)");

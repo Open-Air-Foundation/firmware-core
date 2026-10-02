@@ -2250,7 +2250,16 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
   // the BLE disconnect notice can drain.
   RTOS::delay_ms(SHUTDOWN_POWER_OFF_SETTLE_MS);
 
-  // 5. Ship mode → deep sleep fallback.
+  // 5. User shutdown on USB reboots into the existing charging-only path.
+  if (reason == ShipModeRequest::None &&
+      bms_power_source_has_external_input(_latest_power.charger_status.power_source)) {
+    RtcAppState state = snapshot_state();
+    state.charging_only_requested = true;
+    _svc.power_service.save_state(state);
+    AG_LOGI(TAG, "shutdown: rebooting into charging-only mode");
+    _svc.power_service.reboot();
+    return;
+  }
   _svc.power_service.shutdown(); // BMS QoN — does not return
 }
 

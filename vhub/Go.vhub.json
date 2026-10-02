@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "go-charging-only-33f5d10-2",
+  "rev": "go-usb-shutdown-simple-handoff-20261002",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -608,9 +608,9 @@
       "category": "Power Management",
       "sub_category": "USB shutdown",
       "applies_to": ["V1"],
-      "description": "User shutdown remains quiescent when USB prevents BATFET ship mode",
-      "expected_result": "With USB attached, hold Power for at least 2000 ms until the complete shutdown frame appears and serial logs \"shutdown: entering BMS ship mode (QoN)\". For the following 30 seconds the display remains unchanged, no boot splash or boot log appears, and serial shows no reboot loop. A Power press returns to interactive Home within 30 seconds. Complete BLE Config and the recorded completed-route ID/count are unchanged.",
-      "notes": "Record BLE Config and one completed route first. The optional \"enter_ship_mode failed\" log may appear but is not required; USB-powered quiescence is the acceptance criterion."
+      "description": "User shutdown on USB enters charging-only mode without waiting for a watchdog reset",
+      "expected_result": "Hold Power until Powered off appears, then release it. Charging or Battery Full appears within 10 seconds without Getting Ready or Home. The page remains in charging-only mode for five minutes without rebooting. Pressing and releasing Power starts normal operation and reaches Home. Settings and the recorded completed route remain unchanged. Repeat shutdown on USB, then unplug from the charging page: Powered off appears and the unit stays off.",
+      "notes": "Start on Home with USB connected. Record settings and one completed route before testing. Release Power after Powered off appears; keeping it held delays the reboot. Repeat with a full battery. If collecting serial, expect shutdown: rebooting into charging-only mode. Battery-only and protective shutdowns retain their existing behavior."
     },
     {
       "id": "manufacturing.usb-serial.command-protocol",

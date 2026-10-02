@@ -603,6 +603,7 @@ charging_only_eligible)` function:
 
 | Wake Cause | Condition | Path |
 |---|---|---|
+| Timer wake after user shutdown | One-shot RTC charging-only request | `ChargingOnly` |
 | `PowerOn` | Hardware power-on reset with confirmed external input | `ChargingOnly` |
 | `Timer` + `Locked` | `is_fast_path_wake()` | `FastPath` — measure, display, sleep or promote |
 | `Timer` + `Unlocked` | Not fast-path eligible | `Interactive` |
@@ -619,8 +620,12 @@ The main CPU feeds the external watchdog and uses two-second light sleeps to
 poll external-power status; no LP-core feeder runs. Button wake restarts into
 normal startup. A valid unplug reading refreshes "Powered off" and calls
 `shutdown()` without rechecking the cable or button after the refresh.
-Charging-only eligibility requires `ESP_RST_POWERON` and external input,
-regardless of charge completion; there is no startup button override. See
+Cold-boot charging-only eligibility requires `ESP_RST_POWERON` and external
+input, regardless of charge completion; there is no startup button override.
+User shutdown with USB attached sets `RtcAppState::charging_only_requested`
+after its normal shutdown page and cleanup, then uses a brief timer-woken
+deep-sleep reboot. Boot consumes the request and enters the same charging-only
+display and polling path. See
 [Hardware Init](docs/hardware_init.md#boot-path-selection) for detection rules.
 
 Hardware initialization is managed by **GoHardwareBoard** through
@@ -720,9 +725,17 @@ explicit synchronization needed.
 
 ### Shutdown
 
-Button 1 long press triggers BMS QoN (ship mode) via
+On battery, Button 1 long press triggers BMS QoN (ship mode) via
 `BmsDevice::enter_ship_mode()` on the BQ25629. The device fully powers
 off. GPS module loses power. Next power-on is a fresh boot.
+
+When the latest power status reports USB input, the orchestrator saves existing
+data and a one-shot RTC request after the normal shutdown page and cleanup.
+PowerService waits for button release and reboots through deep sleep into
+charging-only mode.
+The charging-only loop feeds the watchdog and handles unplug; the
+orchestrator has no separate charging loop. Protective shutdowns retain the
+existing ship-mode/deep-sleep fallback.
 
 Button 1 (`PIN_BUTTON_POWER`, GPIO5) is wired to **both** the ESP32 GPIO
 **and** the BQ25629 `/QON` pin. This makes the gesture matter:
@@ -735,9 +748,9 @@ Button 1 (`PIN_BUTTON_POWER`, GPIO5) is wired to **both** the ESP32 GPIO
   line qualifies a ship-mode wake (≥ ~17 ms) and the BQ25629 re-closes
   the BATFET, so the device powers back on. Because the BATFET cut drops
   the RTC domain too, this comes up as `WakeCause::PowerOn` — a full cold
-  boot (RTC state wiped), not a deep-sleep wake. With USB present,
-  `enter_ship_mode()` is refused and the path falls back to deep sleep, so
-  the restart behavior only applies on battery.
+  boot (RTC state wiped), not a deep-sleep wake. With confirmed USB present,
+  user shutdown waits for release and enters charging-only mode instead, so
+  the hardware hold-to-restart behavior only applies on battery.
 
 Ship mode is also triggered automatically by the EDV and high- or
 low-battery-temperature safety trips — see

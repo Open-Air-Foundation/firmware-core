@@ -17,7 +17,7 @@ public:
 
 private:
   // --- Boot paths ---
-  bool detect_charging_only_boot(BmsStatus &status);
+  bool detect_charging_only_boot(BmsStatus &status, bool requested = false);
   void run_charging_only(const BmsStatus &initial_status);
   void run_fast_path(const RtcAppState &state);
   void run_button_wake_path(const RtcAppState &state);
