@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <string>
 
 // ============================================================================
@@ -89,6 +90,18 @@ bool enter_sleep_called = false;
 uint32_t enter_sleep_duration_ms = 0;
 bool should_hold_pm_result = false;
 bool shutdown_called = false;
+bool power_on_reset = false;
+int power_button_level = 1;
+bool pm_power_enabled = true;
+bool ext_watchdog_fed = false;
+bool lp_feeder_started = false;
+bool shutdown_prepared = false;
+int light_sleep_count = 0;
+uint32_t light_sleep_duration_ms = 0;
+bool light_sleep_prepared = true;
+std::function<bool()> light_sleep_callback;
+int ext_watchdog_feed_count = 0;
+WakeCause wake_cause = WakeCause::PowerOn;
 
 // --- BleService ---
 bool ble_init_called = false;
@@ -175,6 +188,18 @@ void reset() {
   enter_sleep_duration_ms = 0;
   should_hold_pm_result = false;
   shutdown_called = false;
+  power_on_reset = false;
+  power_button_level = 1;
+  pm_power_enabled = true;
+  ext_watchdog_fed = false;
+  lp_feeder_started = false;
+  shutdown_prepared = false;
+  light_sleep_count = 0;
+  light_sleep_duration_ms = 0;
+  light_sleep_prepared = true;
+  light_sleep_callback = {};
+  ext_watchdog_feed_count = 0;
+  wake_cause = WakeCause::PowerOn;
 
   ble_init_called = false;
 
@@ -211,6 +236,7 @@ void reset() {
   DisplayService::spy_deep_sleep_called = false;
   DisplayService::spy_init_count = 0;
   DisplayService::spy_update_count = 0;
+  DisplayService::spy_sync_update_count = 0;
   DisplayService::spy_flush_count = 0;
   DisplayService::spy_last_screen = Screen::Home;
   DisplayService::spy_last_init_deferred = false;
@@ -483,8 +509,8 @@ bool PowerService::poll_charging_status(BmsChargingState &state) {
 }
 
 bool PowerService::poll_status(BmsStatus &status) {
-  status = test_spy::snapshot_to_return.charger_status;
-  return true;
+  status = BmsStatus{};
+  return _bms != nullptr && _bms->read_status(status);
 }
 
 bool PowerService::rekick_pmid_if_collapsed(const BmsTelemetry & /*t*/, BmsPowerSource /*src*/) {
@@ -497,13 +523,20 @@ void PowerService::recover_pm_sensor() {}
 
 bool PowerService::reset_watchdog() { return true; }
 
-void PowerService::shutdown() { test_spy::shutdown_called = true; }
+void PowerService::shutdown() {
+  test_spy::shutdown_called = true;
+  test_spy::shutdown_prepared =
+      !test_spy::lp_feeder_started && test_spy::ext_watchdog_fed && !test_spy::pm_power_enabled &&
+      DisplayService::spy_deep_sleep_called && DisplayService::spy_sync_update_count > 0 &&
+      DisplayService::spy_last_screen == Screen::ShutdownUser;
+}
 
 bool PowerService::set_watchdog_timeout_ms(uint32_t /*timeout_ms*/) { return true; }
 
 void PowerService::save_state(const RtcAppState &state) {
   test_spy::state_saved = true;
   test_spy::last_saved_state = state;
+  test_spy::rtc_state = state;
 }
 
 RtcAppState PowerService::load_state() const { return test_spy::rtc_state; }
@@ -521,14 +554,26 @@ bool PowerService::should_hold_pm_sensor(uint32_t /*sleep_duration_ms*/) const {
 
 bool PowerService::should_sleep_pm_sensor(uint32_t /*measure_interval_ms*/) const { return false; }
 
-void PowerService::set_pm_power(bool /*on*/) {}
+void PowerService::set_pm_power(bool on) { test_spy::pm_power_enabled = on; }
 
 void PowerService::enter_sleep(uint32_t sleep_duration_ms) {
   test_spy::enter_sleep_called = true;
   test_spy::enter_sleep_duration_ms = sleep_duration_ms;
 }
 
-WakeCause PowerService::get_wake_cause() { return WakeCause::PowerOn; }
+bool PowerService::enter_light_sleep(uint32_t sleep_duration_ms) {
+  ++test_spy::light_sleep_count;
+  test_spy::light_sleep_duration_ms = sleep_duration_ms;
+  test_spy::light_sleep_prepared &=
+      !test_spy::shutdown_called && !test_spy::lp_feeder_started && !test_spy::pm_power_enabled &&
+      DisplayService::spy_deep_sleep_called &&
+      test_spy::ext_watchdog_feed_count >= test_spy::light_sleep_count;
+  return test_spy::light_sleep_callback ? test_spy::light_sleep_callback() : true;
+}
+
+WakeCause PowerService::get_wake_cause() { return test_spy::wake_cause; }
+
+bool PowerService::is_power_on_reset() { return test_spy::power_on_reset; }
 
 bool PowerService::is_fast_path_wake(WakeCause cause, const RtcAppState &state) {
   return cause == WakeCause::Timer && state.lock_state == LockState::Locked;
@@ -538,7 +583,10 @@ void PowerService::release_sleep_gpio_holds(int /*pin_pm_power*/) {}
 
 void PowerService::init_ext_watchdog() {}
 
-void PowerService::reset_ext_watchdog() {}
+void PowerService::reset_ext_watchdog() {
+  test_spy::ext_watchdog_fed = true;
+  ++test_spy::ext_watchdog_feed_count;
+}
 
 void PowerService::configure_wake_sources(uint32_t /*timer_ms*/) {}
 

@@ -239,6 +239,7 @@ bool ota_run_wifi_invoke_download_started = false;
 bool bms_polled = false;
 uint32_t bms_poll_count = 0;
 bool shutdown_called = false;
+bool power_reboot_called = false;
 bool state_saved = false;
 RtcAppState last_saved_state{};
 RtcAppState state_to_load{};        // tests set this before init(Button)
@@ -431,6 +432,7 @@ void reset() {
   bms_polled = false;
   bms_poll_count = 0;
   shutdown_called = false;
+  power_reboot_called = false;
   state_saved = false;
   last_saved_state = RtcAppState{};
   state_to_load = RtcAppState{};
@@ -449,6 +451,7 @@ void reset() {
   DisplayService::spy_deep_sleep_called = false;
   DisplayService::spy_init_count = 0;
   DisplayService::spy_update_count = 0;
+  DisplayService::spy_sync_update_count = 0;
   DisplayService::spy_flush_count = 0;
   DisplayService::spy_last_screen = Screen::Home;
 }
@@ -691,6 +694,8 @@ void PowerService::recover_pm_sensor() {
 bool PowerService::reset_watchdog() { return true; }
 
 void PowerService::shutdown() { test_spy::shutdown_called = true; }
+
+void PowerService::reboot() { test_spy::power_reboot_called = true; }
 
 bool PowerService::set_watchdog_timeout_ms(uint32_t /*timeout_ms*/) { return true; }
 

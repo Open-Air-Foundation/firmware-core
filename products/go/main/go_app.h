@@ -17,6 +17,8 @@ public:
 
 private:
   // --- Boot paths ---
+  bool detect_charging_only_boot(BmsStatus &status, bool requested = false);
+  void run_charging_only(const BmsStatus &initial_status);
   void run_fast_path(const RtcAppState &state);
   void run_button_wake_path(const RtcAppState &state);
   void run_interactive(WakeCause cause, BootHandoff handoff);
@@ -55,9 +57,9 @@ private:
 // Boot path selection
 // ---------------------------------------------------------------------------
 
-enum class BootPath { FastPath, ButtonWake, Interactive };
+enum class BootPath { FastPath, ButtonWake, Interactive, ChargingOnly };
 
-BootPath select_boot_path(WakeCause cause, const RtcAppState &state);
+BootPath select_boot_path(WakeCause cause, const RtcAppState &state, bool charging_only_eligible);
 
 // ---------------------------------------------------------------------------
 // Pure utility functions

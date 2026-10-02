@@ -71,8 +71,9 @@ struct RtcAppState {
   LockState lock_state = LockState::Locked;
   bool gps_enabled = true;
   TrackingState tracking_state = TrackingState::Idle;
-  uint32_t tracking_session_id = 0; ///< 5-digit session ID; 0 = no active session
-  bool sensors_warm = false;        ///< Sensors kept powered during last deep sleep
+  uint32_t tracking_session_id = 0;     ///< 5-digit session ID; 0 = no active session
+  bool sensors_warm = false;            ///< Sensors kept powered during last deep sleep
+  bool charging_only_requested = false; ///< One-shot request after USB-powered user shutdown
 };
 
 // --- Forward declarations for BootHandoff pointer members ---

@@ -31,7 +31,9 @@
 
 #ifndef TEST_HOST
 #include "driver/gpio.h"
+#include "driver/rtc_io.h"
 #include "esp_sleep.h"
+#include "esp_system.h"
 #endif
 
 #include "go_power.h"
@@ -530,6 +532,22 @@ bool PowerService::set_watchdog_timeout_ms(uint32_t timeout_ms) {
   return _bms != nullptr && _bms->set_watchdog_timeout_ms(timeout_ms);
 }
 
+void PowerService::reboot() {
+  constexpr uint32_t BUTTON_RELEASE_POLL_MS = 50;
+  while (_config.pin_wake_button_power >= 0 &&
+         _gpio.get_level(_config.pin_wake_button_power) == 0) {
+    reset_ext_watchdog();
+    RTOS::delay_ms(BUTTON_RELEASE_POLL_MS);
+  }
+  reset_ext_watchdog();
+#ifndef TEST_HOST
+  constexpr uint64_t REBOOT_DELAY_US = 1000;
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+  esp_sleep_enable_timer_wakeup(REBOOT_DELAY_US);
+  esp_deep_sleep_start();
+#endif
+}
+
 void PowerService::shutdown() {
 #ifndef TEST_HOST
   AG_LOGI(TAG, "shutdown: entering BMS ship mode (QoN)");
@@ -552,6 +570,35 @@ void PowerService::shutdown() {
   }
   esp_deep_sleep_start();
 #endif
+}
+
+bool PowerService::enter_light_sleep(uint32_t sleep_duration_ms) {
+  bool button_wake = false;
+#ifndef TEST_HOST
+  configure_wake_sources(sleep_duration_ms);
+  const esp_err_t err = esp_light_sleep_start();
+  button_wake = err == ESP_OK && esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1;
+
+  // Do not leave a polling timer armed for a later ship-mode/deep-sleep entry.
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_EXT1);
+  // EXT1 leaves its wake pins held in RTC mode; restore digital button reads.
+  const int button_pins[] = {_config.pin_wake_button_power, _config.pin_wake_button_boot};
+  for (int pin : button_pins) {
+    if (pin >= 0) {
+      rtc_gpio_hold_dis(static_cast<gpio_num_t>(pin));
+      rtc_gpio_deinit(static_cast<gpio_num_t>(pin));
+    }
+  }
+  if (err != ESP_OK) {
+    AG_LOGW(TAG, "light sleep failed (%s); delaying before retry", esp_err_to_name(err));
+    RTOS::delay_ms(sleep_duration_ms);
+  }
+#else
+  RTOS::delay_ms(sleep_duration_ms);
+#endif
+  const int button_pin = _config.pin_wake_button_power;
+  return button_wake || (button_pin >= 0 && _gpio.get_level(button_pin) == 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -677,10 +724,9 @@ void PowerService::configure_wake_sources(uint32_t timer_ms) {
   // Timer wake: convert milliseconds to microseconds for the ESP-IDF API.
   esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(timer_ms) * 1000ULL);
 
-  // GPIO wake: both buttons use EXT1 which supports multiple GPIOs in a
-  // single bitmask.  The target (ESP32-C5) does not have EXT0; EXT1 is the
-  // correct deep-sleep GPIO wake source.  Buttons are active-low, so wake
-  // fires when ANY selected GPIO is pulled low.
+  // GPIO wake: EXT1 supports both buttons in one mask for light and deep sleep.
+  // The target (ESP32-C5) has no EXT0. Active-low buttons wake the CPU when
+  // ANY selected GPIO is pulled low.
   uint64_t wake_mask = 0;
   if (_config.pin_wake_button_power >= 0) {
     wake_mask |= 1ULL << _config.pin_wake_button_power;
@@ -697,6 +743,15 @@ void PowerService::configure_wake_sources(uint32_t timer_ms) {
 // ---------------------------------------------------------------------------
 // Boot path — static helpers
 // ---------------------------------------------------------------------------
+
+// static
+bool PowerService::is_power_on_reset() {
+#ifndef TEST_HOST
+  return esp_reset_reason() == ESP_RST_POWERON;
+#else
+  return false;
+#endif
+}
 
 // static
 WakeCause PowerService::get_wake_cause() {

@@ -118,6 +118,7 @@ extern std::set<uint32_t> existing_route_session_ids;
 extern bool bms_polled;
 extern uint32_t bms_poll_count;
 extern bool shutdown_called;
+extern bool power_reboot_called;
 extern bool state_saved;
 extern RtcAppState last_saved_state;
 extern RtcAppState state_to_load;
@@ -3551,6 +3552,30 @@ TEST_CASE("shutdown: works without active tracking", "[Orchestrator][shutdown]")
   REQUIRE_FALSE(test_spy::route_ended); // no route was active
 }
 
+TEST_CASE("shutdown: USB user request saves RTC handoff and reboots", "[Orchestrator][shutdown]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  PowerSnapshot power{};
+  power.charger_status.power_source = BmsPowerSource::UsbDcp;
+  A::set_latest_power(orch, power);
+  SECTION("user shutdown") {
+    A::shutdown(orch);
+    CHECK(test_spy::cache_backed_up);
+    CHECK(test_spy::state_saved);
+    CHECK(test_spy::last_saved_state.charging_only_requested);
+    CHECK(test_spy::power_reboot_called);
+    CHECK_FALSE(test_spy::shutdown_called);
+    CHECK(f.ui_manager.current_screen() == Screen::ShutdownUser);
+    CHECK(DisplayService::spy_last_screen == Screen::ShutdownUser);
+  }
+  SECTION("protective shutdown keeps ship mode") {
+    A::shutdown(orch, ShipModeRequest::OverTemperature);
+    CHECK_FALSE(test_spy::power_reboot_called);
+    CHECK_FALSE(test_spy::last_saved_state.charging_only_requested);
+    CHECK(test_spy::shutdown_called);
+  }
+}
+
 TEST_CASE("shutdown: pushes a disc notice to a connected client", "[Orchestrator][shutdown][ble]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -3559,21 +3584,25 @@ TEST_CASE("shutdown: pushes a disc notice to a connected client", "[Orchestrator
 
   SECTION("over-temperature maps to overheat") {
     A::shutdown(orch, ShipModeRequest::OverTemperature);
+    CHECK_FALSE(test_spy::power_reboot_called);
     CHECK(test_spy::ble_notify_disconnect_called);
     CHECK(test_spy::ble_last_disc_reason == BleDiscReason::Overheat);
   }
   SECTION("under-temperature maps to overheat for protocol compatibility") {
     A::shutdown(orch, ShipModeRequest::UnderTemperature);
+    CHECK_FALSE(test_spy::power_reboot_called);
     CHECK(test_spy::ble_notify_disconnect_called);
     CHECK(test_spy::ble_last_disc_reason == BleDiscReason::Overheat);
   }
   SECTION("over-discharge maps to low_batt") {
     A::shutdown(orch, ShipModeRequest::OverDischarge);
+    CHECK_FALSE(test_spy::power_reboot_called);
     CHECK(test_spy::ble_notify_disconnect_called);
     CHECK(test_spy::ble_last_disc_reason == BleDiscReason::LowBatt);
   }
   SECTION("user long-press maps to user") {
     A::shutdown(orch, ShipModeRequest::None);
+    CHECK_FALSE(test_spy::power_reboot_called);
     CHECK(test_spy::ble_notify_disconnect_called);
     CHECK(test_spy::ble_last_disc_reason == BleDiscReason::User);
   }

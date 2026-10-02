@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "go-wifi-mode-policy-20260930-2",
+  "rev": "go-usb-shutdown-simple-handoff-20261002",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -16,7 +16,7 @@
       "applies_to": ["V1"],
       "description": "Cold boot starts a complete early splash, detects the V1 board, and initializes its production sensors",
       "expected_result": "At the start of cold boot, the display begins the \"Getting Ready\" splash and completes one full refresh without stopping on a partial frame before NAND storage initialization proceeds. The serial log identifies the V1 board, BQ27427 gauge, SHT40, DPS368, SGP41, SPS30, and exactly one fitted CO2 sensor without an initialization failure. Within five minutes, one completed measurement contains PM1/PM2.5/PM10, SPS30 PM0.5/PM1/PM2.5/PM10 counts, CO2, temperature, humidity, TVOC/NOx, pressure, and battery data. Home renders fields from that measurement and uses dashes for fields that are still unavailable.",
-      "notes": "Run two cold-boot subruns on already-onboarded production units: one S12 and one SCD4x. Capture serial from reset through the first complete measurement and record the full \"Getting Ready\" refresh. Require \"CO2 sensor: S12 selected\" only on the S12 unit and \"CO2 sensor: SCD4x selected\" only on the SCD4x unit."
+      "notes": "Run two cold-boot subruns on already-onboarded production units: one S12 and one SCD4x. Capture serial from reset through the first complete measurement and record the full \"Getting Ready\" refresh. Require \"CO2 sensor: S12 selected\" only on the S12 unit and \"CO2 sensor: SCD4x selected\" only on the SCD4x unit. Start each cold boot with USB disconnected and Power pressed; connecting USB to a powered-off unit selects charging-only mode instead. Use a serial capture setup that does not supply USB power for the initial boot logs."
     },
     {
       "id": "onboarding.getting-started.complete-and-persist",
@@ -25,7 +25,7 @@
       "applies_to": ["V1"],
       "description": "A one-second Enter hold completes the first-use Getting Started flow",
       "expected_result": "A factory-reset cold boot shows Getting Started before sensor warmup finishes, with the QR captioned \"Scan for guide\" and \"Or just use it right now\" above one highlighted area containing a single bold \"Hold Enter to start\" line. The action fits without clipping and has balanced padding. No hold duration is displayed. The device plays the complete welcome Chime with a rear-LED color step for each melody step, logs at least two completed sensor measurements while the page remains open, and remains discoverable in a 30-second BLE scan. #AG GET_SERIAL returns the unit's 12-character serial before completing onboarding. A short Enter press, double tap, and hold released before one second all leave the guide open. Holding Enter for at least one second triggers the transition to unlocked Home without requiring release and disables #AG responses; continuing to hold through the display refresh and then releasing causes no further navigation. Entering Home during warmup shows dashes until the first measurement arrives. The next cold boot goes directly to onboarded Home after the boot splash and does not replay Getting Started.",
-      "notes": "Start with onboarding incomplete and no client connected. Scan for the advertisement for 30 seconds before completing the Enter hold. Allow the e-paper refresh to complete after the one-second threshold. Pairing completion is verified separately. Repeat from factory reset, holding Enter as soon as the guide appears to check Home during warmup."
+      "notes": "Start with onboarding incomplete and no client connected. Scan for the advertisement for 30 seconds before completing the Enter hold. Allow the e-paper refresh to complete after the one-second threshold. Pairing completion is verified separately. Repeat from factory reset, holding Enter as soon as the guide appears to check Home during warmup. For cold-boot subruns, start on battery with Power, then connect USB after startup if needed for serial checks. USB insertion while powered off enters charging-only mode; press Power there to restart into onboarding."
     },
     {
       "id": "ui.navigation.lock-and-settings",
@@ -577,6 +577,24 @@
       "notes": "Start below the full-charge pause, record interval and the initial BLE Status, and hold each connected/disconnected state through one power poll and one measurement. Restore the initial USB state."
     },
     {
+      "id": "power.usb.charging-only-boot",
+      "category": "Power Management",
+      "sub_category": "Charging",
+      "applies_to": ["V1"],
+      "description": "Plugging in a powered-off unit shows Charging; Power turns it on and unplugging turns it off",
+      "expected_result": "USB insertion shows \"Charging\", a battery-and-bolt icon, and \"Hold power button / to turn on\". The page stays unchanged for 30 seconds without starting Home or repeatedly refreshing. Pressing Power starts normal operation and reaches Home. In the unplug subrun, the display changes to \"Powered off\" and the unit stays off.",
+      "notes": "Use a partly charged, onboarded unit. Disconnect USB, shut down, and release Power. Plug in USB, wait 30 seconds, then press and release Power. Repeat the shutdown and USB insertion, but unplug instead of pressing Power. Allow about two seconds for unplug detection plus the display refresh."
+    },
+    {
+      "id": "power.usb.charging-only-full",
+      "category": "Power Management",
+      "sub_category": "Charging",
+      "applies_to": ["V1"],
+      "description": "Charging-only mode shows Battery Full when charging finishes",
+      "expected_result": "\"Charging\" changes to \"Battery Full\" with a filled-battery icon. The title and button hint fit without clipping. The page stays unchanged for 30 seconds without repeated refreshes or starting Home. Unplugging shows \"Powered off\"; reconnecting returns to the charging screen and shows \"Battery Full\" once charging is complete.",
+      "notes": "Use a near-full unit to reduce waiting. Shut down with USB disconnected, release Power, then plug in USB and leave it until Battery Full appears. Wait 30 seconds, unplug, wait for Powered off, and reconnect. Charging may appear again briefly while the battery tops up."
+    },
+    {
       "id": "power.shutdown.ship-mode",
       "category": "Power Management",
       "sub_category": "Power button",
@@ -590,9 +608,9 @@
       "category": "Power Management",
       "sub_category": "USB shutdown",
       "applies_to": ["V1"],
-      "description": "User shutdown remains quiescent when USB prevents BATFET ship mode",
-      "expected_result": "With USB attached, hold Power for at least 2000 ms until the complete shutdown frame appears and serial logs \"shutdown: entering BMS ship mode (QoN)\". For the following 30 seconds the display remains unchanged, no boot splash or boot log appears, and serial shows no reboot loop. A Power press returns to interactive Home within 30 seconds. Complete BLE Config and the recorded completed-route ID/count are unchanged.",
-      "notes": "Record BLE Config and one completed route first. The optional \"enter_ship_mode failed\" log may appear but is not required; USB-powered quiescence is the acceptance criterion."
+      "description": "User shutdown on USB enters charging-only mode without waiting for a watchdog reset",
+      "expected_result": "Hold Power until Powered off appears, then release it. Charging or Battery Full appears within 10 seconds without Getting Ready or Home. The page remains in charging-only mode for five minutes without rebooting. Pressing and releasing Power starts normal operation and reaches Home. Settings and the recorded completed route remain unchanged. Repeat shutdown on USB, then unplug from the charging page: Powered off appears and the unit stays off.",
+      "notes": "Start on Home with USB connected. Record settings and one completed route before testing. Release Power after Powered off appears; keeping it held delays the reboot. Repeat with a full battery. If collecting serial, expect shutdown: rebooting into charging-only mode. Battery-only and protective shutdowns retain their existing behavior."
     },
     {
       "id": "manufacturing.usb-serial.command-protocol",

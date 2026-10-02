@@ -74,9 +74,22 @@ static constexpr uint32_t GPS_FAST_PATH_READ_TIMEOUT_MS = 3000;
 static constexpr uint8_t BMS_INIT_MAX_ATTEMPTS = 2;
 static constexpr uint32_t BMS_INIT_RETRY_DELAY_MS = 100;
 
+static constexpr uint8_t CHARGING_BOOT_STATUS_ATTEMPTS = 3;
+static constexpr uint32_t CHARGING_BOOT_STATUS_RETRY_MS = 100;
+static constexpr uint32_t CHARGING_ONLY_POLL_INTERVAL_MS = 2000;
+
 // Strings owned by GoApp that WifiService::Config holds pointers into.
 // Stack-allocated in run_*; lifetime = process (functions never return).
 namespace {
+Screen charging_screen(const BmsStatus &status, Screen current) {
+  if (!status.is_charging_state_valid() || status.charging_state == BmsChargingState::NotCharging) {
+    return current;
+  }
+  return status.charging_state == BmsChargingState::ChargeTerminationDone
+             ? Screen::ShutdownCharged
+             : Screen::ShutdownCharging;
+}
+
 struct StationaryStrings {
   std::string ap_ssid;               // "airgradient-<12-hex>"
   std::string hostname;              // "airgradient_<12-hex>"
@@ -167,6 +180,9 @@ void GoApp::run() {
 
   WakeCause cause = PowerService::get_wake_cause();
   RtcAppState state = load_rtc_app_state();
+  BmsStatus charging_status{};
+  const bool charging_only_eligible =
+      detect_charging_only_boot(charging_status, state.charging_only_requested);
 
   AG_LOGI(TAG,
           "reset_reason=%d wake_cause=%d rtc_state: mode=%d behavior=%d lock=%d gps=%d "
@@ -176,9 +192,11 @@ void GoApp::run() {
           static_cast<int>(state.lock_state), state.gps_enabled,
           static_cast<int>(state.tracking_state), state.tracking_session_id, state.sensors_warm);
 
-  BootPath path = select_boot_path(cause, state);
-
+  BootPath path = select_boot_path(cause, state, charging_only_eligible);
   switch (path) {
+  case BootPath::ChargingOnly:
+    run_charging_only(charging_status);
+    break; // never reached
   case BootPath::FastPath:
     run_fast_path(state);
     break; // never reached
@@ -189,6 +207,83 @@ void GoApp::run() {
     AG_LOGI(TAG, "Serial number: %s", _board.serial_number().c_str());
     run_interactive(cause, {});
     break; // never reached
+  }
+}
+
+// ===========================================================================
+// Charging-only boot — USB power alone does not start the application
+// ===========================================================================
+
+bool GoApp::detect_charging_only_boot(BmsStatus &status, bool requested) {
+  if (!requested && !PowerService::is_power_on_reset()) {
+    return false;
+  }
+
+  _board.init_buses();
+  if (init_bms_with_retry()) {
+    auto *bms = _board.bms();
+    for (uint8_t attempt = 0; bms != nullptr && attempt < CHARGING_BOOT_STATUS_ATTEMPTS;
+         ++attempt) {
+      status = {};
+      if (bms->read_status(status) && status.is_power_source_valid()) {
+        return bms_power_source_has_external_input(status.power_source);
+      }
+      if (attempt + 1 < CHARGING_BOOT_STATUS_ATTEMPTS) {
+        RTOS::delay_ms(CHARGING_BOOT_STATUS_RETRY_MS);
+      }
+    }
+  }
+  status = {};
+  return false;
+}
+
+void GoApp::run_charging_only(const BmsStatus &initial_status) {
+  AG_LOGI(TAG, "charging-only boot");
+  const auto &gpio = _board.gpio_hal();
+  _board.init_fuel_gauge();
+  auto &power = _board.power();
+  power.set_pm_power(false);
+
+  power.save_state({}); // Consume the one-shot charging-only request.
+
+  _board.init_spi();
+  auto &display = _board.display();
+  DisplayValues values{};
+  values.screen = charging_screen(initial_status, Screen::ShutdownCharging);
+  display.init(values);
+  display.flush();
+  display.stop();
+
+  display.deep_sleep();
+  // Configure the button for normal wake from charging-only light sleep.
+  gpio.configure(PIN_BUTTON_POWER, gpio::Mode::Input, gpio::PullMode::PullUp,
+                 gpio::InterruptType::Disabled);
+  for (;;) {
+    power.reset_ext_watchdog();
+    if (power.enter_light_sleep(CHARGING_ONLY_POLL_INTERVAL_MS)) {
+      _board.restart();
+      return;
+    }
+
+    BmsStatus status{};
+    if (!power.poll_status(status) || !status.is_power_source_valid()) {
+      continue; // A failed read is not evidence of an unplug.
+    }
+    if (bms_power_source_has_external_input(status.power_source)) {
+      const Screen next_screen = charging_screen(status, values.screen);
+      if (next_screen != values.screen) {
+        values.screen = next_screen;
+        display.update_sync(values);
+        display.deep_sleep();
+      }
+      continue;
+    }
+
+    values.screen = Screen::ShutdownUser;
+    display.update_sync(values); // Wakes the panel and waits for the full refresh.
+    display.deep_sleep();
+    power.shutdown();
+    return;
   }
 }
 
@@ -938,7 +1033,10 @@ void GoApp::run_interactive(WakeCause cause, BootHandoff handoff) {
 // Pure utility functions
 // ===========================================================================
 
-BootPath select_boot_path(WakeCause cause, const RtcAppState &state) {
+BootPath select_boot_path(WakeCause cause, const RtcAppState &state, bool charging_only_eligible) {
+  if (charging_only_eligible || state.charging_only_requested) {
+    return BootPath::ChargingOnly;
+  }
   if (cause == WakeCause::Timer) {
     if (PowerService::is_fast_path_wake(cause, state)) {
       return BootPath::FastPath;

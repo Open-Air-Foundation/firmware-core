@@ -145,6 +145,8 @@ hardware-dependent and excluded from host builds (stubs provided).
 | `MainMenu` | Home with menu overlay |
 | `Settings` / `SettingsChoice` / `TagList` / `About` / `Confirm` | Full-screen lists |
 | `ShutdownUser` | Goodbye screen for user long-press shutdown ("Powered off" / "Hold button" / "to turn on") |
+| `ShutdownCharging` | Charging-only boot page: battery-and-bolt icon, "Charging" / "Hold power button" / "to turn on" |
+| `ShutdownCharged` | Charge-complete page: filled-battery icon, "Battery Full" / "Hold power button" / "to turn on" |
 | `ShutdownDischarge` | Safety-trip shutdown for OverDischarge ("Battery critically low" / "Connect charger" / "Charge before use") |
 | `ShutdownTemperature` | High-temperature safety shutdown ("Battery overheated" / "Move device to a" / "cooler location") |
 | `ShutdownTemperatureLow` | Low-temperature safety shutdown ("Battery too cold" / "Move device to a" / "warmer location") |
@@ -490,7 +492,7 @@ Screen dispatch:
   6-digit passkey (`logisoso32_tr`, baseline y=145), and "Enter on
   phone" hint (`helvR12_tr`, baseline y=215). No status bar, no
   snackbar.
-- **ShutdownUser / ShutdownDischarge / ShutdownTemperature /
+- **ShutdownUser / ShutdownCharging / ShutdownCharged / ShutdownDischarge / ShutdownTemperature /
   ShutdownTemperatureLow:** Unified template — `"AirGradient"` brand header
   (`helvB14_tf`, baseline y=34),
   3 px-thick divider at y=49, reason-specific icon centred at
@@ -500,7 +502,12 @@ Screen dispatch:
   (power circle, battery body, thermometer with heat-wave lines). No
   status bar, no snackbar. The renderer dispatches on the Screen
   variant. The temperature icons use heat-wave lines for high temperature and
-  a snowflake for low temperature.
+  a snowflake for low temperature. `ShutdownCharging` uses a static battery
+  outline and filled lightning bolt drawn with u8g2 primitives. It has no
+  percentage or animation. `ShutdownCharged` fills the battery outline and
+  shows "Battery Full". The display sleeps after painting and refreshes only
+  when charging completes or resumes. On unplug, the charging-only
+  runner wakes the display for a full `ShutdownUser` refresh before shutdown.
 
 ### Fonts
 

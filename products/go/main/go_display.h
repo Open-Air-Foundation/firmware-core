@@ -47,6 +47,8 @@ enum class Screen : uint8_t {
   FgLearnVerifying,  ///< Learning: re-plugged, checking pass criteria
   FgLearnComplete,   ///< Learning: verified pass (terminal)
   FgLearnFailed,     ///< Learning: rejected (terminal, sticky)
+  ShutdownCharging,  ///< USB-powered cold boot; application remains off
+  ShutdownCharged,   ///< Charging-only mode; charger reports charge complete
 };
 
 enum class Metric : uint8_t {
@@ -407,7 +409,10 @@ public:
     return true;
   }
 
-  void update_sync(const DisplayValues &) {}
+  void update_sync(const DisplayValues &values) {
+    ++spy_sync_update_count;
+    spy_last_screen = values.screen;
+  }
   void flush() { ++spy_flush_count; }
   void clear() {}
   void deep_sleep() { spy_deep_sleep_called = true; }
@@ -417,6 +422,7 @@ public:
   inline static bool spy_deep_sleep_called = false;
   inline static uint32_t spy_init_count = 0;
   inline static uint32_t spy_update_count = 0;
+  inline static uint32_t spy_sync_update_count = 0;
   inline static uint32_t spy_flush_count = 0;
   inline static Screen spy_last_screen = Screen::Home;
   inline static bool spy_last_init_deferred = false;

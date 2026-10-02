@@ -595,34 +595,38 @@ sleep) and the full 10 s warmup runs on wake.
 
 ### Wake and Boot Path
 
-Deep sleep reboots the CPU. All tasks restart from `app_main`. Two
-abbreviated paths exist to avoid the full event-loop overhead when it is
-not needed.
-
-```text
-app_main:
-  GoHardwareBoard board;
-  GoApp app(board);
-  app.run();
-
-GoApp::run():
-  cause = PowerService::get_wake_cause()
-  path = select_boot_path(cause, load_rtc_app_state())
-
-  FastPath    → run_fast_path(state)        // never returns
-  ButtonWake  → run_button_wake_path(state) // never returns
-  Interactive → run_interactive(cause, {})  // never returns
-```
-
-`select_boot_path()` is a pure function (host-testable):
+Deep sleep reboots the CPU. All tasks restart from `app_main`, which creates
+the board and calls `GoApp::run()`. Active factory fuel-gauge learning takes
+priority. Otherwise, the app probes charging-only eligibility and passes it
+to the pure, host-testable `select_boot_path(cause, state,
+charging_only_eligible)` function:
 
 | Wake Cause | Condition | Path |
 |---|---|---|
+| Timer wake after user shutdown | One-shot RTC charging-only request | `ChargingOnly` |
+| `PowerOn` | Hardware power-on reset with confirmed external input | `ChargingOnly` |
 | `Timer` + `Locked` | `is_fast_path_wake()` | `FastPath` — measure, display, sleep or promote |
 | `Timer` + `Unlocked` | Not fast-path eligible | `Interactive` |
 | `Button` + `Offline` | -- | `ButtonWake` — four-phase early paint |
 | `Button` + non-Offline | -- | `Interactive` |
-| `PowerOn` | -- | `Interactive` |
+| `PowerOn` | Not charging-only eligible, including software reset | `Interactive` |
+
+Charging-only boot shows a static battery-and-bolt icon with "Charging" and
+"Hold power button / to turn on". Charge completion shows a filled battery
+and "Battery Full", including when already full at boot. Only charging-state
+transitions repaint the page. The charger is initialized once, PM power is
+disabled, and sensors, radios, storage, and the orchestrator remain unstarted.
+The main CPU feeds the external watchdog and uses two-second light sleeps to
+poll external-power status; no LP-core feeder runs. Button wake restarts into
+normal startup. A valid unplug reading refreshes "Powered off" and calls
+`shutdown()` without rechecking the cable or button after the refresh.
+Cold-boot charging-only eligibility requires `ESP_RST_POWERON` and external
+input, regardless of charge completion; there is no startup button override.
+User shutdown with USB attached sets `RtcAppState::charging_only_requested`
+after its normal shutdown page and cleanup, then uses a brief timer-woken
+deep-sleep reboot. Boot consumes the request and enters the same charging-only
+display and polling path. See
+[Hardware Init](docs/hardware_init.md#boot-path-selection) for detection rules.
 
 Hardware initialization is managed by **GoHardwareBoard** through
 fine-grained init methods and lazy service accessors. `init_nvs()`,
@@ -721,9 +725,17 @@ explicit synchronization needed.
 
 ### Shutdown
 
-Button 1 long press triggers BMS QoN (ship mode) via
+On battery, Button 1 long press triggers BMS QoN (ship mode) via
 `BmsDevice::enter_ship_mode()` on the BQ25629. The device fully powers
 off. GPS module loses power. Next power-on is a fresh boot.
+
+When the latest power status reports USB input, the orchestrator saves existing
+data and a one-shot RTC request after the normal shutdown page and cleanup.
+PowerService waits for button release and reboots through deep sleep into
+charging-only mode.
+The charging-only loop feeds the watchdog and handles unplug; the
+orchestrator has no separate charging loop. Protective shutdowns retain the
+existing ship-mode/deep-sleep fallback.
 
 Button 1 (`PIN_BUTTON_POWER`, GPIO5) is wired to **both** the ESP32 GPIO
 **and** the BQ25629 `/QON` pin. This makes the gesture matter:
@@ -736,9 +748,9 @@ Button 1 (`PIN_BUTTON_POWER`, GPIO5) is wired to **both** the ESP32 GPIO
   line qualifies a ship-mode wake (≥ ~17 ms) and the BQ25629 re-closes
   the BATFET, so the device powers back on. Because the BATFET cut drops
   the RTC domain too, this comes up as `WakeCause::PowerOn` — a full cold
-  boot (RTC state wiped), not a deep-sleep wake. With USB present,
-  `enter_ship_mode()` is refused and the path falls back to deep sleep, so
-  the restart behavior only applies on battery.
+  boot (RTC state wiped), not a deep-sleep wake. With confirmed USB present,
+  user shutdown waits for release and enters charging-only mode instead, so
+  the hardware hold-to-restart behavior only applies on battery.
 
 Ship mode is also triggered automatically by the EDV and high- or
 low-battery-temperature safety trips — see

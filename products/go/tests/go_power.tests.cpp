@@ -548,6 +548,24 @@ TEST_CASE("is_fast_path_wake: fast-path boot predicate", "[PowerService][boot]")
 // TEST CASE 5 — save_state / load_state (RTC_DATA_ATTR is a plain static)
 // ============================================================================
 
+TEST_CASE("reboot: waits for Power release without changing RTC state", "[PowerService][rtc]") {
+  ScopedMockRTOS rtos;
+  MockBmsDevice bms;
+  static int button_reads;
+  button_reads = 0;
+  auto gpio = test_gpio_hal;
+  gpio.get_level = [](int) { return ++button_reads < 3 ? 0 : 1; };
+  PowerService svc(&bms, gpio, DEFAULT_CONFIG);
+  RtcAppState state{};
+  state.charging_only_requested = true;
+  svc.save_state(state);
+  FORBID_CALL(bms, read_status(trompeloeil::_));
+  REQUIRE_CALL(rtos.mock, delay_ms_impl(50)).TIMES(2);
+  svc.reboot();
+  CHECK(button_reads == 3);
+  CHECK(svc.load_state().charging_only_requested);
+}
+
 TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]") {
   MockBmsDevice mock_bms;
   PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
@@ -576,6 +594,8 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
     saved.tracking_state = TrackingState::Recording;
     saved.tracking_session_id = 42731;
     saved.sensors_warm = true;
+    CHECK_FALSE(saved.charging_only_requested);
+    saved.charging_only_requested = true;
 
     svc.save_state(saved);
     const RtcAppState loaded = svc.load_state();
@@ -587,6 +607,7 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
     CHECK(loaded.tracking_state == TrackingState::Recording);
     CHECK(loaded.tracking_session_id == 42731);
     CHECK(loaded.sensors_warm);
+    CHECK(loaded.charging_only_requested);
   }
 
   SECTION("overwrite with new state — load returns latest") {
