@@ -577,9 +577,9 @@ configured interval.
 5. Backup chart cache to RTC memory
 6. Persist app state to RTC memory:
    - Current mode, behavior, lock status
-   - Tracking-in-progress flag, session ID
-   - GPS enabled / disabled
-   - sensors_warm flag (set when sleep < sensor_hold_max_sleep_ms)
+   - Tracking-state enum, session ID
+   - RtcAppFlag::GpsEnabled in the flags mask
+   - RtcAppFlag::SensorsWarm (set when sleep < sensor_hold_max_sleep_ms)
 7. Pulse external watchdog (gives it a full timeout window during sleep)
 8. If sleep < sensor_hold_max_sleep_ms (20 s):
    - gpio_hold_en(PIN_PM_POWER) — hold PM sensor power HIGH
@@ -622,7 +622,7 @@ normal startup. A valid unplug reading refreshes "Powered off" and calls
 `shutdown()` without rechecking the cable or button after the refresh.
 Cold-boot charging-only eligibility requires `ESP_RST_POWERON` and external
 input, regardless of charge completion; there is no startup button override.
-User shutdown with USB attached sets `RtcAppState::charging_only_requested`
+User shutdown with USB attached sets `RtcAppFlag::ChargingOnlyRequested`
 after its normal shutdown page and cleanup, then uses a brief timer-woken
 deep-sleep reboot. Boot consumes the request and enters the same charging-only
 display and polling path. See
@@ -1106,8 +1106,8 @@ sequenceDiagram
     - _board.power().set_pm_power(true) — drives EN_PM GPIO only;
       `EN_OTG` already armed by `init_bms()`
     - _board.load_settings()
-    - _board.sensors(state.sensors_warm) — SPS30 warm: skip_reset
-   - If sensors_warm: skip warmup (200 ms settle only)
+    - _board.sensors(state.has_flag(RtcAppFlag::SensorsWarm)) — SPS30 warm: skip_reset
+   - If RtcAppFlag::SensorsWarm is set: skip warmup (200 ms settle only)
      Else: interruptible warmup loop with button checks
    - One-shot measurement (skip if button pressed)
    - One-shot GPS via _board.new_gps_driver() when GPS is active, including Paused

@@ -237,13 +237,17 @@ See [`fg_learning.md`](fg_learning.md) for the factory learning boot path.
 
 ## Relationship to RtcAppState
 
-Some settings fields have a corresponding field in `RtcAppState` (the
+Some settings fields have a corresponding field or flag in `RtcAppState` (the
 RTC-memory cache used to survive deep sleep):
 
-| Setting | `RtcAppState` field | Purpose |
+| Setting | RTC Field or Flag | Purpose |
 |---|---|---|
 | `operating_mode` | `mode` | Settings = durable (NVS, survives power-off). RtcAppState = fast cache (RTC memory, survives deep sleep only). |
-| `gps_mode` | `gps_enabled` | `GpsMode` in settings maps to a boolean in `RtcAppState` (enabled = not AlwaysOff). |
+| `gps_mode` | `RtcAppFlag::GpsEnabled` | Set in `RtcAppState::flags` when the setting is not AlwaysOff. |
+
+The GPS flag is accessed through `has_flag()` and `set_flag()`. See
+[RTC State Persistence](power_management.md#rtc-state-persistence) for the
+flag layout and defaults.
 
 **Startup logic:**
 

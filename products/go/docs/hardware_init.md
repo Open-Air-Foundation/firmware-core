@@ -50,7 +50,7 @@ result, the wake cause, and RTC state to the pure function
 
 | Wake Cause | Condition | Path |
 |---|---|---|
-| Timer wake after user shutdown | `charging_only_requested` in RTC state | `ChargingOnly`; request consumed before polling |
+| Timer wake after user shutdown | `RtcAppFlag::ChargingOnlyRequested` set in RTC state | `ChargingOnly`; request consumed before polling |
 | `PowerOn` | Hardware power-on reset with confirmed external input | `ChargingOnly` |
 | `PowerOn` | Otherwise, including software reset | `Interactive` with empty BootHandoff |
 | `Timer` + `Locked` | `is_fast_path_wake()` | `FastPath` — measure, display, sleep or promote |
@@ -236,7 +236,7 @@ tasks, no input handling. Returns a `FastPathResult` for testability.
 | 2 | Battery devices | `_board.init_fuel_gauge()`, then retry `_board.init_bms()` twice; continue degraded on failure |
 | 3 | GPIO holds + EN_PM | `_board.release_gpio_holds()`, then `_board.power().set_pm_power(true)` |
 | 4 | Load settings | `_board.load_settings()` |
-| 5 | Sensor init | `_board.sensors(state.sensors_warm)` |
+| 5 | Sensor init | `_board.sensors(state.has_flag(RtcAppFlag::SensorsWarm))` |
 | 6 | Interruptible warmup | `sm.warmup_step()` with button checks |
 | 7 | One-shot measurement | `sm.start_measures()` (skip if button) |
 | 8 | One-shot GPS | `_board.new_gps_driver()` (skip if button/inactive) |
