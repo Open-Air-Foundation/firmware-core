@@ -43,11 +43,12 @@ flowchart TD
 
 ## Boot Path Selection
 
-`GoApp::run()` determines the boot path using the pure function
+`GoApp::run()` enables the selected ESP Power Management options. It then determines the boot path using the pure function.
 `select_boot_path()`:
 
 ```text
 GoApp::run():
+    configure_esp_power_management()
     cause = PowerService::get_wake_cause()
     path = select_boot_path(cause, load_rtc_app_state())
 
@@ -371,3 +372,4 @@ Host-testable free functions co-located with GoApp:
 | `measures_to_ago()` | Convert shared `Measures` → product `MeasuresAGo` |
 | `build_fast_path_display()` | Build `DisplayValues` for locked dashboard |
 | `build_wake_values()` | Build `DisplayValues` from RTC snapshot |
+| `configure_esp_power_management()` | Configure CPU DFS Minimum and Maximum Clock Frequencies and Auto Light Sleep Enable |
