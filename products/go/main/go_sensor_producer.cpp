@@ -328,6 +328,26 @@ void SensorProducer::handle_measurement(uint32_t notify_value) {
 
   Measures measures = _manager.start_measures(static_cast<int>(iterations), measurement_groups);
 
+  if (has_group(measurement_groups, SensorGroup::PM)) {
+    const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+    if (measures.pm_a.is_pm_25_valid()) {
+      _last_pm = measures.pm_a;
+      _last_pm_ms = now;
+    } else if (_last_pm.is_pm_25_valid() && now - _last_pm_ms < PM_VALIDITY_MS) {
+      measures.pm_a = _last_pm;
+    }
+  }
+
+  if (has_group(measurement_groups, SensorGroup::Other)) {
+    const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+    if (measures.co2.is_valid()) {
+      _last_co2 = measures.co2;
+      _last_co2_ms = now;
+    } else if (_last_co2.is_valid() && now - _last_co2_ms < CO2_VALIDITY_MS) {
+      measures.co2 = _last_co2;
+    }
+  }
+
   // When the sampler is active, the measurement didn't read SGP41
   // (TvocNox bit was stripped). Splice in the cached TVOC/NOx so the
   // orchestrator receives fresh index values.

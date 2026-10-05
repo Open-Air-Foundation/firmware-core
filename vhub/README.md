@@ -26,4 +26,4 @@ Review the relevant product template before opening each pull request. Update it
 only when firmware changes behavior that a tester can observe through the
 device, hardware, serial logs, network interfaces, or server data.
 
-Keep test IDs stable and update the template `rev` whenever its content changes.
+`rev` is the 7 digit last commit head. Keep test IDs stable and update the template `rev` whenever its content changes.
