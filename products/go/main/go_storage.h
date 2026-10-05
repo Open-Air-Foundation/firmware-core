@@ -194,6 +194,13 @@ public:
   /// Returns 0 if the session does not exist or the file is empty.
   uint32_t get_session_point_count(uint32_t session_id) const;
 
+  /// Query the point count on demand, including buffered complete writes
+  /// for the matching open session; otherwise use file size / sizeof(RoutePoint).
+  /// Returns true even for an empty file (count = 0). Returns false when
+  /// unmounted or stat fails, leaving count unchanged.
+  /// Does not flush, sync, reopen, scan, or write files.
+  bool try_get_session_point_count(uint32_t session_id, uint32_t &count) const;
+
   /// Read route points from a session file.
   /// Reads up to count points starting at point index offset.
   /// Returns the number of points actually read.

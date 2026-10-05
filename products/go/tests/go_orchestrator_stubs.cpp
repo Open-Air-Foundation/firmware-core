@@ -31,6 +31,7 @@
 #include <functional>
 #include <algorithm>
 #include <cstring>
+#include <map>
 #include <set>
 
 // ============================================================================
@@ -112,6 +113,8 @@ bool clear_routes_result = true;
 bool create_route_result = true;
 bool resume_route_result = true;
 bool append_route_point_result = true;
+bool append_accepts_before_error = false;
+std::map<uint32_t, uint32_t> route_point_counts;
 bool end_route_result = true;
 
 // Session IDs that should appear "already on NAND" to the orchestrator's
@@ -318,6 +321,8 @@ void reset() {
   create_route_result = true;
   resume_route_result = true;
   append_route_point_result = true;
+  append_accepts_before_error = false;
+  route_point_counts.clear();
   end_route_result = true;
   existing_route_session_ids.clear();
 
@@ -602,6 +607,9 @@ bool StorageService::create_route(uint32_t session_id) {
   test_spy::route_started = true;
   test_spy::route_file_open = true;
   test_spy::route_session_id = session_id;
+  _current_session_id = session_id;
+  _current_point_count = 0;
+  test_spy::route_point_counts[session_id] = 0;
   return true;
 }
 
@@ -612,6 +620,8 @@ bool StorageService::resume_route(uint32_t session_id) {
   test_spy::route_resumed = true;
   test_spy::route_file_open = true;
   test_spy::route_session_id = session_id;
+  _current_session_id = session_id;
+  _current_point_count = test_spy::route_point_counts[session_id];
   return true;
 }
 
@@ -622,6 +632,10 @@ bool StorageService::route_file_exists(uint32_t session_id) const {
 bool StorageService::append_route_point(const RoutePoint &point) {
   test_spy::route_point_appended = true;
   test_spy::last_route_point = point;
+  if (test_spy::append_route_point_result || test_spy::append_accepts_before_error) {
+    ++_current_point_count;
+    test_spy::route_point_counts[_current_session_id] = _current_point_count;
+  }
   return test_spy::append_route_point_result;
 }
 
@@ -631,12 +645,14 @@ bool StorageService::end_route() {
   }
   test_spy::route_file_open = false;
   test_spy::route_ended = true;
+  _current_point_count = 0;
+  _current_session_id = 0;
   return test_spy::end_route_result;
 }
 
 bool StorageService::is_route_active() const { return test_spy::route_file_open; }
 
-uint32_t StorageService::current_route_point_count() const { return 0; }
+uint32_t StorageService::current_route_point_count() const { return _current_point_count; }
 
 bool StorageService::delete_route(uint32_t /*session_id*/) { return true; }
 

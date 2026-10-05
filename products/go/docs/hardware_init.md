@@ -248,6 +248,34 @@ The caller (`run_fast_path`) handles ISR setup/teardown and sleep entry. Before
 promotion to `run_interactive()`, it retries BMS initialization if the degraded
 fast path did not acquire the charger; failure restarts the device.
 
+### Retained Tracking Timing
+
+Every `FastPathResult` includes only the updated `TrackingTiming` value in
+`tracking_timing`, not a replacement app state. The core derives it from the
+input's timing and normalizes it against the actual tracking state: inactive
+tracking clears timing, while a live-segment marker that disagrees with Recording or
+Paused invalidates only accumulated duration and the segment anchor. Session
+and last-record anchors remain independently usable. Paused appends no point.
+Recording samples retained-clock seconds at append using
+`tracking_seconds_from_ms(RTOS::get_retained_time_ms())`. The existing writer's
+`current_route_point_count()` is compared before and after the append, before
+`end_route()` resets it. Only an advancing count timestamps an accepted record,
+including an accepted write whose subsequent sync fails. Append and reopen
+errors retain their existing promotion behavior.
+
+Unknown active duration does not block a valid accepted-record timestamp.
+The helper checks actual Recording state, session elapsed time, and the prior
+last-record anchor independently of duration. If it rejects the accepted
+record's time, only `last_record_s` is invalidated. Early promotion and reopen
+failure carry the normalized timing without timestamping a record.
+The caller (`run_fast_path`) copies the original `RtcAppState` and replaces only
+its timing with the result. Sleep additionally applies the new `SensorsWarm`
+flag; Promote preserves the original flags. Both save the reconstructed state
+before sleeping or entering the BMS retry and interactive initialization, so RTC
+readers receive the accepted-record timestamp without replacing unrelated app
+state. A temperature Shutdown result clears its timing; the wrapper continues
+directly to shutdown without saving that result or changing the route lifecycle.
+
 ### Button detection during fast path
 
 GoBoard's `install_button_isr()` / `remove_button_isr()` manage a

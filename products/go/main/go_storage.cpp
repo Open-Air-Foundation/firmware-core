@@ -474,6 +474,28 @@ uint32_t StorageService::get_session_point_count(uint32_t session_id) const {
   return static_cast<uint32_t>(st.st_size / sizeof(RoutePoint));
 }
 
+bool StorageService::try_get_session_point_count(uint32_t session_id, uint32_t &count) const {
+  if (!_nand.is_mounted()) {
+    return false;
+  }
+
+  if (_route_file != nullptr && _current_session_id == session_id) {
+    count = _current_point_count;
+    return true;
+  }
+
+  char path[MAX_PATH_LEN];
+  format_route_path(session_id, path, sizeof(path));
+
+  struct stat st{};
+  if (stat(path, &st) != 0) {
+    return false;
+  }
+
+  count = static_cast<uint32_t>(st.st_size / sizeof(RoutePoint));
+  return true;
+}
+
 uint16_t StorageService::read_route_points(uint32_t session_id, uint32_t offset, RoutePoint *out,
                                            uint16_t count) const {
   if (out == nullptr || count == 0 || !_nand.is_mounted()) {

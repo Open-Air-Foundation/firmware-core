@@ -509,14 +509,25 @@ reserved bits. RTC save/load copies the complete state, preserving the mask.
 
 `mode`, `behavior`, `lock_state`, and `tracking_state` remain separate
 one-byte enums; `tracking_session_id` remains a separate four-byte integer.
-Their defaults are Portable, Idle, Locked, Idle, and zero respectively. The
-complete structure occupies 12 bytes, enforced by a size assertion in both
-host and firmware builds.
+Their defaults are Portable, Idle, Locked, Idle, and zero respectively.
+`tracking_timing` adds four `uint32_t` second-based fields for the original
+session start, accumulated recording duration, current recording-segment start,
+and last accepted-record time. All default to `TRACKING_TIME_INVALID_S`; zero is
+a valid clock value. The timing block occupies 16 bytes, making the complete
+structure 28 bytes, enforced by a size assertion in host and firmware builds.
 
 The saved `tracking_state` enum and `tracking_session_id` preserve Recording or
 Paused across deep sleep. A Recording wake reopens the route for append; a
 Paused wake keeps it closed while continuing measurement, display, and configured
 GPS behavior. Only an explicit Resume returns a paused session to Recording.
+
+Timing anchors use the retained monotonic clock, not GPS/system UTC. Closing and
+reopening the writer for sleep does not change a recording segment. Timer-wake
+accepted writes update the last-record timestamp; both the Sleep and Promote
+paths persist that updated value. Inactive tracking restores invalid timing.
+No point count, GPS fix data, or UI cursor is added to app-state retention.
+The timing data is not persisted in route files and does not migrate an active
+session through a cold boot or firmware update.
 
 `RtcAppFlag::ChargingOnlyRequested` defaults to clear. User shutdown with
 confirmed USB power sets it before a brief timer-woken deep-sleep reboot.
@@ -530,9 +541,10 @@ Under `TEST_HOST`, `RTC_DATA_ATTR` is defined away so the variables become
 ordinary statics — `save_state()` / `load_state()` work identically.
 [Power-service host tests](../tests/go_power.tests.cpp) cover defaults,
 independent flag updates, all eight flag combinations through both loaders,
-reserved-bit preservation, invalid-state fallback, and paused-session
-persistence. [Boot tests](../tests/go_app.tests.cpp) verify that charging-only
-mode consumes its request before polling and the next restart boots normally.
+reserved-bit preservation, invalid-state fallback, and recording/paused timing
+persistence. [Boot tests](../tests/go_app.tests.cpp) verify timing handoff through
+Sleep/Promote, and that charging-only mode consumes its request before polling
+and the next restart boots normally.
 
 ### Display Snapshot (`go_display.cpp`)
 
@@ -554,7 +566,7 @@ sensors.
 
 | Region | Size | Location |
 |---|---|---|
-| `RtcAppState` + valid flag | 12 B + 1 B, excluding linker alignment | `go_power.cpp` |
+| `RtcAppState` + valid flag | 28 B + 1 B, excluding linker alignment | `go_power.cpp` |
 | `PayloadCacheStorageData` | ~1.5 KB | `rtc_payload_cache_storage.cpp` |
 | `RtcDisplaySnapshot` + valid flag | ~45 B | `go_display.cpp` |
 | **Total** | **~1.6 KB** | ESP32-C5: 8 KB available |

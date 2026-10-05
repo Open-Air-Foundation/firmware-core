@@ -112,6 +112,7 @@ extern bool clear_routes_result;
 extern bool create_route_result;
 extern bool resume_route_result;
 extern bool append_route_point_result;
+extern bool append_accepts_before_error;
 extern bool end_route_result;
 extern TrackingState ble_tracking_state;
 extern std::set<uint32_t> existing_route_session_ids;
@@ -273,6 +274,8 @@ class MockRTOS : public trompeloeil::mock_interface<RTOS> {
 public:
   IMPLEMENT_MOCK1(delay_ms_impl);
   IMPLEMENT_MOCK0(get_time_ms_impl);
+  uint64_t retained_time_ms = 0;
+  uint64_t get_retained_time_ms_impl() override { return retained_time_ms; }
 
   void set_system_time_from_epoch_impl(int64_t epoch_seconds) override {
     system_time_set = true;
@@ -526,6 +529,10 @@ public:
     return tracking_session_active(o._tracking_state);
   }
   static uint32_t tracking_session_id(const Orchestrator &o) { return o._tracking_session_id; }
+  static const TrackingTiming &tracking_timing(const Orchestrator &o) { return o._tracking_timing; }
+  static void set_tracking_timing(Orchestrator &o, const TrackingTiming &timing) {
+    o._tracking_timing = timing;
+  }
   static bool first_measurement_done(const Orchestrator &o) { return o._first_measurement_done; }
   static const MeasuresAGo &cached_measures(const Orchestrator &o) { return o._raw_measures; }
   static const MeasuresAGo &raw_measures(const Orchestrator &o) { return o._raw_measures; }
@@ -1551,6 +1558,297 @@ TEST_CASE("unlock: sets Unlocked state", "[Orchestrator][state]") {
 // 8. State Transitions — tracking
 // ============================================================================
 
+static void check_tracking_timing(const TrackingTiming &actual, const TrackingTiming &expected) {
+  CHECK(actual.session_started_s == expected.session_started_s);
+  CHECK(actual.recording_accumulated_s == expected.recording_accumulated_s);
+  CHECK(actual.recording_started_s == expected.recording_started_s);
+  CHECK(actual.last_record_s == expected.last_record_s);
+}
+
+TEST_CASE("tracking timing: lifecycle uses retained seconds without changing route decisions",
+          "[Orchestrator][tracking][timing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.mock_rtos.retained_time_ms = 100999;
+  REQUIRE(A::start_tracking(orch));
+  check_tracking_timing(A::tracking_timing(orch), {100, 0, 100, TRACKING_TIME_INVALID_S});
+
+  f.mock_rtos.retained_time_ms = 110000;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK(A::tracking_timing(orch).last_record_s == 110);
+  CHECK(f.storage_service.current_route_point_count() == 1);
+
+  f.mock_rtos.retained_time_ms = 130000;
+  REQUIRE(A::pause_tracking(orch));
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  check_tracking_timing(A::tracking_timing(orch), {100, 30, TRACKING_TIME_INVALID_S, 110});
+  CHECK(tracking_elapsed_s(A::tracking_timing(orch), 150) == 50);
+  CHECK(tracking_recording_s(A::tracking_timing(orch), 150) == 30);
+  CHECK(tracking_last_record_age_s(A::tracking_timing(orch), 150) == 40);
+
+  f.mock_rtos.retained_time_ms = 150000;
+  REQUIRE(A::pause_tracking(orch));
+  REQUIRE_FALSE(A::start_tracking(orch));
+  REQUIRE(A::resume_tracking(orch));
+  check_tracking_timing(A::tracking_timing(orch), {100, 30, 150, 110});
+  f.mock_rtos.retained_time_ms = 170000;
+  REQUIRE(A::resume_tracking(orch));
+  CHECK(A::tracking_timing(orch).recording_started_s == 150);
+  CHECK(tracking_recording_s(A::tracking_timing(orch), 170) == 50);
+
+  test_spy::end_route_result = false;
+  A::stop_tracking(orch);
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
+  check_tracking_timing(A::snapshot_state(orch).tracking_timing, TrackingTiming{});
+}
+
+TEST_CASE("tracking timing: failed start and resume preserve the prior timing",
+          "[Orchestrator][tracking][timing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.mock_rtos.retained_time_ms = 100000;
+  test_spy::create_route_result = false;
+  REQUIRE_FALSE(A::start_tracking(orch));
+  check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
+  test_spy::create_route_result = true;
+  REQUIRE(A::start_tracking(orch));
+
+  f.mock_rtos.retained_time_ms = 130000;
+  test_spy::end_route_result = false;
+  REQUIRE_FALSE(A::pause_tracking(orch));
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  const auto paused = A::tracking_timing(orch);
+  CHECK(paused.recording_accumulated_s == 30);
+  CHECK(paused.recording_started_s == TRACKING_TIME_INVALID_S);
+
+  f.mock_rtos.retained_time_ms = 150000;
+  test_spy::resume_route_result = false;
+  REQUIRE_FALSE(A::resume_tracking(orch));
+  check_tracking_timing(A::tracking_timing(orch), paused);
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+}
+
+TEST_CASE("tracking timing: invalid transition time changes timing validity not route behavior",
+          "[Orchestrator][tracking][timing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  SECTION("Unrepresentable start time") {
+    f.mock_rtos.retained_time_ms = UINT64_MAX;
+    REQUIRE(A::start_tracking(orch));
+    CHECK(A::tracking_state(orch) == TrackingState::Recording);
+    CHECK(test_spy::route_file_open);
+    check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
+  }
+  SECTION("Bad pause cannot keep a live segment running") {
+    f.mock_rtos.retained_time_ms = 100000;
+    REQUIRE(A::start_tracking(orch));
+    f.mock_rtos.retained_time_ms = 110000;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    f.mock_rtos.retained_time_ms = UINT64_MAX;
+    REQUIRE(A::pause_tracking(orch));
+    CHECK(A::tracking_state(orch) == TrackingState::Paused);
+    check_tracking_timing(A::tracking_timing(orch),
+                          {100, TRACKING_TIME_INVALID_S, TRACKING_TIME_INVALID_S, 110});
+    f.mock_rtos.retained_time_ms = 150000;
+    REQUIRE(A::resume_tracking(orch));
+    CHECK(A::tracking_state(orch) == TrackingState::Recording);
+    CHECK(tracking_elapsed_s(A::tracking_timing(orch), 160) == 60);
+    CHECK(tracking_recording_s(A::tracking_timing(orch), 160) == TRACKING_TIME_INVALID_S);
+    f.mock_rtos.retained_time_ms = 160000;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(A::tracking_timing(orch).last_record_s == 160);
+    CHECK(tracking_last_record_age_s(A::tracking_timing(orch), 170) == 10);
+    CHECK(tracking_recording_s(A::tracking_timing(orch), 170) == TRACKING_TIME_INVALID_S);
+  }
+  SECTION("Backward resume does not fabricate an active segment") {
+    f.mock_rtos.retained_time_ms = 100000;
+    REQUIRE(A::start_tracking(orch));
+    f.mock_rtos.retained_time_ms = 130000;
+    REQUIRE(A::pause_tracking(orch));
+    f.mock_rtos.retained_time_ms = 99000;
+    REQUIRE(A::resume_tracking(orch));
+    CHECK(A::tracking_state(orch) == TrackingState::Recording);
+    CHECK(test_spy::route_file_open);
+    CHECK(A::tracking_timing(orch).recording_accumulated_s == TRACKING_TIME_INVALID_S);
+    CHECK(A::tracking_timing(orch).recording_started_s == TRACKING_TIME_INVALID_S);
+    CHECK(A::tracking_timing(orch).session_started_s == 100);
+  }
+}
+
+TEST_CASE("tracking timing: only accepted scheduled route points advance last-record time",
+          "[Orchestrator][tracking][timing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.mock_rtos.retained_time_ms = 100000;
+  REQUIRE(A::start_tracking(orch));
+  f.mock_rtos.retained_time_ms = 110000;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  REQUIRE(A::tracking_timing(orch).last_record_s == 110);
+  f.mock_rtos.retained_time_ms = 120000;
+
+  SECTION("Rejected write") {
+    test_spy::append_route_point_result = false;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(A::tracking_timing(orch).last_record_s == 110);
+    CHECK(f.storage_service.current_route_point_count() == 1);
+  }
+  SECTION("Accepted write followed by sync failure") {
+    test_spy::append_route_point_result = false;
+    test_spy::append_accepts_before_error = true;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(A::tracking_timing(orch).last_record_s == 120);
+    CHECK(f.storage_service.current_route_point_count() == 2);
+  }
+  SECTION("Accepted write with invalid time invalidates the previous age") {
+    f.mock_rtos.retained_time_ms = UINT64_MAX;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(A::tracking_timing(orch).last_record_s == TRACKING_TIME_INVALID_S);
+    CHECK(f.storage_service.current_route_point_count() == 2);
+    CHECK(A::tracking_timing(orch).session_started_s == 100);
+    f.mock_rtos.retained_time_ms = 130000;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(A::tracking_timing(orch).last_record_s == 130);
+  }
+  SECTION("Manual refresh is not a route point") {
+    Event event{};
+    event.type = EventType::SensorDataReady;
+    event.sensor_data.origin = MeasurementOrigin::Refresh;
+    A::dispatch(orch, event);
+    CHECK(A::tracking_timing(orch).last_record_s == 110);
+    CHECK(f.storage_service.current_route_point_count() == 1);
+  }
+  SECTION("Paused data is not a route point") {
+    REQUIRE(A::pause_tracking(orch));
+    const auto paused = A::tracking_timing(orch);
+    f.mock_rtos.retained_time_ms = 130000;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    check_tracking_timing(A::tracking_timing(orch), paused);
+    CHECK(A::tracking_state(orch) == TrackingState::Paused);
+    return;
+  }
+  CHECK(A::tracking_state(orch) == TrackingState::Recording);
+  CHECK(test_spy::route_file_open);
+}
+
+TEST_CASE("tracking timing: recording and paused sleep preserve timing across per-boot clock reset",
+          "[Orchestrator][tracking][timing][init]") {
+  TestFixture f;
+  f.settings.onboarding_done = true;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  f.mock_rtos.retained_time_ms = 100000;
+  REQUIRE(A::start_tracking(orch));
+  f.mock_rtos.retained_time_ms = 110000;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  f.mock_rtos.retained_time_ms = 130000;
+  bool paused = false;
+  SECTION("Recording") {}
+  SECTION("Paused") {
+    REQUIRE(A::pause_tracking(orch));
+    paused = true;
+  }
+  const auto before = A::tracking_timing(orch);
+  A::prepare_for_sleep(orch);
+  REQUIRE(test_spy::state_saved);
+  check_tracking_timing(test_spy::last_saved_state.tracking_timing, before);
+  CHECK_FALSE(test_spy::route_file_open);
+
+  test_spy::state_to_load = test_spy::last_saved_state;
+  f.mock_rtos.retained_time_ms = 200000;
+  auto restored = f.make_orchestrator();
+  restored.init(WakeCause::Button, {.measurement_completed = true});
+  check_tracking_timing(A::tracking_timing(restored), before);
+  CHECK(tracking_elapsed_s(A::tracking_timing(restored), 200) == 100);
+  CHECK(tracking_recording_s(A::tracking_timing(restored), 200) == (paused ? 30 : 100));
+  CHECK(tracking_last_record_age_s(A::tracking_timing(restored), 200) == 90);
+  CHECK(A::tracking_state(restored) == (paused ? TrackingState::Paused : TrackingState::Recording));
+  CHECK(test_spy::route_file_open == !paused);
+}
+
+TEST_CASE("tracking timing: cold boot, inactive RTC and failed reopen discard stale timing",
+          "[Orchestrator][tracking][timing][init]") {
+  TestFixture f;
+  f.settings.onboarding_done = true;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  test_spy::state_to_load.tracking_state = TrackingState::Recording;
+  test_spy::state_to_load.tracking_session_id = 12345;
+  test_spy::state_to_load.tracking_timing = {100, 0, 100, 110};
+  f.mock_rtos.retained_time_ms = 200000;
+  WakeCause cause = WakeCause::Button;
+  SECTION("Fresh power-on") { cause = WakeCause::PowerOn; }
+  SECTION("Inactive retained session") {
+    test_spy::state_to_load.tracking_state = TrackingState::Idle;
+    test_spy::state_to_load.tracking_session_id = 0;
+  }
+  SECTION("Recording route cannot be reopened") { test_spy::resume_route_result = false; }
+  orch.init(cause, {.measurement_completed = true});
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
+  check_tracking_timing(A::snapshot_state(orch).tracking_timing, TrackingTiming{});
+}
+
+TEST_CASE("tracking timing: mismatched RTC segment invalidates active duration only",
+          "[Orchestrator][tracking][timing][init]") {
+  TestFixture f;
+  f.settings.onboarding_done = true;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  test_spy::state_to_load.tracking_session_id = 12345;
+  SECTION("Recording with a paused timing value") {
+    test_spy::state_to_load.tracking_state = TrackingState::Recording;
+    test_spy::state_to_load.tracking_timing = {100, 30, TRACKING_TIME_INVALID_S, 110};
+  }
+  SECTION("Paused with a running segment") {
+    test_spy::state_to_load.tracking_state = TrackingState::Paused;
+    test_spy::state_to_load.tracking_timing = {100, 0, 100, 110};
+  }
+  f.mock_rtos.retained_time_ms = 200000;
+  orch.init(WakeCause::Button, {.measurement_completed = true});
+  CHECK(A::tracking_state(orch) == test_spy::state_to_load.tracking_state);
+  CHECK(tracking_elapsed_s(A::tracking_timing(orch), 200) == 100);
+  CHECK(tracking_recording_s(A::tracking_timing(orch), 200) == TRACKING_TIME_INVALID_S);
+  CHECK(tracking_last_record_age_s(A::tracking_timing(orch), 200) == 90);
+}
+
+TEST_CASE("tracking timing: inactive Stop is a no-op while Clear Data clears stale timing",
+          "[Orchestrator][tracking][timing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  const TrackingTiming stale{100, 0, 100, 110};
+  REQUIRE(A::tracking_state(orch) == TrackingState::Idle);
+  A::set_tracking_timing(orch, stale);
+  check_tracking_timing(A::snapshot_state(orch).tracking_timing, TrackingTiming{});
+
+  SECTION("Stop preserves private timing while already Idle") {
+    A::stop_tracking(orch);
+    check_tracking_timing(A::tracking_timing(orch), stale);
+  }
+  SECTION("Clear Data discards private timing even while Idle") {
+    REQUIRE(A::clear_data(orch));
+    check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
+  }
+
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  check_tracking_timing(A::snapshot_state(orch).tracking_timing, TrackingTiming{});
+}
+
 TEST_CASE("pause/resume: keep session, GPS and live data; record results only while Recording",
           "[Orchestrator][tracking][pause]") {
   TestFixture f;
@@ -1883,6 +2181,7 @@ TEST_CASE("clear_data: clears cache and routes, stopping tracking first",
   CHECK_FALSE(A::tracking_active(orch));
   CHECK(A::behavior(orch) == Behavior::Idle);
   CHECK(A::tracking_session_id(orch) == 0);
+  check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
   CHECK(test_spy::route_ended);
   CHECK(test_spy::cache_cleared);
   CHECK(test_spy::routes_cleared);
@@ -1915,6 +2214,7 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
           "[Orchestrator][factory_reset]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  A::set_tracking_timing(orch, {100, 20, 130, 140});
 
   A::settings(orch).operating_mode = OperatingMode::Offline;
   A::settings(orch).gps_mode = GpsMode::AlwaysOff;
@@ -1948,6 +2248,7 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
   CHECK(A::lock_state(orch) == LockState::Locked);
   CHECK_FALSE(A::tracking_active(orch));
   CHECK(A::tracking_session_id(orch) == 0);
+  check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
   CHECK(*f.local_api.get_config().configuration_control == "both");
   CHECK(*f.local_api.get_config().pm_standard == "ugm3");
   CHECK_FALSE(f.local_api.get_system_info().wifi_rssi.has_value());

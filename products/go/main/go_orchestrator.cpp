@@ -202,12 +202,14 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   _mode = _settings.operating_mode;
 
   // --- Restore RTC state for wake-from-sleep cases ---
+  _tracking_timing = TrackingTiming{};
   if (cause != WakeCause::PowerOn) {
     RtcAppState state = _svc.power_service.load_state();
     _behavior = tracking_session_active(state.tracking_state) ? Behavior::Tracking : Behavior::Idle;
     _gps_enabled = state.has_flag(RtcAppFlag::GpsEnabled);
     _tracking_state = state.tracking_state;
     _tracking_session_id = state.tracking_session_id;
+    _tracking_timing = tracking_timing_for_state(state.tracking_timing, _tracking_state);
   }
 
   // --- Apply initial lock state ---
@@ -267,6 +269,7 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
       AG_LOGE(TAG, "init: resume_route failed for session %" PRIu32, _tracking_session_id);
       _tracking_state = TrackingState::Idle;
       _tracking_session_id = 0;
+      _tracking_timing = TrackingTiming{};
       _behavior = Behavior::Idle;
       _svc.ui_manager.show_snackbar("Tracking stopped — storage");
     }
@@ -1045,9 +1048,16 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
       p.gps = _latest_gps;
       p.sensors = _raw_measures;
       p.battery_percentage = _latest_power.battery_percentage;
+      const uint32_t record_s = tracking_seconds_from_ms(RTOS::get_retained_time_ms());
+      const uint32_t count_before = _svc.storage_service.current_route_point_count();
       // Failures are logged by the storage layer; the session keeps running
       // and re-attempts on each subsequent measurement.
       (void)_svc.storage_service.append_route_point(p);
+      // A full write can advance the counter even when a subsequent sync fails.
+      if (_svc.storage_service.current_route_point_count() > count_before &&
+          !tracking_timing_record_accepted(_tracking_timing, _tracking_state, record_s)) {
+        _tracking_timing.last_record_s = TRACKING_TIME_INVALID_S;
+      }
     }
   }
 
@@ -1531,6 +1541,10 @@ bool Orchestrator::start_tracking() {
   _tracking_session_id = session_id;
   _tracking_state = TrackingState::Recording;
   _behavior = Behavior::Tracking;
+  if (!tracking_timing_start(_tracking_timing,
+                             tracking_seconds_from_ms(RTOS::get_retained_time_ms()))) {
+    _tracking_timing = TrackingTiming{};
+  }
 
   if (!was_gps_active && is_gps_active()) {
     _svc.gps_service.start();
@@ -1554,6 +1568,11 @@ bool Orchestrator::pause_tracking() {
   }
 
   AG_LOGI(TAG, "pause_tracking: session %" PRIu32, _tracking_session_id);
+  if (!tracking_timing_pause(_tracking_timing,
+                             tracking_seconds_from_ms(RTOS::get_retained_time_ms()))) {
+    _tracking_timing.recording_accumulated_s = TRACKING_TIME_INVALID_S;
+    _tracking_timing.recording_started_s = TRACKING_TIME_INVALID_S;
+  }
   _tracking_state = TrackingState::Paused;
   const bool saved = _svc.storage_service.end_route();
   _svc.ui_manager.show_snackbar(saved ? "Tracking paused" : "Paused - storage sync failed");
@@ -1578,6 +1597,11 @@ bool Orchestrator::resume_tracking() {
   }
 
   AG_LOGI(TAG, "resume_tracking: session %" PRIu32, _tracking_session_id);
+  if (!tracking_timing_resume(_tracking_timing,
+                              tracking_seconds_from_ms(RTOS::get_retained_time_ms()))) {
+    _tracking_timing.recording_accumulated_s = TRACKING_TIME_INVALID_S;
+    _tracking_timing.recording_started_s = TRACKING_TIME_INVALID_S;
+  }
   _tracking_state = TrackingState::Recording;
   _svc.ui_manager.show_snackbar("Tracking resumed");
   update_display();
@@ -1597,6 +1621,7 @@ void Orchestrator::stop_tracking() {
   _svc.storage_service.end_route();
   _tracking_state = TrackingState::Idle;
   _tracking_session_id = 0;
+  _tracking_timing = TrackingTiming{};
   _behavior = Behavior::Idle;
 
   if (was_gps_active && !is_gps_active()) {
@@ -2130,6 +2155,7 @@ bool Orchestrator::clear_data() {
   if (tracking_session_active(_tracking_state)) {
     stop_tracking();
   }
+  _tracking_timing = TrackingTiming{};
 
   _svc.storage_service.clear_cache();
   const bool routes_cleared = _svc.storage_service.clear_routes();
@@ -2183,6 +2209,7 @@ bool Orchestrator::factory_reset(bool preserve_corrections) {
   _lock_state = LockState::Locked;
   _tracking_state = TrackingState::Idle;
   _tracking_session_id = 0;
+  _tracking_timing = TrackingTiming{};
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
   _svc.ui_manager.reset_to_home();
@@ -3389,6 +3416,8 @@ RtcAppState Orchestrator::snapshot_state() const {
       .lock_state = _lock_state,
       .tracking_state = _tracking_state,
       .tracking_session_id = _tracking_session_id,
+      .tracking_timing =
+          tracking_session_active(_tracking_state) ? _tracking_timing : TrackingTiming{},
   };
   state.set_flag(RtcAppFlag::GpsEnabled, _gps_enabled);
   return state;

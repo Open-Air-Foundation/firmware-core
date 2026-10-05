@@ -111,6 +111,7 @@ private:
   bool _gps_enabled = true;
   TrackingState _tracking_state = TrackingState::Idle;
   uint32_t _tracking_session_id = 0;
+  TrackingTiming _tracking_timing{};
 
   // --- Cached data ---
   MeasuresAGo _raw_measures{};       ///< Authoritative sensor results for cloud/storage

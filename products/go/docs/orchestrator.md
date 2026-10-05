@@ -463,8 +463,10 @@ Helper users include the `.hpp` explicitly; data-only users need only the `.h`.
 There is no compiled helper source or support library. Focused tests live in
 [`go_types.tests.cpp`](../tests/go_types.tests.cpp).
 
-The new timing helpers are not yet connected to the orchestrator or embedded
-in `RtcAppState`; the current RTC layout and tracking behavior remain unchanged.
+The orchestrator owns `_tracking_timing` and includes it in
+`RtcAppState::tracking_timing` for active sessions. This data is internal; it is
+not yet exposed through a Status screen, BLE, or the local HTTP API. The timing
+hooks do not change tracking commands, GPS operation, or route-error decisions.
 
 The value contains four `uint32_t` fields, totaling 16 bytes:
 
@@ -484,18 +486,47 @@ unrepresentable conversion. Zero remains valid. The helpers subtract
 whole-second anchors; subsecond fractions are discarded, including across
 pause/resume segments.
 
-Start initializes a new timing value. Pause accumulates the active segment;
-Resume establishes the next segment without clearing previous duration.
-Repeated Pause or Resume is a no-op. A copied value continues across simulated
-sleep without an extra transition. Assigning `TrackingTiming{}` clears it.
-No point count, runtime clock access, or route-error policy is included.
+Successful Start initializes timing from `RTOS::get_retained_time_ms()`.
+Pause accumulates the active segment at the state transition, even when the
+subsequent route close reports failure. Resume establishes the next segment
+only after the existing reopen succeeds. Failed Start/Resume and repeated
+Pause/Resume leave timing unchanged. Stop, Clear Data, and successful factory
+reset clear the timing value with the existing session lifecycle.
+
+For scheduled route writes, the orchestrator samples retained time and compares
+the existing writer count immediately before and after append. Count advancement
+timestamps an accepted record even when append subsequently reports a sync
+failure. Rejected writes, manual Refresh measurements, and paused measurements
+do not update the timestamp. These counts are temporary observations, not a
+second persistent counter. The boot fast path uses the same acceptance rule.
+
+Normal deep sleep copies the timing value without a Pause/Resume transition, so
+recording time includes sleep while Recording and remains frozen while Paused.
+Both interactive and fast-path restore reconcile the active-segment marker with
+the authoritative tracking state using `tracking_timing_for_state()`. Inactive
+RTC timing is discarded; a mismatched segment makes recording duration unknown
+without discarding independently usable session-start or last-record anchors.
+Power-on starts with invalid timing, and a failed Recording reopen clears timing
+alongside the existing transition to Idle. The fast path saves updated timing
+before returning to sleep or promoting to the interactive orchestrator.
 
 The caller must supply nondecreasing timestamps and own the actual tracking
 lifecycle. Helpers reject invalid or inconsistent inputs without changing the
 value; duration queries return the invalid sentinel instead of underflowing or
 wrapping. They check against retained anchors, not a separate last-observation
-timestamp. The caller only invokes the record helper after confirming that a
-write was accepted.
+timestamp. The record helper additionally takes the actual `TrackingState` and
+is called only after confirming a write was accepted. A valid accepted-record
+timestamp can recover even when accumulated recording duration is unknown.
+
+If a timing helper rejects an actual transition, recording behavior still follows
+the existing lifecycle: Start leaves all timing unknown; Pause/Resume invalidate
+only the recording accumulator and segment anchor. An accepted write with an
+invalid timestamp invalidates only `last_record_s` rather than retaining the
+previous point's age. No new retry, stop, repair, or shutdown policy is introduced.
+
+Point count is not stored in RTC. `StorageService::try_get_session_point_count()`
+provides a checked, read-only query for future view consumers; this step does not
+add background polling or connect that query to an existing screen.
 
 ### change_mode()
 

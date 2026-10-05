@@ -31,6 +31,20 @@ constexpr uint32_t duration_s(uint32_t start_s, uint32_t now_s) {
 
 } // namespace go_type_helpers_detail
 
+/// Reconcile retained timing with the authoritative tracking state without
+/// changing that state. Preserve independently usable elapsed/last-record anchors.
+inline TrackingTiming tracking_timing_for_state(TrackingTiming timing, TrackingState state) {
+  if (!tracking_session_active(state)) {
+    return TrackingTiming{};
+  }
+  const bool has_segment = timing.recording_started_s != TRACKING_TIME_INVALID_S;
+  if (has_segment != (state == TrackingState::Recording)) {
+    timing.recording_accumulated_s = TRACKING_TIME_INVALID_S;
+    timing.recording_started_s = TRACKING_TIME_INVALID_S;
+  }
+  return timing;
+}
+
 /// Floor retained milliseconds to seconds before narrowing. Unrepresentable time
 /// returns TRACKING_TIME_INVALID_S; zero is valid. No clock is read here.
 inline uint32_t tracking_seconds_from_ms(uint64_t retained_ms) {
@@ -120,10 +134,12 @@ inline uint32_t tracking_last_record_age_s(const TrackingTiming &timing, uint32_
   return true;
 }
 
-/// Timestamp a caller-confirmed accepted record; requires an active segment.
-[[nodiscard]] inline bool tracking_timing_record_accepted(TrackingTiming &timing, uint32_t now_s) {
-  if (timing.recording_started_s == TRACKING_TIME_INVALID_S ||
-      tracking_recording_s(timing, now_s) == TRACKING_TIME_INVALID_S) {
+/// Timestamp a caller-confirmed accepted record while Recording, independently
+/// of active-duration validity. The caller supplies the actual tracking state.
+[[nodiscard]] inline bool tracking_timing_record_accepted(TrackingTiming &timing,
+                                                          TrackingState state, uint32_t now_s) {
+  if (state != TrackingState::Recording ||
+      tracking_elapsed_s(timing, now_s) == TRACKING_TIME_INVALID_S) {
     return false;
   }
   if (timing.last_record_s != TRACKING_TIME_INVALID_S &&

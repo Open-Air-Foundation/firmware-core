@@ -36,7 +36,9 @@ TEST_CASE("tracking timing defaults are unknown and layout is compact", "[go][tr
   STATIC_REQUIRE(sizeof(TrackingTiming) == 16);
   STATIC_REQUIRE(std::is_trivially_copyable_v<TrackingTiming>);
   STATIC_REQUIRE(std::is_standard_layout_v<TrackingTiming>);
-  STATIC_REQUIRE(sizeof(RtcAppState) == 12); // RTC integration is a separate step.
+  STATIC_REQUIRE(sizeof(RtcAppState) == 28);
+  STATIC_REQUIRE(std::is_trivially_copyable_v<RtcAppState>);
+  check_same_timing(RtcAppState{}.tracking_timing, TrackingTiming{});
 
   const TrackingTiming timing;
   CHECK(timing.session_started_s == TRACKING_TIME_INVALID_S);
@@ -74,7 +76,7 @@ TEST_CASE("tracking timing accepts timestamp zero and a point at start", "[go][t
   CHECK(tracking_recording_s(timing, 0) == 0);
   CHECK(tracking_last_record_age_s(timing, 0) == TRACKING_TIME_INVALID_S);
 
-  REQUIRE(tracking_timing_record_accepted(timing, 0));
+  REQUIRE(tracking_timing_record_accepted(timing, TrackingState::Recording, 0));
   CHECK(timing.last_record_s == 0);
   CHECK(tracking_last_record_age_s(timing, 0) == 0);
 }
@@ -83,7 +85,7 @@ TEST_CASE("tracking timing separates active segments from session elapsed time",
           "[go][tracking][timing]") {
   TrackingTiming timing;
   REQUIRE(tracking_timing_start(timing, 100));
-  REQUIRE(tracking_timing_record_accepted(timing, 110));
+  REQUIRE(tracking_timing_record_accepted(timing, TrackingState::Recording, 110));
   CHECK(tracking_recording_s(timing, 120) == 20);
 
   REQUIRE(tracking_timing_pause(timing, 130));
@@ -101,7 +103,7 @@ TEST_CASE("tracking timing separates active segments from session elapsed time",
   CHECK(tracking_recording_s(timing, 170) == 50);
   CHECK(tracking_elapsed_s(timing, 170) == 70);
 
-  REQUIRE(tracking_timing_record_accepted(timing, 170));
+  REQUIRE(tracking_timing_record_accepted(timing, TrackingState::Recording, 170));
   REQUIRE(tracking_timing_pause(timing, 180));
   CHECK(timing.recording_accumulated_s == 60);
   REQUIRE(tracking_timing_resume(timing, 200));
@@ -129,7 +131,7 @@ TEST_CASE("tracking timing copied across sleep keeps the active segment",
           "[go][tracking][timing]") {
   TrackingTiming timing;
   REQUIRE(tracking_timing_start(timing, 10));
-  REQUIRE(tracking_timing_record_accepted(timing, 20));
+  REQUIRE(tracking_timing_record_accepted(timing, TrackingState::Recording, 20));
 
   SECTION("Recording sleep is included without periodic counter updates") {
     const TrackingTiming restored = timing;
@@ -163,7 +165,7 @@ TEST_CASE("tracking timing records differences of whole-second anchors", "[go][t
 TEST_CASE("tracking restart and reset discard previous session timing", "[go][tracking][timing]") {
   TrackingTiming timing;
   REQUIRE(tracking_timing_start(timing, 100));
-  REQUIRE(tracking_timing_record_accepted(timing, 110));
+  REQUIRE(tracking_timing_record_accepted(timing, TrackingState::Recording, 110));
   REQUIRE(tracking_timing_pause(timing, 120));
   REQUIRE(tracking_timing_start(timing, 200));
   CHECK(timing.session_started_s == 200);
@@ -179,13 +181,14 @@ TEST_CASE("tracking mutations reject unknown time without changing state",
           "[go][tracking][timing]") {
   TrackingTiming timing;
   REQUIRE(tracking_timing_start(timing, 100));
-  REQUIRE(tracking_timing_record_accepted(timing, 110));
+  REQUIRE(tracking_timing_record_accepted(timing, TrackingState::Recording, 110));
   const auto previous = timing;
 
   CHECK_FALSE(tracking_timing_start(timing, TRACKING_TIME_INVALID_S));
   CHECK_FALSE(tracking_timing_pause(timing, TRACKING_TIME_INVALID_S));
   CHECK_FALSE(tracking_timing_resume(timing, TRACKING_TIME_INVALID_S));
-  CHECK_FALSE(tracking_timing_record_accepted(timing, TRACKING_TIME_INVALID_S));
+  CHECK_FALSE(
+      tracking_timing_record_accepted(timing, TrackingState::Recording, TRACKING_TIME_INVALID_S));
   check_same_timing(timing, previous);
   CHECK(tracking_elapsed_s(timing, TRACKING_TIME_INVALID_S) == TRACKING_TIME_INVALID_S);
   CHECK(tracking_recording_s(timing, TRACKING_TIME_INVALID_S) == TRACKING_TIME_INVALID_S);
@@ -196,24 +199,25 @@ TEST_CASE("tracking mutations require an initialized session", "[go][tracking][t
   TrackingTiming timing;
   CHECK_FALSE(tracking_timing_pause(timing, 10));
   CHECK_FALSE(tracking_timing_resume(timing, 10));
-  CHECK_FALSE(tracking_timing_record_accepted(timing, 10));
+  CHECK_FALSE(tracking_timing_record_accepted(timing, TrackingState::Recording, 10));
   check_same_timing(timing, TrackingTiming{});
 }
 
-TEST_CASE("tracking record acceptance requires a live segment and ordered timestamp",
+TEST_CASE("tracking record acceptance requires Recording state and ordered timestamp",
           "[go][tracking][timing]") {
   TrackingTiming timing;
   REQUIRE(tracking_timing_start(timing, 100));
-  REQUIRE(tracking_timing_record_accepted(timing, 110));
+  REQUIRE(tracking_timing_record_accepted(timing, TrackingState::Recording, 110));
   auto previous = timing;
-  CHECK_FALSE(tracking_timing_record_accepted(timing, 109));
+  CHECK_FALSE(tracking_timing_record_accepted(timing, TrackingState::Recording, 109));
   check_same_timing(timing, previous);
-  REQUIRE(tracking_timing_record_accepted(timing, 110)); // Same whole second is valid.
+  REQUIRE(tracking_timing_record_accepted(timing, TrackingState::Recording, 110));
   check_same_timing(timing, previous);
 
   REQUIRE(tracking_timing_pause(timing, 120));
   previous = timing;
-  CHECK_FALSE(tracking_timing_record_accepted(timing, 130));
+  CHECK_FALSE(tracking_timing_record_accepted(timing, TrackingState::Paused, 130));
+  CHECK_FALSE(tracking_timing_record_accepted(timing, TrackingState::Idle, 130));
   check_same_timing(timing, previous);
 }
 
@@ -225,7 +229,7 @@ TEST_CASE("tracking timing rejects time before known anchors", "[go][tracking][t
   CHECK(tracking_recording_s(timing, 99) == TRACKING_TIME_INVALID_S);
   CHECK_FALSE(tracking_timing_pause(timing, 99));
   CHECK_FALSE(tracking_timing_resume(timing, 99));
-  CHECK_FALSE(tracking_timing_record_accepted(timing, 99));
+  CHECK_FALSE(tracking_timing_record_accepted(timing, TrackingState::Recording, 99));
   check_same_timing(timing, previous);
 
   REQUIRE(tracking_timing_pause(timing, 120));
@@ -285,7 +289,7 @@ TEST_CASE("tracking timing supports the last representable second without wrappi
   REQUIRE(tracking_timing_pause(timing, MAX_TIME_S - 10));
   REQUIRE(tracking_timing_resume(timing, MAX_TIME_S - 5));
   CHECK(tracking_recording_s(timing, MAX_TIME_S) == MAX_TIME_S - 5);
-  REQUIRE(tracking_timing_record_accepted(timing, MAX_TIME_S));
+  REQUIRE(tracking_timing_record_accepted(timing, TrackingState::Recording, MAX_TIME_S));
   CHECK(tracking_last_record_age_s(timing, MAX_TIME_S) == 0);
   REQUIRE(tracking_timing_pause(timing, MAX_TIME_S));
   CHECK(timing.recording_accumulated_s == MAX_TIME_S - 5);
@@ -298,10 +302,33 @@ TEST_CASE("tracking timing supports the last representable second without wrappi
 TEST_CASE("tracking timing snapshots do not mutate the timing value", "[go][tracking][timing]") {
   TrackingTiming timing;
   REQUIRE(tracking_timing_start(timing, 10));
-  REQUIRE(tracking_timing_record_accepted(timing, 20));
+  REQUIRE(tracking_timing_record_accepted(timing, TrackingState::Recording, 20));
   const auto previous = timing;
   CHECK(tracking_elapsed_s(timing, 30) == 20);
   CHECK(tracking_recording_s(timing, 30) == 20);
   CHECK(tracking_last_record_age_s(timing, 30) == 10);
   check_same_timing(timing, previous);
+}
+
+TEST_CASE("tracking last-record time can recover independently of active duration",
+          "[go][tracking][timing]") {
+  TrackingTiming timing{100, TRACKING_TIME_INVALID_S, TRACKING_TIME_INVALID_S, 110};
+  REQUIRE(tracking_timing_record_accepted(timing, TrackingState::Recording, 160));
+  CHECK(tracking_elapsed_s(timing, 170) == 70);
+  CHECK(tracking_recording_s(timing, 170) == TRACKING_TIME_INVALID_S);
+  CHECK(tracking_last_record_age_s(timing, 170) == 10);
+}
+
+TEST_CASE("tracking timing restoration follows the authoritative state", "[go][tracking][timing]") {
+  const TrackingTiming recording{100, 20, 140, 150};
+  const TrackingTiming paused{100, 30, TRACKING_TIME_INVALID_S, 120};
+  check_same_timing(tracking_timing_for_state(recording, TrackingState::Recording), recording);
+  check_same_timing(tracking_timing_for_state(paused, TrackingState::Paused), paused);
+  check_same_timing(tracking_timing_for_state(recording, TrackingState::Paused),
+                    {100, TRACKING_TIME_INVALID_S, TRACKING_TIME_INVALID_S, 150});
+  check_same_timing(tracking_timing_for_state(paused, TrackingState::Recording),
+                    {100, TRACKING_TIME_INVALID_S, TRACKING_TIME_INVALID_S, 120});
+  check_same_timing(tracking_timing_for_state(recording, TrackingState::Idle), TrackingTiming{});
+  check_same_timing(tracking_timing_for_state(recording, static_cast<TrackingState>(255)),
+                    TrackingTiming{});
 }
