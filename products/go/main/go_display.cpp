@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "go_text_wrap.h"
+#include "go_type_helpers.hpp"
 
 #include <driver/gpio.h>
 #include <esp_attr.h>

@@ -29,6 +29,7 @@
 #include "go_board.h"
 #include "go_local_api.h"
 #include "go_orchestrator.h"
+#include "go_type_helpers.hpp"
 #include "go_accel_test_access.h"
 #include "services/ag_client.h"
 

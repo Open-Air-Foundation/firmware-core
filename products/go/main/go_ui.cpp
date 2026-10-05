@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "common.h"
+#include "go_type_helpers.hpp"
 #include "services/provisioning_qr.h"
 
 // First-boot setup QR target. Short redirect -> low QR version, scannable

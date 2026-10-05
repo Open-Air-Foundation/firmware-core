@@ -749,6 +749,26 @@ target_link_libraries(go_local_api_tests PRIVATE
 catch_discover_tests(go_local_api_tests)
 
 # ---------------------------------------------------------------------------
+# go_types tests — header-only type helpers, no hardware or clock access
+# ---------------------------------------------------------------------------
+
+add_executable(go_types_tests
+    go_types.tests.cpp
+)
+
+target_include_directories(go_types_tests PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+)
+
+target_compile_definitions(go_types_tests PRIVATE TEST_HOST)
+
+target_link_libraries(go_types_tests PRIVATE
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_types_tests)
+
+# ---------------------------------------------------------------------------
 # go_text_wrap tests
 # ---------------------------------------------------------------------------
 

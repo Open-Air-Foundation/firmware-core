@@ -454,6 +454,49 @@ Deep sleep closes an open file but preserves the session state and ID. A failed
 Recording restore on wake clears the session; a failed explicit Resume keeps
 the session Paused so the user can retry or Stop.
 
+#### Tracking Timing Helpers
+
+[`go_types.h`](../main/go_types.h) defines the plain `TrackingTiming` value and
+its invalid sentinel. [`go_type_helpers.hpp`](../main/go_type_helpers.hpp)
+provides the pure, header-only operations, including `tracking_session_active()`.
+Helper users include the `.hpp` explicitly; data-only users need only the `.h`.
+There is no compiled helper source or support library. Focused tests live in
+[`go_types.tests.cpp`](../tests/go_types.tests.cpp).
+
+The new timing helpers are not yet connected to the orchestrator or embedded
+in `RtcAppState`; the current RTC layout and tracking behavior remain unchanged.
+
+The value contains four `uint32_t` fields, totaling 16 bytes:
+
+- `session_started_s`: original session-start anchor, including pauses when
+  calculating elapsed time.
+- `recording_accumulated_s`: the sum of completed recording segments.
+- `recording_started_s`: the current recording-segment anchor; invalid while
+  paused. Active duration adds this segment to the accumulated duration.
+- `last_record_s`: the last caller-confirmed accepted write, not a guarantee
+  that the record was synchronized to storage.
+
+All timing uses monotonic seconds supplied by the caller, not GPS or wall time.
+`tracking_seconds_from_ms()` divides retained milliseconds before narrowing,
+avoiding the 32-bit millisecond rollover at about 49.7 days. It reserves
+`TRACKING_TIME_INVALID_S` (`UINT32_MAX`) for unknown values and rejects an
+unrepresentable conversion. Zero remains valid. The helpers subtract
+whole-second anchors; subsecond fractions are discarded, including across
+pause/resume segments.
+
+Start initializes a new timing value. Pause accumulates the active segment;
+Resume establishes the next segment without clearing previous duration.
+Repeated Pause or Resume is a no-op. A copied value continues across simulated
+sleep without an extra transition. Assigning `TrackingTiming{}` clears it.
+No point count, runtime clock access, or route-error policy is included.
+
+The caller must supply nondecreasing timestamps and own the actual tracking
+lifecycle. Helpers reject invalid or inconsistent inputs without changing the
+value; duration queries return the invalid sentinel instead of underflowing or
+wrapping. They check against retained anchors, not a separate last-observation
+timestamp. The caller only invokes the record helper after confirming that a
+write was accepted.
+
 ### change_mode()
 
 Updates `_mode`, persists it to NVS, and syncs `UIManager` so the

@@ -24,9 +24,18 @@ enum class TrackingState : uint8_t {
   Paused = 2,
 };
 
-constexpr bool tracking_session_active(TrackingState state) {
-  return state == TrackingState::Recording || state == TrackingState::Paused;
-}
+// --- Tracking timing data; pure operations live in go_type_helpers.hpp ---
+
+inline constexpr uint32_t TRACKING_TIME_INVALID_S = UINT32_MAX;
+
+struct TrackingTiming {
+  uint32_t session_started_s = TRACKING_TIME_INVALID_S;
+  uint32_t recording_accumulated_s = TRACKING_TIME_INVALID_S; ///< Completed active segments
+  uint32_t recording_started_s = TRACKING_TIME_INVALID_S; ///< Current segment; invalid if paused
+  uint32_t last_record_s = TRACKING_TIME_INVALID_S;       ///< Last accepted write, not sync
+};
+
+static_assert(sizeof(TrackingTiming) == 16, "Tracking timing must contain four 32-bit fields");
 
 enum class LockState : uint8_t {
   Locked,

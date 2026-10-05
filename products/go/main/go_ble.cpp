@@ -17,6 +17,7 @@
 #include "go_ble_protocol.h"
 #include "go_events.h"
 #include "go_storage.h"
+#include "go_type_helpers.hpp"
 
 #ifndef TEST_HOST
 #include "sdkconfig.h"

@@ -22,6 +22,7 @@
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_storage.h"
+#include "go_type_helpers.hpp"
 #include "go_ulp.h"
 #include "services/ag_client.h"
 #include "go_wifi.h"

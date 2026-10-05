@@ -4,7 +4,6 @@ idf_component_register(
          "go_hardware_board.cpp"
          "go_ble.cpp"
          "go_cloud.cpp"
-         "go_types.cpp"
          "go_settings.cpp"
          "go_display.cpp"
          "gps/gps_driver.cpp"

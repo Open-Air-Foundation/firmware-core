@@ -28,6 +28,7 @@
 #include "go_melody.h"
 #include "go_melody_sync.h"
 #include "go_power.h"
+#include "go_type_helpers.hpp"
 #include "rtos.h"
 #include "services/ag_client.h"
 

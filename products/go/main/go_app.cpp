@@ -47,6 +47,7 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "go_sensor_producer.h"
 #include "go_settings.h"
 #include "go_storage.h"
+#include "go_type_helpers.hpp"
 #include "go_ui.h"
 #include "go_ulp.h"
 #include "go_wifi.h"
