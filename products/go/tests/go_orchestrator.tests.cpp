@@ -52,6 +52,7 @@ extern "C" void __wrap__Z6rebootv() {
 namespace test_spy {
 extern std::function<void()> during_melody;
 extern uint32_t buzzer_refresh_ack_count;
+extern uint32_t retained_time_read_count;
 extern bool sensor_started;
 extern bool sensor_stopped;
 extern bool sensor_stop_sleep_pm;
@@ -113,6 +114,10 @@ extern bool create_route_result;
 extern bool resume_route_result;
 extern bool append_route_point_result;
 extern bool append_accepts_before_error;
+extern std::map<uint32_t, uint32_t> route_point_counts;
+extern uint32_t session_point_count_query_count;
+extern uint32_t session_point_count_query_id;
+extern bool session_point_count_query_success;
 extern bool end_route_result;
 extern TrackingState ble_tracking_state;
 extern std::set<uint32_t> existing_route_session_ids;
@@ -275,7 +280,10 @@ public:
   IMPLEMENT_MOCK1(delay_ms_impl);
   IMPLEMENT_MOCK0(get_time_ms_impl);
   uint64_t retained_time_ms = 0;
-  uint64_t get_retained_time_ms_impl() override { return retained_time_ms; }
+  uint64_t get_retained_time_ms_impl() override {
+    ++test_spy::retained_time_read_count;
+    return retained_time_ms;
+  }
 
   void set_system_time_from_epoch_impl(int64_t epoch_seconds) override {
     system_time_set = true;
@@ -513,11 +521,13 @@ class OrchestratorTestAccess {
 public:
   static void dispatch(Orchestrator &o, const Event &evt) { o.dispatch(evt); }
   static void check_timers(Orchestrator &o) { o.check_timers(); }
+  static bool auto_lock_allowed(const Orchestrator &o) { return o.auto_lock_allowed(); }
   static uint32_t compute_queue_timeout_ms(const Orchestrator &o) {
     return o.compute_queue_timeout_ms();
   }
 
   static BuildContext build_context(const Orchestrator &o) { return o.build_context(); }
+  static void update_display(Orchestrator &o, bool wait = false) { o.update_display(wait); }
   static RtcAppState snapshot_state(const Orchestrator &o) { return o.snapshot_state(); }
 
   // State readers
@@ -1441,6 +1451,76 @@ TEST_CASE("init(Button, display_painted + unlocked): resumes route when tracking
   REQUIRE(test_spy::route_session_id == 42000);
 }
 
+TEST_CASE("init: prepainted boot synchronizes tracking without waiting for input or rendering",
+          "[Orchestrator][init][tracking]") {
+  for (const auto state : {TrackingState::Recording, TrackingState::Paused}) {
+    CAPTURE(state);
+    TestFixture f;
+    f.settings.onboarding_done = true;
+    test_spy::state_to_load.tracking_state = state;
+    test_spy::state_to_load.tracking_session_id = 42000;
+    auto orch = f.make_orchestrator();
+    ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::NOT_FOUND);
+    ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::NOT_FOUND);
+    ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::NOT_FOUND);
+    BootHandoff handoff{};
+    handoff.display_painted = true;
+    handoff.measurement_completed = true;
+    handoff.initial_lock_state = LockState::Unlocked;
+    orch.init(WakeCause::Button, handoff);
+
+    // Inspect UI input directly: neither an orchestrator input nor a later render
+    // may hide missing synchronization in init().
+    f.ui_manager.set_screen(Screen::MainMenu);
+    f.ui_manager.handle_input(InputSource::TouchDown, InputType::ShortPress);
+    const auto action = f.ui_manager.handle_input(InputSource::TouchEnter, InputType::ShortPress);
+    CHECK(action.action == UIAction::None);
+    REQUIRE(f.ui_manager.current_screen() == Screen::TrackingMenu);
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(std::string(values.rows[3].text) ==
+          (state == TrackingState::Recording ? "Pause Tracking" : "Resume Tracking"));
+    CHECK(A::tracking_state(orch) == state);
+    CHECK(A::tracking_session_id(orch) == 42000);
+  }
+}
+
+TEST_CASE("init: failed route reopen synchronizes Idle after any early unlock render",
+          "[Orchestrator][init][tracking]") {
+  for (const bool display_painted : {false, true}) {
+    CAPTURE(display_painted);
+    TestFixture f;
+    f.settings.onboarding_done = true;
+    test_spy::state_to_load.tracking_state = TrackingState::Recording;
+    test_spy::state_to_load.tracking_session_id = 42000;
+    test_spy::resume_route_result = false;
+    auto orch = f.make_orchestrator();
+    ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::NOT_FOUND);
+    ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::NOT_FOUND);
+    ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::NOT_FOUND);
+    BootHandoff handoff{};
+    handoff.display_painted = display_painted;
+    handoff.measurement_completed = true;
+    handoff.initial_lock_state = LockState::Unlocked;
+    orch.init(WakeCause::Button, handoff);
+
+    REQUIRE(A::tracking_state(orch) == TrackingState::Idle);
+    CHECK(A::tracking_session_id(orch) == 0);
+    f.ui_manager.set_screen(Screen::MainMenu);
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(std::string(values.rows[1].text) == "Start Tracking");
+    f.ui_manager.handle_input(InputSource::TouchDown, InputType::ShortPress);
+    const auto action = f.ui_manager.handle_input(InputSource::TouchEnter, InputType::ShortPress);
+    CHECK(action.action == UIAction::StartTracking);
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
+}
+
 // ============================================================================
 // 6. Input Handling
 // ============================================================================
@@ -1541,6 +1621,37 @@ TEST_CASE("lock: sets Locked and resets UI to home", "[Orchestrator][state]") {
   REQUIRE(f.ui_manager.current_screen() == Screen::Home);
 }
 
+TEST_CASE("lock: always waits for a busy display regardless of screen or auto-lock setting",
+          "[Orchestrator][state][inactivity]") {
+  for (const auto screen : {Screen::Home, Screen::MainMenu, Screen::Settings,
+                            Screen::TrackingStatus, Screen::PairingPasskey}) {
+    for (const bool via_power_button : {false, true}) {
+      CAPTURE(screen, via_power_button);
+      TestFixture f;
+      f.settings.auto_lock_seconds = 0; // Manual locking does not use inactivity eligibility.
+      auto orch = f.make_orchestrator();
+      A::unlock(orch);
+      f.ui_manager.set_screen(screen);
+      REQUIRE_FALSE(A::auto_lock_allowed(orch));
+      DisplayService::spy_worker_busy = true;
+      DisplayService::spy_last_screen = screen;
+      const auto attempts = DisplayService::spy_update_count;
+      if (via_power_button) {
+        A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
+      } else {
+        A::lock(orch);
+      }
+      CHECK(A::lock_state(orch) == LockState::Locked);
+      CHECK(f.ui_manager.current_screen() == Screen::Home);
+      CHECK(DisplayService::spy_last_screen == Screen::Home);
+      CHECK(DisplayService::spy_update_count == attempts + 1);
+      CHECK(DisplayService::spy_last_update_wait);
+      CHECK_FALSE(DisplayService::spy_worker_busy);
+      CHECK(A::settings(orch).auto_lock_seconds == 0);
+    }
+  }
+}
+
 TEST_CASE("unlock: sets Unlocked state", "[Orchestrator][state]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -1563,6 +1674,587 @@ static void check_tracking_timing(const TrackingTiming &actual, const TrackingTi
   CHECK(actual.recording_accumulated_s == expected.recording_accumulated_s);
   CHECK(actual.recording_started_s == expected.recording_started_s);
   CHECK(actual.last_record_s == expected.last_record_s);
+}
+
+TEST_CASE("Tracking Status: live and paused snapshots are copied and read only",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.mock_rtos.retained_time_ms = 100'900;
+  REQUIRE(A::start_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  f.mock_rtos.retained_time_ms = 110'900;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  f.ui_manager.set_screen(Screen::TrackingStatus);
+
+  const auto sample = [&] {
+    test_spy::retained_time_read_count = 0;
+    test_spy::session_point_count_query_count = 0;
+    test_spy::measurement_requested = false;
+    test_spy::prepare_requested = false;
+    test_spy::gps_started = false;
+    test_spy::gps_stopped = false;
+    test_spy::gps_stop_and_idle_called = false;
+    test_spy::gps_idle_called = false;
+    const auto timing = A::tracking_timing(orch);
+    const auto last_input = A::last_input_ms(orch);
+    const auto ctx = A::build_context(orch);
+    CHECK(test_spy::retained_time_read_count == 1);
+    CHECK(test_spy::session_point_count_query_count == 1);
+    CHECK(test_spy::session_point_count_query_id == session);
+    CHECK_FALSE(test_spy::measurement_requested);
+    CHECK_FALSE(test_spy::prepare_requested);
+    CHECK_FALSE(test_spy::gps_started);
+    CHECK_FALSE(test_spy::gps_stopped);
+    CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+    CHECK_FALSE(test_spy::gps_idle_called);
+    CHECK(ctx.gps_data == &A::latest_gps(orch));
+    CHECK(A::last_input_ms(orch) == last_input);
+    check_tracking_timing(A::tracking_timing(orch), timing);
+    return ctx.tracking_status;
+  };
+
+  f.mock_rtos.retained_time_ms = 120'999;
+  // The open writer is authoritative even if a persisted count is older.
+  test_spy::route_point_counts[session] = 0;
+  const auto live = sample();
+  CHECK(live.recording_s == 20);
+  CHECK(live.elapsed_s == 20);
+  CHECK(live.last_record_age_s == 10);
+  CHECK(live.point_count_known);
+  CHECK(live.point_count == 1);
+  test_spy::route_point_counts[session] = 1;
+
+  f.mock_rtos.retained_time_ms = 130'900;
+  REQUIRE(A::pause_tracking(orch));
+  REQUIRE_FALSE(test_spy::route_file_open);
+  f.mock_rtos.retained_time_ms = 150'999;
+  const auto paused = sample();
+  CHECK(paused.recording_s == 30);
+  CHECK(paused.elapsed_s == 50);
+  CHECK(paused.last_record_age_s == 40);
+  CHECK(paused.point_count_known);
+  CHECK(paused.point_count == 1);
+
+  f.mock_rtos.retained_time_ms = 170'999;
+  const auto later = sample();
+  CHECK(later.recording_s == 30);
+  CHECK(later.elapsed_s == 70);
+  CHECK(later.last_record_age_s == 60);
+  CHECK(live.recording_s == 20);
+  CHECK(live.elapsed_s == 20);
+  CHECK(paused.elapsed_s == 50);
+}
+
+TEST_CASE("Tracking Status: unknown data differs from a known zero count",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  f.ui_manager.set_screen(Screen::TrackingStatus);
+  const auto initial = A::build_context(orch).tracking_status;
+  CHECK(initial.recording_s == 0);
+  CHECK(initial.elapsed_s == 0);
+  CHECK(initial.last_record_age_s == TRACKING_TIME_INVALID_S);
+  CHECK(initial.point_count_known);
+  CHECK(initial.point_count == 0);
+
+  SECTION("failed checked count and unknown anchors") {
+    test_spy::session_point_count_query_success = false;
+    A::set_tracking_timing(orch, TrackingTiming{});
+  }
+  SECTION("missing closed route and invalid retained time") {
+    REQUIRE(A::pause_tracking(orch));
+    test_spy::route_point_counts.clear();
+    f.mock_rtos.retained_time_ms = static_cast<uint64_t>(TRACKING_TIME_INVALID_S) * 1000;
+  }
+  test_spy::retained_time_read_count = 0;
+  test_spy::session_point_count_query_count = 0;
+  const auto unknown = A::build_context(orch).tracking_status;
+  CHECK(unknown.recording_s == TRACKING_TIME_INVALID_S);
+  CHECK(unknown.elapsed_s == TRACKING_TIME_INVALID_S);
+  CHECK(unknown.last_record_age_s == TRACKING_TIME_INVALID_S);
+  CHECK_FALSE(unknown.point_count_known);
+  CHECK(unknown.point_count == 0);
+  CHECK(test_spy::retained_time_read_count == 1);
+  CHECK(test_spy::session_point_count_query_count == 1);
+
+  uint32_t count = 42;
+  const auto stored_routes = test_spy::route_point_counts.size();
+  CHECK_FALSE(f.storage_service.try_get_session_point_count(A::tracking_session_id(orch), count));
+  CHECK(count == 42);
+  CHECK(test_spy::route_point_counts.size() == stored_routes);
+}
+
+TEST_CASE("Tracking Status: context queries are gated by screen lock and active session",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+
+  SECTION("Home recording") { f.ui_manager.set_screen(Screen::Home); }
+  SECTION("Home paused") {
+    REQUIRE(A::pause_tracking(orch));
+    f.ui_manager.set_screen(Screen::Home);
+  }
+  SECTION("Main Menu") { f.ui_manager.set_screen(Screen::MainMenu); }
+  SECTION("Tracking menu") { f.ui_manager.set_screen(Screen::TrackingMenu); }
+  SECTION("Settings") { f.ui_manager.set_screen(Screen::Settings); }
+  SECTION("GPS test") { f.ui_manager.set_screen(Screen::GpsTest); }
+  SECTION("locked Status") {
+    A::lock(orch);
+    f.ui_manager.set_screen(Screen::TrackingStatus);
+  }
+  SECTION("Idle Status") {
+    A::stop_tracking(orch);
+    f.ui_manager.set_screen(Screen::TrackingStatus);
+  }
+
+  test_spy::retained_time_read_count = 0;
+  test_spy::session_point_count_query_count = 0;
+  const auto ctx = A::build_context(orch);
+  CHECK(test_spy::retained_time_read_count == 0);
+  CHECK(test_spy::session_point_count_query_count == 0);
+  CHECK(ctx.tracking_status.recording_s == TRACKING_TIME_INVALID_S);
+  CHECK(ctx.tracking_status.elapsed_s == TRACKING_TIME_INVALID_S);
+  CHECK(ctx.tracking_status.last_record_age_s == TRACKING_TIME_INVALID_S);
+  CHECK_FALSE(ctx.tracking_status.point_count_known);
+  CHECK(ctx.tracking_status.point_count == 0);
+  CHECK(ctx.gps_data == &A::latest_gps(orch));
+}
+
+static void enter_tracking_status(TestFixture &f, Orchestrator &orch) {
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+  A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+  open_ui_row(f, orch, "Tracking");
+  REQUIRE(f.ui_manager.current_screen() == Screen::TrackingMenu);
+  open_ui_row(f, orch, "Status");
+  REQUIRE(f.ui_manager.current_screen() == Screen::TrackingStatus);
+}
+
+TEST_CASE("Tracking Status: external transitions reliably paint and preserve view and cursor",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+
+  bool via_ble = false;
+  SECTION("programmatic actions on Session view") {}
+  SECTION("BLE commands on GPS view") {
+    via_ble = true;
+    open_ui_row(f, orch, "GPS details");
+    // Leave the switch row selected on the GPS view.
+  }
+  const auto before = f.ui_manager.build_values(A::build_context(orch));
+  const auto last_input = A::last_input_ms(orch);
+  const auto command = [&](EventType type, BleCommand cmd) {
+    now_ms += 10'000;
+    DisplayService::spy_worker_busy = true;
+    DisplayService::spy_last_screen = Screen::Home;
+    const auto attempts = DisplayService::spy_update_count;
+    Event event{};
+    event.type = type;
+    if (via_ble) {
+      test_spy::ble_pending_config_len = 1;
+      test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+      test_spy::ble_config_decode_result.cmd = cmd;
+      event.type = EventType::BleConfigWrite;
+    }
+    A::dispatch(orch, event);
+    CHECK(DisplayService::spy_update_count == attempts + 1);
+    CHECK(DisplayService::spy_last_update_wait);
+    CHECK_FALSE(DisplayService::spy_worker_busy);
+    CHECK(A::last_input_ms(orch) == (cmd == BleCommand::StopTracking ? now_ms : last_input));
+  };
+  const auto check_view = [&] {
+    CHECK(DisplayService::spy_last_screen == Screen::TrackingStatus);
+    REQUIRE(f.ui_manager.current_screen() == Screen::TrackingStatus);
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(values.selected_row == before.selected_row);
+    CHECK(std::string(values.rows[2].text) == before.rows[2].text);
+  };
+
+  f.mock_rtos.retained_time_ms = 10'000;
+  command(EventType::UserPauseTracking, BleCommand::PauseTracking);
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  check_view();
+  f.mock_rtos.retained_time_ms = 20'000;
+  command(EventType::UserResumeTracking, BleCommand::ResumeTracking);
+  CHECK(A::tracking_state(orch) == TrackingState::Recording);
+  check_view();
+  command(EventType::UserStopTracking, BleCommand::StopTracking);
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  CHECK(f.ui_manager.current_screen() == Screen::MainMenu);
+  CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
+}
+
+TEST_CASE("Tracking Status: pause and resume storage errors also wait for the display worker",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+
+  test_spy::end_route_result = false;
+  DisplayService::spy_worker_busy = true;
+  CHECK_FALSE(A::pause_tracking(orch));
+  CHECK(DisplayService::spy_last_update_wait);
+  CHECK_FALSE(DisplayService::spy_worker_busy);
+  CHECK(DisplayService::spy_last_screen == Screen::TrackingStatus);
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+
+  test_spy::resume_route_result = false;
+  DisplayService::spy_worker_busy = true;
+  CHECK_FALSE(A::resume_tracking(orch));
+  CHECK(DisplayService::spy_last_update_wait);
+  CHECK_FALSE(DisplayService::spy_worker_busy);
+  CHECK(DisplayService::spy_last_screen == Screen::TrackingStatus);
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+}
+
+TEST_CASE("Tracking Status: leaving for Home reliably paints with a busy worker",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  DisplayService::spy_worker_busy = true;
+
+  SECTION("power button locks") {
+    A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
+    CHECK(A::lock_state(orch) == LockState::Locked);
+  }
+  SECTION("long Enter returns Home") {
+    A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress});
+    CHECK(A::lock_state(orch) == LockState::Unlocked);
+  }
+  SECTION("factory reset returns Home after stopping tracking") {
+    ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+    REQUIRE(A::factory_reset(orch));
+    CHECK(A::lock_state(orch) == LockState::Locked);
+  }
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+  CHECK(DisplayService::spy_last_screen == Screen::Home);
+  CHECK(DisplayService::spy_last_update_wait);
+  CHECK_FALSE(DisplayService::spy_worker_busy);
+}
+
+TEST_CASE("Tracking Status: both views remain unlocked while Recording or Paused",
+          "[Orchestrator][tracking][status]") {
+  for (const auto mode :
+       {OperatingMode::Portable, OperatingMode::Stationary, OperatingMode::Offline}) {
+    for (const bool paused : {false, true}) {
+      for (const bool gps_view : {false, true}) {
+        CAPTURE(mode, paused, gps_view);
+        TestFixture f;
+        f.settings.auto_lock_seconds = 10;
+        f.settings.measure_interval_seconds = 3600;
+        auto orch = f.make_orchestrator();
+        A::set_mode(orch, mode);
+        uint32_t now_ms = 1000;
+        ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+        FORBID_CALL(f.mock_config, commit());
+        A::unlock(orch);
+        REQUIRE(A::start_tracking(orch));
+        if (paused) {
+          REQUIRE(A::pause_tracking(orch));
+        }
+        enter_tracking_status(f, orch);
+        if (gps_view) {
+          open_ui_row(f, orch, "GPS details");
+        }
+        const auto last_input = A::last_input_ms(orch);
+        const auto before = f.ui_manager.build_values(A::build_context(orch));
+
+        for (const uint32_t time_ms : {11'000u, 61'000u, 121'000u}) {
+          now_ms = time_ms;
+          f.mock_rtos.retained_time_ms = now_ms;
+          A::check_timers(orch);
+          Event timeout{};
+          timeout.type = EventType::InactivityTimeout;
+          A::dispatch(orch, timeout);
+          (void)A::build_context(orch);
+          A::update_display(orch);
+          CHECK(A::lock_state(orch) == LockState::Unlocked);
+          CHECK(f.ui_manager.current_screen() == Screen::TrackingStatus);
+          CHECK(A::last_input_ms(orch) == last_input);
+        }
+        const auto after = f.ui_manager.build_values(A::build_context(orch));
+        CHECK(after.selected_row == before.selected_row);
+        CHECK(std::string(after.rows[2].text) == before.rows[2].text);
+        CHECK(A::settings(orch).auto_lock_seconds == 10);
+      }
+    }
+  }
+}
+
+TEST_CASE("Tracking Status: inactivity deadline is excluded from the queue timeout",
+          "[Orchestrator][tracking][status][timers]") {
+  TestFixture f;
+  f.settings.auto_lock_seconds = 10;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  SECTION("Recording") {}
+  SECTION("Paused") { REQUIRE(A::pause_tracking(orch)); }
+
+  now_ms = 10'000;
+  A::check_timers(orch); // The next five-second BMS status poll is now at 15,000.
+  now_ms = 10'999;
+  CHECK(A::compute_queue_timeout_ms(orch) == 4001); // Not the 1 ms inactivity candidate.
+  now_ms = 11'000;
+  CHECK(A::compute_queue_timeout_ms(orch) == 4000); // Not an expired zero-timeout wake.
+  CHECK(A::settings(orch).auto_lock_seconds == 10);
+}
+
+TEST_CASE("Tracking Status: every ordinary exit starts one fresh inactivity window",
+          "[Orchestrator][tracking][status][timers]") {
+  TestFixture f;
+  f.settings.auto_lock_seconds = 10;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  FORBID_CALL(f.mock_config, commit());
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  now_ms = 70'000;
+
+  Screen destination = Screen::TrackingMenu;
+  SECTION("Back row") { A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress}); }
+  SECTION("Exit row") {
+    A::on_input(orch, {InputSource::TouchUp, InputType::ShortPress});
+    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+    destination = Screen::Home;
+  }
+  SECTION("Double Enter") { A::on_input(orch, {InputSource::TouchEnter, InputType::DoublePress}); }
+  SECTION("Long Enter") {
+    A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress});
+    destination = Screen::Home;
+  }
+  SECTION("Programmatic Stop") {
+    A::stop_tracking(orch);
+    destination = Screen::MainMenu;
+  }
+  SECTION("BLE Stop") {
+    test_spy::ble_pending_config_len = 1;
+    test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+    test_spy::ble_config_decode_result.cmd = BleCommand::StopTracking;
+    Event event{};
+    event.type = EventType::BleConfigWrite;
+    A::dispatch(orch, event);
+    destination = Screen::MainMenu;
+  }
+  SECTION("Stop immediately before the ordinary clock wraps") {
+    now_ms = UINT32_MAX - 5000;
+    A::stop_tracking(orch);
+    destination = Screen::MainMenu;
+  }
+  const uint32_t exit_ms = now_ms;
+  CHECK(f.ui_manager.current_screen() == destination);
+  CHECK(A::last_input_ms(orch) == exit_ms);
+  A::check_timers(orch);
+  REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+
+  now_ms = exit_ms + 5000;
+  A::update_display(orch); // Subsequent paints must not keep extending the window.
+  CHECK(A::last_input_ms(orch) == exit_ms);
+  now_ms = exit_ms + 9999;
+  A::check_timers(orch);
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  now_ms = exit_ms + 10'000;
+  A::check_timers(orch);
+  CHECK(A::lock_state(orch) == LockState::Locked);
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+  CHECK(A::settings(orch).auto_lock_seconds == 10);
+}
+
+TEST_CASE("Tracking Status: screen overrides rebase inactivity once even if the paint is busy",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  now_ms = 70'000;
+  DisplayService::spy_worker_busy = true;
+
+  SECTION("Info replaces the page before rendering") {
+    f.ui_manager.show_info("Replacing Status");
+    A::update_display(orch);
+    CHECK(f.ui_manager.current_screen() == Screen::Info);
+  }
+  SECTION("Pairing replaces the page before rendering") {
+    Event event{};
+    event.type = EventType::BlePairingRequest;
+    event.ble_passkey = 123456;
+    A::dispatch(orch, event);
+    CHECK(f.ui_manager.current_screen() == Screen::PairingPasskey);
+  }
+  CHECK(A::last_input_ms(orch) == 70'000);
+  now_ms = 75'000;
+  A::update_display(orch, true);
+  CHECK(A::last_input_ms(orch) == 70'000);
+}
+
+TEST_CASE("Tracking Status: Auto Lock Off remains disabled after leaving",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  f.settings.auto_lock_seconds = 0;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  FORBID_CALL(f.mock_config, commit());
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  now_ms = 70'000;
+  A::stop_tracking(orch);
+  CHECK(A::last_input_ms(orch) == now_ms);
+  now_ms = 140'000;
+  A::check_timers(orch);
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  CHECK(A::settings(orch).auto_lock_seconds == 0);
+}
+
+TEST_CASE("Tracking Status: manual Power and safety shutdown remain available",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  f.settings.auto_lock_seconds = 10;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  now_ms = 70'000;
+
+  SECTION("Power short press still locks") {
+    A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
+    CHECK(A::lock_state(orch) == LockState::Locked);
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
+  SECTION("Power long press still shuts down") {
+    A::on_input(orch, {InputSource::ButtonPower, InputType::LongPress});
+    CHECK(test_spy::shutdown_called);
+    CHECK(f.ui_manager.current_screen() == Screen::ShutdownUser);
+  }
+  SECTION("BMS timer still handles thermal shutdown") {
+    test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverTemperature;
+    A::check_timers(orch);
+    CHECK(test_spy::bms_polled);
+    CHECK(test_spy::shutdown_called);
+    CHECK(f.ui_manager.current_screen() == Screen::ShutdownTemperature);
+  }
+}
+
+TEST_CASE("Tracking Status: ordinary display updates stay non-blocking",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  const auto attempts = DisplayService::spy_update_count;
+  test_spy::session_point_count_query_count = 0;
+  test_spy::retained_time_read_count = 0;
+  A::request_background_display_update(orch);
+  CHECK(DisplayService::spy_update_count == attempts);
+  CHECK(test_spy::session_point_count_query_count == 0);
+  CHECK(test_spy::retained_time_read_count == 0);
+
+  DisplayService::spy_worker_busy = true;
+  A::update_display(orch);
+  CHECK_FALSE(DisplayService::spy_last_update_wait);
+  CHECK(DisplayService::spy_worker_busy);
+
+  f.ui_manager.set_screen(Screen::Home);
+  A::update_display(orch);
+  CHECK_FALSE(DisplayService::spy_last_update_wait);
+  CHECK(DisplayService::spy_worker_busy);
+}
+
+TEST_CASE("tracking transitions: Pause Resume and Stop wait for the display on every page",
+          "[Orchestrator][tracking][display]") {
+  enum class Transition { Pause, PauseCloseFailure, Resume, ResumeOpenFailure, Stop, StopPaused };
+  for (const auto screen :
+       {Screen::Home, Screen::Settings, Screen::TrackingMenu, Screen::TrackingStatus}) {
+    for (const auto transition :
+         {Transition::Pause, Transition::PauseCloseFailure, Transition::Resume,
+          Transition::ResumeOpenFailure, Transition::Stop, Transition::StopPaused}) {
+      CAPTURE(screen, transition);
+      TestFixture f;
+      auto orch = f.make_orchestrator();
+      A::unlock(orch);
+      REQUIRE(A::start_tracking(orch));
+      if (transition == Transition::Resume || transition == Transition::ResumeOpenFailure ||
+          transition == Transition::StopPaused) {
+        REQUIRE(A::pause_tracking(orch));
+      }
+      // Home also covers local menu actions, which navigate Home before execution.
+      f.ui_manager.set_screen(screen);
+      DisplayService::spy_last_screen = screen;
+      DisplayService::spy_worker_busy = true;
+      const auto attempts = DisplayService::spy_update_count;
+      Screen expected_screen = screen;
+      switch (transition) {
+      case Transition::Pause:
+        REQUIRE(A::pause_tracking(orch));
+        CHECK(A::tracking_state(orch) == TrackingState::Paused);
+        break;
+      case Transition::PauseCloseFailure:
+        test_spy::end_route_result = false;
+        REQUIRE_FALSE(A::pause_tracking(orch));
+        CHECK(A::tracking_state(orch) == TrackingState::Paused);
+        break;
+      case Transition::Resume:
+        REQUIRE(A::resume_tracking(orch));
+        CHECK(A::tracking_state(orch) == TrackingState::Recording);
+        break;
+      case Transition::ResumeOpenFailure:
+        test_spy::resume_route_result = false;
+        REQUIRE_FALSE(A::resume_tracking(orch));
+        CHECK(A::tracking_state(orch) == TrackingState::Paused);
+        break;
+      case Transition::Stop:
+      case Transition::StopPaused:
+        A::stop_tracking(orch);
+        CHECK(A::tracking_state(orch) == TrackingState::Idle);
+        if (screen == Screen::TrackingMenu || screen == Screen::TrackingStatus) {
+          expected_screen = Screen::MainMenu;
+        }
+        break;
+      }
+      CHECK(f.ui_manager.current_screen() == expected_screen);
+      CHECK(DisplayService::spy_last_screen == expected_screen);
+      CHECK(DisplayService::spy_update_count == attempts + 1);
+      CHECK(DisplayService::spy_last_update_wait);
+      CHECK_FALSE(DisplayService::spy_worker_busy);
+    }
+  }
 }
 
 TEST_CASE("tracking timing: lifecycle uses retained seconds without changing route decisions",
@@ -3156,6 +3848,87 @@ TEST_CASE("compute_queue_timeout: BMS full poll dominates when status poll not d
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(3000);
   uint32_t timeout = A::compute_queue_timeout_ms(orch);
   REQUIRE(timeout <= 2000);
+}
+
+TEST_CASE("auto-lock eligibility is shared by scheduling, timer firing, and timeout events",
+          "[Orchestrator][timers][inactivity]") {
+  struct EligibilityCase {
+    const char *name;
+    Screen screen;
+    bool unlocked;
+    int auto_lock_seconds;
+    bool setup_session;
+    bool allowed;
+  };
+  const EligibilityCase cases[] = {
+      {"Home", Screen::Home, true, 10, false, true},
+      {"Menu", Screen::MainMenu, true, 10, false, true},
+      {"Locked", Screen::Home, false, 10, false, false},
+      {"Disabled", Screen::Home, true, 0, false, false},
+      {"Setup", Screen::Info, true, 10, true, false},
+      {"Focus", Screen::PairingPasskey, true, 10, false, false},
+      {"Hardware menu", Screen::HardwareTest, true, 10, false, false},
+      {"Peripheral test", Screen::PeripheralTest, true, 10, false, false},
+      {"GPS test", Screen::GpsTest, true, 10, false, false},
+      {"Accelerometer test", Screen::AccelTest, true, 10, false, false},
+      {"Tracking Status", Screen::TrackingStatus, true, 10, false, false},
+  };
+  for (const auto &item : cases) {
+    for (const bool via_event : {false, true}) {
+      CAPTURE(item.name, via_event);
+      TestFixture f;
+      f.settings.auto_lock_seconds = item.auto_lock_seconds;
+      f.settings.measure_interval_seconds = 3600;
+      auto orch = f.make_orchestrator();
+      uint32_t now_ms = 1000;
+      ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+      A::unlock(orch);
+      now_ms = 10'000;
+      A::check_timers(orch); // Rebase due BMS work before the inactivity boundary at 11,000.
+      if (!item.unlocked) {
+        A::lock(orch);
+      }
+      f.ui_manager.set_screen(item.screen);
+      A::set_setup_session_active(orch, item.setup_session);
+      CHECK(A::auto_lock_allowed(orch) == item.allowed);
+
+      now_ms = 10'999;
+      const auto with_setting = A::compute_queue_timeout_ms(orch);
+      A::settings(orch).auto_lock_seconds = 0;
+      const auto without_inactivity = A::compute_queue_timeout_ms(orch);
+      A::settings(orch).auto_lock_seconds = item.auto_lock_seconds;
+      if (item.allowed) {
+        CHECK(with_setting == 1);
+        CHECK(without_inactivity > with_setting);
+      } else {
+        CHECK(with_setting == without_inactivity);
+      }
+
+      now_ms = 11'000;
+      DisplayService::spy_worker_busy = true;
+      const auto updates_before_timeout = DisplayService::spy_update_count;
+      if (via_event) {
+        Event timeout{};
+        timeout.type = EventType::InactivityTimeout;
+        A::dispatch(orch, timeout);
+      } else {
+        A::check_timers(orch);
+      }
+      if (item.allowed) {
+        CHECK(A::lock_state(orch) == LockState::Locked);
+        CHECK(f.ui_manager.current_screen() == Screen::Home);
+        CHECK(DisplayService::spy_last_screen == Screen::Home);
+        CHECK(DisplayService::spy_last_update_wait);
+        CHECK_FALSE(DisplayService::spy_worker_busy);
+      } else {
+        CHECK(A::lock_state(orch) == (item.unlocked ? LockState::Unlocked : LockState::Locked));
+        CHECK(f.ui_manager.current_screen() == item.screen);
+        if (via_event) {
+          CHECK(DisplayService::spy_update_count == updates_before_timeout);
+        }
+      }
+    }
+  }
 }
 
 TEST_CASE("check_timers: fires inactivity when unlocked and due", "[Orchestrator][timers]") {
@@ -5201,6 +5974,33 @@ TEST_CASE("Co2CalibrationDone Unsupported shows snackbar", "[Orchestrator][calib
 // ============================================================================
 // 23. prepare_for_sleep
 // ============================================================================
+
+TEST_CASE("prepare_for_sleep: reconciles tracking navigation before its final render",
+          "[Orchestrator][sleep][tracking]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  SECTION("Idle dismisses obsolete Status") {
+    f.ui_manager.sync_tracking_state(TrackingState::Recording);
+    f.ui_manager.set_screen(Screen::TrackingStatus);
+    A::prepare_for_sleep(orch);
+    CHECK(f.ui_manager.current_screen() == Screen::MainMenu);
+    CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(std::string(values.rows[1].text) == "Start Tracking");
+    CHECK(test_spy::last_saved_state.tracking_state == TrackingState::Idle);
+  }
+  SECTION("Paused state controls the menu label") {
+    REQUIRE(A::start_tracking(orch));
+    REQUIRE(A::pause_tracking(orch));
+    f.ui_manager.sync_tracking_state(TrackingState::Recording);
+    f.ui_manager.set_screen(Screen::TrackingMenu);
+    A::prepare_for_sleep(orch);
+    CHECK(f.ui_manager.current_screen() == Screen::TrackingMenu);
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(std::string(values.rows[3].text) == "Resume Tracking");
+    CHECK(test_spy::last_saved_state.tracking_state == TrackingState::Paused);
+  }
+}
 
 TEST_CASE("prepare_for_sleep: stops all services, saves state, and deep sleeps display",
           "[Orchestrator][sleep]") {

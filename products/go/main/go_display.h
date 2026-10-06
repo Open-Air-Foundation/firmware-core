@@ -49,6 +49,7 @@ enum class Screen : uint8_t {
   FgLearnFailed,     ///< Learning: rejected (terminal, sticky)
   ShutdownCharging,  ///< USB-powered cold boot; application remains off
   ShutdownCharged,   ///< Charging-only mode; charger reports charge complete
+  TrackingStatus,    ///< Read-only current-session and GPS details
 };
 
 enum class Metric : uint8_t {
@@ -403,8 +404,13 @@ public:
     return true;
   }
 
-  bool update(const DisplayValues &values, bool = false) {
+  bool update(const DisplayValues &values, bool wait = false) {
     ++spy_update_count;
+    spy_last_update_wait = wait;
+    if (spy_worker_busy && !wait) {
+      return false;
+    }
+    spy_worker_busy = false;
     spy_last_screen = values.screen;
     return true;
   }
@@ -426,6 +432,8 @@ public:
   inline static uint32_t spy_flush_count = 0;
   inline static Screen spy_last_screen = Screen::Home;
   inline static bool spy_last_init_deferred = false;
+  inline static bool spy_last_update_wait = false;
+  inline static bool spy_worker_busy = false;
 };
 
 // Stub implementations for host builds.

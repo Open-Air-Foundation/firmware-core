@@ -124,9 +124,10 @@ private:
   uint32_t _last_bms_poll_ms = 0;
   uint32_t _last_bms_status_poll_ms = 0;
   uint32_t _last_ext_wdt_ms = 0;
-  uint32_t _last_input_ms = 0;                ///< Reset on every input; drives inactivity
+  uint32_t _last_input_ms = 0;                ///< Inactivity baseline: input or explicit UI exit
   uint32_t _snackbar_refresh_deadline_ms = 0; ///< 0 = inactive; non-zero = absolute deadline
   bool _first_measurement_done = false;
+  bool _tracking_status_was_visible = false; ///< Detect Status exit once; not RTC-persisted
 
   // --- OTA ---
   /// Unified OTA poll-timer baseline: 2 s BLE is_ble_active() poll (Portable),
@@ -315,6 +316,8 @@ private:
   void shutdown(ShipModeRequest reason = ShipModeRequest::None);
 
   // --- Timer management ---
+  /// Shared inactivity eligibility; elapsed-time checks remain with the timer.
+  bool auto_lock_allowed() const;
   uint32_t compute_queue_timeout_ms() const;
   void check_timers();
   void on_bms_timer();

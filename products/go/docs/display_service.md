@@ -274,33 +274,30 @@ enum class RefreshMode : uint8_t {
 
 The `update()` method selects the refresh mode using this priority:
 
-1. **Full** — crossing the setup-session boundary (any non-session screen
+1. **Partial, body-only** — destination is `TrackingStatus`, regardless of
+   header changes or the partial-operation budget.
+2. **Full** — crossing the setup-session boundary (any non-session screen
    ↔ `Info` / `Provisioning` / `ProvisioningConfirm`). Resets
    `_diff_count` and `_menu_exited` so the next session starts with a
    fresh partial budget.
-2. **Partial** — in-session transition (both previous and next are
+3. **Partial** — in-session transition (both previous and next are
    session screens). The partial-op counter is **not** consulted inside
    the session. Covers `Info` text updates, Provisioning status updates,
    `Provisioning ↔ ProvisioningConfirm`, and No ↔ Yes toggling.
-3. **Partial** — menu-navigation transition (either previous or next is
+4. **Partial** — menu-navigation transition (either previous or next is
    a menu-navigation screen, and the next screen is not a `Shutdown*`
    variant or PairingPasskey)
-4. **Full** — `_diff_count >= max_partial_ops` (anti-ghosting, default 20)
-5. **Fast** — `_menu_exited` is set (post-menu cleanup)
-6. **Partial** — both screens "navigable" and header unchanged, OR same
+5. **Full** — `_diff_count >= max_partial_ops` (anti-ghosting, default 20)
+6. **Fast** — `_menu_exited` is set (post-menu cleanup)
+7. **Partial** — both screens "navigable" and header unchanged, OR same
    list screen
-7. **Fast** — everything else (fallback)
+8. **Fast** — everything else (fallback)
 
-A screen is **navigable** if the user reaches it through normal menu
-interaction: Home, MainMenu, Settings, SettingsChoice, TagList, Confirm,
-About. PairingPasskey and the `Shutdown*` variants are not navigable —
-transitions involving them always use Fast for clear visual indication.
-
-A screen is **menu-navigation** if it is navigable and not Home (MainMenu,
-Settings, SettingsChoice, TagList, Confirm, About). Transitions where either
-side is a menu-navigation screen force body-only Partial regardless of header
-changes or anti-ghosting counter. This keeps menu interaction responsive and
-flash-free. The anti-ghosting Full refresh is deferred, not skipped.
+**Navigable** screens are Home and menu/list screens, including tracking,
+settings, and diagnostics. PairingPasskey and `Shutdown*` are not navigable.
+**Menu-navigation** means navigable but not Home. Unless a higher-priority rule
+applies, menu transitions use body-only Partial and defer header updates and
+anti-ghosting cleanup until exit.
 
 `_menu_exited` is set during any menu-navigation Partial and cleared when a
 full-screen refresh (Full or Fast) executes. After the user leaves the menu,
@@ -324,9 +321,9 @@ or Partial (capped at `UINT8_MAX` to prevent wrap during long menu sessions).
 `Config::max_partial_ops` (default 20) controls the limit.
 
 During menu navigation, the anti-ghosting threshold may be reached or
-exceeded, but the menu-navigation rule (tier 1) overrides it. The counter
+exceeded, but the menu-navigation rule overrides it. The counter
 keeps incrementing. When a later non-menu update runs, `_diff_count >=
-max_partial_ops` (tier 2) promotes it to Full — an even stronger cleanup
+max_partial_ops` promotes it to Full — an even stronger cleanup
 than the Fast from `_menu_exited`.
 
 ### Fast Refresh: Temperature Override
@@ -480,13 +477,16 @@ Screen dispatch:
   The 2 px-thick 1st grid divider is preserved as the menu top border.
   Menu rows use full 128 px-wide selection rects. The four rows are Exit Menu,
   Start Tracking (Idle) / Tracking (Recording or Paused), Operating Mode, and Settings.
-- **TrackingMenu/Settings/Operations/DisplayTouch/SettingsChoice/TagList/Confirm/About:** Full-screen list with
+- **TrackingMenu/TrackingStatus/Settings/Operations/DisplayTouch/SettingsChoice/TagList/Confirm/About:** Full-screen list with
   full 128 px-wide selection rects and vertically centered text. A
   separator line between the header rows (Exit/Back) and content rows
   uses a 2 px content offset to avoid touching.
-- **TrackingMenu:** Exit, Back, Pause Tracking / Resume Tracking, and Stop
-  Tracking. It participates in list-screen refresh handling, so moving the
-  selection follows the existing partial-refresh policy.
+- **TrackingMenu:** Exit, Back, Status, Pause Tracking / Resume Tracking, and Stop
+  Tracking. Status is selected on entry.
+- **TrackingStatus:** Session and GPS views use nine rows of at most 19 characters,
+  above the snackbar. Only Exit, Back, and the view switch are selectable.
+  Updates are always body-only Partial (Y=18..249), leaving the top bar unchanged;
+  cleanup resumes after exit. See [Tracking Status](ui_manager.md#tracking-status).
 - **PairingPasskey:** "Bluetooth Pairing" title (`helvB14_tf`, baseline
   y=35), 3 px-thick divider at y=49 (shared chrome with `Shutdown*`),
   6-digit passkey (`logisoso32_tr`, baseline y=145), and "Enter on

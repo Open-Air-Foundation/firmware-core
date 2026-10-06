@@ -29,6 +29,7 @@
 
 #include <string>
 #include <initializer_list>
+#include <limits>
 
 #include "go_ui.h"
 
@@ -82,9 +83,10 @@ static UIActionResult double_press(UIManager &ui) {
 }
 
 /// Select a visible row by label prefix without depending on its position.
-static void select_row(UIManager &ui, const std::string &prefix) {
+static void select_row(UIManager &ui, const std::string &prefix,
+                       const BuildContext &ctx = make_default_ctx()) {
   for (uint8_t step = 0; step < MAX_LIST_ROWS; ++step) {
-    const auto values = ui.build_values(make_default_ctx());
+    const auto values = ui.build_values(ctx);
     REQUIRE(values.selected_row < values.row_count);
     if (std::string(values.rows[values.selected_row].text).rfind(prefix, 0) == 0)
       return;
@@ -93,8 +95,9 @@ static void select_row(UIManager &ui, const std::string &prefix) {
   FAIL("Menu row not found: " << prefix);
 }
 
-static UIActionResult open_row(UIManager &ui, const std::string &prefix) {
-  select_row(ui, prefix);
+static UIActionResult open_row(UIManager &ui, const std::string &prefix,
+                               const BuildContext &ctx = make_default_ctx()) {
+  select_row(ui, prefix, ctx);
   return press(ui, InputSource::TouchEnter);
 }
 
@@ -121,8 +124,9 @@ static void open_measure_interval_choice(UIManager &ui) {
   press(ui, InputSource::TouchEnter);
 }
 
-static void check_rows(UIManager &ui, std::initializer_list<const char *> expected) {
-  const auto values = ui.build_values(make_default_ctx());
+static void check_rows(UIManager &ui, std::initializer_list<const char *> expected,
+                       const BuildContext &ctx = make_default_ctx()) {
+  const auto values = ui.build_values(ctx);
   REQUIRE(values.row_count == expected.size());
   uint8_t row = 0;
   for (const char *text : expected)
@@ -532,14 +536,14 @@ TEST_CASE("UIManager: tracking start/stop", "[UIManager][tracking]") {
   }
 
   SECTION("Stop Tracking returns UIAction::StopTracking") {
-    // Cache the Recording state before opening the menu.
+    // Synchronize Recording before opening the menu; rendering is read-only.
     auto ctx = make_default_ctx();
     ctx.tracking_state = TrackingState::Recording;
-    ui.build_values(ctx);
+    ui.sync_tracking_state(ctx.tracking_state);
 
     press(ui, InputSource::TouchEnter); // Home → MainMenu
     press(ui, InputSource::TouchDown);  // 0 → 1 (Tracking)
-    press(ui, InputSource::TouchEnter); // Tracking submenu, Back selected
+    press(ui, InputSource::TouchEnter); // Tracking submenu, Status selected
     press(ui, InputSource::TouchDown);  // Pause
     press(ui, InputSource::TouchDown);  // Stop
     auto result = press(ui, InputSource::TouchEnter);
@@ -554,7 +558,7 @@ TEST_CASE("UIManager: tracking submenu preserves four main rows and pause naviga
   UIManager ui(DEFAULT_UI_CONFIG);
   auto ctx = make_default_ctx();
   ctx.tracking_state = TrackingState::Recording;
-  ui.build_values(ctx);
+  ui.sync_tracking_state(ctx.tracking_state);
   press(ui, InputSource::TouchEnter);
   press(ui, InputSource::TouchDown);
   auto main = ui.build_values(ctx);
@@ -564,27 +568,28 @@ TEST_CASE("UIManager: tracking submenu preserves four main rows and pause naviga
   REQUIRE(ui.current_screen() == Screen::TrackingMenu);
   CHECK(ui.is_on_menu_screen());
   auto menu = ui.build_values(ctx);
-  CHECK(menu.row_count == 4);
-  CHECK(menu.selected_row == 1);
-  CHECK(std::string(menu.rows[menu.selected_row].text) == "Back");
-  CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
+  CHECK(menu.row_count == 5);
+  CHECK(menu.selected_row == 2);
+  CHECK(std::string(menu.rows[menu.selected_row].text) == "Status");
+  check_rows(ui, {"Exit", "Back", "Status", "Pause Tracking", "Stop Tracking"}, ctx);
+  CHECK(open_row(ui, "Back", ctx).action == UIAction::None);
   CHECK(ui.current_screen() == Screen::MainMenu);
   CHECK(ui.build_values(ctx).selected_row == 1);
-  press(ui, InputSource::TouchEnter); // Reopen with Back selected.
-  CHECK(ui.build_values(ctx).selected_row == 1);
-  CHECK(std::string(menu.rows[2].text) == "Pause Tracking");
+  press(ui, InputSource::TouchEnter); // Reopen with Status selected.
+  CHECK(ui.build_values(ctx).selected_row == 2);
+  CHECK(std::string(menu.rows[3].text) == "Pause Tracking");
   press(ui, InputSource::TouchDown);
   CHECK(press(ui, InputSource::TouchEnter).action == UIAction::PauseTracking);
   CHECK(ui.current_screen() == Screen::Home);
 
   ctx.tracking_state = TrackingState::Paused;
-  ui.build_values(ctx);
+  ui.sync_tracking_state(ctx.tracking_state);
   press(ui, InputSource::TouchEnter);
   press(ui, InputSource::TouchDown);
   press(ui, InputSource::TouchEnter);
   menu = ui.build_values(ctx);
-  CHECK(menu.selected_row == 1);
-  CHECK(std::string(menu.rows[2].text) == "Resume Tracking");
+  CHECK(menu.selected_row == 2);
+  CHECK(std::string(menu.rows[3].text) == "Resume Tracking");
   CHECK(menu.tracking_state == TrackingState::Paused);
 
   SECTION("Resume returns to Home") {
@@ -593,7 +598,7 @@ TEST_CASE("UIManager: tracking submenu preserves four main rows and pause naviga
     CHECK(ui.current_screen() == Screen::Home);
   }
   SECTION("Back restores Tracking selection") {
-    CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
+    CHECK(open_row(ui, "Back", ctx).action == UIAction::None);
     CHECK(ui.current_screen() == Screen::MainMenu);
     CHECK(ui.build_values(ctx).selected_row == 1);
   }
@@ -601,6 +606,395 @@ TEST_CASE("UIManager: tracking submenu preserves four main rows and pause naviga
     ui.sync_tracking_state(TrackingState::Idle);
     CHECK(ui.current_screen() == Screen::MainMenu);
   }
+}
+
+static void go_to_tracking_status(UIManager &ui, const BuildContext &ctx) {
+  REQUIRE(ui.current_screen() == Screen::Home);
+  ui.sync_tracking_state(ctx.tracking_state);
+  press(ui, InputSource::TouchEnter);
+  CHECK(open_row(ui, "Tracking", ctx).action == UIAction::None);
+  REQUIRE(ui.current_screen() == Screen::TrackingMenu);
+  CHECK(ui.build_values(ctx).selected_row == 2);
+  CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
+  REQUIRE(ui.current_screen() == Screen::TrackingStatus);
+}
+
+static void check_tracking_status_layout(const DisplayValues &values) {
+  REQUIRE(values.row_count == 9);
+  CHECK(values.selected_row < 3);
+  CHECK(values.show_separator_after_back);
+  for (uint8_t row = 0; row < values.row_count; ++row) {
+    const std::string text(values.rows[row].text);
+    INFO("row " << static_cast<int>(row) << ": " << text);
+    CHECK(text.size() <= 19);
+    CHECK(values.rows[row].disabled == (row >= 3));
+    for (unsigned char ch : text)
+      CHECK((ch >= 32 && ch <= 126));
+  }
+}
+
+TEST_CASE("UIManager: Tracking Status navigation and entry reset",
+          "[UIManager][tracking][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  auto ctx = make_default_ctx();
+  ctx.tracking_state = TrackingState::Recording;
+  go_to_tracking_status(ui, ctx);
+  CHECK(ui.is_on_menu_screen());
+  CHECK_FALSE(ui.is_focus_screen());
+  CHECK_FALSE(ui.is_hardware_test_screen());
+  CHECK(ui.build_values(ctx).selected_row == 1);
+  check_rows(ui,
+             {"Exit", "Back", "GPS details > (1/2)", "State: Recording", "UTC: --", "Active --",
+              "Elapsed --", "Points: --", "Last --"},
+             ctx);
+
+  SECTION("both views wrap only three selectable rows and switch in place") {
+    for (int view = 0; view < 2; ++view) {
+      for (uint8_t expected : {0, 2, 1, 0}) {
+        CHECK(press(ui, InputSource::TouchUp).action == UIAction::None);
+        CHECK(ui.build_values(ctx).selected_row == expected);
+      }
+      for (uint8_t expected : {1, 2, 0, 1, 2}) {
+        CHECK(press(ui, InputSource::TouchDown).action == UIAction::None);
+        CHECK(ui.build_values(ctx).selected_row == expected);
+      }
+      CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
+      auto values = ui.build_values(ctx);
+      CHECK(values.selected_row == 2);
+      CHECK(std::string(values.rows[2].text) ==
+            (view == 0 ? "Session > (2/2)" : "GPS details > (1/2)"));
+      check_tracking_status_layout(values);
+      press(ui, InputSource::TouchUp); // Back for next cycle.
+    }
+  }
+  SECTION("Back and double Enter restore Status and reset on reopening") {
+    for (bool gesture : {false, true}) {
+      open_row(ui, "GPS details", ctx);
+      if (gesture)
+        CHECK(double_press(ui).action == UIAction::None);
+      else
+        CHECK(open_row(ui, "Back", ctx).action == UIAction::None);
+      REQUIRE(ui.current_screen() == Screen::TrackingMenu);
+      CHECK(ui.build_values(ctx).selected_row == 2);
+      press(ui, InputSource::TouchEnter);
+      const auto values = ui.build_values(ctx);
+      CHECK(values.selected_row == 1);
+      CHECK(std::string(values.rows[2].text) == "GPS details > (1/2)");
+    }
+  }
+  SECTION("Exit and long Enter return Home from either view") {
+    for (bool gps_view : {false, true}) {
+      for (bool gesture : {false, true}) {
+        if (ui.current_screen() == Screen::Home)
+          go_to_tracking_status(ui, ctx);
+        if (gps_view)
+          open_row(ui, "GPS details", ctx);
+        if (gesture)
+          CHECK(long_press(ui).action == UIAction::None);
+        else
+          CHECK(open_row(ui, "Exit", ctx).action == UIAction::None);
+        CHECK(ui.current_screen() == Screen::Home);
+      }
+    }
+  }
+  SECTION("Home reset and explicit reentry select Session Back") {
+    open_row(ui, "GPS details", ctx);
+    ui.reset_to_home();
+    CHECK(ui.current_screen() == Screen::Home);
+    CHECK(ui.build_values(ctx).active_metric == Metric::None);
+    ui.open_tracking_status();
+    CHECK(ui.build_values(ctx).selected_row == 1);
+    CHECK(std::string(ui.build_values(ctx).rows[2].text) == "GPS details > (1/2)");
+  }
+  SECTION("plain screen assignment preserves view and cursor until explicit entry") {
+    open_row(ui, "GPS details", ctx);
+    ui.set_screen(Screen::Home);
+    ui.set_screen(Screen::TrackingStatus);
+    const auto preserved = ui.build_values(ctx);
+    CHECK(preserved.selected_row == 2);
+    CHECK(std::string(preserved.rows[2].text) == "Session > (2/2)");
+
+    // Explicit entry resets even if the screen is already Tracking Status.
+    ui.open_tracking_status();
+    const auto reset = ui.build_values(ctx);
+    CHECK(reset.selected_row == 1);
+    CHECK(std::string(reset.rows[2].text) == "GPS details > (1/2)");
+  }
+  SECTION("non-navigation inputs preserve the screen") {
+    for (InputSource source : {InputSource::TouchUp, InputSource::TouchDown}) {
+      for (InputType type : {InputType::DoublePress, InputType::LongPress}) {
+        CHECK(ui.handle_input(source, type).action == UIAction::None);
+        CHECK(ui.current_screen() == Screen::TrackingStatus);
+        CHECK(ui.build_values(ctx).selected_row == 1);
+      }
+    }
+    ui.show_snackbar("Status message");
+    const auto values = ui.build_values(ctx);
+    REQUIRE(values.snackbar_text != nullptr);
+    CHECK(std::string(values.snackbar_text) == "Status message");
+    check_tracking_status_layout(values);
+  }
+  SECTION("Idle synchronization immediately returns directly to MainMenu") {
+    open_row(ui, "GPS details", ctx);
+    ctx.tracking_state = TrackingState::Idle;
+    ui.sync_tracking_state(ctx.tracking_state);
+    CHECK(ui.current_screen() == Screen::MainMenu);
+    CHECK(ui.build_values(ctx).selected_row == 1);
+  }
+}
+
+TEST_CASE("UIManager: rendering does not synchronize tracking navigation",
+          "[UIManager][tracking][status]") {
+  for (const auto state : {TrackingState::Idle, TrackingState::Recording, TrackingState::Paused}) {
+    CAPTURE(state);
+    UIManager ui(DEFAULT_UI_CONFIG);
+    ui.sync_tracking_state(state);
+    press(ui, InputSource::TouchEnter);
+    press(ui, InputSource::TouchDown);
+    REQUIRE(ui.current_screen() == Screen::MainMenu);
+
+    // A mismatched render context must not silently replace the synchronized state.
+    auto ctx = make_default_ctx();
+    ctx.tracking_state =
+        state == TrackingState::Idle ? TrackingState::Recording : TrackingState::Idle;
+    const UIManager &view = ui;
+    (void)view.build_values(ctx);
+    CHECK(ui.current_screen() == Screen::MainMenu);
+    const auto result = press(ui, InputSource::TouchEnter);
+    if (state == TrackingState::Idle) {
+      CHECK(result.action == UIAction::StartTracking);
+      CHECK(ui.current_screen() == Screen::Home);
+    } else {
+      CHECK(result.action == UIAction::None);
+      CHECK(ui.current_screen() == Screen::TrackingMenu);
+      ctx.tracking_state = state;
+      const auto action = open_row(ui, state == TrackingState::Recording ? "Pause" : "Resume", ctx);
+      CHECK(action.action == (state == TrackingState::Recording ? UIAction::PauseTracking
+                                                                : UIAction::ResumeTracking));
+    }
+  }
+}
+
+TEST_CASE("UIManager: Idle sync alone dismisses either tracking screen",
+          "[UIManager][tracking][status]") {
+  for (const auto screen : {Screen::TrackingMenu, Screen::TrackingStatus}) {
+    UIManager ui(DEFAULT_UI_CONFIG);
+    ui.sync_tracking_state(TrackingState::Recording);
+    ui.set_screen(screen);
+    ui.sync_tracking_state(TrackingState::Idle);
+    REQUIRE(ui.current_screen() == Screen::MainMenu);
+    const auto values = ui.build_values(make_default_ctx());
+    CHECK(values.selected_row == 1);
+    CHECK(std::string(values.rows[1].text) == "Start Tracking");
+  }
+}
+
+TEST_CASE("UIManager: Tracking Status preserves view and cursor across snapshots and state events",
+          "[UIManager][tracking][status]") {
+  for (bool gps_view : {false, true}) {
+    for (uint8_t row : {0, 1, 2}) {
+      UIManager ui(DEFAULT_UI_CONFIG);
+      auto ctx = make_default_ctx();
+      ctx.tracking_state = TrackingState::Recording;
+      go_to_tracking_status(ui, ctx);
+      if (gps_view)
+        open_row(ui, "GPS details", ctx);
+      while (ui.build_values(ctx).selected_row != row)
+        press(ui, InputSource::TouchDown);
+      for (TrackingState state : {TrackingState::Paused, TrackingState::Recording}) {
+        ctx.tracking_state = state;
+        ui.sync_tracking_state(state);
+        ctx.tracking_status = {12, 23, 4, 8, true};
+        ctx.now_ms += 10000;
+        ui.set_screen(Screen::TrackingStatus); // Reasserting the same screen is not entry.
+        const auto values = ui.build_values(ctx);
+        CHECK(ui.current_screen() == Screen::TrackingStatus);
+        CHECK(values.selected_row == row);
+        CHECK(std::string(values.rows[2].text) ==
+              (gps_view ? "Session > (2/2)" : "GPS details > (1/2)"));
+        if (!gps_view) {
+          CHECK(std::string(values.rows[3].text) ==
+                (state == TrackingState::Paused ? "State: Paused" : "State: Recording"));
+          CHECK(std::string(values.rows[5].text) == "Active 00:00:12");
+        }
+      }
+      ui.sync_tracking_state(TrackingState::Idle);
+      ctx.tracking_state = TrackingState::Idle;
+      REQUIRE(ui.current_screen() == Screen::MainMenu);
+      const auto values = ui.build_values(ctx);
+      CHECK(values.selected_row == 1);
+      CHECK(std::string(values.rows[1].text) == "Start Tracking");
+    }
+  }
+}
+
+TEST_CASE("UIManager: Tracking Status duration and point extremes",
+          "[UIManager][tracking][status]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  auto ctx = make_default_ctx();
+  ctx.tracking_state = TrackingState::Paused;
+  go_to_tracking_status(ui, ctx);
+  struct DurationCase {
+    uint32_t seconds;
+    const char *text;
+  };
+  const DurationCase cases[] = {{0, "00:00:00"},
+                                {59, "00:00:59"},
+                                {60, "00:01:00"},
+                                {3599, "00:59:59"},
+                                {3600, "01:00:00"},
+                                {86399, "23:59:59"},
+                                {86400, "1d00:00"},
+                                {90061, "1d01:01"},
+                                {UINT32_MAX - 1, "49710d06:28"},
+                                {TRACKING_TIME_INVALID_S, "--"}};
+  ctx.tracking_status.point_count_known = true;
+  ctx.tracking_status.point_count = UINT32_MAX;
+  for (const auto &item : cases) {
+    ctx.tracking_status.recording_s = item.seconds;
+    ctx.tracking_status.elapsed_s = item.seconds;
+    ctx.tracking_status.last_record_age_s = item.seconds;
+    auto values = ui.build_values(ctx);
+    CHECK(std::string(values.rows[5].text) == std::string("Active ") + item.text);
+    CHECK(std::string(values.rows[6].text) == std::string("Elapsed ") + item.text);
+    CHECK(std::string(values.rows[7].text) == "Points: 4294967295");
+    CHECK(std::string(values.rows[8].text) == std::string("Last ") + item.text);
+    check_tracking_status_layout(values);
+  }
+  ctx.tracking_status.point_count = 0;
+  ctx.tracking_status.last_record_age_s = 42; // Known zero wins over any cached age.
+  CHECK(std::string(ui.build_values(ctx).rows[7].text) == "Points: 0");
+  CHECK(std::string(ui.build_values(ctx).rows[8].text) == "Last: No points yet");
+  check_tracking_status_layout(ui.build_values(ctx));
+  ctx.tracking_status.point_count_known = false;
+  ctx.tracking_status.last_record_age_s = TRACKING_TIME_INVALID_S;
+  CHECK(std::string(ui.build_values(ctx).rows[7].text) == "Points: --");
+  CHECK(std::string(ui.build_values(ctx).rows[8].text) == "Last --");
+  ctx.tracking_status.last_record_age_s = 1;
+  CHECK(std::string(ui.build_values(ctx).rows[8].text) == "Last 00:00:01");
+  ctx.tracking_status.point_count = UINT32_MAX;
+  CHECK(std::string(ui.build_values(ctx).rows[7].text) == "Points: --");
+}
+
+TEST_CASE("UIManager: Tracking Status GPS gates cached data and validates each field",
+          "[UIManager][tracking][status][gps]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  auto ctx = make_default_ctx();
+  ctx.tracking_state = TrackingState::Recording;
+  GpsData gps{};
+  gps.position = {-90.0, -180.0};
+  gps.fix = {GpsFixType::Fix3D, 0, 1.25f};
+  gps.timestamp = {2026, 10, 6, 23, 59, 59, true};
+  ctx.gps_data = &gps;
+  ctx.gps_fix = false; // Status uses the actual data, not the status-bar flag.
+  go_to_tracking_status(ui, ctx);
+  CHECK(std::string(ui.build_values(ctx).rows[4].text) == "UTC: 23:59:59");
+  ctx.now_ms = UINT32_MAX;
+  CHECK(std::string(ui.build_values(ctx).rows[4].text) == "UTC: 23:59:59");
+  open_row(ui, "GPS details", ctx);
+  check_rows(ui,
+             {"Exit", "Back", "Session > (2/2)", "GPS: On", "Fix: 3D", "Sats: 0", "HDOP: 1.2",
+              "Lat: -90.00000", "Lon: -180.00000"},
+             ctx);
+
+  SECTION("recognized fix predicate rejects NoFix and unknown enum") {
+    for (GpsFixType fix : {GpsFixType::NoFix, static_cast<GpsFixType>(1),
+                           static_cast<GpsFixType>(255), GpsFixType::Fix2D, GpsFixType::Fix3D}) {
+      gps.fix.fix_type = fix;
+      ctx.gps_fix = true; // Cannot bypass the recognized-fix predicate.
+      const bool recognized = fix == GpsFixType::Fix2D || fix == GpsFixType::Fix3D;
+      const auto values = ui.build_values(ctx);
+      CHECK(std::string(values.rows[7].text) == (recognized ? "Lat: -90.00000" : "Lat: --"));
+      CHECK(std::string(values.rows[8].text) == (recognized ? "Lon: -180.00000" : "Lon: --"));
+      const char *fix_text = fix == GpsFixType::NoFix   ? "Fix: NoFix"
+                             : fix == GpsFixType::Fix2D ? "Fix: 2D"
+                             : fix == GpsFixType::Fix3D ? "Fix: 3D"
+                                                        : "Fix: --";
+      CHECK(std::string(values.rows[4].text) == fix_text);
+      open_row(ui, "Session", ctx);
+      CHECK(std::string(ui.build_values(ctx).rows[4].text) ==
+            (recognized ? "UTC: 23:59:59" : "UTC: --"));
+      open_row(ui, "GPS details", ctx);
+    }
+  }
+  SECTION("GPS off hides all cached data; null data has placeholders") {
+    for (bool enabled : {false, true}) {
+      ctx.gps_enabled = enabled;
+      ctx.gps_data = enabled ? nullptr : &gps;
+      const auto values = ui.build_values(ctx);
+      CHECK(std::string(values.rows[3].text) == (enabled ? "GPS: On" : "GPS: Off"));
+      CHECK(std::string(values.rows[4].text) == "Fix: --");
+      CHECK(std::string(values.rows[5].text) == "Sats: --");
+      CHECK(std::string(values.rows[6].text) == "HDOP: --");
+      CHECK(std::string(values.rows[7].text) == "Lat: --");
+      CHECK(std::string(values.rows[8].text) == "Lon: --");
+      open_row(ui, "Session", ctx);
+      CHECK(std::string(ui.build_values(ctx).rows[4].text) == "UTC: --");
+      open_row(ui, "GPS details", ctx);
+    }
+  }
+  SECTION("coordinates validate independently including nonfinite and range extremes") {
+    for (double invalid :
+         {91.0, -91.0, std::numeric_limits<double>::quiet_NaN(),
+          std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}) {
+      gps.position = {invalid, 180.0};
+      auto values = ui.build_values(ctx);
+      CHECK(std::string(values.rows[7].text) == "Lat: --");
+      CHECK(std::string(values.rows[8].text) == "Lon: 180.00000");
+      gps.position = {90.0, invalid * 2};
+      values = ui.build_values(ctx);
+      CHECK(std::string(values.rows[7].text) == "Lat: 90.00000");
+      CHECK(std::string(values.rows[8].text) == "Lon: --");
+      check_tracking_status_layout(values);
+    }
+  }
+  SECTION("satellites and HDOP validate independently without requiring a fix") {
+    gps.fix.fix_type = GpsFixType::NoFix;
+    for (int count : {-1, std::numeric_limits<int>::min(), 0, std::numeric_limits<int>::max()}) {
+      gps.fix.satellite_count = count;
+      const auto values = ui.build_values(ctx);
+      CHECK(std::string(values.rows[5].text) ==
+            (count < 0 ? "Sats: --" : "Sats: " + std::to_string(count)));
+      check_tracking_status_layout(values);
+    }
+    for (float hdop :
+         {-1.0f, 0.0f, std::numeric_limits<float>::quiet_NaN(),
+          std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity()}) {
+      gps.fix.hdop = hdop;
+      CHECK(std::string(ui.build_values(ctx).rows[6].text) == "HDOP: --");
+    }
+    struct HdopCase {
+      float value;
+      const char *text;
+    };
+    const HdopCase cases[] = {{std::numeric_limits<float>::min(), "HDOP: 0.0"},
+                              {9999.0f, "HDOP: 9999.0"},
+                              {10000.0f, "HDOP: 1.0e+04"},
+                              {std::numeric_limits<float>::max(), "HDOP: 3.4e+38"}};
+    for (const auto &item : cases) {
+      gps.fix.hdop = item.value;
+      CHECK(std::string(ui.build_values(ctx).rows[6].text) == item.text);
+      check_tracking_status_layout(ui.build_values(ctx));
+    }
+  }
+  SECTION("UTC validates the flag and every time field without date or clock fallback") {
+    open_row(ui, "Session", ctx);
+    gps.timestamp.valid = false;
+    CHECK(std::string(ui.build_values(ctx).rows[4].text) == "UTC: --");
+    gps.timestamp = {0, 0, 0, 0, 0, 0, true};
+    CHECK(std::string(ui.build_values(ctx).rows[4].text) == "UTC: 00:00:00");
+    for (int GpsTimestamp::*field :
+         {&GpsTimestamp::hour, &GpsTimestamp::minute, &GpsTimestamp::second}) {
+      for (int invalid : {-1, field == &GpsTimestamp::hour ? 24 : 60,
+                          std::numeric_limits<int>::max(), std::numeric_limits<int>::min()}) {
+        gps.timestamp.*field = invalid;
+        CHECK(std::string(ui.build_values(ctx).rows[4].text) == "UTC: --");
+        check_tracking_status_layout(ui.build_values(ctx));
+      }
+      gps.timestamp.*field = 0;
+    }
+  }
+  check_tracking_status_layout(ui.build_values(ctx));
 }
 
 // ============================================================================

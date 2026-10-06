@@ -262,7 +262,7 @@ the nearest deadline.
 | BMS full poll | `BMS_POLL_INTERVAL_MS` (30000 ms) | Sensitive services not paused |
 | BMS status poll | `BMS_STATUS_POLL_INTERVAL_MS` (5000 ms) | Sensitive services not paused |
 | External watchdog | `EXT_WDT_INTERVAL_MS` (60000 ms) | Always — never suppressed during a setup session |
-| Inactivity | `auto_lock_seconds * 1000` | Unlocked, auto-lock > 0, and no setup session active |
+| Inactivity | `auto_lock_seconds * 1000` | `auto_lock_allowed()`: unlocked, auto-lock > 0, no setup session, focus screen, Hardware Test screen, or Tracking Status |
 | Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | Non-persistent snackbar active, sensitive services not paused |
 | Wi-Fi initial-connect / fallback | `WifiService::next_deadline_ms()` | While the service has armed a deadline (Stationary bring-up) |
 | Local endpoint activation retry | `LOCAL_API_ACTIVATION_RETRY_MS` (5000 ms) | Stationary + online after local HTTP or mDNS activation fails |
@@ -307,7 +307,7 @@ Events are dispatched by type:
 | `SettingsChanged` | `apply_settings_change()` |
 | `ClearData` | `clear_data()` |
 | `SaveTag` | `save_tag()` |
-| `InactivityTimeout` | `on_inactivity_timeout()` → `lock()` |
+| `InactivityTimeout` | `on_inactivity_timeout()` calls `lock()` only when `auto_lock_allowed()` |
 | `MeasurementTimer` | `check_timers()` (legacy event, re-checks all timers) |
 | `WakeFromSleep` | No-op (handled in `init()`) |
 | `BleConnected` | Push current measures/status/config, dismiss passkey overlay |
@@ -381,8 +381,10 @@ calls `_svc.wifi.switch_provisioning_transport()`.
 
 ### lock()
 
-Sets `LockState::Locked`, resets UI to home screen, updates display. Sleep
-eligibility is evaluated on the next main loop iteration.
+Sets Locked, returns Home, and calls `update_display(true)` so a busy worker
+cannot drop the frame. This waits for the previous operation, not completion of
+the new frame. Manual locking bypasses auto-lock eligibility; sleep eligibility
+is checked on the next loop iteration.
 
 ### unlock()
 
@@ -464,9 +466,10 @@ There is no compiled helper source or support library. Focused tests live in
 [`go_types.tests.cpp`](../tests/go_types.tests.cpp).
 
 The orchestrator owns `_tracking_timing` and includes it in
-`RtcAppState::tracking_timing` for active sessions. This data is internal; it is
-not yet exposed through a Status screen, BLE, or the local HTTP API. The timing
-hooks do not change tracking commands, GPS operation, or route-error decisions.
+`RtcAppState::tracking_timing` for active sessions. Derived durations are exposed
+on the Tracking Status screen through a by-value snapshot; BLE and the local
+HTTP API do not expose them. The timing hooks do not change tracking commands,
+GPS operation, or route-error decisions.
 
 The value contains four `uint32_t` fields, totaling 16 bytes:
 
@@ -524,9 +527,27 @@ only the recording accumulator and segment anchor. An accepted write with an
 invalid timestamp invalidates only `last_record_s` rather than retaining the
 previous point's age. No new retry, stop, repair, or shutdown policy is introduced.
 
-Point count is not stored in RTC. `StorageService::try_get_session_point_count()`
-provides a checked, read-only query for future view consumers; this step does not
-add background polling or connect that query to an existing screen.
+#### Tracking Status Snapshots
+
+Tracking → Status exposes the current session while Recording or Paused.
+While Status is visible and unlocked, `build_context()` reads retained time and
+queries `try_get_session_point_count()` once per snapshot. It returns derived
+durations and a count with separate validity; unknown is not zero. Counts are
+not retained in RTC, and no extra sensor or GPS readings are requested.
+
+UI tracking state is synchronized after boot's route-reopen outcome, before
+display updates, and before the final sleep render. Input uses that maintained
+state. Pause, Resume (including reopen failure), and Stop use waiting display
+updates; Pause/Resume preserve the Status view, and Stop returns it to Main Menu.
+
+`auto_lock_allowed()` supplies one eligibility policy for scheduling and timeout
+handling. Status is exempt, but manual locking and safety shutdowns remain
+available. Leaving Status starts a fresh configured timeout once, including
+after remote Stop; repaints and Pause/Resume do not extend it. The saved setting
+is unchanged. Keeping Status open also keeps Offline mode awake.
+
+Values update on entry, input, and tracking changes. Periodic refresh is not yet
+implemented; ordinary background updates remain suppressed on this menu.
 
 ### change_mode()
 

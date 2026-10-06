@@ -275,6 +275,10 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     }
   }
 
+  // Initialize UI state after reopen may have cleared tracking. A prepainted
+  // boot can skip rendering, so input must not depend on a prior display update.
+  _svc.ui_manager.sync_tracking_state(_tracking_state);
+
   // --- LED brightness from settings ---
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
@@ -352,6 +356,13 @@ void Orchestrator::run() {
 // Timer management
 // ---------------------------------------------------------------------------
 
+bool Orchestrator::auto_lock_allowed() const {
+  return _lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0 &&
+         !_setup_session_active && !_svc.ui_manager.is_focus_screen() &&
+         !_svc.ui_manager.is_hardware_test_screen() &&
+         _svc.ui_manager.current_screen() != Screen::TrackingStatus;
+}
+
 uint32_t Orchestrator::compute_queue_timeout_ms() const {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   uint32_t next = UINT32_MAX;
@@ -379,10 +390,8 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, bms_status_remaining);
   }
 
-  // Inactivity deadline — gated identically to the auto-lock fire below
-  // (skip setup sessions and Hardware Test screens).
-  if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0 &&
-      !_setup_session_active && !_svc.ui_manager.is_hardware_test_screen()) {
+  // Inactivity scheduling and execution share the same eligibility policy.
+  if (auto_lock_allowed()) {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
     uint32_t inact_remaining = (_last_input_ms + inact_interval) - now;
     next = std::min(next, inact_remaining);
@@ -523,12 +532,8 @@ void Orchestrator::check_timers() {
     _last_ext_wdt_ms = now;
   }
 
-  // --- Auto-lock timer — suppressed during setup sessions, on focus
-  // screens (PairingPasskey), and on Hardware Test screens, so a
-  // lock-and-return-Home can't interrupt the user mid-flow ---
-  if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0 &&
-      !_setup_session_active && !_svc.ui_manager.is_focus_screen() &&
-      !_svc.ui_manager.is_hardware_test_screen()) {
+  // --- Auto-lock timer ---
+  if (auto_lock_allowed()) {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
     if ((now - _last_input_ms) >= inact_interval) {
       on_inactivity_timeout();
@@ -640,7 +645,11 @@ void Orchestrator::on_bms_status_timer() {
   _last_bms_status_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 }
 
-void Orchestrator::on_inactivity_timeout() { lock(); }
+void Orchestrator::on_inactivity_timeout() {
+  if (auto_lock_allowed()) {
+    lock();
+  }
+}
 
 void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) {
   if (previous_settings.measure_interval_seconds == _settings.measure_interval_seconds) {
@@ -1507,7 +1516,7 @@ void Orchestrator::lock() {
   _svc.ui_manager.show_snackbar("Locked");
   _lock_state = LockState::Locked;
   _svc.ui_manager.reset_to_home();
-  update_display();
+  update_display(/*wait=*/true);
 }
 
 void Orchestrator::unlock() {
@@ -1576,7 +1585,7 @@ bool Orchestrator::pause_tracking() {
   _tracking_state = TrackingState::Paused;
   const bool saved = _svc.storage_service.end_route();
   _svc.ui_manager.show_snackbar(saved ? "Tracking paused" : "Paused - storage sync failed");
-  update_display();
+  update_display(/*wait=*/true);
   // Keep the legacy active-session fields while notifying the new state.
   _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, _tracking_session_id,
                                           _tracking_state);
@@ -1592,7 +1601,7 @@ bool Orchestrator::resume_tracking() {
   }
   if (!_svc.storage_service.resume_route(_tracking_session_id)) {
     _svc.ui_manager.show_snackbar("Can't resume - storage error");
-    update_display();
+    update_display(/*wait=*/true);
     return false;
   }
 
@@ -1604,7 +1613,7 @@ bool Orchestrator::resume_tracking() {
   }
   _tracking_state = TrackingState::Recording;
   _svc.ui_manager.show_snackbar("Tracking resumed");
-  update_display();
+  update_display(/*wait=*/true);
   _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, _tracking_session_id,
                                           _tracking_state);
   return true;
@@ -1631,7 +1640,7 @@ void Orchestrator::stop_tracking() {
   char msg[48];
   (void)snprintf(msg, sizeof(msg), "Tracking stop = %05" PRIu32, ended_session_id);
   _svc.ui_manager.show_snackbar(msg);
-  update_display();
+  update_display(/*wait=*/true);
   _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, _tracking_session_id,
                                           _tracking_state);
 }
@@ -2172,6 +2181,7 @@ bool Orchestrator::clear_data() {
 }
 
 bool Orchestrator::factory_reset(bool preserve_corrections) {
+  const bool wait = _svc.ui_manager.current_screen() == Screen::TrackingStatus;
   const bool should_preserve_corrections = preserve_corrections || _manufacturing_mode;
   AG_LOGI(TAG, "factory_reset: preserve_corrections=%d", should_preserve_corrections);
 
@@ -2213,7 +2223,7 @@ bool Orchestrator::factory_reset(bool preserve_corrections) {
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
   _svc.ui_manager.reset_to_home();
-  update_display();
+  update_display(wait);
 
   return true;
 }
@@ -3190,6 +3200,13 @@ void Orchestrator::update_display() { update_display(false); }
 void Orchestrator::update_display(bool wait) {
   _svc.ui_manager.sync_tracking_state(_tracking_state);
   uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  const bool tracking_status_visible = _svc.ui_manager.current_screen() == Screen::TrackingStatus;
+  if (_tracking_status_was_visible && !tracking_status_visible) {
+    // Start a fresh inactivity window on any exit, including a remote Stop.
+    // Track logical navigation even if a non-waiting display submission is busy.
+    _last_input_ms = now_ms;
+  }
+  _tracking_status_was_visible = tracking_status_visible;
   _svc.ui_manager.clear_expired_snackbar(now_ms);
   BuildContext ctx = build_context();
   DisplayValues values = _svc.ui_manager.build_values(ctx);
@@ -3256,6 +3273,17 @@ BuildContext Orchestrator::build_context() const {
   const uint32_t gps_ttff_secs =
       (gps_ttff_fixed ? _gps_ttff_ms : (now_ms - _gps_test_entry_ms)) / 1000;
 
+  TrackingStatusSnapshot tracking_status{};
+  if (_svc.ui_manager.current_screen() == Screen::TrackingStatus &&
+      _lock_state == LockState::Unlocked && tracking_session_active(_tracking_state)) {
+    const uint32_t now_s = tracking_seconds_from_ms(RTOS::get_retained_time_ms());
+    tracking_status.recording_s = tracking_recording_s(_tracking_timing, now_s);
+    tracking_status.elapsed_s = tracking_elapsed_s(_tracking_timing, now_s);
+    tracking_status.last_record_age_s = tracking_last_record_age_s(_tracking_timing, now_s);
+    tracking_status.point_count_known = _svc.storage_service.try_get_session_point_count(
+        _tracking_session_id, tracking_status.point_count);
+  }
+
   return BuildContext{
       .sensor_data = _display_measures,
       .battery_pct = battery_pct,
@@ -3290,6 +3318,7 @@ BuildContext Orchestrator::build_context() const {
       .accel_magnitude_mg = _accel_magnitude_mg,
       .accel_read_ok = _accel_read_ok,
       .accel_pass = _accel_pass,
+      .tracking_status = tracking_status,
   };
 }
 
@@ -3321,6 +3350,7 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   log_heap(TAG, "sleep.prepare:enter");
 
   // Ensure pending display refresh completes before stopping worker
+  _svc.ui_manager.sync_tracking_state(_tracking_state);
   _svc.ui_manager.clear_expired_snackbar(static_cast<uint32_t>(RTOS::get_time_ms()));
   BuildContext ctx = build_context();
   DisplayValues values = _svc.ui_manager.build_values(ctx);

@@ -660,12 +660,12 @@ uint8_t u8x8_d_epd_128x250_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *
 bool is_home_like(Screen screen) { return screen == Screen::Home || screen == Screen::MainMenu; }
 
 bool is_list_screen(Screen screen) {
-  return screen == Screen::TrackingMenu || screen == Screen::Settings ||
-         screen == Screen::Operations || screen == Screen::DisplayTouch ||
-         screen == Screen::SettingsChoice || screen == Screen::TagList ||
-         screen == Screen::Confirm || screen == Screen::About || screen == Screen::HardwareTest ||
-         screen == Screen::PeripheralTest || screen == Screen::GpsTest ||
-         screen == Screen::AccelTest;
+  return screen == Screen::TrackingMenu || screen == Screen::TrackingStatus ||
+         screen == Screen::Settings || screen == Screen::Operations ||
+         screen == Screen::DisplayTouch || screen == Screen::SettingsChoice ||
+         screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About ||
+         screen == Screen::HardwareTest || screen == Screen::PeripheralTest ||
+         screen == Screen::GpsTest || screen == Screen::AccelTest;
 }
 
 // Any reason-specific shutdown screen.
@@ -1291,7 +1291,12 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
       !entering_system_screen &&
       (is_menu_navigation_screen(_prev_values.screen) || is_menu_navigation_screen(values.screen));
 
-  if (crossing_session_boundary) {
+  if (values.screen == Screen::TrackingStatus) {
+    // Status never refreshes the top bar, even on entry or beyond the partial budget.
+    // Its non-session classification keeps the worker's transfer body-only.
+    _pending_mode = RefreshMode::Partial;
+    _menu_exited = true;
+  } else if (crossing_session_boundary) {
     // Full refresh on the session boundary.  Reset the partial-op counter
     // so the next session's partials start with a fresh budget.
     _pending_mode = RefreshMode::Full;
@@ -1474,6 +1479,7 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     _draw_menu_overlay(v);
     break;
   case Screen::TrackingMenu:
+  case Screen::TrackingStatus:
   case Screen::Settings:
   case Screen::Operations:
   case Screen::DisplayTouch:

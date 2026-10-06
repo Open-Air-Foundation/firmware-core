@@ -33,11 +33,15 @@ directly. The orchestrator drives it:
 
 ```text
 Orchestrator:
+  after boot tracking restore/reopen:
+      ui_manager.sync_tracking_state(tracking_state)
+
   on InputPress (unlocked):
       action = ui_manager.handle_input(source, type)
       if action: post event
 
   on display update:
+      ui_manager.sync_tracking_state(tracking_state)
       ui_manager.clear_expired_snackbar(now_ms)
       values = ui_manager.build_values(ctx)
       display_service.update(values)
@@ -46,6 +50,11 @@ Orchestrator:
 `BuildContext` passes all external state (sensors, battery, status flags,
 settings-derived flags, measurement cache). The UI Manager reads from it
 but never stores references to services.
+
+`sync_tracking_state()` owns tracking state and dismisses ended-session menus.
+The orchestrator synchronizes at boot and before rendering; input uses that
+maintained state. `build_values()` does not change tracking state or navigation,
+and its context must match the synchronized state.
 
 `UIManager::Config` carries `firmware_version`, `serial_number`, and
 `ap_password` (defaults to `"cleanair"`). `ap_password` must match
@@ -57,11 +66,12 @@ on-screen password line agree.
 | Method | Purpose |
 |---|---|
 | `handle_input(source, type)` | Process touch input. Returns `UIActionResult` if an app-level state change occurred. |
-| `build_values(ctx)` | Build a `DisplayValues` snapshot for the Display Service. |
-| `set_screen(screen)` | Force screen (Shutdown, deep-sleep restore). |
-| `sync_tracking_state(state)` | Refresh the cached tracking enum; return from TrackingMenu when the session becomes Idle. |
+| `build_values(ctx)` | Render a snapshot without changing tracking state or navigation. |
+| `set_screen(screen)` | Assign the screen without initializing its view or cursor. |
+| `open_tracking_status()` | Open Session with Back selected; requires an active session. |
+| `sync_tracking_state(state)` | Update tracking state; on Idle, dismiss tracking menus to MainMenu with the tracking row selected. |
 | `current_screen()` | Read current screen. |
-| `is_on_menu_screen()` | True when the current screen is a menu-navigation screen (MainMenu, TrackingMenu, Settings, Operations, DisplayTouch, SettingsChoice, TagList, Confirm, About) or `GettingStarted`. Used by the orchestrator to suppress background display updates. |
+| `is_on_menu_screen()` | Identify screens that suppress background renders: menus, diagnostics, and GettingStarted. |
 | `show_snackbar(text, persistent = false)` | Show a 3-second message, or persistent text until explicitly cleared. A persistent message ignores ordinary replacement and clear calls. |
 | `snackbar_persistent()` | True when the buffer contains text with no expiry deadline. |
 | `clear_expired_snackbar(now_ms)` | Expire stale snackbar. Call before `build_values`. |
@@ -115,6 +125,9 @@ flowchart TD
     MainMenu -- Exit --> Home
     MainMenu -- Tracking --> TrackingMenu
     TrackingMenu -- Back --> MainMenu
+    TrackingMenu -- Status --> TrackingStatus
+    TrackingStatus -- Back --> TrackingMenu
+    TrackingStatus -- Exit --> Home
     TrackingMenu -- Exit, Pause, Resume, or Stop --> Home
     MainMenu -- Operating Mode --> Mode["SettingsChoice: Portable / Stationary / Offline"]
     Mode -- Back --> MainMenu
@@ -145,13 +158,14 @@ flowchart TD
 MainMenu rows are Exit Menu (0), Start Tracking / Tracking (1), Operating Mode
 (2), and Settings (3). When Idle, Start Tracking starts a session and returns
 Home. When Recording or Paused, Tracking opens `Screen::TrackingMenu` with Exit,
-Back, Pause Tracking / Resume Tracking, and Stop Tracking. Back is selected on
-every entry, so pressing Enter again returns to MainMenu with Tracking selected
-without pausing or resuming. Exit and the action rows return Home.
+Back, Status, Pause Tracking / Resume Tracking, and Stop Tracking. Status is
+selected on entry. Back returns to MainMenu with Tracking selected; Exit and
+the action rows return Home.
 
 `sync_tracking_state()` keeps the menu aligned with BLE and other state changes.
-If a remote Stop ends the session while TrackingMenu is open, it returns to
-MainMenu. The paused state uses a two-bar icon in the recording dot's position.
+If a remote Stop ends the session while TrackingMenu or TrackingStatus is open,
+it returns directly to MainMenu with Start Tracking selected. The paused state
+uses a two-bar icon in the recording dot's position.
 
 Operating Mode lists Portable, Stationary, and Offline in
 that order. Selecting a mode returns Home and emits `ChangeMode`; the existing
@@ -162,7 +176,7 @@ rows follow this order:
 
 | Menu | Content Rows |
 |---|---|
-| Tracking | Pause Tracking or Resume Tracking, Stop Tracking |
+| Tracking | Status, Pause Tracking or Resume Tracking, Stop Tracking |
 | Settings | Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide, About Device |
 | Operations | Measurement Interval, CO2 Calibration, GPS Mode, Buzzer |
 | Display & Touch | Temperature Unit, Altitude Unit, PM Display, Auto Lock, AQI LED, Touch LED |
@@ -198,6 +212,45 @@ Tag-list plumbing (`dispatch_tag_list`, `open_tag_list`, `SaveTag`) remains
 unreachable from the menu. Shutdown, PairingPasskey, Info, Provisioning, and
 ProvisioningConfirm are opened directly by the orchestrator and retain their
 existing controls.
+
+### Tracking Status
+
+Tracking → Status calls `open_tracking_status()`, selecting Session and Back.
+Each view has nine rows of at most 19 ASCII characters, leaving room for the
+snackbar. Up/down cycle through Exit, Back, and the view switch; metric rows
+are read-only.
+
+| Row | Session View | GPS View |
+|---|---|---|
+| 0 | Exit | Exit |
+| 1 | Back | Back |
+| 2 | `GPS details > (1/2)` | `Session > (2/2)` |
+| 3 | State: Recording / Paused | GPS: On / Off |
+| 4 | UTC | Fix: NoFix / 2D / 3D / `--` |
+| 5 | Active recording duration | Sats |
+| 6 | Elapsed session duration | HDOP |
+| 7 | Points | Lat |
+| 8 | Last record age | Lon |
+
+Back and double Enter restore TrackingMenu with Status selected. Exit and
+long Enter return Home. Updates preserve the view and cursor; reopening resets
+them. A remote Stop returns to MainMenu with Start Tracking selected.
+
+Status does not auto-lock. Leaving starts a fresh configured timeout; manual
+Power locking and safety shutdowns remain available. Offline stays awake while
+the page is open.
+
+`BuildContext::tracking_status` supplies durations and point-count validity.
+Unknown values show `--`; known zero points show `Last: No points yet`.
+Durations use `HH:MM:SS` below 24 hours and `<days>dHH:MM` afterward.
+
+GPS values come from the cached snapshot. UTC and coordinates require enabled
+GPS, a recognized 2D/3D fix, and valid fields; UTC has no system-clock fallback.
+Zero satellites is valid. HDOP must be finite and positive, using scientific
+notation at 10000 or above to fit the row.
+
+Values update on entry, input, and tracking changes; there is no periodic
+refresh yet. The UI reads no hardware, storage, or clocks.
 
 ### TouchEnter Gestures (Back / Exit)
 
@@ -244,6 +297,8 @@ factory-state write and reboot path.
 |---|---|---|---|
 | Home (metrics) | Circular cycle (5 entries: None, Pm25, Co2, Temp, Humidity) | Yes | N/A |
 | MainMenu | Circular (4 rows, all always enabled) | Yes | N/A |
+| TrackingMenu | Circular (5 rows) | Yes | None |
+| TrackingStatus | Circular (3 selectable rows, 6 informational rows) | Yes | None; Session/GPS view switch |
 | Settings / Operations / DisplayTouch / HardwareTest | Circular | Yes | None; at most 9 rows including Exit/Back |
 | SettingsChoice | Circular | Yes | Sliding window (8 items) |
 | TagList | Circular | Yes | Page-based (8 items) |
