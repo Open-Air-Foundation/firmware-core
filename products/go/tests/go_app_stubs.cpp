@@ -951,7 +951,7 @@ void Orchestrator::on_bms_timer() {}
 void Orchestrator::on_bms_status_timer() {}
 void Orchestrator::on_inactivity_timeout() {}
 void Orchestrator::reschedule_sensor_timer(const GoSettings & /*previous_settings*/) {}
-void Orchestrator::update_display() {}
+bool Orchestrator::update_display() { return true; }
 void Orchestrator::request_background_display_update(bool /*wait*/) {}
 BuildContext Orchestrator::build_context() const {
   static Measures dummy_measures{};

@@ -324,7 +324,8 @@ select the saved value. Back restores the row that opened the child page.
 
 Tracking Status shows session state, recording time excluding pauses, elapsed
 time including pauses, point count, last-point age, and GPS time. A second view
-shows GPS signal and location details. Unavailable values show `--`.
+shows GPS signal and location details. Values refresh every five seconds while
+the page is open. Unavailable values show `--`.
 
 The page does not auto-lock; use Power to lock or leave to restore normal
 auto-lock. Keeping it open in Offline mode keeps the device awake and uses more

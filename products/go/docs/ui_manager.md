@@ -249,8 +249,9 @@ GPS, a recognized 2D/3D fix, and valid fields; UTC has no system-clock fallback.
 Zero satellites is valid. HDOP must be finite and positive, using scientific
 notation at 10000 or above to fit the row.
 
-Values update on entry, input, and tracking changes; there is no periodic
-refresh yet. The UI reads no hardware, storage, or clocks.
+Values update on entry, input, tracking changes, and every five seconds while
+visible. The orchestrator schedules refreshes; the UI reads no hardware,
+storage, or clocks.
 
 ### TouchEnter Gestures (Back / Exit)
 

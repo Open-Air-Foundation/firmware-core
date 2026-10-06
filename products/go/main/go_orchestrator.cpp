@@ -363,6 +363,45 @@ bool Orchestrator::auto_lock_allowed() const {
          _svc.ui_manager.current_screen() != Screen::TrackingStatus;
 }
 
+bool Orchestrator::tracking_status_refresh_allowed() const {
+  return _svc.ui_manager.current_screen() == Screen::TrackingStatus &&
+         _lock_state == LockState::Unlocked && tracking_session_active(_tracking_state);
+}
+
+void Orchestrator::sync_tracking_status_lifecycle() {
+  const bool visible = _svc.ui_manager.current_screen() == Screen::TrackingStatus;
+  const bool entered = visible && !_tracking_status_was_visible;
+  if (_tracking_status_was_visible && !visible) {
+    _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  }
+  _tracking_status_was_visible = visible;
+
+  if (!tracking_status_refresh_allowed()) {
+    _tracking_status_refresh_armed = false;
+  } else if (entered) {
+    _tracking_status_refresh_deadline_ms =
+        static_cast<uint32_t>(RTOS::get_time_ms()) + TRACKING_STATUS_REFRESH_INTERVAL_MS;
+    _tracking_status_refresh_armed = true;
+  }
+}
+
+void Orchestrator::refresh_tracking_status() {
+  // Late timer handlers (for example OTA) can replace the page.
+  sync_tracking_status_lifecycle();
+  if (!_tracking_status_refresh_armed) {
+    return;
+  }
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  if (static_cast<int32_t>(_tracking_status_refresh_deadline_ms - now) > 0) {
+    return;
+  }
+
+  const bool accepted = update_display(/*wait=*/false);
+  _tracking_status_refresh_deadline_ms =
+      static_cast<uint32_t>(RTOS::get_time_ms()) +
+      (accepted ? TRACKING_STATUS_REFRESH_INTERVAL_MS : TRACKING_STATUS_REFRESH_RETRY_MS);
+}
+
 uint32_t Orchestrator::compute_queue_timeout_ms() const {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   uint32_t next = UINT32_MAX;
@@ -466,6 +505,12 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, ota_remaining);
   }
 
+  if (_tracking_status_refresh_armed && tracking_status_refresh_allowed()) {
+    const int32_t remaining = static_cast<int32_t>(_tracking_status_refresh_deadline_ms - now);
+    // Clamp this candidate before min() so an overdue refresh cannot be hidden.
+    next = std::min(next, remaining <= 0 ? 0u : static_cast<uint32_t>(remaining));
+  }
+
   // If any deadline already passed, the unsigned subtraction yields a large
   // number — clamp to 0 so check_timers() fires immediately.
   if (next > MAX_REASONABLE_TIMEOUT_MS) {
@@ -532,10 +577,16 @@ void Orchestrator::check_timers() {
     _last_ext_wdt_ms = now;
   }
 
+  // Observe page exits before applying inactivity, including a remote Stop.
+  if (_tracking_status_was_visible || _svc.ui_manager.current_screen() == Screen::TrackingStatus) {
+    sync_tracking_status_lifecycle();
+  }
+
   // --- Auto-lock timer ---
   if (auto_lock_allowed()) {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
-    if ((now - _last_input_ms) >= inact_interval) {
+    const uint32_t inactivity_now = static_cast<uint32_t>(RTOS::get_time_ms());
+    if ((inactivity_now - _last_input_ms) >= inact_interval) {
       on_inactivity_timeout();
     }
   }
@@ -589,6 +640,10 @@ void Orchestrator::check_timers() {
         finish_ota(_svc.ota.run_ble());
       }
     }
+  }
+
+  if (_tracking_status_refresh_armed) {
+    refresh_tracking_status();
   }
 }
 
@@ -3195,22 +3250,15 @@ void Orchestrator::exit_ota(const char *snackbar) {
 // Display
 // ---------------------------------------------------------------------------
 
-void Orchestrator::update_display() { update_display(false); }
+bool Orchestrator::update_display() { return update_display(false); }
 
-void Orchestrator::update_display(bool wait) {
+bool Orchestrator::update_display(bool wait) {
   _svc.ui_manager.sync_tracking_state(_tracking_state);
   uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
-  const bool tracking_status_visible = _svc.ui_manager.current_screen() == Screen::TrackingStatus;
-  if (_tracking_status_was_visible && !tracking_status_visible) {
-    // Start a fresh inactivity window on any exit, including a remote Stop.
-    // Track logical navigation even if a non-waiting display submission is busy.
-    _last_input_ms = now_ms;
-  }
-  _tracking_status_was_visible = tracking_status_visible;
   _svc.ui_manager.clear_expired_snackbar(now_ms);
   BuildContext ctx = build_context();
   DisplayValues values = _svc.ui_manager.build_values(ctx);
-  _svc.display_service.update(values, wait);
+  const bool accepted = _svc.display_service.update(values, wait);
 
   // Schedule a follow-up refresh to visually clear the snackbar after it
   // expires.  Only arm once per snackbar — intermediate update_display()
@@ -3222,6 +3270,7 @@ void Orchestrator::update_display(bool wait) {
   }
 
   AG_LOGI(TAG, "display update done");
+  return accepted;
 }
 
 void Orchestrator::request_background_display_update(bool wait) {
@@ -3274,8 +3323,7 @@ BuildContext Orchestrator::build_context() const {
       (gps_ttff_fixed ? _gps_ttff_ms : (now_ms - _gps_test_entry_ms)) / 1000;
 
   TrackingStatusSnapshot tracking_status{};
-  if (_svc.ui_manager.current_screen() == Screen::TrackingStatus &&
-      _lock_state == LockState::Unlocked && tracking_session_active(_tracking_state)) {
+  if (tracking_status_refresh_allowed()) {
     const uint32_t now_s = tracking_seconds_from_ms(RTOS::get_retained_time_ms());
     tracking_status.recording_s = tracking_recording_s(_tracking_timing, now_s);
     tracking_status.elapsed_s = tracking_elapsed_s(_tracking_timing, now_s);
@@ -3345,6 +3393,7 @@ void Orchestrator::try_enter_sleep() {
 
 void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   AG_LOGI(TAG, "prepare_for_sleep");
+  _tracking_status_refresh_armed = false;
   _svc.accel_service.stop();
   clear_refresh();
   log_heap(TAG, "sleep.prepare:enter");

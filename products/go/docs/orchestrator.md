@@ -263,6 +263,7 @@ the nearest deadline.
 | BMS status poll | `BMS_STATUS_POLL_INTERVAL_MS` (5000 ms) | Sensitive services not paused |
 | External watchdog | `EXT_WDT_INTERVAL_MS` (60000 ms) | Always — never suppressed during a setup session |
 | Inactivity | `auto_lock_seconds * 1000` | `auto_lock_allowed()`: unlocked, auto-lock > 0, no setup session, focus screen, Hardware Test screen, or Tracking Status |
+| Tracking Status | `TRACKING_STATUS_REFRESH_INTERVAL_MS` (5000 ms); rejected submissions retry after `TRACKING_STATUS_REFRESH_RETRY_MS` (100 ms) | Status visible, unlocked, and Recording or Paused |
 | Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | Non-persistent snackbar active, sensitive services not paused |
 | Wi-Fi initial-connect / fallback | `WifiService::next_deadline_ms()` | While the service has armed a deadline (Stationary bring-up) |
 | Local endpoint activation retry | `LOCAL_API_ACTIVATION_RETRY_MS` (5000 ms) | Stationary + online after local HTTP or mDNS activation fails |
@@ -546,8 +547,14 @@ available. Leaving Status starts a fresh configured timeout once, including
 after remote Stop; repaints and Pause/Resume do not extend it. The saved setting
 is unchanged. Keeping Status open also keeps Offline mode awake.
 
-Values update on entry, input, and tracking changes. Periodic refresh is not yet
-implemented; ordinary background updates remain suppressed on this menu.
+Entry, input, and tracking changes repaint immediately. The timer loop observes
+page entry/exit through `sync_tracking_status_lifecycle()`: entry arms a
+five-second deadline; exit cancels it and restarts inactivity.
+`refresh_tracking_status()` submits without waiting, then schedules the next
+periodic refresh after five seconds or retries a rejection after 100 ms.
+Manual redraws do not restart this schedule. Lock, Stop, and sleep cancel it;
+refreshes preserve the view, cursor, and inactivity baseline.
+Outside Status, its handlers are skipped once exit cleanup is complete.
 
 ### change_mode()
 
@@ -986,8 +993,9 @@ for the component-facing contract and edge cases.
 
 ### `update_display()`
 
-Builds a `BuildContext` from cached state and asks the UIManager to produce
-a `DisplayValues` snapshot:
+Builds and submits a UI frame, returning whether the display accepted it.
+Status lifecycle and refresh scheduling belong to the timer handlers, not this
+function. Frame preparation uses a `BuildContext` and `DisplayValues` snapshot:
 
 1. Clear expired snackbar
 2. `build_context()` — convert cached `MeasuresAGo` to `Measures`, read
