@@ -519,6 +519,222 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
 }
 
 // ===========================================================================
+// PM retention tests
+// ===========================================================================
+
+TEST_CASE("SensorProducer retains PM for two minutes after a valid reading", "[SensorProducer]") {
+  MockPMSensor mock_pm;
+  ALLOW_CALL(mock_pm, supports_temp_hum()).RETURN(false);
+  Sensors sensors{};
+  sensors.pms_a = &mock_pm;
+  SensorManager manager(sensors);
+
+  uint64_t now = 0;
+  Event captured{};
+  MockRTOS mock_rtos;
+  RTOS::set_instance(&mock_rtos);
+  ALLOW_CALL(mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  ALLOW_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+      .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+      .RETURN(true);
+
+  SensorProducer producer(manager, &event_queue_sentinel, {});
+  SensorProducerTestAccess access(producer);
+  auto measure = [&](const PMData &data, bool success,
+                     MeasurementOrigin origin = MeasurementOrigin::Scheduled) {
+    EXPECT_READ(mock_pm, data, success);
+    access.handle_measurement(SensorProducerTestAccess::encode_notify(1, SensorGroup::PM, origin));
+    REQUIRE(captured.type == EventType::SensorDataReady);
+    CHECK(captured.sensor_data.origin == origin);
+    return captured.sensor_data.measures.pm_a;
+  };
+
+  // No cached sample at startup, including when the clock is zero.
+  CHECK_FALSE(measure({}, false).is_pm_25_valid());
+  const PMData initial{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+  REQUIRE(measure(initial, true).pm_25 == initial.pm_25);
+
+  SECTION("failed reads retain the whole snapshot without extending its lifetime") {
+    for (const uint64_t age_ms : {60000, 119999, 120000, 180000}) {
+      now = age_ms;
+      const PMData result = measure({}, false);
+      if (age_ms < 120000) {
+        CHECK(result.pm_01 == initial.pm_01);
+        CHECK(result.pm_25 == initial.pm_25);
+        CHECK(result.pm_10 == initial.pm_10);
+        CHECK(result.pm_01_sp == initial.pm_01_sp);
+        CHECK(result.pm_25_sp == initial.pm_25_sp);
+        CHECK(result.pm_10_sp == initial.pm_10_sp);
+        CHECK(result.pm_03_pc == initial.pm_03_pc);
+        CHECK(result.pm_05_pc == initial.pm_05_pc);
+        CHECK(result.pm_01_pc == initial.pm_01_pc);
+        CHECK(result.pm_25_pc == initial.pm_25_pc);
+        CHECK(result.pm_5_pc == initial.pm_5_pc);
+        CHECK(result.pm_10_pc == initial.pm_10_pc);
+      } else {
+        CHECK(result.pm_01 == MeasuresInvalid::PM);
+        CHECK(result.pm_25 == MeasuresInvalid::PM);
+        CHECK(result.pm_10 == MeasuresInvalid::PM);
+        CHECK(result.pm_05_pc == MeasuresInvalid::PM);
+      }
+    }
+  }
+
+  SECTION("refresh uses the same cache and expiry") {
+    now = 119999;
+    CHECK(measure({}, false, MeasurementOrigin::Refresh).pm_25 == initial.pm_25);
+    now = 120000;
+    CHECK_FALSE(measure({}, false, MeasurementOrigin::Refresh).is_pm_25_valid());
+  }
+
+  SECTION("a new valid reading replaces the snapshot and restarts its lifetime") {
+    now = 60000;
+    PMData replacement{};
+    replacement.pm_25 = 0; // Zero is valid; unsupported fields remain invalid.
+    CHECK(measure(replacement, true).pm_25 == 0);
+    now = 120000;
+    const PMData retained = measure({}, false);
+    CHECK(retained.pm_25 == 0);
+    CHECK_FALSE(retained.is_pm_01_valid());
+    now = 180000;
+    CHECK_FALSE(measure({}, false).is_pm_25_valid());
+    now = 180001;
+    CHECK(measure(initial, true).pm_25 == initial.pm_25);
+    now = 180002;
+    CHECK(measure({}, false).pm_25 == initial.pm_25);
+  }
+
+  SECTION("a successful read with invalid PM2.5 does not refresh the cache") {
+    now = 60000;
+    CHECK(measure({}, true).pm_25 == initial.pm_25);
+    now = 120000;
+    CHECK_FALSE(measure({}, true).is_pm_25_valid());
+  }
+
+  SECTION("PM retention expires across the 32-bit clock rollover") {
+    now = UINT32_MAX - 60000;
+    REQUIRE(measure(initial, true).pm_25 == initial.pm_25);
+    now += 119999;
+    CHECK(measure({}, false).pm_25 == initial.pm_25);
+    ++now;
+    CHECK_FALSE(measure({}, false).is_pm_25_valid());
+  }
+
+  SECTION("measurements that omit PM do not inject or refresh cached PM") {
+    now = 60000;
+    access.handle_measurement(SensorProducerTestAccess::encode_notify(1, SensorGroup::Other));
+    CHECK_FALSE(captured.sensor_data.measures.pm_a.is_pm_25_valid());
+    now = 120000;
+    CHECK_FALSE(measure({}, false).is_pm_25_valid());
+  }
+
+  SECTION("self-test still reports a failed fresh read with a valid cache") {
+    EXPECT_READ(mock_pm, (PMData{}), false);
+    access.handle_self_test();
+    CHECK(captured.type == EventType::SensorTestDone);
+    CHECK_FALSE(captured.sensor_test_results.pm_pass);
+  }
+}
+
+// ===========================================================================
+// CO2 retention tests
+// ===========================================================================
+
+TEST_CASE("SensorProducer retains CO2 for two minutes after a valid reading", "[SensorProducer]") {
+  MockCO2Sensor mock_co2;
+  ALLOW_CALL(mock_co2, supports_temp_hum()).RETURN(false);
+  Sensors sensors{};
+  sensors.co2 = &mock_co2;
+  SensorManager manager(sensors);
+
+  uint64_t now = 0;
+  Event captured{};
+  MockRTOS mock_rtos;
+  RTOS::set_instance(&mock_rtos);
+  ALLOW_CALL(mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  ALLOW_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+      .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+      .RETURN(true);
+
+  SensorProducer producer(manager, &event_queue_sentinel, {});
+  SensorProducerTestAccess access(producer);
+  auto measure = [&](const CO2Data &data, bool success,
+                     MeasurementOrigin origin = MeasurementOrigin::Scheduled) {
+    EXPECT_READ(mock_co2, data, success);
+    access.handle_measurement(
+        SensorProducerTestAccess::encode_notify(1, SensorGroup::Other, origin));
+    REQUIRE(captured.type == EventType::SensorDataReady);
+    CHECK(captured.sensor_data.origin == origin);
+    return captured.sensor_data.measures.co2;
+  };
+
+  CHECK_FALSE(measure({}, false).is_valid());
+  const CO2Data initial{800};
+  REQUIRE(measure(initial, true).co2 == initial.co2);
+
+  SECTION("failed reads do not extend the lifetime") {
+    for (const uint64_t age_ms : {60000, 119999, 120000, 180000}) {
+      now = age_ms;
+      CHECK(measure({}, false).co2 == (age_ms < 120000 ? initial.co2 : MeasuresInvalid::CO2));
+    }
+  }
+
+  SECTION("refresh uses the same cache and expiry") {
+    now = 119999;
+    CHECK(measure({}, false, MeasurementOrigin::Refresh).co2 == initial.co2);
+    now = 120000;
+    CHECK_FALSE(measure({}, false, MeasurementOrigin::Refresh).is_valid());
+  }
+
+  SECTION("a new valid reading replaces the cache and restarts its lifetime") {
+    now = 60000;
+    const CO2Data replacement{500};
+    CHECK(measure(replacement, true).co2 == replacement.co2);
+    now = 120000;
+    CHECK(measure({}, false).co2 == replacement.co2);
+    now = 180000;
+    CHECK_FALSE(measure({}, false).is_valid());
+    now = 180001;
+    CHECK(measure(initial, true).co2 == initial.co2);
+    now = 180002;
+    CHECK(measure({}, false).co2 == initial.co2);
+  }
+
+  SECTION("out-of-range readings do not refresh the cache") {
+    now = 60000;
+    CHECK(measure({MeasuresRange::MIN_VALID_CO2 - 1}, true).co2 == initial.co2);
+    now = 119999;
+    CHECK(measure({MeasuresRange::MAX_VALID_CO2 + 1}, true).co2 == initial.co2);
+    now = 120000;
+    CHECK_FALSE(measure({}, true).is_valid());
+  }
+
+  SECTION("CO2 retention expires across the 32-bit clock rollover") {
+    now = UINT32_MAX - 60000;
+    REQUIRE(measure(initial, true).co2 == initial.co2);
+    now += 119999;
+    CHECK(measure({}, false).co2 == initial.co2);
+    ++now;
+    CHECK_FALSE(measure({}, false).is_valid());
+  }
+
+  SECTION("measurements that omit CO2 do not inject or refresh cached CO2") {
+    now = 60000;
+    access.handle_measurement(SensorProducerTestAccess::encode_notify(1, SensorGroup::PM));
+    CHECK_FALSE(captured.sensor_data.measures.co2.is_valid());
+    now = 120000;
+    CHECK_FALSE(measure({}, false).is_valid());
+  }
+
+  SECTION("self-test still reports a failed fresh read with a valid cache") {
+    EXPECT_READ(mock_co2, (CO2Data{}), false);
+    access.handle_self_test();
+    CHECK(captured.type == EventType::SensorTestDone);
+    CHECK_FALSE(captured.sensor_test_results.co2_pass);
+  }
+}
+
+// ===========================================================================
 // run() integration tests
 // ===========================================================================
 

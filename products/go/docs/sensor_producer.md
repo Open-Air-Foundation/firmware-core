@@ -260,6 +260,19 @@ preserved so `All`/`TvocNox` still reads raw SGP41 values.
 The latest valid `temp_hum_a` from each measurement is cached for
 compensation push.
 
+For measurements requesting PM, the producer caches the complete PM snapshot
+when PM2.5 is valid. If a later result has invalid PM2.5, it reuses that snapshot
+while its age is less than 120 seconds, measured from completion of the last
+valid measurement. Failures do not extend the deadline. Scheduled and refresh
+measurements share this cache; requests omitting PM and hardware self-tests do
+not use it. The cache starts empty and does not persist across reboot or deep
+sleep.
+
+CO2 uses an independent cache with the same 120-second lifetime and refresh
+behavior. Measurements requesting the `Other` group update it only when
+`CO2Data::is_valid()` passes; invalid results reuse the unexpired reading.
+Requests omitting `Other` and hardware self-tests do not use the CO2 cache.
+
 #### `handle_calibration()`
 
 Calls `SensorManager::calibrate_co2()` synchronously on the producer task, then

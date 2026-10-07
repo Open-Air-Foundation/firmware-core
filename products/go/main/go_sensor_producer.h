@@ -127,6 +127,16 @@ private:
   TempHumData _last_temp_hum{};
   bool _last_temp_hum_valid = false;
 
+  /// Last PM snapshot with valid PM2.5, retained across failed measurements.
+  static constexpr uint32_t PM_VALIDITY_MS = 120000;
+  PMData _last_pm{};
+  uint32_t _last_pm_ms = 0;
+
+  /// Last valid CO2 reading, retained across failed measurements.
+  static constexpr uint32_t CO2_VALIDITY_MS = 120000;
+  CO2Data _last_co2{};
+  uint32_t _last_co2_ms = 0;
+
   // A flag that indicate TVOC and NOx sampling enabled or not
   bool _sampler_enabled = false;
 
