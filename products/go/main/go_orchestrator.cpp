@@ -716,7 +716,8 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) 
   uint32_t new_interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
   if (_mode != OperatingMode::Offline &&
       _svc.power_service.should_sleep_pm_sensor(new_interval_ms)) {
-    if (!_measurement_pending && !_refresh_pending && _pm_state == PmState::Ready) {
+    if (!_measurement_pending && !_refresh_pending && !_periph.active &&
+        _pm_state == PmState::Ready) {
       _svc.sensor_producer.request_pm_sleep();
       _pm_state = PmState::Sleeping;
     }
@@ -1130,8 +1131,23 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
   // the correction settings from Config.
   _svc.ble_service.notify_measures(_raw_measures, _latest_gps, time(nullptr));
 
-  // Sleep PM sensor when the time until the next measurement justifies power-cycling.
-  // The producer sleeps the sensor, then posts PmSensorAsleep so we isolate.
+  try_start_peripheral_sensor_test();
+  sleep_pm_if_idle();
+
+  if (refreshed) {
+    AG_LOGI(TAG, "refresh complete");
+    update_refresh_display();
+  } else {
+    request_background_display_update();
+  }
+}
+
+void Orchestrator::sleep_pm_if_idle() {
+  if (_periph.active || _measurement_pending || _refresh_pending) {
+    return;
+  }
+
+  // The producer sleeps PM before PmSensorAsleep lets us isolate the bus.
   uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
   const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   const int32_t until_regular = static_cast<int32_t>(_last_measurement_ms + interval_ms - now);
@@ -1140,13 +1156,6 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
       _svc.power_service.should_sleep_pm_sensor(remaining_ms)) {
     _svc.sensor_producer.request_pm_sleep();
     _pm_state = PmState::Sleeping;
-  }
-
-  if (refreshed) {
-    AG_LOGI(TAG, "refresh complete");
-    update_refresh_display();
-  } else {
-    request_background_display_update();
   }
 }
 
@@ -1264,7 +1273,8 @@ void Orchestrator::try_refresh() {
   if (!_refresh_pending) {
     return;
   }
-  // An outstanding measurement also satisfies the refresh.
+  // Wait for an outstanding read. Normal measurements satisfy the refresh;
+  // a peripheral sweep leaves it pending until on_sensor_test_done().
   if (!_measurement_pending) {
     if (_pm_state == PmState::Ready) {
       start_measurement(MeasurementOrigin::Refresh);
@@ -1295,11 +1305,13 @@ void Orchestrator::on_pm_event(EventType type) {
     _pm_state = PmState::Asleep;
     _svc.power_service.set_pm_power(false);
     const uint32_t interval = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
-    if (_mode == OperatingMode::Offline || !_svc.power_service.should_sleep_pm_sensor(interval)) {
+    if (_periph.active || _mode == OperatingMode::Offline ||
+        !_svc.power_service.should_sleep_pm_sensor(interval)) {
       prepare_pm();
     }
   }
   try_refresh();
+  try_start_peripheral_sensor_test();
   if (_refresh_pending) {
     update_refresh_display();
   }
@@ -1773,6 +1785,7 @@ void Orchestrator::start_peripheral_test() {
   _periph = PeripheralTestState{};
   _periph.active = true;
   _periph.step = PeripheralTestState::Step::BackLed;
+  prepare_pm();
   drive_peripheral_actuator();
 }
 
@@ -1834,17 +1847,28 @@ void Orchestrator::peripheral_step_result(bool pass) {
   case Step::Buzzer: {
     _periph.buzzer = pass;
     // Actuators done → run the automatic AQ sweep in the producer task.
-    _periph.step = Step::Testing;
+    _periph.step = Step::WaitingForSensors;
     _svc.led_service.back_off(); // clear the cycle before the AQ phase
     PeripheralTestView view{};
     view.kind = PeripheralTestView::Kind::Testing;
     _svc.ui_manager.set_peripheral_test_view(view);
-    _svc.sensor_producer.request_self_test();
+    try_start_peripheral_sensor_test();
     break;
   }
   default:
-    break; // Testing/Summary ignore actuator taps
+    break; // Waiting/Testing/Summary ignore actuator taps
   }
+}
+
+void Orchestrator::try_start_peripheral_sensor_test() {
+  if (!_periph.active || _periph.step != PeripheralTestState::Step::WaitingForSensors ||
+      _pm_state != PmState::Ready || _measurement_pending) {
+    return;
+  }
+
+  _periph.step = PeripheralTestState::Step::Testing;
+  _measurement_pending = true;
+  _svc.sensor_producer.request_self_test();
 }
 
 void Orchestrator::on_sensor_test_done(const SensorTestResults &results) {
@@ -1852,6 +1876,9 @@ void Orchestrator::on_sensor_test_done(const SensorTestResults &results) {
 
   // Only meaningful while the flow is waiting on the AQ sweep.
   if (!_periph.active || _periph.step != PeripheralTestState::Step::Testing) {
+    try_start_peripheral_sensor_test();
+    try_refresh();
+    sleep_pm_if_idle();
     return;
   }
 
@@ -1895,6 +1922,8 @@ void Orchestrator::finish_peripheral_test() {
   }
   AG_LOGI(TAG, "peripheral test: finish, restoring hardware");
   _periph.active = false;
+  try_refresh();
+  sleep_pm_if_idle();
 
   // Restore LED/buzzer to persisted settings + live AQI.
   _svc.led_service.touch_set_all(false); // clear any steady touch LEDs
@@ -3105,6 +3134,7 @@ void Orchestrator::pause_provisioning_sensitive_services() {
   _svc.sensor_producer.stop(/*sleep_pm=*/true);
   _measurement_pending = false;
   _pm_state = PmState::Asleep;
+  finish_peripheral_test();
   if (is_gps_active()) {
     _svc.gps_service.stop_and_idle_gnss();
   }

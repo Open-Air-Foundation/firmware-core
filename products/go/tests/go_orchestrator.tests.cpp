@@ -7383,6 +7383,230 @@ private:
   alignas(8) static inline char _stub_buf[64];
 };
 
+static void confirm_peripheral_actuators(Orchestrator &orch) {
+  const InputEventData pass{InputSource::TouchEnter, InputType::ShortPress};
+  A::on_input(orch, pass); // Back LED
+  A::on_input(orch, pass); // Touch LEDs
+  A::on_input(orch, pass); // Buzzer
+}
+
+TEST_CASE("Peripheral Test: wakes PM and waits for preparation before the sweep",
+          "[Orchestrator][hwtest][peripheral][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.ui_manager.set_screen(Screen::PeripheralTest);
+
+  bool sleep_pending = false;
+  bool already_preparing = false;
+  SECTION("PM asleep") { A::sensor_asleep(orch); }
+  SECTION("PM sleep in progress") {
+    sleep_pending = true;
+    A::sensor_sleeping(orch);
+  }
+  SECTION("PM warmup in progress") {
+    already_preparing = true;
+    Event event{};
+    event.type = EventType::PmPreparationStarted;
+    A::dispatch(orch, event);
+  }
+
+  A::start_peripheral_test(orch);
+  CHECK(test_spy::prepare_requested == (!sleep_pending && !already_preparing));
+  confirm_peripheral_actuators(orch);
+  CHECK_FALSE(test_spy::self_test_requested);
+
+  Event event{};
+  if (sleep_pending) {
+    event.type = EventType::PmSensorAsleep;
+    A::dispatch(orch, event);
+    CHECK(test_spy::prepare_requested);
+    CHECK(test_spy::pm_power_on);
+    CHECK_FALSE(test_spy::self_test_requested);
+  }
+
+  event.type = EventType::PmPreparationStarted;
+  A::dispatch(orch, event);
+  CHECK_FALSE(test_spy::self_test_requested);
+  event.type = EventType::PmPrepared;
+  A::dispatch(orch, event);
+  CHECK(test_spy::self_test_requested);
+  CHECK_FALSE(test_spy::pm_sleep_requested);
+  CHECK(A::settings(orch).measure_interval_seconds == 60);
+
+  test_spy::self_test_requested = false;
+  A::dispatch(orch, event);
+  CHECK_FALSE(test_spy::self_test_requested); // Never launch the same sweep twice.
+}
+
+TEST_CASE("Peripheral Test: serializes the sweep with scheduled measurements",
+          "[Orchestrator][hwtest][peripheral][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.ui_manager.set_screen(Screen::PeripheralTest);
+  uint64_t now = 60000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  A::check_timers(orch);
+  REQUIRE(test_spy::measurement_requested);
+  test_spy::measurement_requested = false;
+
+  A::start_peripheral_test(orch);
+  confirm_peripheral_actuators(orch);
+  CHECK_FALSE(test_spy::self_test_requested);
+  A::on_sensor_data(orch, MeasuresAGo{});
+  REQUIRE(test_spy::self_test_requested);
+  CHECK_FALSE(test_spy::pm_sleep_requested);
+
+  now += 60000;
+  A::check_timers(orch);
+  CHECK_FALSE(test_spy::measurement_requested);
+  Event done{};
+  done.type = EventType::SensorTestDone;
+  done.sensor_test_results = SensorTestResults{true, true, true, true, true};
+  A::dispatch(orch, done);
+  const auto view = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(std::string(view.rows[0].text) == "PASS - tap to exit");
+  A::check_timers(orch);
+  CHECK(test_spy::measurement_requested);
+}
+
+TEST_CASE("Peripheral Test: holds PM awake until any test exit",
+          "[Orchestrator][hwtest][peripheral][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.ui_manager.set_screen(Screen::PeripheralTest);
+  A::start_peripheral_test(orch);
+
+  // A normal measurement or an interval update cannot sleep PM during the test.
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK_FALSE(test_spy::pm_sleep_requested);
+  const GoSettings previous = A::settings(orch);
+  A::settings(orch).measure_interval_seconds = 120;
+  A::reschedule_sensor_timer(orch, previous);
+  CHECK_FALSE(test_spy::pm_sleep_requested);
+
+  InputType exit = InputType::DoublePress;
+  SECTION("double-press back during actuators") {}
+  SECTION("long-press home during actuators") { exit = InputType::LongPress; }
+  SECTION("tap completed summary") {
+    confirm_peripheral_actuators(orch);
+    Event done{};
+    done.type = EventType::SensorTestDone;
+    A::dispatch(orch, done);
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK_FALSE(test_spy::pm_sleep_requested);
+    exit = InputType::ShortPress;
+  }
+  A::on_input(orch, {InputSource::TouchEnter, exit});
+  CHECK(f.ui_manager.current_screen() != Screen::PeripheralTest);
+  CHECK(test_spy::pm_sleep_requested);
+  CHECK(A::settings(orch).measure_interval_seconds == 120);
+}
+
+TEST_CASE("Peripheral Test: early exit cancels a sweep waiting for PM",
+          "[Orchestrator][hwtest][peripheral][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.ui_manager.set_screen(Screen::PeripheralTest);
+  bool sleep_pending = false;
+  SECTION("wake already requested") { A::sensor_asleep(orch); }
+  SECTION("sleep still in progress") {
+    sleep_pending = true;
+    A::sensor_sleeping(orch);
+  }
+  A::start_peripheral_test(orch);
+  confirm_peripheral_actuators(orch);
+  A::on_input(orch, {InputSource::TouchEnter, InputType::DoublePress});
+  test_spy::prepare_requested = false;
+  Event event{};
+  event.type = sleep_pending ? EventType::PmSensorAsleep : EventType::PmPrepared;
+  A::dispatch(orch, event);
+  CHECK_FALSE(test_spy::self_test_requested);
+  CHECK_FALSE(test_spy::prepare_requested);
+  CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+}
+
+TEST_CASE("Peripheral Test: an in-flight sweep retains PM ownership after exit",
+          "[Orchestrator][hwtest][peripheral][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.ui_manager.set_screen(Screen::PeripheralTest);
+  A::start_peripheral_test(orch);
+  confirm_peripheral_actuators(orch);
+  REQUIRE(test_spy::self_test_requested);
+  A::on_input(orch, {InputSource::TouchEnter, InputType::DoublePress});
+  CHECK_FALSE(test_spy::pm_sleep_requested);
+
+  SECTION("completion restores sleep without changing the screen") {
+    Event done{};
+    done.type = EventType::SensorTestDone;
+    A::dispatch(orch, done);
+    CHECK(test_spy::pm_sleep_requested);
+    CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+  }
+  SECTION("scheduled and refresh requests wait for completion after exit") {
+    uint64_t now = 60000;
+    ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+    A::check_timers(orch);
+    CHECK_FALSE(test_spy::measurement_requested);
+    Event shake{};
+    shake.type = EventType::ShakeDetected;
+    shake.shake_detected_ms = static_cast<uint32_t>(now);
+    A::dispatch(orch, shake);
+    CHECK_FALSE(test_spy::measurement_requested);
+    Event done{};
+    done.type = EventType::SensorTestDone;
+    A::dispatch(orch, done);
+    CHECK(test_spy::measurement_requested);
+    CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
+    CHECK_FALSE(test_spy::pm_sleep_requested);
+  }
+  SECTION("reopening waits for the old sweep and discards its result") {
+    f.ui_manager.set_screen(Screen::PeripheralTest);
+    A::start_peripheral_test(orch);
+    test_spy::self_test_requested = false;
+    confirm_peripheral_actuators(orch);
+    CHECK_FALSE(test_spy::self_test_requested);
+    Event done{};
+    done.type = EventType::SensorTestDone;
+    done.sensor_test_results = SensorTestResults{true, true, true, true, true};
+    A::dispatch(orch, done);
+    CHECK(test_spy::self_test_requested);
+    const auto view = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(view.row_count != 9); // The old result must not become the new summary.
+    CHECK_FALSE(test_spy::pm_sleep_requested);
+  }
+}
+
+TEST_CASE("Peripheral Test: stopping the producer cancels pending test ownership",
+          "[Orchestrator][hwtest][peripheral][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.ui_manager.set_screen(Screen::PeripheralTest);
+  A::start_peripheral_test(orch);
+  confirm_peripheral_actuators(orch);
+  REQUIRE(test_spy::self_test_requested);
+
+  A::pause_sensitive_services(orch);
+  A::resume_sensitive_services(orch);
+  Event ready{};
+  ready.type = EventType::PmPrepared;
+  A::dispatch(orch, ready);
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK(test_spy::pm_sleep_requested);
+}
+
 TEST_CASE("PM sleep: on_sensor_data requests PM sleep for Portable + long interval",
           "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;

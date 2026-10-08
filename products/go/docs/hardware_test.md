@@ -45,7 +45,7 @@ orchestrator consumes. Opening the submenu is internal navigation
 
 | `UIAction` | Emitted by | Orchestrator response |
 |---|---|---|
-| `RunPeripheralTest` | Peripheral Test row | `start_peripheral_test()` — drive first actuator |
+| `RunPeripheralTest` | Peripheral Test row | `start_peripheral_test()` — wake PM and drive first actuator |
 | `PeripheralStepPass` / `PeripheralStepFail` | Actuator step Pass/Fail | `peripheral_step_result()` — record + advance |
 | `PeripheralTestExit` | Summary tap | `finish_peripheral_test()` — restore hardware |
 | `OpenGpsTest` | GPS Test row | `start_gps_test()` — ungate receiver, fast posting, TTFF timer |
@@ -102,10 +102,22 @@ stateDiagram-v2
     [*] --> BackLed
     BackLed --> TouchLeds: tap confirms
     TouchLeds --> Buzzer: tap confirms
-    Buzzer --> Testing: tap confirms
+    Buzzer --> WaitingForSensors: tap confirms
+    WaitingForSensors --> Testing: PM ready and producer available
     Testing --> Summary: SensorTestDone
     Summary --> [*]: tap exits
 ```
+
+Opening Peripheral Test connects and wakes an asleep PM sensor so warmup can
+run during the actuator checks. If PM is still entering sleep, the orchestrator
+waits for `PmSensorAsleep` before connecting and preparing it. PM remains awake
+through the summary, without changing the saved measurement interval.
+
+After the buzzer check, the screen shows the automatic testing view while
+`WaitingForSensors` waits for PM readiness and any outstanding measurement.
+`PmPrepared` or the existing measurement's `SensorDataReady` event lets the
+orchestrator start the sweep once both conditions are met. If PM is already
+ready and the producer is available, the sweep starts immediately.
 
 The AQ sweep runs **inside the sensor producer task** (the normal I2C bus owner)
 via `request_self_test()`: a single `start_measures(1, All)` iteration classified
@@ -114,9 +126,12 @@ carrying `SensorTestResults`. The summary cue fires on the overall result —
 **PASS**: green back LED + `PATTERN_CHARGE_DONE`; **FAIL**: red back LED +
 `PATTERN_UNPLUG`. On exit the LED/buzzer are restored to persisted settings.
 
-`on_sensor_test_done()` clears `_measurement_pending` before checking the test
-screen state, allowing the regular scheduler to continue if the self-test
-notification replaced a pending measurement request.
+The sweep shares `_measurement_pending` with normal measurements to prevent
+overlapping requests. Its completion event is `SensorTestDone`;
+`SensorDataReady` completes normal measurements only. `on_sensor_test_done()`
+clears the pending flag before handling the result. On exit, the orchestrator
+resumes the normal PM sleep policy using the time remaining until the next
+scheduled measurement.
 
 ### GPS Test
 
@@ -190,6 +205,12 @@ See [`fg_learning.md`](fg_learning.md) for the runner.
 - **Mid-flow exit.** Any exit gesture that bypasses a flow's on-screen control
   (double-press Back, long-press Home) still restores hardware: the orchestrator
   detects the screen transition and runs the matching `finish_*`.
+- **Peripheral sweep after exit.** Leaving while waiting for PM cancels the
+  waiting sweep. A sweep already running keeps PM awake until `SensorTestDone`,
+  then releases it without changing the screen. Reopening the test waits for
+  that completion and discards the old result before starting a new sweep.
+- **Sensor worker stopped.** Provisioning or committed OTA clears the pending
+  measurement state and finishes the peripheral test when stopping the worker.
 - **Inert actuators.** On board variants without an LED/buzzer driver the cues
   are silent by design; the display still reports the result.
 - **Auto-lock suppressed.** The inactivity auto-lock is disabled on every

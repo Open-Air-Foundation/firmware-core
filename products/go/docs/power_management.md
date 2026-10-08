@@ -320,13 +320,19 @@ is close, PM stays ready rather than sleeping and needing another warmup.
 Interval-policy checks, including pre-wake eligibility, still use the configured
 interval. PM operation state prevents duplicate sleep or preparation requests.
 
+Peripheral Test holds PM awake from entry through its summary and waits for
+preparation before reading. Sleep resumes after exit when no read is pending
+and the remaining time permits it. A sweep already running at exit retains PM
+until `SensorTestDone`. The saved measurement interval is unchanged. See
+[Hardware Test](hardware_test.md#peripheral-test).
+
 ### Edge Cases
 
 | Scenario | Handling |
 |---|---|
 | **Unlock** | Display shows cached data; PM wakes at the next pre-wake timer |
 | **Interval shortened below threshold** | Prepare an asleep sensor; a sleeping sensor is prepared after `PmSensorAsleep` |
-| **Interval lengthened above threshold** | Request sleep when PM is ready and no measurement or refresh is pending |
+| **Interval lengthened above threshold** | Request sleep when PM is ready, no read or refresh is pending, and Peripheral Test is inactive |
 | **Mode change** | `change_mode()` calls `prepare_pm()` to connect and prepare an asleep sensor |
 | **Shake while PM asleep or preparing** | Prepare if asleep, then request the refresh after `PmPrepared` |
 | **Shake while PM sleep is in progress** | Wait for `PmSensorAsleep`, then prepare and measure |
