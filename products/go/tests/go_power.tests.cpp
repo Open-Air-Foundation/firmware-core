@@ -619,6 +619,7 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
     stale.tracking_state = TrackingState::Recording;
     stale.tracking_session_id = 42731;
     stale.flags = ~uint32_t{0};
+    stale.tracking_timing = {100, 20, 130, 140};
     svc.save_state(stale);
     invalidate_rtc_app_state_for_test();
 
@@ -629,6 +630,10 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
       CHECK(loaded.tracking_state == TrackingState::Idle);
       CHECK(loaded.tracking_session_id == 0);
       CHECK(loaded.flags == static_cast<uint32_t>(RtcAppFlag::GpsEnabled));
+      CHECK(loaded.tracking_timing.session_started_s == TRACKING_TIME_INVALID_S);
+      CHECK(loaded.tracking_timing.recording_accumulated_s == TRACKING_TIME_INVALID_S);
+      CHECK(loaded.tracking_timing.recording_started_s == TRACKING_TIME_INVALID_S);
+      CHECK(loaded.tracking_timing.last_record_s == TRACKING_TIME_INVALID_S);
     }
   }
 
@@ -645,6 +650,7 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
         saved.tracking_state = TrackingState::Recording;
         saved.tracking_session_id = 42731;
         saved.flags = reserved;
+        saved.tracking_timing = {100, 20, 130, 140};
         saved.set_flag(RtcAppFlag::GpsEnabled, (combination & 0x01) != 0);
         saved.set_flag(RtcAppFlag::SensorsWarm, (combination & 0x02) != 0);
         saved.set_flag(RtcAppFlag::ChargingOnlyRequested, (combination & 0x04) != 0);
@@ -656,6 +662,10 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
           CHECK(loaded.lock_state == saved.lock_state);
           CHECK(loaded.tracking_state == saved.tracking_state);
           CHECK(loaded.tracking_session_id == saved.tracking_session_id);
+          CHECK(loaded.tracking_timing.session_started_s == 100);
+          CHECK(loaded.tracking_timing.recording_accumulated_s == 20);
+          CHECK(loaded.tracking_timing.recording_started_s == 130);
+          CHECK(loaded.tracking_timing.last_record_s == 140);
           CHECK(loaded.flags == (reserved | combination));
           CHECK(loaded.has_flag(RtcAppFlag::GpsEnabled) == ((combination & 0x01) != 0));
           CHECK(loaded.has_flag(RtcAppFlag::SensorsWarm) == ((combination & 0x02) != 0));
@@ -698,10 +708,16 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
     RtcAppState saved{};
     saved.tracking_state = TrackingState::Paused;
     saved.tracking_session_id = 42731;
+    saved.tracking_timing = {100, 30, TRACKING_TIME_INVALID_S, 120};
     svc.save_state(saved);
     const auto loaded = svc.load_state();
     CHECK(loaded.tracking_state == TrackingState::Paused);
     CHECK(loaded.tracking_session_id == 42731);
+    CHECK(loaded.tracking_timing.session_started_s == 100);
+    CHECK(loaded.tracking_timing.recording_accumulated_s == 30);
+    CHECK(loaded.tracking_timing.recording_started_s == TRACKING_TIME_INVALID_S);
+    CHECK(loaded.tracking_timing.last_record_s == 120);
+    CHECK(load_rtc_app_state().tracking_timing.recording_accumulated_s == 30);
   }
 }
 

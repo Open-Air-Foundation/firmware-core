@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 // Invalid sentinel values — used to mark uninitialized or unavailable fields.
@@ -69,9 +70,17 @@ inline bool is_altitude_valid(float alt) { return alt > GPS_ALTITUDE_INVALID; }
 
 inline bool is_satellite_count_valid(int count) { return count >= 0; }
 
+inline bool is_hdop_valid(float hdop) { return std::isfinite(hdop) && hdop > 0.0f; }
+
 inline bool is_fix_valid(const GpsFix &fix) { return fix.fix_type != GpsFixType::NoFix; }
 
 inline bool is_gps_timestamp_valid(const GpsTimestamp &ts) { return ts.valid; }
+
+/// Validate only the displayed UTC time fields, independently of the date/valid flag.
+inline bool is_gps_time_of_day_valid(const GpsTimestamp &ts) {
+  return ts.hour >= 0 && ts.hour <= 23 && ts.minute >= 0 && ts.minute <= 59 && ts.second >= 0 &&
+         ts.second <= 59;
+}
 
 // ---------------------------------------------------------------------------
 // A-GNSS aiding data

@@ -47,6 +47,7 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "go_sensor_producer.h"
 #include "go_settings.h"
 #include "go_storage.h"
+#include "go_type_helpers.hpp"
 #include "go_ui.h"
 #include "go_ulp.h"
 #include "go_wifi.h"
@@ -346,8 +347,10 @@ void GoApp::run_fast_path(const RtcAppState &state) {
     return;
   }
 
+  RtcAppState save = state;
+  save.tracking_timing = result.tracking_timing;
+
   if (result.outcome == FastPathResult::Outcome::Sleep) {
-    RtcAppState save = state;
     save.set_flag(RtcAppFlag::SensorsWarm, result.sensors_warm);
     _board.power().save_state(save);
 
@@ -359,6 +362,8 @@ void GoApp::run_fast_path(const RtcAppState &state) {
     // Never returns — CPU reboots on wake.
     return;
   }
+
+  _board.power().save_state(save);
 
   if (result.outcome == FastPathResult::Outcome::Promote && _board.bms() == nullptr &&
       !init_bms_with_retry()) {
@@ -386,6 +391,8 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
                                                const RtcDisplaySnapshot *snapshot,
                                                bool snapshot_valid) {
   const uint32_t boot_time_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  TrackingTiming tracking_timing =
+      tracking_timing_for_state(state.tracking_timing, state.tracking_state);
 
   // --- Core init (NVS must be ready before load_settings) ---
   _board.init_core();
@@ -496,7 +503,17 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
         point.gps = gps;
         point.sensors = ago;
         point.battery_percentage = power_snapshot.battery_percentage;
-        if (!stor.append_route_point(point)) {
+        const uint32_t record_s = tracking_seconds_from_ms(RTOS::get_retained_time_ms());
+        const uint32_t count_before = stor.current_route_point_count();
+        const bool append_ok = stor.append_route_point(point);
+        const uint32_t count_after = stor.current_route_point_count();
+        // An accepted write advances the count even if its subsequent sync fails.
+        // Observe it before end_route() resets the writer count.
+        if (count_after > count_before &&
+            !tracking_timing_record_accepted(tracking_timing, state.tracking_state, record_s)) {
+          tracking_timing.last_record_s = TRACKING_TIME_INVALID_S;
+        }
+        if (!append_ok) {
           AG_LOGW(TAG, "fast-path: append_route_point failed → promote");
           promote = true;
           storage_failure_promote = true;
@@ -530,6 +547,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
           .has_measures = has_measures,
           .sleep_duration_ms = 0,
           .sensors_warm = false,
+          .tracking_timing = {},
       };
     }
     disp.init(values);
@@ -551,6 +569,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
           .has_measures = has_measures,
           .sleep_duration_ms = decision.duration_ms,
           .sensors_warm = warm,
+          .tracking_timing = tracking_timing,
       };
     }
     // Sleep too short — fall through to promotion.
@@ -588,6 +607,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
       .has_measures = has_measures,
       .sleep_duration_ms = 0,
       .sensors_warm = false,
+      .tracking_timing = tracking_timing,
   };
 }
 

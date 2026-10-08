@@ -1019,6 +1019,163 @@ TEST_CASE("Route: durability budget", "[StorageService][route][durability]") {
 }
 
 // ============================================================================
+// TEST CASE — Route: on-demand point count
+// ============================================================================
+
+TEST_CASE("Route: on-demand point count", "[StorageService][route][point-count]") {
+  TempDir tmp;
+  StubPayloadCacheStorage stub_storage;
+  PayloadCache cache(stub_storage, 16);
+  FakeNandStorage fake_nand(tmp.path);
+  StorageService svc(cache, fake_nand);
+  constexpr uint32_t SESSION_ID = 12345;
+  constexpr uint32_t UNCHANGED_COUNT = 99;
+  uint32_t count = UNCHANGED_COUNT;
+  s_fake_rtos.set(0);
+
+  SECTION("empty open and closed sessions succeed with zero") {
+    REQUIRE(svc.create_route(SESSION_ID));
+    CHECK(svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == 0);
+    REQUIRE(svc.end_route());
+    count = UNCHANGED_COUNT;
+    CHECK(svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == 0);
+  }
+
+  SECTION("missing file fails without changing output or creating files") {
+    CHECK_FALSE(svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == UNCHANGED_COUNT);
+    CHECK_FALSE(std::filesystem::exists(tmp / "routes"));
+  }
+
+  SECTION("unmounted NAND preserves output even with a matching writer") {
+    MockNandStorage nand;
+    bool mounted = true;
+    ALLOW_CALL(nand, is_mounted()).LR_RETURN(mounted);
+    ALLOW_CALL(nand, mount_path()).LR_RETURN(tmp.path);
+    StorageService mounted_svc(cache, nand);
+    REQUIRE(mounted_svc.create_route(SESSION_ID));
+    REQUIRE(mounted_svc.append_route_point(make_route_point(1)));
+    mounted = false;
+
+    CHECK_FALSE(mounted_svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == UNCHANGED_COUNT);
+    REQUIRE(mounted_svc.end_route());
+    CHECK_FALSE(mounted_svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == UNCHANGED_COUNT);
+  }
+
+  SECTION("active writer includes buffered points without flushing or syncing") {
+    REQUIRE(svc.create_route(SESSION_ID));
+    REQUIRE(svc.append_route_point(make_route_point(1))); // First append syncs.
+    REQUIRE(svc.append_route_point(make_route_point(2))); // Inside the sync budget.
+    const std::string path = tmp / "routes/route_12345.bin";
+    const auto size_before = std::filesystem::file_size(path);
+    REQUIRE(size_before == sizeof(RoutePoint));
+    REQUIRE(svc.current_route_point_count() == 2);
+
+    StorageTestSeam seam{};
+    svc.set_test_seam(&seam);
+    CHECK(svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == 2);
+    CHECK(seam.fflush_count == 0);
+    CHECK(seam.fsync_count == 0);
+    CHECK(std::filesystem::file_size(path) == size_before);
+    CHECK(svc.get_session_point_count(SESSION_ID) == 1);
+    CHECK(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == SESSION_ID);
+    svc.set_test_seam(nullptr);
+    REQUIRE(svc.end_route());
+  }
+
+  SECTION("paused closed session derives count from file without reopening") {
+    REQUIRE(svc.create_route(SESSION_ID));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    REQUIRE(svc.append_route_point(make_route_point(2)));
+    REQUIRE(svc.end_route());
+    StorageService restored_svc(cache, fake_nand);
+
+    CHECK(restored_svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == 2);
+    CHECK_FALSE(restored_svc.is_route_active());
+    CHECK(restored_svc.current_route_point_count() == 0);
+    CHECK(restored_svc.current_route_session_id() == 0);
+  }
+
+  SECTION("another session uses its file count while a writer stays open") {
+    constexpr uint32_t OTHER_SESSION_ID = 23456;
+    REQUIRE(svc.create_route(OTHER_SESSION_ID));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    REQUIRE(svc.end_route());
+    REQUIRE(svc.create_route(SESSION_ID));
+    REQUIRE(svc.append_route_point(make_route_point(2)));
+    REQUIRE(svc.append_route_point(make_route_point(3)));
+
+    StorageTestSeam seam{};
+    svc.set_test_seam(&seam);
+    CHECK(svc.try_get_session_point_count(OTHER_SESSION_ID, count));
+    CHECK(count == 1);
+    CHECK_FALSE(svc.try_get_session_point_count(34567, count));
+    CHECK(count == 1);
+    CHECK(seam.fflush_count == 0);
+    CHECK(seam.fsync_count == 0);
+    CHECK(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == SESSION_ID);
+    CHECK(svc.current_route_point_count() == 2);
+    svc.set_test_seam(nullptr);
+    REQUIRE(svc.end_route());
+  }
+
+  SECTION("torn trailing bytes are excluded without truncating the file") {
+    REQUIRE(svc.create_route(SESSION_ID));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    REQUIRE(svc.end_route());
+    const std::string path = tmp / "routes/route_12345.bin";
+    constexpr size_t TORN_SIZE = sizeof(RoutePoint) + sizeof(RoutePoint) / 2;
+    std::filesystem::resize_file(path, TORN_SIZE);
+
+    CHECK(svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == 1);
+    CHECK(std::filesystem::file_size(path) == TORN_SIZE);
+    CHECK_FALSE(svc.is_route_active());
+  }
+}
+
+TEST_CASE("Route: complete writes count despite sync failure",
+          "[StorageService][route][durability][point-count]") {
+  TempDir tmp;
+  StubPayloadCacheStorage stub_storage;
+  PayloadCache cache(stub_storage, 16);
+  FakeNandStorage fake_nand(tmp.path);
+  StorageService svc(cache, fake_nand);
+  StorageTestSeam seam{};
+  svc.set_test_seam(&seam);
+  s_fake_rtos.set(0);
+  constexpr uint32_t SESSION_ID = 12345;
+  REQUIRE(svc.create_route(SESSION_ID));
+  REQUIRE(svc.append_route_point(make_route_point(1)));
+  REQUIRE(svc.current_route_point_count() == 1);
+  s_fake_rtos.advance(CONFIG_TRACKING_FSYNC_INTERVAL_MS);
+
+  SECTION("fflush failure") { seam.fflush_return = -1; }
+  SECTION("fsync failure") { seam.fsync_return = -1; }
+
+  CHECK_FALSE(svc.append_route_point(make_route_point(2)));
+  CHECK(svc.current_route_point_count() == 2);
+  const int flush_count = seam.fflush_count;
+  const int sync_count = seam.fsync_count;
+  uint32_t count = 0;
+  CHECK(svc.try_get_session_point_count(SESSION_ID, count));
+  CHECK(count == 2);
+  CHECK(seam.fflush_count == flush_count);
+  CHECK(seam.fsync_count == sync_count);
+  CHECK(svc.is_route_active());
+  svc.set_test_seam(nullptr);
+  REQUIRE(svc.end_route());
+}
+
+// ============================================================================
 // TEST CASE 7 — Route: session_count and list_sessions
 // ============================================================================
 

@@ -24,9 +24,18 @@ enum class TrackingState : uint8_t {
   Paused = 2,
 };
 
-constexpr bool tracking_session_active(TrackingState state) {
-  return state == TrackingState::Recording || state == TrackingState::Paused;
-}
+// --- Tracking timing data; pure operations live in go_type_helpers.hpp ---
+
+inline constexpr uint32_t TRACKING_TIME_INVALID_S = UINT32_MAX;
+
+struct TrackingTiming {
+  uint32_t session_started_s = TRACKING_TIME_INVALID_S;
+  uint32_t recording_accumulated_s = TRACKING_TIME_INVALID_S; ///< Completed active segments
+  uint32_t recording_started_s = TRACKING_TIME_INVALID_S; ///< Current segment; invalid if paused
+  uint32_t last_record_s = TRACKING_TIME_INVALID_S;       ///< Last accepted write, not sync
+};
+
+static_assert(sizeof(TrackingTiming) == 16, "Tracking timing must contain four 32-bit fields");
 
 enum class LockState : uint8_t {
   Locked,
@@ -79,6 +88,7 @@ struct RtcAppState {
   TrackingState tracking_state = TrackingState::Idle;
   uint32_t tracking_session_id = 0; ///< 5-digit session ID; 0 = no active session
   uint32_t flags = static_cast<uint32_t>(RtcAppFlag::GpsEnabled);
+  TrackingTiming tracking_timing{};
 
   constexpr bool has_flag(RtcAppFlag flag) const {
     return (flags & static_cast<uint32_t>(flag)) != 0;
@@ -90,7 +100,7 @@ struct RtcAppState {
   }
 };
 
-static_assert(sizeof(RtcAppState) == 12, "RTC app state layout must remain 12 bytes");
+static_assert(sizeof(RtcAppState) == 28, "RTC app state layout must remain 28 bytes");
 
 // --- Forward declarations for BootHandoff pointer members ---
 

@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "common.h"
+#include "go_type_helpers.hpp"
 #include "services/provisioning_qr.h"
 
 // First-boot setup QR target. Short redirect -> low QR version, scannable
@@ -76,10 +77,20 @@ static constexpr uint8_t TAG_COUNT = 10;
 // ---------------------------------------------------------------------------
 
 static constexpr uint8_t MENU_TRACKING = 1;
-static constexpr uint8_t TRACKING_MENU_TOTAL = 4;
+static constexpr uint8_t TRACKING_MENU_TOTAL = 5;
 static constexpr uint8_t TRACKING_BACK = 1;
-static constexpr uint8_t TRACKING_PAUSE_RESUME = 2;
-static constexpr uint8_t TRACKING_STOP = 3;
+static constexpr uint8_t TRACKING_STATUS = 2;
+static constexpr uint8_t TRACKING_PAUSE_RESUME = 3;
+static constexpr uint8_t TRACKING_STOP = 4;
+static constexpr uint8_t TRACKING_STATUS_SWITCH = 2;
+static constexpr uint8_t TRACKING_STATUS_SELECTABLE_ROWS = 3;
+static constexpr uint8_t TRACKING_STATUS_TOTAL = 9;
+// 19 characters fit the list font; nine rows leave the snackbar area clear.
+static constexpr size_t TRACKING_STATUS_LABEL_CAPACITY = 20;
+static constexpr uint32_t SECONDS_PER_MINUTE = 60;
+static constexpr uint32_t SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE;
+static constexpr uint32_t SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR;
+static constexpr float HDOP_SCIENTIFIC_THRESHOLD = 10000.0f;
 static constexpr uint8_t MENU_MODE = 2;
 static constexpr uint8_t MENU_SETTINGS = 3;
 static constexpr uint8_t SETTINGS_OPERATIONS = 2;
@@ -164,6 +175,25 @@ static bool is_custom_measure_interval(int seconds) {
   return measure_interval_option_index(seconds) < 0;
 }
 
+static void copy_tracking_duration(DisplayValues &v, uint8_t row, const char *label,
+                                   uint32_t seconds) {
+  char text[TRACKING_STATUS_LABEL_CAPACITY];
+  if (seconds == TRACKING_TIME_INVALID_S) {
+    (void)snprintf(text, sizeof(text), "%s --", label);
+  } else if (seconds < SECONDS_PER_DAY) {
+    (void)snprintf(text, sizeof(text), "%s %02lu:%02lu:%02lu", label,
+                   static_cast<unsigned long>(seconds / SECONDS_PER_HOUR),
+                   static_cast<unsigned long>((seconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE),
+                   static_cast<unsigned long>(seconds % SECONDS_PER_MINUTE));
+  } else {
+    (void)snprintf(text, sizeof(text), "%s %lud%02lu:%02lu", label,
+                   static_cast<unsigned long>(seconds / SECONDS_PER_DAY),
+                   static_cast<unsigned long>((seconds % SECONDS_PER_DAY) / SECONDS_PER_HOUR),
+                   static_cast<unsigned long>((seconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE));
+  }
+  copy_row(v, row, text, true);
+}
+
 // ---------------------------------------------------------------------------
 // UIManager — construction
 // ---------------------------------------------------------------------------
@@ -218,6 +248,8 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_menu(source, type);
   case Screen::TrackingMenu:
     return dispatch_tracking_menu(source, type);
+  case Screen::TrackingStatus:
+    return dispatch_tracking_status(source, type);
   case Screen::Settings:
     return dispatch_settings(source, type);
   case Screen::Operations:
@@ -269,9 +301,6 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
 }
 
 DisplayValues UIManager::build_values(const BuildContext &ctx) const {
-  // Cache tracking state for handle_input decisions.
-  _tracking_state = ctx.tracking_state;
-
   DisplayValues v{};
 
   // --- Sensor readings (channel A) ---
@@ -318,6 +347,9 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     break;
   case Screen::TrackingMenu:
     populate_tracking_rows(v);
+    break;
+  case Screen::TrackingStatus:
+    populate_tracking_status_rows(v, ctx);
     break;
   case Screen::Settings:
     populate_settings_rows(v);
@@ -425,12 +457,19 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
 
 void UIManager::set_screen(Screen screen) { _screen = screen; }
 
+void UIManager::open_tracking_status() {
+  _tracking_status_view = TrackingStatusView::Session;
+  _tracking_status_index = TRACKING_BACK;
+  _screen = Screen::TrackingStatus;
+}
+
 Screen UIManager::current_screen() const { return _screen; }
 
 bool UIManager::is_on_menu_screen() const {
   switch (_screen) {
   case Screen::MainMenu:
   case Screen::TrackingMenu:
+  case Screen::TrackingStatus:
   case Screen::Settings:
   case Screen::Operations:
   case Screen::DisplayTouch:
@@ -735,6 +774,10 @@ void UIManager::navigate_back() {
   case Screen::TrackingMenu:
     _screen = Screen::MainMenu;
     _menu_index = MENU_TRACKING;
+    break;
+  case Screen::TrackingStatus:
+    _screen = Screen::TrackingMenu;
+    _tracking_menu_index = TRACKING_STATUS;
     break;
   case Screen::Settings:
     _screen = Screen::MainMenu;
@@ -1138,7 +1181,7 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
     case MENU_TRACKING:
       if (tracking_session_active(_tracking_state)) {
         _screen = Screen::TrackingMenu;
-        _tracking_menu_index = TRACKING_BACK;
+        _tracking_menu_index = TRACKING_STATUS;
       } else {
         go_home();
         result.action = UIAction::StartTracking;
@@ -1578,16 +1621,15 @@ void UIManager::move_provisioning_confirm(int delta) {
 
 void UIManager::sync_tracking_state(TrackingState state) {
   _tracking_state = state;
-  if (state == TrackingState::Idle && _screen == Screen::TrackingMenu) {
-    navigate_back();
+  if (state == TrackingState::Idle &&
+      (_screen == Screen::TrackingMenu || _screen == Screen::TrackingStatus)) {
+    // A finished session has no Tracking parent menu to return to.
+    _screen = Screen::MainMenu;
+    _menu_index = MENU_TRACKING;
   }
 }
 
 UIActionResult UIManager::dispatch_tracking_menu(InputSource source, InputType /*type*/) {
-  if (!tracking_session_active(_tracking_state)) {
-    navigate_back();
-    return {};
-  }
   UIActionResult result{};
   if (source == InputSource::TouchUp || source == InputSource::TouchDown) {
     const int delta = source == InputSource::TouchUp ? -1 : 1;
@@ -1600,6 +1642,9 @@ UIActionResult UIManager::dispatch_tracking_menu(InputSource source, InputType /
       break;
     case TRACKING_BACK:
       navigate_back();
+      break;
+    case TRACKING_STATUS:
+      open_tracking_status();
       break;
     case TRACKING_PAUSE_RESUME:
       result.action = _tracking_state == TrackingState::Paused ? UIAction::ResumeTracking
@@ -1615,15 +1660,120 @@ UIActionResult UIManager::dispatch_tracking_menu(InputSource source, InputType /
   return result;
 }
 
+UIActionResult UIManager::dispatch_tracking_status(InputSource source, InputType /*type*/) {
+  if (source == InputSource::TouchUp || source == InputSource::TouchDown) {
+    const int delta = source == InputSource::TouchUp ? -1 : 1;
+    _tracking_status_index =
+        static_cast<uint8_t>(wrap(_tracking_status_index + delta, TRACKING_STATUS_SELECTABLE_ROWS));
+  } else if (source == InputSource::TouchEnter) {
+    if (_tracking_status_index == 0) {
+      go_home();
+    } else if (_tracking_status_index == TRACKING_BACK) {
+      navigate_back();
+    } else if (_tracking_status_index == TRACKING_STATUS_SWITCH) {
+      _tracking_status_view = _tracking_status_view == TrackingStatusView::Session
+                                  ? TrackingStatusView::Gps
+                                  : TrackingStatusView::Session;
+    }
+  }
+  return {};
+}
+
 void UIManager::populate_tracking_rows(DisplayValues &v) const {
   v.row_count = TRACKING_MENU_TOTAL;
   copy_row(v, 0, "Exit", false);
   copy_row(v, TRACKING_BACK, "Back", false);
+  copy_row(v, TRACKING_STATUS, "Status", false);
   copy_row(v, TRACKING_PAUSE_RESUME,
            _tracking_state == TrackingState::Paused ? "Resume Tracking" : "Pause Tracking", false);
   copy_row(v, TRACKING_STOP, "Stop Tracking", false);
   v.selected_row = _tracking_menu_index;
   v.show_separator_after_back = true;
+}
+
+void UIManager::populate_tracking_status_rows(DisplayValues &v, const BuildContext &ctx) const {
+  static_assert(TRACKING_STATUS_TOTAL <= MAX_LIST_ROWS);
+  v.row_count = TRACKING_STATUS_TOTAL;
+  v.selected_row = _tracking_status_index;
+  v.show_separator_after_back = true;
+  copy_row(v, 0, "Exit", false);
+  copy_row(v, TRACKING_BACK, "Back", false);
+  const GpsData *gps = ctx.gps_enabled ? ctx.gps_data : nullptr;
+  const bool recognized_fix = gps != nullptr && (gps->fix.fix_type == GpsFixType::Fix2D ||
+                                                 gps->fix.fix_type == GpsFixType::Fix3D);
+  char text[TRACKING_STATUS_LABEL_CAPACITY];
+  if (_tracking_status_view == TrackingStatusView::Session) {
+    copy_row(v, TRACKING_STATUS_SWITCH, "GPS details > (1/2)", false);
+    const char *state = "--";
+    if (ctx.tracking_state == TrackingState::Recording)
+      state = "Recording";
+    else if (ctx.tracking_state == TrackingState::Paused)
+      state = "Paused";
+    (void)snprintf(text, sizeof(text), "State: %s", state);
+    copy_row(v, 3, text, true);
+    copy_row(v, 4, "UTC: --", true);
+    if (recognized_fix && is_gps_timestamp_valid(gps->timestamp) &&
+        is_gps_time_of_day_valid(gps->timestamp)) {
+      (void)snprintf(text, sizeof(text), "UTC: %02d:%02d:%02d", gps->timestamp.hour,
+                     gps->timestamp.minute, gps->timestamp.second);
+      copy_row(v, 4, text, true);
+    }
+    copy_tracking_duration(v, 5, "Active", ctx.tracking_status.recording_s);
+    copy_tracking_duration(v, 6, "Elapsed", ctx.tracking_status.elapsed_s);
+    copy_row(v, 7, "Points: --", true);
+    if (ctx.tracking_status.point_count_known) {
+      (void)snprintf(text, sizeof(text), "Points: %lu",
+                     static_cast<unsigned long>(ctx.tracking_status.point_count));
+      copy_row(v, 7, text, true);
+    }
+    if (ctx.tracking_status.point_count_known && ctx.tracking_status.point_count == 0) {
+      copy_row(v, 8, "Last: No points yet", true);
+    } else {
+      copy_tracking_duration(v, 8, "Last", ctx.tracking_status.last_record_age_s);
+    }
+    return;
+  }
+
+  copy_row(v, TRACKING_STATUS_SWITCH, "Session > (2/2)", false);
+  copy_row(v, 3, ctx.gps_enabled ? "GPS: On" : "GPS: Off", true);
+  const char *fix = "--";
+  if (gps != nullptr) {
+    switch (gps->fix.fix_type) {
+    case GpsFixType::NoFix:
+      fix = "NoFix";
+      break;
+    case GpsFixType::Fix2D:
+      fix = "2D";
+      break;
+    case GpsFixType::Fix3D:
+      fix = "3D";
+      break;
+    }
+  }
+  (void)snprintf(text, sizeof(text), "Fix: %s", fix);
+  copy_row(v, 4, text, true);
+  copy_row(v, 5, "Sats: --", true);
+  if (gps != nullptr && is_satellite_count_valid(gps->fix.satellite_count)) {
+    (void)snprintf(text, sizeof(text), "Sats: %d", gps->fix.satellite_count);
+    copy_row(v, 5, text, true);
+  }
+  copy_row(v, 6, "HDOP: --", true);
+  if (gps != nullptr && is_hdop_valid(gps->fix.hdop)) {
+    // Scientific notation bounds even FLT_MAX to eight value characters.
+    const char *format = gps->fix.hdop >= HDOP_SCIENTIFIC_THRESHOLD ? "HDOP: %.1e" : "HDOP: %.1f";
+    (void)snprintf(text, sizeof(text), format, static_cast<double>(gps->fix.hdop));
+    copy_row(v, 6, text, true);
+  }
+  copy_row(v, 7, "Lat: --", true);
+  if (recognized_fix && is_latitude_valid(gps->position.latitude)) {
+    (void)snprintf(text, sizeof(text), "Lat: %.5f", gps->position.latitude);
+    copy_row(v, 7, text, true);
+  }
+  copy_row(v, 8, "Lon: --", true);
+  if (recognized_fix && is_longitude_valid(gps->position.longitude)) {
+    (void)snprintf(text, sizeof(text), "Lon: %.5f", gps->position.longitude);
+    copy_row(v, 8, text, true);
+  }
 }
 
 void UIManager::populate_menu_rows(DisplayValues &v) const {

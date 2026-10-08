@@ -45,6 +45,17 @@ struct GlobalSetup {
 
 static GlobalSetup s_global_setup;
 
+// Opt-in retained clock override; existing tests keep their normal host RTOS.
+class ScopedRetainedClock : public FreeRTOS {
+public:
+  explicit ScopedRetainedClock(uint64_t now_ms) : retained_ms(now_ms) { RTOS::set_instance(this); }
+  ~ScopedRetainedClock() { RTOS::set_instance(&s_rtos); }
+
+  uint64_t get_retained_time_ms_impl() override { return retained_ms; }
+
+  uint64_t retained_ms;
+};
+
 // ============================================================================
 // External test_spy (from go_app_stubs.cpp)
 // ============================================================================
@@ -70,6 +81,8 @@ extern bool route_point_appended;
 extern RoutePoint last_route_point;
 extern bool resume_route_result;
 extern bool append_route_point_result;
+extern bool append_route_point_sync_failure;
+extern uint32_t route_point_count;
 extern bool route_ended;
 extern bool cache_backed_up;
 extern bool bms_polled;
@@ -97,6 +110,7 @@ extern bool orchestrator_init_called;
 extern bool orchestrator_run_called;
 extern WakeCause orchestrator_wake_cause;
 extern BootHandoff orchestrator_handoff;
+extern RtcAppState orchestrator_rtc_state;
 extern RtosQueueHandle orchestrator_event_queue;
 extern GoLocalApiService *orchestrator_local_api;
 extern SystemInfo orchestrator_local_api_system_info;
@@ -236,6 +250,7 @@ public:
   bool bms_init_called = false;
   int bms_init_attempts = 0;
   int bms_failures_remaining = 0;
+  std::function<void()> bms_init_callback;
   bool core_init_called = false;
   bool sensors_warm_arg = false;
   bool sensors_called = false;
@@ -272,6 +287,9 @@ public:
   bool init_bms() override {
     call_log.push_back("init_bms");
     bms_init_called = true;
+    if (bms_init_callback) {
+      bms_init_callback();
+    }
     if (bms_available) {
       return true;
     }
@@ -1405,6 +1423,318 @@ TEST_CASE("execute_fast_path: no tracking -> no route") {
 
   CHECK(result.outcome == GoAppTestAccess::Outcome::Sleep);
   CHECK(test_spy::route_started == false);
+}
+
+// ============================================================================
+// Tests: fast-path retained tracking timing
+// ============================================================================
+
+static RtcAppState recording_rtc_state() {
+  constexpr uint32_t RESERVED_RTC_FLAG = uint32_t{1} << 31;
+  RtcAppState state{};
+  state.mode = OperatingMode::Offline;
+  state.behavior = Behavior::Tracking;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
+  state.flags |= RESERVED_RTC_FLAG;
+  state.tracking_state = TrackingState::Recording;
+  state.tracking_session_id = 12345;
+  state.tracking_timing = {100, 20, 150, 160};
+  return state;
+}
+
+static void check_tracking_timing(const TrackingTiming &actual, const TrackingTiming &expected) {
+  CHECK(actual.session_started_s == expected.session_started_s);
+  CHECK(actual.recording_accumulated_s == expected.recording_accumulated_s);
+  CHECK(actual.recording_started_s == expected.recording_started_s);
+  CHECK(actual.last_record_s == expected.last_record_s);
+}
+
+static void check_rtc_state(const RtcAppState &actual, const RtcAppState &expected) {
+  CHECK(actual.mode == expected.mode);
+  CHECK(actual.behavior == expected.behavior);
+  CHECK(actual.lock_state == expected.lock_state);
+  CHECK(actual.tracking_state == expected.tracking_state);
+  CHECK(actual.tracking_session_id == expected.tracking_session_id);
+  CHECK(actual.flags == expected.flags);
+  check_tracking_timing(actual.tracking_timing, expected.tracking_timing);
+}
+
+TEST_CASE("execute_fast_path: accepted write carries retained seconds into Sleep or late Promote") {
+  test_spy::reset();
+  ScopedRetainedClock clock(200999);
+  test_spy::route_point_count = 7;
+  auto expected_outcome = GoAppTestAccess::Outcome::Sleep;
+  bool expected_display_painted = false;
+  SECTION("sleep after accepted write") {}
+  SECTION("late promotion after accepted write") {
+    test_spy::sleep_decision_to_return = {PowerService::SleepType::None, 0};
+    expected_outcome = GoAppTestAccess::Outcome::Promote;
+    expected_display_painted = true;
+  }
+  SECTION("sync error after accepted write still timestamps and promotes") {
+    test_spy::append_route_point_sync_failure = true;
+    expected_outcome = GoAppTestAccess::Outcome::Promote;
+  }
+
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+  const auto state = recording_rtc_state();
+  volatile bool button = false;
+  const auto result = access.execute_fast_path(state, button);
+
+  CHECK(result.outcome == expected_outcome);
+  CHECK(result.handoff.display_painted == expected_display_painted);
+  CHECK(result.has_measures);
+  CHECK(test_spy::route_point_appended);
+  CHECK(test_spy::route_ended);
+  CHECK(test_spy::route_point_count == 0); // Closing resets the writer, not the accepted timestamp.
+  auto expected = state.tracking_timing;
+  expected.last_record_s = 200;
+  check_tracking_timing(result.tracking_timing, expected);
+  CHECK(state.tracking_timing.last_record_s == 160); // Input remains a snapshot.
+}
+
+TEST_CASE("execute_fast_path: early promotion and rejected writes preserve tracking timing") {
+  test_spy::reset();
+  ScopedRetainedClock clock(200999);
+  test_spy::route_point_count = 7;
+  auto state = recording_rtc_state();
+  volatile bool button = false;
+  bool append_attempted = false;
+  SECTION("button interrupts warmup") {
+    state.set_flag(RtcAppFlag::SensorsWarm, false);
+    button = true;
+  }
+  SECTION("button after warm measurement") { button = true; }
+  SECTION("route reopen failure") { test_spy::resume_route_result = false; }
+  SECTION("write rejected with existing nonzero count") {
+    test_spy::append_route_point_result = false;
+    append_attempted = true;
+  }
+
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+  const auto result = access.execute_fast_path(state, button);
+
+  CHECK(result.outcome == GoAppTestAccess::Outcome::Promote);
+  CHECK_FALSE(result.handoff.display_painted);
+  CHECK(test_spy::route_point_appended == append_attempted);
+  CHECK(test_spy::route_ended == append_attempted);
+  CHECK(result.handoff.initial_lock_state == (button ? LockState::Unlocked : LockState::Locked));
+  check_tracking_timing(result.tracking_timing, state.tracking_timing);
+}
+
+TEST_CASE("execute_fast_path: paused timing is preserved and inactive timing is cleared") {
+  test_spy::reset();
+  ScopedRetainedClock clock(200999);
+  auto state = recording_rtc_state();
+  state.tracking_state = TrackingState::Paused;
+  state.tracking_timing.recording_accumulated_s = 30;
+  state.tracking_timing.recording_started_s = TRACKING_TIME_INVALID_S;
+  auto expected = state.tracking_timing;
+  volatile bool button = false;
+  SECTION("paused sleep") {}
+  SECTION("paused early promotion") { button = true; }
+  SECTION("paused with live marker invalidates active duration") {
+    state.tracking_timing.recording_started_s = 150;
+    expected.recording_accumulated_s = TRACKING_TIME_INVALID_S;
+  }
+  SECTION("inactive sleep clears stale timing") {
+    state.tracking_state = TrackingState::Idle;
+    expected = {};
+  }
+  SECTION("inactive early promotion clears stale timing") {
+    state.tracking_state = TrackingState::Idle;
+    expected = {};
+    button = true;
+  }
+
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+  const auto result = access.execute_fast_path(state, button);
+
+  CHECK(result.outcome ==
+        (button ? GoAppTestAccess::Outcome::Promote : GoAppTestAccess::Outcome::Sleep));
+  CHECK_FALSE(test_spy::route_resumed);
+  CHECK_FALSE(test_spy::route_point_appended);
+  check_tracking_timing(result.tracking_timing, expected);
+}
+
+TEST_CASE("execute_fast_path: early promotion normalizes mismatched state and segment") {
+  test_spy::reset();
+  ScopedRetainedClock clock(200999);
+  auto state = recording_rtc_state();
+  SECTION("Recording with paused marker") {
+    state.tracking_timing.recording_started_s = TRACKING_TIME_INVALID_S;
+  }
+  SECTION("Paused with live marker") { state.tracking_state = TrackingState::Paused; }
+
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+  volatile bool button = true;
+  const auto result = access.execute_fast_path(state, button);
+
+  CHECK(result.outcome == GoAppTestAccess::Outcome::Promote);
+  CHECK_FALSE(test_spy::route_point_appended);
+  auto expected = state.tracking_timing;
+  expected.recording_accumulated_s = TRACKING_TIME_INVALID_S;
+  expected.recording_started_s = TRACKING_TIME_INVALID_S;
+  check_tracking_timing(result.tracking_timing, expected);
+}
+
+TEST_CASE("execute_fast_path: unknown active duration allows accepted-record timestamps") {
+  test_spy::reset();
+  ScopedRetainedClock clock(200999);
+  auto state = recording_rtc_state();
+  SECTION("Recording with paused marker") {
+    state.tracking_timing.recording_started_s = TRACKING_TIME_INVALID_S;
+  }
+  SECTION("accumulated duration is unknown") {
+    state.tracking_timing.recording_accumulated_s = TRACKING_TIME_INVALID_S;
+  }
+  SECTION("entire active duration is unknown") {
+    state.tracking_timing.recording_accumulated_s = TRACKING_TIME_INVALID_S;
+    state.tracking_timing.recording_started_s = TRACKING_TIME_INVALID_S;
+  }
+  for (bool sync_failure : {false, true}) {
+    CAPTURE(sync_failure);
+    test_spy::reset();
+    test_spy::append_route_point_sync_failure = sync_failure;
+    MockBoard board;
+    GoApp app(board);
+    GoAppTestAccess access(app);
+    volatile bool button = false;
+    const auto result = access.execute_fast_path(state, button);
+
+    CHECK(result.outcome ==
+          (sync_failure ? GoAppTestAccess::Outcome::Promote : GoAppTestAccess::Outcome::Sleep));
+    CHECK(test_spy::route_point_appended);
+    CHECK(test_spy::route_ended);
+    auto expected = state.tracking_timing;
+    expected.recording_accumulated_s = TRACKING_TIME_INVALID_S;
+    expected.last_record_s = 200;
+    check_tracking_timing(result.tracking_timing, expected);
+  }
+}
+
+TEST_CASE("execute_fast_path: invalid accepted-record time invalidates only last_record_s") {
+  test_spy::reset();
+  ScopedRetainedClock clock(200999);
+  auto state = recording_rtc_state();
+  auto expected_outcome = GoAppTestAccess::Outcome::Sleep;
+  SECTION("clock exceeds representable seconds") {
+    clock.retained_ms = static_cast<uint64_t>(TRACKING_TIME_INVALID_S) * 1000;
+  }
+  SECTION("clock regresses behind last accepted record") { clock.retained_ms = 159999; }
+  SECTION("invalid time and accepted write with sync failure") {
+    clock.retained_ms = 99999;
+    test_spy::append_route_point_sync_failure = true;
+    expected_outcome = GoAppTestAccess::Outcome::Promote;
+  }
+
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+  volatile bool button = false;
+  const auto result = access.execute_fast_path(state, button);
+
+  CHECK(result.outcome == expected_outcome);
+  CHECK(test_spy::route_point_appended);
+  auto expected = state.tracking_timing;
+  expected.last_record_s = TRACKING_TIME_INVALID_S;
+  check_tracking_timing(result.tracking_timing, expected);
+}
+
+TEST_CASE("execute_fast_path: Shutdown result clears timing without changing route lifecycle") {
+  test_spy::reset();
+  ScopedRetainedClock clock(200999);
+  test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverTemperature;
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+  const auto state = recording_rtc_state();
+  volatile bool button = false;
+  const auto result = access.execute_fast_path(state, button);
+
+  CHECK(result.outcome == GoAppTestAccess::Outcome::Shutdown);
+  check_tracking_timing(result.tracking_timing, TrackingTiming{});
+  CHECK(state.tracking_state == TrackingState::Recording);
+  CHECK(state.tracking_session_id == 12345);
+  CHECK_FALSE(test_spy::state_saved);
+}
+
+TEST_CASE("run_fast_path: Sleep saves returned timing with SensorsWarm") {
+  test_spy::reset();
+  ScopedRetainedClock clock(200999);
+  SECTION("hold sensors warm") { test_spy::should_hold_pm_result = true; }
+  SECTION("power down sensors") { test_spy::should_hold_pm_result = false; }
+  MockBoard board;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+  const auto state = recording_rtc_state();
+  test_spy::rtc_state = state;
+
+  access.run_fast_path(state);
+
+  REQUIRE(test_spy::state_saved);
+  CHECK(test_spy::enter_sleep_called);
+  CHECK_FALSE(test_spy::orchestrator_init_called);
+  auto expected = state;
+  expected.tracking_timing.last_record_s = 200;
+  expected.set_flag(RtcAppFlag::SensorsWarm, test_spy::should_hold_pm_result);
+  check_rtc_state(test_spy::last_saved_state, expected);
+  check_rtc_state(test_spy::rtc_state, expected);
+}
+
+TEST_CASE("run_fast_path: promotion saves timing before BMS retry and interactive init") {
+  test_spy::reset();
+  ScopedRetainedClock clock(200999);
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::None, 0};
+  MockBoard board;
+  board.bms_failures_remaining = 2;
+  const auto state = recording_rtc_state();
+  test_spy::rtc_state = state;
+  auto expected = state;
+  expected.tracking_timing.last_record_s = 200;
+  bool expect_restart = false;
+  SECTION("late promotion hands updated RTC to init") {}
+  SECTION("sync failure hands accepted timestamp to init") {
+    test_spy::append_route_point_sync_failure = true;
+  }
+  SECTION("early promotion hands original timing to init") {
+    board.press_button_on_isr_install = true;
+    expected = state;
+  }
+  SECTION("BMS retry failure retains accepted timestamp before restart") {
+    board.bms_failures_remaining = 4;
+    expect_restart = true;
+  }
+  bool checked_retry_state = false;
+  board.bms_init_callback = [&] {
+    if (board.bms_init_attempts >= 2) {
+      REQUIRE(test_spy::state_saved);
+      check_rtc_state(test_spy::rtc_state, expected);
+      checked_retry_state = true;
+    }
+  };
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  access.run_fast_path(state);
+
+  CHECK(checked_retry_state);
+  CHECK(board.restart_called == expect_restart);
+  CHECK(test_spy::orchestrator_init_called == !expect_restart);
+  CHECK_FALSE(test_spy::enter_sleep_called);
+  check_rtc_state(test_spy::last_saved_state, expected);
+  if (!expect_restart) {
+    check_rtc_state(test_spy::orchestrator_rtc_state, expected);
+    CHECK(test_spy::orchestrator_wake_cause == WakeCause::Timer);
+  }
 }
 
 // ============================================================================

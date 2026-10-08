@@ -310,17 +310,26 @@ reset or refurbished unit.
 ## Configurable Settings
 
 The main menu offers Exit Menu, Start Tracking / Tracking, Operating Mode, and
-Settings. During a session, Tracking opens Exit, Back, Pause Tracking / Resume
-Tracking, and Stop Tracking. Operating Mode lists Portable, Stationary, and
+Settings. During a session, Tracking opens Exit, Back, Status, Pause Tracking /
+Resume Tracking, and Stop Tracking. Operating Mode lists Portable, Stationary, and
 Offline. Settings contains Operations, Display & Touch, Hardware Test, Clear
 Data, Setup Guide, and the existing About Device page.
 
 Operations groups measurement interval, CO2 calibration, GPS mode, and buzzer.
 Display & Touch groups temperature/altitude units, PM display, auto-lock, and
 AQI LED and Touch LED brightness. Submenus keep Exit and Back;
-opening Tracking selects Back to avoid an accidental Pause or Resume. Settings
+opening Tracking selects Status to show session details. Settings
 and its list submenus select their first content item, while value choices
 select the saved value. Back restores the row that opened the child page.
+
+Tracking Status shows session state, recording time excluding pauses, elapsed
+time including pauses, point count, last-point age, and GPS time. A second view
+shows GPS signal and location details. Values refresh every five seconds while
+the page is open. Unavailable values show `--`.
+
+The page does not auto-lock; use Power to lock or leave to restore normal
+auto-lock. Keeping it open in Offline mode keeps the device awake and uses more
+battery.
 
 The Go stores user settings on the device, so they survive power cycles.
 

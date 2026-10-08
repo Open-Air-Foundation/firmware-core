@@ -164,8 +164,31 @@ a route is already active, leaving the existing route untouched.
 Stopping tracking before the first append leaves a zero-point route file. The
 file remains a valid completed session: session listing includes it, point
 count and start time are both zero, and BLE history can download or delete it.
-Callers must use `route_file_exists()` rather than point count to distinguish
-this state from a missing session.
+Legacy count callers use `route_file_exists()` to distinguish this state from
+a missing session. The checked query below distinguishes them directly.
+
+### On-Demand Session Point Count
+
+`bool try_get_session_point_count(uint32_t session_id, uint32_t &count) const`
+returns `true` with the count, including zero for an existing empty session.
+It returns `false` when NAND is unmounted or `stat()` fails, leaving the
+caller's output unchanged.
+
+- For the matching open writer, it uses the existing `_current_point_count`,
+  including complete `fwrite` records still buffered in memory. This count
+  advances even when a subsequent `fflush` or `fsync` fails; it is not a
+  durability guarantee.
+- Otherwise, including a paused/closed session or another session while a
+  writer is open, it uses `stat()` size divided by `sizeof(RoutePoint)`.
+  Partial trailing bytes are excluded from the count and left untouched.
+- The query does not flush, sync, reopen, scan, or write files. It adds no
+  retained count and uses the existing route-path naming convention.
+
+This checked query has no production consumer yet. It provides the storage
+API for a future Status UI to load the count on opening and visible refresh;
+that UI is not implemented here. The legacy `get_session_point_count()` and
+its callers keep their existing file-size-only behavior, returning zero for
+both empty and unavailable sessions.
 
 ### Durability Budget
 

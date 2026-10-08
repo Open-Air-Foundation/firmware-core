@@ -111,6 +111,7 @@ private:
   bool _gps_enabled = true;
   TrackingState _tracking_state = TrackingState::Idle;
   uint32_t _tracking_session_id = 0;
+  TrackingTiming _tracking_timing{};
 
   // --- Cached data ---
   MeasuresAGo _raw_measures{};       ///< Authoritative sensor results for cloud/storage
@@ -123,9 +124,12 @@ private:
   uint32_t _last_bms_poll_ms = 0;
   uint32_t _last_bms_status_poll_ms = 0;
   uint32_t _last_ext_wdt_ms = 0;
-  uint32_t _last_input_ms = 0;                ///< Reset on every input; drives inactivity
+  uint32_t _last_input_ms = 0;                ///< Inactivity baseline: input or explicit UI exit
   uint32_t _snackbar_refresh_deadline_ms = 0; ///< 0 = inactive; non-zero = absolute deadline
   bool _first_measurement_done = false;
+  bool _tracking_status_was_visible = false; ///< Detect Status exit once; not RTC-persisted
+  bool _tracking_status_refresh_armed = false;
+  uint32_t _tracking_status_refresh_deadline_ms = 0; ///< Zero is valid when armed
 
   // --- OTA ---
   /// Unified OTA poll-timer baseline: 2 s BLE is_ble_active() poll (Portable),
@@ -249,6 +253,8 @@ private:
   /// Live accelerometer test poll cadence (~2 Hz X/Y/Z refresh).
   static constexpr uint32_t ACCEL_TEST_POLL_INTERVAL_MS = 500;
   static constexpr uint32_t LOCAL_API_ACTIVATION_RETRY_MS = 5000;
+  static constexpr uint32_t TRACKING_STATUS_REFRESH_INTERVAL_MS = 5000;
+  static constexpr uint32_t TRACKING_STATUS_REFRESH_RETRY_MS = 100;
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
@@ -314,6 +320,11 @@ private:
   void shutdown(ShipModeRequest reason = ShipModeRequest::None);
 
   // --- Timer management ---
+  /// Shared inactivity eligibility; elapsed-time checks remain with the timer.
+  bool auto_lock_allowed() const;
+  bool tracking_status_refresh_allowed() const;
+  void sync_tracking_status_lifecycle();
+  void refresh_tracking_status();
   uint32_t compute_queue_timeout_ms() const;
   void check_timers();
   void on_bms_timer();
@@ -322,12 +333,13 @@ private:
   void reschedule_sensor_timer(const GoSettings &previous_settings);
 
   // --- Display ---
-  void update_display();
+  bool update_display();
   /// Drop-free render variant.  Forwards to DisplayService::update(values,
   /// wait); when wait=true the new frame is queued without being dropped
   /// even if the worker is mid-paint on a prior frame.  Paired with
   /// DisplayService::flush() at call sites that need post-paint guarantees.
-  void update_display(bool wait);
+  /// Returns whether the frame was accepted, not whether painting has finished.
+  bool update_display(bool wait);
   /// Gated background render (skips focus/menu/session screens). wait=true for
   /// fire-once edges (charging / BLE state) so a worker-busy drop can't leave
   /// the screen stale until touch.

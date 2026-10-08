@@ -98,6 +98,14 @@ struct UIActionResult {
 // BuildContext — all external state for building a DisplayValues snapshot.
 // ---------------------------------------------------------------------------
 
+struct TrackingStatusSnapshot {
+  uint32_t recording_s = TRACKING_TIME_INVALID_S;
+  uint32_t elapsed_s = TRACKING_TIME_INVALID_S;
+  uint32_t last_record_age_s = TRACKING_TIME_INVALID_S;
+  uint32_t point_count = 0; ///< Meaningful only when point_count_known is true
+  bool point_count_known = false;
+};
+
 struct BuildContext {
   const Measures &sensor_data;
 
@@ -129,9 +137,10 @@ struct BuildContext {
   // Current timestamp for snackbar expiry
   uint32_t now_ms;
 
-  // --- GPS test screen (Screen::GpsTest only) ---
-  /// Latest parsed fix to render (borrowed; orchestrator owns).  Null = none.
+  // --- Cached GPS data (TrackingStatus and GpsTest) ---
+  /// Latest parsed fix to render (borrowed; orchestrator owns). Null = none.
   const GpsData *gps_data = nullptr;
+  // GPS test timing (Screen::GpsTest only).
   /// Seconds since GPS test entry, frozen once the first valid fix latches.
   uint32_t gps_ttff_secs = 0;
   /// True once the first valid fix has latched the TTFF value.
@@ -152,13 +161,16 @@ struct BuildContext {
   bool accel_read_ok = false;
   /// Overall PASS: identity matched, read ok, and magnitude within tolerance.
   bool accel_pass = false;
+
+  // Current-session values, computed by the orchestrator only for Tracking Status.
+  TrackingStatusSnapshot tracking_status{};
 };
 
 // ---------------------------------------------------------------------------
 // UIManager — pure state machine for screen navigation and UI logic.
 //
 // The UI Manager has ZERO hardware or RTOS dependencies. It is driven
-// entirely by the orchestrator which calls handle_input() and build_values().
+// entirely by the orchestrator via state synchronization, input, and rendering.
 // ---------------------------------------------------------------------------
 
 class UIManager {
@@ -175,16 +187,26 @@ public:
 
   /// Process an input event. Returns an action if the input triggered
   /// an application-level state change (start tracking, change mode, etc.).
-  /// The orchestrator should not call this when the device is locked.
+  /// The owner keeps tracking state synchronized. Do not call while locked.
   UIActionResult handle_input(InputSource source, InputType type);
 
   /// Build a complete DisplayValues snapshot for the Display Service.
-  /// The orchestrator passes in all external state via BuildContext.
+  /// Does not synchronize tracking/navigation state. The caller supplies a
+  /// context matching the state passed to sync_tracking_state().
   DisplayValues build_values(const BuildContext &ctx) const;
 
   /// Force the screen to a specific value. Used by the orchestrator
   /// for Shutdown and for restoring state after deep sleep wake.
+  /// Does not initialize per-screen view or cursor state.
   void set_screen(Screen screen);
+
+  /// Open Tracking Status on Session with Back selected. Used for explicit entry,
+  /// not redraws; tracking state must already be synchronized to an active session.
+  void open_tracking_status();
+
+  /// Sole tracking-state update/reconciliation point. Update from the owner's
+  /// state changes and boot restoration. Idle immediately dismisses TrackingMenu
+  /// and TrackingStatus to MainMenu on the tracking row.
   void sync_tracking_state(TrackingState state);
 
   /// Get the current screen (for orchestrator decisions).
@@ -320,7 +342,10 @@ private:
   // Menu selection indices (per screen)
   static constexpr uint8_t FIRST_CONTENT_ROW = 2; // Skip Exit and Back.
   uint8_t _menu_index = 0;
-  uint8_t _tracking_menu_index = 0;
+  uint8_t _tracking_menu_index = FIRST_CONTENT_ROW;
+  enum class TrackingStatusView : uint8_t { Session, Gps };
+  TrackingStatusView _tracking_status_view = TrackingStatusView::Session;
+  uint8_t _tracking_status_index = 1; // Back selected on entry.
   uint8_t _settings_index = FIRST_CONTENT_ROW;
   uint8_t _group_index = FIRST_CONTENT_ROW;
   uint8_t _settings_choice_index = 1;
@@ -402,13 +427,14 @@ private:
   // Chart output buffer (mutable: written by const build_values)
   mutable float _chart_buf[UI_CHART_BUF_SIZE] = {};
 
-  // Cached from last build_values call (mutable for const correctness)
-  mutable TrackingState _tracking_state = TrackingState::Idle;
+  // Explicitly synchronized by the owner; rendering never changes this state.
+  TrackingState _tracking_state = TrackingState::Idle;
 
   // --- Input dispatch (per screen) ---
   UIActionResult dispatch_home(InputSource source, InputType type);
   UIActionResult dispatch_menu(InputSource source, InputType type);
   UIActionResult dispatch_tracking_menu(InputSource source, InputType type);
+  UIActionResult dispatch_tracking_status(InputSource source, InputType type);
   UIActionResult dispatch_settings(InputSource source, InputType type);
   UIActionResult dispatch_settings_group(InputSource source, InputType type);
   UIActionResult dispatch_settings_choice(InputSource source, InputType type);
@@ -456,6 +482,7 @@ private:
   // --- Row population ---
   void populate_menu_rows(DisplayValues &v) const;
   void populate_tracking_rows(DisplayValues &v) const;
+  void populate_tracking_status_rows(DisplayValues &v, const BuildContext &ctx) const;
   void populate_settings_rows(DisplayValues &v) const;
   void populate_settings_group_rows(DisplayValues &v) const;
   void populate_settings_choice_rows(DisplayValues &v) const;

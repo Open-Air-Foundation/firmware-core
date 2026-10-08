@@ -22,6 +22,7 @@
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_storage.h"
+#include "go_type_helpers.hpp"
 #include "go_ulp.h"
 #include "services/ag_client.h"
 #include "go_wifi.h"
@@ -30,6 +31,7 @@
 #include <functional>
 #include <algorithm>
 #include <cstring>
+#include <map>
 #include <set>
 
 // ============================================================================
@@ -39,6 +41,7 @@
 namespace test_spy {
 std::function<void()> during_melody;
 uint32_t buzzer_refresh_ack_count = 0;
+uint32_t retained_time_read_count = 0;
 
 // --- SensorProducer ---
 bool sensor_started = false;
@@ -111,6 +114,11 @@ bool clear_routes_result = true;
 bool create_route_result = true;
 bool resume_route_result = true;
 bool append_route_point_result = true;
+bool append_accepts_before_error = false;
+std::map<uint32_t, uint32_t> route_point_counts;
+uint32_t session_point_count_query_count = 0;
+uint32_t session_point_count_query_id = 0;
+bool session_point_count_query_success = true;
 bool end_route_result = true;
 
 // Session IDs that should appear "already on NAND" to the orchestrator's
@@ -259,6 +267,7 @@ uint32_t recover_pm_sensor_count = 0;
 void reset() {
   during_melody = nullptr;
   buzzer_refresh_ack_count = 0;
+  retained_time_read_count = 0;
   sensor_started = false;
   sensor_stopped = false;
   sensor_stop_sleep_pm = false;
@@ -317,6 +326,11 @@ void reset() {
   create_route_result = true;
   resume_route_result = true;
   append_route_point_result = true;
+  append_accepts_before_error = false;
+  route_point_counts.clear();
+  session_point_count_query_count = 0;
+  session_point_count_query_id = 0;
+  session_point_count_query_success = true;
   end_route_result = true;
   existing_route_session_ids.clear();
 
@@ -454,6 +468,8 @@ void reset() {
   DisplayService::spy_sync_update_count = 0;
   DisplayService::spy_flush_count = 0;
   DisplayService::spy_last_screen = Screen::Home;
+  DisplayService::spy_last_update_wait = false;
+  DisplayService::spy_worker_busy = false;
 }
 
 } // namespace test_spy
@@ -601,6 +617,9 @@ bool StorageService::create_route(uint32_t session_id) {
   test_spy::route_started = true;
   test_spy::route_file_open = true;
   test_spy::route_session_id = session_id;
+  _current_session_id = session_id;
+  _current_point_count = 0;
+  test_spy::route_point_counts[session_id] = 0;
   return true;
 }
 
@@ -611,6 +630,8 @@ bool StorageService::resume_route(uint32_t session_id) {
   test_spy::route_resumed = true;
   test_spy::route_file_open = true;
   test_spy::route_session_id = session_id;
+  _current_session_id = session_id;
+  _current_point_count = test_spy::route_point_counts[session_id];
   return true;
 }
 
@@ -618,9 +639,31 @@ bool StorageService::route_file_exists(uint32_t session_id) const {
   return test_spy::existing_route_session_ids.count(session_id) > 0;
 }
 
+bool StorageService::try_get_session_point_count(uint32_t session_id, uint32_t &count) const {
+  ++test_spy::session_point_count_query_count;
+  test_spy::session_point_count_query_id = session_id;
+  if (!test_spy::session_point_count_query_success || session_id == 0) {
+    return false;
+  }
+  if (test_spy::route_file_open && _current_session_id == session_id) {
+    count = _current_point_count;
+    return true;
+  }
+  const auto it = test_spy::route_point_counts.find(session_id);
+  if (it == test_spy::route_point_counts.end()) {
+    return false;
+  }
+  count = it->second;
+  return true;
+}
+
 bool StorageService::append_route_point(const RoutePoint &point) {
   test_spy::route_point_appended = true;
   test_spy::last_route_point = point;
+  if (test_spy::append_route_point_result || test_spy::append_accepts_before_error) {
+    ++_current_point_count;
+    test_spy::route_point_counts[_current_session_id] = _current_point_count;
+  }
   return test_spy::append_route_point_result;
 }
 
@@ -630,12 +673,14 @@ bool StorageService::end_route() {
   }
   test_spy::route_file_open = false;
   test_spy::route_ended = true;
+  _current_point_count = 0;
+  _current_session_id = 0;
   return test_spy::end_route_result;
 }
 
 bool StorageService::is_route_active() const { return test_spy::route_file_open; }
 
-uint32_t StorageService::current_route_point_count() const { return 0; }
+uint32_t StorageService::current_route_point_count() const { return _current_point_count; }
 
 bool StorageService::delete_route(uint32_t /*session_id*/) { return true; }
 

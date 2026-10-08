@@ -39,8 +39,9 @@ private:
     BootHandoff handoff;
     MeasuresAGo measures;
     bool has_measures;
-    uint32_t sleep_duration_ms; ///< Valid when outcome == Sleep
-    bool sensors_warm;          ///< RTC persistence before sleep
+    uint32_t sleep_duration_ms;     ///< Valid when outcome == Sleep
+    bool sensors_warm;              ///< RTC persistence before sleep
+    TrackingTiming tracking_timing; ///< Updated timing only; caller owns RTC state
   };
 
   FastPathResult execute_fast_path(const RtcAppState &state, const volatile bool &button_flag,

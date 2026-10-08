@@ -262,7 +262,8 @@ the nearest deadline.
 | BMS full poll | `BMS_POLL_INTERVAL_MS` (30000 ms) | Sensitive services not paused |
 | BMS status poll | `BMS_STATUS_POLL_INTERVAL_MS` (5000 ms) | Sensitive services not paused |
 | External watchdog | `EXT_WDT_INTERVAL_MS` (60000 ms) | Always — never suppressed during a setup session |
-| Inactivity | `auto_lock_seconds * 1000` | Unlocked, auto-lock > 0, and no setup session active |
+| Inactivity | `auto_lock_seconds * 1000` | `auto_lock_allowed()`: unlocked, auto-lock > 0, no setup session, focus screen, Hardware Test screen, or Tracking Status |
+| Tracking Status | `TRACKING_STATUS_REFRESH_INTERVAL_MS` (5000 ms); rejected submissions retry after `TRACKING_STATUS_REFRESH_RETRY_MS` (100 ms) | Status visible, unlocked, and Recording or Paused |
 | Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | Non-persistent snackbar active, sensitive services not paused |
 | Wi-Fi initial-connect / fallback | `WifiService::next_deadline_ms()` | While the service has armed a deadline (Stationary bring-up) |
 | Local endpoint activation retry | `LOCAL_API_ACTIVATION_RETRY_MS` (5000 ms) | Stationary + online after local HTTP or mDNS activation fails |
@@ -307,7 +308,7 @@ Events are dispatched by type:
 | `SettingsChanged` | `apply_settings_change()` |
 | `ClearData` | `clear_data()` |
 | `SaveTag` | `save_tag()` |
-| `InactivityTimeout` | `on_inactivity_timeout()` → `lock()` |
+| `InactivityTimeout` | `on_inactivity_timeout()` calls `lock()` only when `auto_lock_allowed()` |
 | `MeasurementTimer` | `check_timers()` (legacy event, re-checks all timers) |
 | `WakeFromSleep` | No-op (handled in `init()`) |
 | `BleConnected` | Push current measures/status/config, dismiss passkey overlay |
@@ -381,8 +382,10 @@ calls `_svc.wifi.switch_provisioning_transport()`.
 
 ### lock()
 
-Sets `LockState::Locked`, resets UI to home screen, updates display. Sleep
-eligibility is evaluated on the next main loop iteration.
+Sets Locked, returns Home, and calls `update_display(true)` so a busy worker
+cannot drop the frame. This waits for the previous operation, not completion of
+the new frame. Manual locking bypasses auto-lock eligibility; sleep eligibility
+is checked on the next loop iteration.
 
 ### unlock()
 
@@ -453,6 +456,105 @@ keeps running so subsequent appends can retry against a recovered NAND.
 Deep sleep closes an open file but preserves the session state and ID. A failed
 Recording restore on wake clears the session; a failed explicit Resume keeps
 the session Paused so the user can retry or Stop.
+
+#### Tracking Timing Helpers
+
+[`go_types.h`](../main/go_types.h) defines the plain `TrackingTiming` value and
+its invalid sentinel. [`go_type_helpers.hpp`](../main/go_type_helpers.hpp)
+provides the pure, header-only operations, including `tracking_session_active()`.
+Helper users include the `.hpp` explicitly; data-only users need only the `.h`.
+There is no compiled helper source or support library. Focused tests live in
+[`go_types.tests.cpp`](../tests/go_types.tests.cpp).
+
+The orchestrator owns `_tracking_timing` and includes it in
+`RtcAppState::tracking_timing` for active sessions. Derived durations are exposed
+on the Tracking Status screen through a by-value snapshot; BLE and the local
+HTTP API do not expose them. The timing hooks do not change tracking commands,
+GPS operation, or route-error decisions.
+
+The value contains four `uint32_t` fields, totaling 16 bytes:
+
+- `session_started_s`: original session-start anchor, including pauses when
+  calculating elapsed time.
+- `recording_accumulated_s`: the sum of completed recording segments.
+- `recording_started_s`: the current recording-segment anchor; invalid while
+  paused. Active duration adds this segment to the accumulated duration.
+- `last_record_s`: the last caller-confirmed accepted write, not a guarantee
+  that the record was synchronized to storage.
+
+All timing uses monotonic seconds supplied by the caller, not GPS or wall time.
+`tracking_seconds_from_ms()` divides retained milliseconds before narrowing,
+avoiding the 32-bit millisecond rollover at about 49.7 days. It reserves
+`TRACKING_TIME_INVALID_S` (`UINT32_MAX`) for unknown values and rejects an
+unrepresentable conversion. Zero remains valid. The helpers subtract
+whole-second anchors; subsecond fractions are discarded, including across
+pause/resume segments.
+
+Successful Start initializes timing from `RTOS::get_retained_time_ms()`.
+Pause accumulates the active segment at the state transition, even when the
+subsequent route close reports failure. Resume establishes the next segment
+only after the existing reopen succeeds. Failed Start/Resume and repeated
+Pause/Resume leave timing unchanged. Stop, Clear Data, and successful factory
+reset clear the timing value with the existing session lifecycle.
+
+For scheduled route writes, the orchestrator samples retained time and compares
+the existing writer count immediately before and after append. Count advancement
+timestamps an accepted record even when append subsequently reports a sync
+failure. Rejected writes, manual Refresh measurements, and paused measurements
+do not update the timestamp. These counts are temporary observations, not a
+second persistent counter. The boot fast path uses the same acceptance rule.
+
+Normal deep sleep copies the timing value without a Pause/Resume transition, so
+recording time includes sleep while Recording and remains frozen while Paused.
+Both interactive and fast-path restore reconcile the active-segment marker with
+the authoritative tracking state using `tracking_timing_for_state()`. Inactive
+RTC timing is discarded; a mismatched segment makes recording duration unknown
+without discarding independently usable session-start or last-record anchors.
+Power-on starts with invalid timing, and a failed Recording reopen clears timing
+alongside the existing transition to Idle. The fast path saves updated timing
+before returning to sleep or promoting to the interactive orchestrator.
+
+The caller must supply nondecreasing timestamps and own the actual tracking
+lifecycle. Helpers reject invalid or inconsistent inputs without changing the
+value; duration queries return the invalid sentinel instead of underflowing or
+wrapping. They check against retained anchors, not a separate last-observation
+timestamp. The record helper additionally takes the actual `TrackingState` and
+is called only after confirming a write was accepted. A valid accepted-record
+timestamp can recover even when accumulated recording duration is unknown.
+
+If a timing helper rejects an actual transition, recording behavior still follows
+the existing lifecycle: Start leaves all timing unknown; Pause/Resume invalidate
+only the recording accumulator and segment anchor. An accepted write with an
+invalid timestamp invalidates only `last_record_s` rather than retaining the
+previous point's age. No new retry, stop, repair, or shutdown policy is introduced.
+
+#### Tracking Status Snapshots
+
+Tracking → Status exposes the current session while Recording or Paused.
+While Status is visible and unlocked, `build_context()` reads retained time and
+queries `try_get_session_point_count()` once per snapshot. It returns derived
+durations and a count with separate validity; unknown is not zero. Counts are
+not retained in RTC, and no extra sensor or GPS readings are requested.
+
+UI tracking state is synchronized after boot's route-reopen outcome, before
+display updates, and before the final sleep render. Input uses that maintained
+state. Pause, Resume (including reopen failure), and Stop use waiting display
+updates; Pause/Resume preserve the Status view, and Stop returns it to Main Menu.
+
+`auto_lock_allowed()` supplies one eligibility policy for scheduling and timeout
+handling. Status is exempt, but manual locking and safety shutdowns remain
+available. Leaving Status starts a fresh configured timeout once, including
+after remote Stop; repaints and Pause/Resume do not extend it. The saved setting
+is unchanged. Keeping Status open also keeps Offline mode awake.
+
+Entry, input, and tracking changes repaint immediately. The timer loop observes
+page entry/exit through `sync_tracking_status_lifecycle()`: entry arms a
+five-second deadline; exit cancels it and restarts inactivity.
+`refresh_tracking_status()` submits without waiting, then schedules the next
+periodic refresh after five seconds or retries a rejection after 100 ms.
+Manual redraws do not restart this schedule. Lock, Stop, and sleep cancel it;
+refreshes preserve the view, cursor, and inactivity baseline.
+Outside Status, its handlers are skipped once exit cleanup is complete.
 
 ### change_mode()
 
@@ -891,8 +993,9 @@ for the component-facing contract and edge cases.
 
 ### `update_display()`
 
-Builds a `BuildContext` from cached state and asks the UIManager to produce
-a `DisplayValues` snapshot:
+Builds and submits a UI frame, returning whether the display accepted it.
+Status lifecycle and refresh scheduling belong to the timer handlers, not this
+function. Frame preparation uses a `BuildContext` and `DisplayValues` snapshot:
 
 1. Clear expired snackbar
 2. `build_context()` — convert cached `MeasuresAGo` to `Measures`, read

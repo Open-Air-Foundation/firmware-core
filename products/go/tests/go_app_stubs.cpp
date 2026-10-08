@@ -78,6 +78,8 @@ bool cache_restored = false;
 bool storage_init_called = false;
 bool resume_route_result = true;
 bool append_route_point_result = true;
+bool append_route_point_sync_failure = false;
+uint32_t route_point_count = 0;
 
 // --- PowerService ---
 bool bms_polled = false;
@@ -117,6 +119,7 @@ bool orchestrator_init_called = false;
 bool orchestrator_run_called = false;
 WakeCause orchestrator_wake_cause = WakeCause::PowerOn;
 BootHandoff orchestrator_handoff{};
+RtcAppState orchestrator_rtc_state{};
 RtosQueueHandle orchestrator_event_queue = nullptr;
 GoLocalApiService *orchestrator_local_api = nullptr;
 SystemInfo orchestrator_local_api_system_info{};
@@ -177,6 +180,8 @@ void reset() {
   storage_init_called = false;
   resume_route_result = true;
   append_route_point_result = true;
+  append_route_point_sync_failure = false;
+  route_point_count = 0;
 
   bms_polled = false;
   bms_poll_count = 0;
@@ -212,6 +217,7 @@ void reset() {
   orchestrator_run_called = false;
   orchestrator_wake_cause = WakeCause::PowerOn;
   orchestrator_handoff = BootHandoff{};
+  orchestrator_rtc_state = RtcAppState{};
   orchestrator_event_queue = nullptr;
   orchestrator_local_api = nullptr;
   orchestrator_local_api_system_info = SystemInfo{};
@@ -240,6 +246,8 @@ void reset() {
   DisplayService::spy_flush_count = 0;
   DisplayService::spy_last_screen = Screen::Home;
   DisplayService::spy_last_init_deferred = false;
+  DisplayService::spy_last_update_wait = false;
+  DisplayService::spy_worker_busy = false;
 }
 
 } // namespace test_spy
@@ -453,7 +461,10 @@ bool StorageService::route_file_exists(uint32_t /*session_id*/) const { return f
 bool StorageService::append_route_point(const RoutePoint &point) {
   test_spy::route_point_appended = true;
   test_spy::last_route_point = point;
-  return test_spy::append_route_point_result;
+  if (test_spy::append_route_point_result || test_spy::append_route_point_sync_failure) {
+    ++test_spy::route_point_count;
+  }
+  return test_spy::append_route_point_result && !test_spy::append_route_point_sync_failure;
 }
 
 bool StorageService::end_route() {
@@ -462,12 +473,13 @@ bool StorageService::end_route() {
   }
   test_spy::route_file_open = false;
   test_spy::route_ended = true;
+  test_spy::route_point_count = 0;
   return true;
 }
 
 bool StorageService::is_route_active() const { return test_spy::route_file_open; }
 
-uint32_t StorageService::current_route_point_count() const { return 0; }
+uint32_t StorageService::current_route_point_count() const { return test_spy::route_point_count; }
 
 bool StorageService::delete_route(uint32_t /*session_id*/) { return true; }
 
@@ -863,6 +875,7 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   test_spy::orchestrator_init_called = true;
   test_spy::orchestrator_wake_cause = cause;
   test_spy::orchestrator_handoff = handoff;
+  test_spy::orchestrator_rtc_state = load_rtc_app_state();
 }
 
 void Orchestrator::run() { test_spy::orchestrator_run_called = true; }
@@ -938,7 +951,7 @@ void Orchestrator::on_bms_timer() {}
 void Orchestrator::on_bms_status_timer() {}
 void Orchestrator::on_inactivity_timeout() {}
 void Orchestrator::reschedule_sensor_timer(const GoSettings & /*previous_settings*/) {}
-void Orchestrator::update_display() {}
+bool Orchestrator::update_display() { return true; }
 void Orchestrator::request_background_display_update(bool /*wait*/) {}
 BuildContext Orchestrator::build_context() const {
   static Measures dummy_measures{};
