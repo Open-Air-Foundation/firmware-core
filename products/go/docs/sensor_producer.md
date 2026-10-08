@@ -319,11 +319,15 @@ self-test, or calibration request. While a handler is blocking, at most the
 latest request remains latched for the next loop iteration; repeated requests
 can therefore coalesce and do not guarantee one completion per call.
 
-For scheduled measurements and shake refresh, the orchestrator tracks one
-pending measurement and PM preparation/sleep state. It waits for the relevant
-PM completion event before requesting a refresh measurement, and reuses an
-already-requested measurement instead of sending another. The notification
-transport remains unchanged; there is no command queue.
+For scheduled measurements, shake refresh, and the peripheral-test sweep, the
+orchestrator tracks one pending read and PM preparation/sleep state. It waits
+for the relevant PM completion event before requesting a refresh measurement,
+and reuses an already-requested normal measurement instead of sending another.
+Peripheral Test wakes PM on entry, waits for preparation and any normal
+measurement to finish, then requests its sweep. The sweep holds the same
+pending flag until `SensorTestDone`; normal measurements complete through
+`SensorDataReady`. The notification transport remains unchanged; there is no
+command queue. See [Hardware Test](hardware_test.md#peripheral-test).
 
 PM preparation after startup advances between command handlers, allowing
 gas-index sampler ticks throughout warmup. Refresh results use the latest

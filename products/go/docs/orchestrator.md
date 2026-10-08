@@ -220,7 +220,7 @@ The orchestrator owns the authoritative application state:
 | `_behavior` | `Behavior` | `Idle` | Tracking / Idle / Shutdown |
 | `_lock_state` | `LockState` | `Locked` | Locked / Unlocked |
 | `_pm_state` | `PmState` | `Preparing` | PM preparation, ready, sleep-in-progress, or asleep |
-| `_measurement_pending` | `bool` | `false` | A measurement has been requested and its result is outstanding |
+| `_measurement_pending` | `bool` | `false` | A normal measurement or peripheral-test sweep is outstanding |
 | `_refresh_pending` | `bool` | `false` | An accepted shake is waiting for a measurement result |
 | `_gps_enabled` | `bool` | `true` | Whether GPS data is used (derived from `GpsMode` setting) |
 | `_tracking_state` | `TrackingState` | `Idle` | Idle (0), Recording (1), or Paused (2); Paused retains the session |
@@ -293,10 +293,10 @@ Events are dispatched by type:
 
 | EventType | Handler |
 |---|---|
-| `SensorDataReady` | `on_sensor_data(measures, origin)` — complete pending measurement/refresh, update current readings and consumers; cache and record only scheduled results |
-| `PmPreparationStarted`, `PmPrepared`, `PmSensorAsleep` | `on_pm_event()` — advance PM state, manage bus isolation, and continue a pending refresh |
+| `SensorDataReady` | `on_sensor_data(measures, origin)` — complete pending measurement/refresh, update current readings and consumers, and start a waiting peripheral sweep when ready; cache and record only scheduled results |
+| `PmPreparationStarted`, `PmPrepared`, `PmSensorAsleep` | `on_pm_event()` — advance PM state, manage bus isolation, and continue a pending refresh or peripheral test |
 | `ShakeDetected` | `on_shake_detected()` — check eligibility and event age, acknowledge once, request or reuse a measurement |
-| `SensorTestDone` | `on_sensor_test_done()` — clear the pending-measurement flag, then handle Hardware Test results |
+| `SensorTestDone` | `on_sensor_test_done()` — clear the pending-measurement flag, show the peripheral-test result if still relevant, or release an exited sweep |
 | `GpsFixUpdate` | `on_gps_fix()` — cache GPS if `is_gps_active()` |
 | `InputPress` | `on_input()` — touch flash on touch events, shutdown, lock/unlock, forward to UIManager |
 | `UserStartTracking` | `start_tracking()` |
@@ -1180,6 +1180,15 @@ threshold is 20 s by default. Thus a manual refresh near the next regular
 measurement leaves PM awake instead of requiring another warmup. The regular
 pre-wake timer prepares an asleep sensor one warmup duration before its deadline.
 
+Peripheral Test wakes PM on entry and holds it awake through the summary.
+Its sweep waits for PM readiness and any outstanding normal measurement, then
+sets the shared `_measurement_pending` flag until `SensorTestDone`. The
+`try_start_peripheral_sensor_test()` call in `on_sensor_data()` starts a sweep
+that was waiting for that normal measurement to finish. `sleep_pm_if_idle()`
+preserves the regular sleep policy while preventing sleep during the test or
+an outstanding read. The measurement interval stays unchanged. See
+[Hardware Test](hardware_test.md#peripheral-test) for the complete flow.
+
 See [Power Management — PM Sensor Sleep](power_management.md#pm-sensor-sleep-active-mode-power-cycling)
 for the full cycle, edge cases, and method documentation.
 
@@ -1200,7 +1209,8 @@ shake sets `_refresh_pending` and calls `BuzzerService::acknowledge_refresh()`
 
 | State | Action |
 |---|---|
-| Measurement already requested | Reuse its result; keep the original measurement origin |
+| Normal measurement already requested | Reuse its result; keep the original measurement origin |
+| Peripheral sweep still running after test exit | Wait for `SensorTestDone`, then request the refresh |
 | No measurement pending, PM ready | Request `MeasurementOrigin::Refresh` immediately |
 | PM asleep | Connect PM and request preparation; measure after `PmPrepared` |
 | PM preparing | Wait for `PmPrepared`, then request the refresh |
