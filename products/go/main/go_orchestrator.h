@@ -146,7 +146,7 @@ private:
   // --- PM sensor sleep (Portable mode power-cycling) ---
   enum class PmState { Preparing, Ready, Sleeping, Asleep };
   PmState _pm_state = PmState::Preparing; ///< Producer starts with boot warmup.
-  bool _measurement_pending = false;      ///< Requested measurement has not returned yet.
+  bool _measurement_pending = false; ///< Normal measurement or peripheral sweep is outstanding.
   bool _refresh_pending = false;
 
   // --- PM sensor recovery (V1: boost-kill power cycle on persistent failure) ---
@@ -193,6 +193,7 @@ private:
       BackLed,
       TouchLed,
       Buzzer,
+      WaitingForSensors,
       Testing,
       Summary,
     } step = Step::BackLed;
@@ -416,19 +417,23 @@ private:
   void run_led_test();
 
   // --- Peripheral (hardware) test flow ---
-  /// Begin the guided actuator + AQ peripheral test. Resets state, drives the
-  /// first actuator, and pushes the first step view.
+  /// Begin the guided actuator + AQ peripheral test. Wakes PM, resets state,
+  /// drives the first actuator, and pushes the first step view.
   void start_peripheral_test();
   /// Record the operator's Pass/Fail for the current actuator step and advance
   /// to the next actuator, or into the automatic AQ sweep.
   void peripheral_step_result(bool pass);
+  /// Start the sweep once PM is ready and the producer has finished any measurement.
+  void try_start_peripheral_sensor_test();
   /// Consume the bulk AQ self-test result, compute overall pass/fail, fire the
   /// success/alert cue, and show the summary.
   void on_sensor_test_done(const SensorTestResults &results);
-  /// Leave the flow: mark inactive and restore LED/buzzer to normal settings.
+  /// Leave the flow: restore PM sleep policy and LED/buzzer settings.
   void finish_peripheral_test();
   /// Drive the actuator for the current step and push its prompt view.
   void drive_peripheral_actuator();
+  /// Resume PM sleep when no measurement or peripheral test owns the sensor.
+  void sleep_pm_if_idle();
 
   /// Enter the live GPS test: reset the TTFF timer, ungate the receiver if
   /// settings leave GPS inactive, speed up posting for a ~1 Hz refresh, render.
