@@ -36,10 +36,11 @@ struct LedMap {
   /// v1.0 LED board: LED1/LED2/LED10 touch, five back LEDs, LED25/26 front.
   static constexpr LedMap v1() { return {{30, 31}, {6, 12, 15, 18, 24}, 5, 27, 3, 0}; }
 
-  /// v2.0 main board: only LED1–LED4 are routed (OUT0–OUT11).  Roles are
-  /// provisional until the enclosure assignment is confirmed (bring-up P9-03):
-  /// LED1/LED2 keep the v1 touch-right/left slots, LED3/LED4 form the ring.
-  static constexpr LedMap v2() { return {{-1, -1}, {6, 9, 0, 0, 0}, 2, -1, 3, 0}; }
+  /// v2.0 main board: only LED1–LED4 are routed (OUT0–OUT11), and the
+  /// enclosure shows them left to right as LED4, LED3, LED2, LED1.  All four
+  /// are the AQI ring, listed in that order so a chase runs left to right.
+  /// There is no touch feedback LED.
+  static constexpr LedMap v2() { return {{-1, -1}, {9, 6, 3, 0, 0}, 4, -1, -1, -1}; }
 };
 
 enum class LedBrightness : uint8_t {

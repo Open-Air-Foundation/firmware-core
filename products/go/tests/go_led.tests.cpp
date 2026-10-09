@@ -128,6 +128,22 @@ TEST_CASE("LedService: lifecycle", "[LedService][lifecycle]") {
 // Front LED
 // ============================================================================
 
+TEST_CASE("LedMap: v2.0 runs all four LEDs as the ring, left to right", "[LedService][map]") {
+  // The enclosure shows LED4, LED3, LED2, LED1 from left to right; each LED is
+  // addressed by its blue-channel base, OUT(3 * (n - 1)).
+  constexpr LedMap map = LedMap::v2();
+  CHECK(map.back_count == 4);
+  CHECK(map.back[0] == 9);
+  CHECK(map.back[1] == 6);
+  CHECK(map.back[2] == 3);
+  CHECK(map.back[3] == 0);
+  CHECK(map.touch_select == -1);
+  CHECK(map.touch_left == -1);
+  CHECK(map.touch_right == -1);
+  CHECK(map.front[0] == -1);
+  CHECK(map.front[1] == -1);
+}
+
 TEST_CASE("LedService: front brightness", "[LedService][front]") {
   TestFixture f;
   f.build();

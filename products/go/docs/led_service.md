@@ -104,6 +104,18 @@ variant.
 
 LED8 (OUT21/22/23) is reserved for a future follow-up.
 
+The table above is board variant V1. The v2.0 main board routes only
+LED1–LED4, which the enclosure shows left to right as LED4, LED3, LED2,
+LED1. All four are the back ring, in that order, so a chase runs left to
+right. V2 has no touch feedback LED and no front indicator.
+
+| Logical LED | LP5036 Channel(s) | Group (V2) |
+|---|---|---|
+| LED4 | OUT9/10/11 | Back (index 0), leftmost |
+| LED3 | OUT6/7/8 | Back (index 1) |
+| LED2 | OUT3/4/5 | Back (index 2) |
+| LED1 | OUT0/1/2 | Back (index 3), rightmost |
+
 ## Brightness and PWM Tables
 
 ### Front PWM
