@@ -52,10 +52,10 @@ TEST_CASE("touch_tuning_for keeps rev 1 on what it shipped with", "[board][touch
 
 TEST_CASE("touch_tuning_for gives rev 2.0 the gain its pads were measured at",
           "[board][touch]") {
-  // 4 is 8x, where the strongest pad reads 60 and the weakest 43 — both clear
-  // of the register ceiling and far above the noise.
+  // 4 is 8x, where the strongest press reads 44 and the weakest 36 — clear of
+  // the register ceiling and far above the noise.
   CHECK(touch_tuning_for(BoardVariant::V2).delta_sense == 4);
-  CHECK(touch_tuning_for(BoardVariant::V2).threshold == 21);
+  CHECK(touch_tuning_for(BoardVariant::V2).threshold == 18);
   // Rev 2.0's pads sit under an enclosure that can rest on one, so it takes
   // the trade rev 1 does not.
   CHECK(touch_tuning_for(BoardVariant::V2).max_duration_recal);
@@ -63,11 +63,10 @@ TEST_CASE("touch_tuning_for gives rev 2.0 the gain its pads were measured at",
 
 TEST_CASE("the rev 2.0 threshold sits between the noise and a real touch",
           "[board][touch]") {
-  // Measured at 16x with the enclosure fitted: idle stays within one count and
-  // the weakest pad, CS2, peaks at 87 — 43 once the gain is halved to the 8x
-  // this ships at.
+  // Measured at 8x in the new enclosure: idle stays within one count and the
+  // weakest of three presses on any pad, one on CS2, peaks at 36.
   constexpr uint8_t IDLE_NOISE = 1;
-  constexpr uint8_t WEAKEST_PEAK = 43;
+  constexpr uint8_t WEAKEST_PEAK = 36;
   const uint8_t threshold = touch_tuning_for(BoardVariant::V2).threshold;
   CHECK(threshold > IDLE_NOISE * 8);    // nowhere near tripping on noise
   CHECK(threshold <= WEAKEST_PEAK / 2); // and reached at half a press

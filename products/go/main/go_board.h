@@ -68,23 +68,22 @@ struct TouchTuning {
 /// saturates one can be invisible on the other, so one global setting cannot
 /// serve both.
 ///
-/// Rev 2.0, measured on the bench with the enclosure fitted, one guided press
-/// per pad at 16x: CS1 peaks at 120, CS2 at 87, CS3 at 114, against an idle
-/// band of a single count. The pads are unequal but they are clean — with one
-/// pad pressed the other two read zero, so the three can share a threshold.
+/// Rev 2.0, measured on the bench in the new enclosure at the 8x it ships at,
+/// three guided presses per pad: CS1 peaks at 38-44, CS2 at 36-41, CS3 at
+/// 38-39, against an idle band of -1..0. The pads are clean — with one pad
+/// pressed the other two read zero — and close enough to share a threshold.
 ///
-/// 16x is still too high. It leaves CS1 seven counts short of the register
-/// ceiling, and a pinned delta is the datasheet's own symptom of sensitivity
+/// 8x, because a pinned delta is the datasheet's own symptom of sensitivity
 /// set too high: it also trips the noise detector, which forces the delta to
-/// zero for that sample and makes a press read as a release mid-hold. 8x
-/// halves all three into the middle of the range, 60 / 43 / 57, with the
-/// weakest still forty times the noise.
+/// zero for that sample and makes a press read as a release mid-hold. The
+/// strongest press is 44, far under the ceiling of 127. The number had to be
+/// read at 8x itself: a 16x-against-2x check on the same board came out at
+/// 6.9, 5.1 and 8.4 where 8.0 was expected, so a peak is not carried across a
+/// gain change. The first enclosure read stronger, about 60 / 43 / 57 at 8x,
+/// and its threshold of 21 sat above half of this one's weakest press.
 ///
-/// The threshold is sized for the weakest pad, CS2, at half its peak. The
-/// other two then trigger at under 40 % of theirs, which is more sensitive
-/// rather than less. Per-pad thresholds were considered and skipped: the
-/// spread rests on one press each, and CS1's was held five times longer than
-/// CS3's, so the differences are not yet solid enough to fit to.
+/// The threshold is half the weakest press seen on any pad, CS2's 36, which is
+/// still eighteen times the idle band.
 ///
 /// Delayed recalibration is rev 2.0 only, and that is a deliberate asymmetry.
 /// It is not free: at 2800 ms the chip recalibrates under a finger that is
@@ -100,7 +99,7 @@ struct TouchTuning {
 /// threshold of 64 is what every unit in the field already does; guessing on
 /// its behalf could leave them with no working touch at all.
 inline constexpr TouchTuning touch_tuning_for(BoardVariant v) {
-  return (v == BoardVariant::V2) ? TouchTuning{4, 21, true} : TouchTuning{0, 64, false};
+  return (v == BoardVariant::V2) ? TouchTuning{4, 18, true} : TouchTuning{0, 64, false};
 }
 
 /// 0x6 is 2800 ms, the nearest step above the longest hold the UI asks for, a
