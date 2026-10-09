@@ -1252,13 +1252,12 @@ static constexpr const char *TOUCH_DIAG_TAG = "TOUCHDIAG";
 // Three FreeRTOS ticks at the project's 100 Hz, so the request is exact.
 static constexpr uint32_t TOUCH_DIAG_PERIOD_MS = 30;
 
-// Gains the run walks through, as DELTA_SENSE codes.  16x first because that
-// is where the pads read without pinning, then 2x to check the multiplier:
-// DELTA_SENSE scales the reported count and nothing else (datasheet Table
-// 5-7), so every peak should fall by exactly the ratio of the two gains.  If
-// it does not, no number taken across a gain change can be trusted, which is
-// the assumption two earlier runs disagreed over.
-static constexpr uint8_t TOUCH_DIAG_GAINS[] = {3, 6}; // 16x, then 2x
+// Gains the run walks through, as DELTA_SENSE codes.  Only 8x, the gain rev
+// 2.0 ships at: on the new enclosure the 16x-against-2x check came out at
+// 6.9, 5.1 and 8.4 where 8.0 was expected, so a peak measured at one gain may
+// not be carried to another and the threshold has to come from 8x itself.
+// List a second gain to bring the multiplier check back.
+static constexpr uint8_t TOUCH_DIAG_GAINS[] = {4}; // 8x
 
 // Press segmentation, quoted at 16x and scaled with the gain.  The idle band
 // at 16x measures about one count and the weakest pad peaks near 50, so 12
@@ -1282,9 +1281,11 @@ static constexpr uint32_t TOUCH_DIAG_IDLE_MS = 2000;
 // then measured against a pressed pad.
 static constexpr uint32_t TOUCH_DIAG_HANDS_CLEAR_MS = 5000;
 
-// Two goes at each pad.  A pad that reads wrong twice is reporting real
-// crosstalk, and asking a third time will not change that.
-static constexpr uint8_t TOUCH_DIAG_ATTEMPTS_PER_PAD = 2;
+// Every pad is pressed this many times, round-robin.  One press per pad gave
+// a single number whose pressure nobody controlled; the threshold has to clear
+// the weakest of several, so the run reports the lowest peak as well as the
+// highest.
+static constexpr uint8_t TOUCH_DIAG_PRESSES_PER_PAD = 3;
 
 // Another pad at this share of the pressed pad's peak is called out: at that
 // level a threshold set for one pad also fires on the other.
@@ -1298,6 +1299,7 @@ namespace {
 /// What one pad did during one gain stage.
 struct TouchDiagPad {
   int peak = 0;                 ///< this pad's own best delta while it was the target
+  int low_peak = 0;             ///< the weakest of those per-press peaks
   int at_peak[3] = {0, 0, 0};   ///< all three channels at that same instant
   int worst_other = 0;          ///< highest any other pad reached at any point in the press
   uint8_t worst_other_pad = 0;
@@ -1443,7 +1445,11 @@ void touch_diag_run_stage(CAP1203 &touch, const gpio::Hal &hal, TouchDiagStage &
   bool press_sat = false;
   bool press_noise = false;
 
-  AG_LOGI(TOUCH_DIAG_TAG, "press CS%u only — one fingertip, ~2 s, then lift clear", target + 1);
+  AG_LOGI(TOUCH_DIAG_TAG, "%u presses per pad, round-robin — make at least one of each pad's a "
+                          "light touch, since the threshold has to catch the weakest",
+          TOUCH_DIAG_PRESSES_PER_PAD);
+  AG_LOGI(TOUCH_DIAG_TAG, "press CS%u only (%u/%u) — one fingertip, ~2 s, then lift clear",
+          target + 1, attempts[target] + 1, TOUCH_DIAG_PRESSES_PER_PAD);
 
   while (done_mask != 0x07) {
     touch_diag_feed_wdt(hal, last_feed);
@@ -1534,6 +1540,9 @@ void touch_diag_run_stage(CAP1203 &touch, const gpio::Hal &hal, TouchDiagStage &
 
     TouchDiagPad &rec = stage.pad[target];
     ++rec.presses;
+    if (rec.presses == 1 || peak < rec.low_peak) {
+      rec.low_peak = peak;
+    }
     if (mismatch) {
       ++rec.mismatches;
     }
@@ -1569,7 +1578,7 @@ void touch_diag_run_stage(CAP1203 &touch, const gpio::Hal &hal, TouchDiagStage &
       AG_LOGW(TOUCH_DIAG_TAG, "delta pinned at +127 — %ux is too high to measure this pad", mult);
     }
 
-    if (++attempts[target] >= TOUCH_DIAG_ATTEMPTS_PER_PAD || !mismatch) {
+    if (++attempts[target] >= TOUCH_DIAG_PRESSES_PER_PAD) {
       done_mask = static_cast<uint8_t>(done_mask | (1u << target));
     }
     if (done_mask == 0x07) {
@@ -1582,7 +1591,8 @@ void touch_diag_run_stage(CAP1203 &touch, const gpio::Hal &hal, TouchDiagStage &
         break;
       }
     }
-    AG_LOGI(TOUCH_DIAG_TAG, "press CS%u only — one fingertip, ~2 s, then lift clear", target + 1);
+    AG_LOGI(TOUCH_DIAG_TAG, "press CS%u only (%u/%u) — one fingertip, ~2 s, then lift clear",
+            target + 1, attempts[target] + 1, TOUCH_DIAG_PRESSES_PER_PAD);
     RTOS::delay_ms(TOUCH_DIAG_PERIOD_MS);
   }
 }
@@ -1591,7 +1601,7 @@ void touch_diag_report(const TouchDiagStage &stage) {
   const uint8_t mult = CAP1203::delta_sense_multiplier(stage.sense);
   AG_LOGI(TOUCH_DIAG_TAG, "==== %ux: each pad's peak, and what the others did during that press ====",
           mult);
-  AG_LOGI(TOUCH_DIAG_TAG, "pad  peak   CS1   CS2   CS3   worst other   idle     n  bad");
+  AG_LOGI(TOUCH_DIAG_TAG, "pad  peak   low   CS1   CS2   CS3   worst other   idle     n  bad");
 
   int worst_pct = 0;
   uint8_t worst_victim = 0;
@@ -1603,8 +1613,9 @@ void touch_diag_report(const TouchDiagStage &stage) {
       continue;
     }
     const int pct = p.worst_other * 100 / p.peak;
-    AG_LOGI(TOUCH_DIAG_TAG, "CS%d  %+4d  %+4d  %+4d  %+4d   CS%u %+4d %3d%%  %+d..%+d  %u  %u%s%s",
-            i + 1, p.peak, p.at_peak[0], p.at_peak[1], p.at_peak[2], p.worst_other_pad + 1,
+    AG_LOGI(TOUCH_DIAG_TAG,
+            "CS%d  %+4d  %+4d  %+4d  %+4d  %+4d   CS%u %+4d %3d%%  %+d..%+d  %u  %u%s%s", i + 1,
+            p.peak, p.low_peak, p.at_peak[0], p.at_peak[1], p.at_peak[2], p.worst_other_pad + 1,
             p.worst_other, pct, p.idle_lo, p.idle_hi, p.presses, p.mismatches,
             p.saturated ? "  SAT" : "", p.noise ? "  NOISE" : "");
     if (pct > worst_pct) {
@@ -1620,11 +1631,12 @@ void touch_diag_report(const TouchDiagStage &stage) {
               ? "REAL. No threshold separates these pads; this is a spacing question for v2.1"
               : "the pads separate cleanly, so per-pad thresholds will work");
 
-  // Half the peak is the usual starting point: far enough above the idle band
-  // to never self-trigger, far enough below the peak that a light press still
-  // registers.  Printed per pad because CS1 and CS2 differ by about a third.
-  AG_LOGI(TOUCH_DIAG_TAG, "starting thresholds at %ux (half of peak): CS1 %d  CS2 %d  CS3 %d", mult,
-          stage.pad[0].peak / 2, stage.pad[1].peak / 2, stage.pad[2].peak / 2);
+  // Half the weakest press is the starting point: far enough above the idle
+  // band to never self-trigger, far enough below every press seen that a light
+  // one still registers.  Printed per pad because the pads differ by a third.
+  AG_LOGI(TOUCH_DIAG_TAG,
+          "starting thresholds at %ux (half of weakest press): CS1 %d  CS2 %d  CS3 %d", mult,
+          stage.pad[0].low_peak / 2, stage.pad[1].low_peak / 2, stage.pad[2].low_peak / 2);
 }
 
 /// Does the same finger really read eight times smaller at an eighth of the
@@ -1727,8 +1739,10 @@ void GoHardwareBoard::run_touch_diag() {
 
   // Only worth comparing two stages that both actually ran; a stage that
   // never got its gain set would read as a broken multiplier.
-  if (measured >= 2) {
-    touch_diag_linearity(stages[0], stages[1]);
+  if constexpr (stage_count >= 2) {
+    if (measured >= 2) {
+      touch_diag_linearity(stages[0], stages[1]);
+    }
   }
   AG_LOGI(TOUCH_DIAG_TAG, "measurement complete — reset the board to run it again");
 
