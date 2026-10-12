@@ -1,9 +1,8 @@
 /**
  * AirGradient Go -- LED service implementation
  *
- * Adaptive render loop, back-LED effect engine, touch flash manager,
- * and front direct writes.  See products/go/specs/led_service.md for
- * the full design.
+ * Adaptive render loop, back-LED effect engine, and touch flash manager.
+ * See products/go/docs/led_service.md for the full design.
  *
  * AirGradient
  * https://airgradient.com
@@ -26,12 +25,6 @@ static constexpr const char *TAG = "Led";
 // ===========================================================================
 
 // --- Channel wiring comes from Config::map (LedMap, per board variant) ---
-
-// --- Front PWM levels ---
-static constexpr uint8_t FRONT_PWM_OFF = 0;
-static constexpr uint8_t FRONT_PWM_DIM = 5;
-static constexpr uint8_t FRONT_PWM_MID = 13;
-static constexpr uint8_t FRONT_PWM_BRIGHT = 26;
 
 // --- Back brightness scale (output = effect_value * scale / 255) ---
 static constexpr uint8_t BACK_SCALE_OFF = 0;
@@ -67,20 +60,6 @@ static constexpr float TWO_PI = 6.2831853f;
 // ===========================================================================
 
 static bool rgb_eq(Rgb a, Rgb b) { return a.r == b.r && a.g == b.g && a.b == b.b; }
-
-static uint8_t front_pwm_for(LedBrightness b) {
-  switch (b) {
-  case LedBrightness::Off:
-    return FRONT_PWM_OFF;
-  case LedBrightness::Dim:
-    return FRONT_PWM_DIM;
-  case LedBrightness::Mid:
-    return FRONT_PWM_MID;
-  case LedBrightness::Bright:
-    return FRONT_PWM_BRIGHT;
-  }
-  return FRONT_PWM_OFF;
-}
 
 static uint8_t back_scale_for(LedBrightness b) {
   switch (b) {
@@ -221,17 +200,6 @@ bool LedService::start() {
 
   _started = true;
   return true;
-}
-
-// ===========================================================================
-// Public API -- Front
-// ===========================================================================
-
-void LedService::front_set_brightness(LedBrightness brightness) {
-  Cmd cmd{};
-  cmd.kind = Cmd::Kind::FrontSetBrightness;
-  cmd.brightness = brightness;
-  _enqueue(cmd);
 }
 
 // ===========================================================================
@@ -379,11 +347,6 @@ void LedService::_enqueue(const Cmd &cmd) {
 
 void LedService::_process_cmd(const Cmd &cmd, uint32_t now_ms) {
   switch (cmd.kind) {
-
-  case Cmd::Kind::FrontSetBrightness:
-    _front_brightness = cmd.brightness;
-    _front_dirty = true;
-    break;
 
   case Cmd::Kind::BackSolid:
     _clear_saved_effect();
@@ -843,29 +806,6 @@ uint32_t LedService::_next_wait_timeout_ms(uint32_t now_ms) const {
 // Internal -- Render
 // ===========================================================================
 
-void LedService::_render_front() {
-  if (!_front_dirty) {
-    return;
-  }
-  _front_dirty = false;
-
-  uint8_t pwm = front_pwm_for(_front_brightness);
-  bool ok = true;
-  for (int8_t ch : _config.map.front) {
-    if (ch >= 0) {
-      ok = _config.driver->set_channel(static_cast<uint8_t>(ch), pwm) && ok;
-    }
-  }
-
-  if (!ok && !_driver_error_logged) {
-    AG_LOGW(TAG, "front write failed");
-    _driver_error_logged = true;
-  } else if (ok && _driver_error_logged) {
-    AG_LOGI(TAG, "driver recovered");
-    _driver_error_logged = false;
-  }
-}
-
 void LedService::_render_back() {
   if (!_back_dirty) {
     return;
@@ -981,7 +921,6 @@ void LedService::_run() {
 
     _tick_back(_now_ms);
     _tick_touch(_now_ms);
-    _render_front();
     _render_back();
     _render_touch();
   }
@@ -1008,7 +947,6 @@ void LedService::pump_for_test(uint32_t now_ms) {
 
   _tick_back(now_ms);
   _tick_touch(now_ms);
-  _render_front();
   _render_back();
   _render_touch();
 }

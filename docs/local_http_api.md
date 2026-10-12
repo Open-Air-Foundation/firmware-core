@@ -314,7 +314,7 @@ Go returns these fields from `GET /api/v1/config` and accepts them in partial
 | Field Group | Supported Fields |
 |---|---|
 | Device behavior | `pmStandard`, `temperatureUnit`, `altitudeUnit`, `measurementInterval`, `gpsMode` |
-| LEDs and buzzer | `frontLedBrightness`, `backLedBrightness`, `touchLedIntensity`, `buzzerEnabled` |
+| LEDs and buzzer | `backLedBrightness`, `touchLedIntensity`, `buzzerEnabled` |
 | Connectivity policy | `cloudConnection`, `configurationControl` |
 | Sensor configuration | `co2AbcDays`, `tvocLearningOffset`, `noxLearningOffset`, `corrections` |
 

@@ -16,16 +16,16 @@
       "applies_to": ["V1", "V2"],
       "description": "Cold boot starts a complete early splash, detects the V1 or V2 board, and initializes its production sensors",
       "expected_result": "At the start of cold boot, the display begins the \"Getting Ready\" splash and completes one full refresh without stopping on a partial frame before NAND storage initialization proceeds. The serial log identifies the board variant (\"board variant: V1 (TCA6408A @ 0x20 NACK, FG @ 0x55 ACK)\" or \"board variant: V2 (TCA6408A @ 0x20 ACK, FG @ 0x55 ACK)\"), the gauge (BQ27427 on V1, bq27742-G1 on V2 with its protector snapshot line), SHT40, the pressure sensor (DPS368 on V1, \"SPL07-003 detected\" on V2), SGP41, SPS30, and exactly one fitted CO2 sensor without an initialization failure. On V2 the log also shows \"TCA6408A ready\", one \"I2C census:\" line listing 0x18 0x20 0x28 0x33 0x44 0x55 0x59 0x68 0x6A 0x77 (plus 0x62 with an SCD4x module), \"software chip-select on HAL pin 102\" from NAND storage, and \"touch ALERT pin 104 has no interrupt — polling every 20 ms\" Right before the orchestrator starts, every boot path except the fast path prints one \"chip report (<variant>):\" table with a PASS/FAIL/----/n/a verdict per chip and a \"pass N  fail N  untested N  absent N\" trailer; on a healthy unit every fitted chip except TAU1113 (----, runtime) reads PASS. Within five minutes, one completed measurement contains PM1/PM2.5/PM10, SPS30 PM0.5/PM1/PM2.5/PM10 counts, CO2, temperature, humidity, TVOC/NOx, pressure, and battery data. Home renders fields from that measurement and uses dashes for fields that are still unavailable.",
-      "notes": "Run two cold-boot subruns on already-onboarded production units: one S12 and one SCD4x. Capture serial from reset through the first complete measurement and record the full \"Getting Ready\" refresh. Require \"CO2 sensor: S12 selected\" only on the S12 unit and \"CO2 sensor: SCD4x selected\" only on the SCD4x unit. On a V2 unit add a third subrun and additionally confirm that the display paints (D/C on the expander), NAND mounts, and touch pads respond while polled."
+      "notes": "Run two cold-boot subruns on already-onboarded production units: one S12 and one SCD4x. Capture serial from reset through the first complete measurement and record the full \"Getting Ready\" refresh. Require \"CO2 sensor: S12 selected\" only on the S12 unit and \"CO2 sensor: SCD4x selected\" only on the SCD4x unit. Start each cold boot with USB disconnected and Power pressed; connecting USB to a powered-off unit selects charging-only mode instead. Use a serial capture setup that does not supply USB power for the initial boot logs. On a V2 unit add a third subrun and additionally confirm that the display paints (D/C on the expander), NAND mounts, and touch pads respond while polled."
     },
     {
       "id": "onboarding.getting-started.complete-and-persist",
       "category": "Boot & Onboarding",
       "sub_category": "First use",
       "applies_to": ["V1"],
-      "description": "Start using completes the first-use Getting Started flow",
-      "expected_result": "A factory-reset cold boot shows the Getting Started QR and \"Start using\", plays the complete welcome Chime with a rear-LED color step for each melody step, logs at least two completed sensor measurements while the page remains open, and remains discoverable in a 30-second BLE scan. #AG GET_SERIAL returns the unit's 12-character serial before selecting Start using. Selecting \"Start using\" opens unlocked Home and disables #AG responses. The next cold boot goes directly to onboarded Home after the boot splash and does not replay Getting Started.",
-      "notes": "Start with onboarding incomplete and no client connected. Scan for the advertisement for 30 seconds before selecting Start using. Pairing completion is verified separately."
+      "description": "A one-second Enter hold completes the first-use Getting Started flow",
+      "expected_result": "A factory-reset cold boot shows Getting Started before sensor warmup finishes, with the QR captioned \"Scan for guide\" and \"Or just use it right now\" above one highlighted area containing a single bold \"Hold Enter to start\" line. The action fits without clipping and has balanced padding. No hold duration is displayed. The device plays the complete welcome Chime with a rear-LED color step for each melody step, logs at least two completed sensor measurements while the page remains open, and remains discoverable in a 30-second BLE scan. #AG GET_SERIAL returns the unit's 12-character serial before completing onboarding. A short Enter press, double tap, and hold released before one second all leave the guide open. Holding Enter for at least one second triggers the transition to unlocked Home without requiring release and disables #AG responses; continuing to hold through the display refresh and then releasing causes no further navigation. Entering Home during warmup shows dashes until the first measurement arrives. The next cold boot goes directly to onboarded Home after the boot splash and does not replay Getting Started.",
+      "notes": "Start with onboarding incomplete and no client connected. Scan for the advertisement for 30 seconds before completing the Enter hold. Allow the e-paper refresh to complete after the one-second threshold. Pairing completion is verified separately. Repeat from factory reset, holding Enter as soon as the guide appears to check Home during warmup. For cold-boot subruns, start on battery with Power, then connect USB after startup if needed for serial checks. USB insertion while powered off enters charging-only mode; press Power there to restart into onboarding."
     },
     {
       "id": "ui.navigation.lock-and-settings",
@@ -33,8 +33,8 @@
       "sub_category": "Navigation and settings",
       "applies_to": ["V1"],
       "description": "Physical inputs navigate the UI and enforce manual locking",
-      "expected_result": "A Power press released before 2000 ms alternates Locked and Unlocked exactly once. While locked, each touch leaves the screen unchanged, shows \"Unlock First\", and flashes only its configured touch LED. While unlocked, left, right, and center touches perform Up, Down, and Enter; two center taps separated by no more than 250 ms go Back; holding center for at least 1000 ms returns Home. The path Home > Menu > Settings > Hardware Test > Back > Setup Guide > Back > Home completes with one action per gesture and no title, row, or selection from the prior screen after each refresh. Short Power during boot splash and Stationary setup leaves that session unchanged.",
-      "notes": "Enable touch feedback. Execute the navigation path once, then separately reboot for the boot-splash check and enter Stationary setup for its suppression check. Auto-lock is covered in the timing-settings case."
+      "expected_result": "A Power press released before 2000 ms alternates Locked and Unlocked exactly once. While locked, each touch leaves the screen unchanged, shows \"Unlock First\", and flashes only its configured touch LED. While unlocked, left, right, and center touches perform Up, Down, and Enter; two center taps separated by no more than 250 ms go Back; holding center for at least 1000 ms returns Home. Main Menu lists Exit Menu, Start Tracking when idle or Tracking during a session, Operating Mode, and Settings in that order. Tracking opens Exit, Back, Status, Pause Tracking while recording or Resume Tracking while paused, and Stop Tracking. Every entry selects Status; pressing Enter again opens the Session view with Back selected and does not pause or resume. Back returns to Tracking with Status selected. Moving between Tracking rows uses the same partial-refresh behavior as other list menus, without a full-screen flash on every move. Settings lists Exit, Back, Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide, and About Device. Operations lists Measurement Interval (shown as Measure Int.), CO2 Calibration, GPS Mode (shown as GPS), and Buzzer; Display & Touch lists Temperature Unit, Altitude Unit, PM Display, Auto Lock, AQI LED, and Touch LED. Hardware Test lists Peripheral Test, GPS Test, Accelerometer Test, Fuel Gauge Learning, and Play Melody. Every group begins with Exit and Back. Opening or reopening Settings selects Operations; Operations selects Measurement Interval, Display & Touch selects Temperature Unit, and Hardware Test selects Peripheral Test. Choice/value pages still select the saved value. All rows and current-value summaries fit on screen without clipping. Back and double-tap restore the parent selection, including after applying or canceling a setting; Exit and center hold return Home. Each gesture causes one action and each refresh leaves no stale rows or selection. Short Power during boot splash and Stationary setup leaves that session unchanged.",
+      "notes": "Enable touch feedback and visit Operating Mode, every Settings group, and About Device. Check wrapping from Exit to the last row and back. Apply and cancel one setting in each group; verify return selection. Separately reboot for the boot-splash check and enter Stationary setup for its suppression check. Auto-lock is covered in the timing-settings case."
     },
     {
       "id": "display.home.measurements-and-invalids",
@@ -51,7 +51,7 @@
       "sub_category": "Home charts",
       "applies_to": ["V1"],
       "description": "Home metric selection and rolling charts use valid samples and configured units",
-      "expected_result": "Down cycles None > PM2.5 > CO2 > Temperature > Humidity > None and Up traverses the reverse order. Charts use valid samples from the newest 16 completed measurements, so a field invalid in that window yields fewer than 16 plotted points. After 17 recorded cycles, displayed Min and Max equal the valid values in cycles 2 through 17 after conversion and display rounding; a deliberately unique cycle-1 temperature maximum is no longer the Max. A CO2 value omitted during warm-up is excluded. Changing C/F or mass/USAQI recalculates statistics. Returning Home through lock or menu reset selects None and removes the prior chart on the next refresh.",
+      "expected_result": "Down cycles None > PM2.5 > CO2 > Temperature > Humidity > None and Up traverses the reverse order. Charts use valid samples from the newest 16 completed scheduled measurements, so a field invalid in that window yields fewer than 16 plotted points. After 17 recorded cycles, displayed Min and Max equal the valid values in cycles 2 through 17 after conversion and display rounding; a deliberately unique cycle-1 temperature maximum is no longer the Max. A CO2 value omitted during warm-up is excluded. Changing C/F or mass/USAQI recalculates statistics. Returning Home through lock or menu reset selects None and removes the prior chart on the next refresh.",
       "notes": "Before changing configuration, record the measurement interval, temperature unit, and PM standard. Clear data, set 3 seconds, and use a safe warm-air source within -40 to 125 C to make cycle 1 a unique temperature maximum; remove it for cycles 2-17 and record all values. Use cold-start CO2 warm-up for invalid filtering. Restore the recorded configuration values after the case."
     },
     {
@@ -60,7 +60,7 @@
       "sub_category": "Status icons",
       "applies_to": ["V1"],
       "description": "Home status icons follow authenticated connectivity, GPS, tracking, lock, and power states",
-      "expected_result": "Each state change updates Home by the next completed display refresh: lock toggles the lock icon; Portable shows the unlink icon before BLE authentication and the link icon afterward; leaving Portable removes the BLE icon; GPS is absent without a valid fix and present after a 2D/3D fix; tracking is present only while BLE Status reports tracking=true; Stationary shows connected or disconnected Wi-Fi after the terminal event; Offline shows neither radio icon; battery operation shows the battery icon; active charging shows the bolt; and when charging completes or pauses at full while USB remains connected, the plug and battery icons appear. Transitions remove each corresponding icon or replace it with the specified alternate, and no icon covers another icon or measurement text.",
+      "expected_result": "Each state change updates Home by the next completed display refresh: lock toggles the lock icon; Portable shows the unlink icon before BLE authentication and the link icon afterward; leaving Portable removes the BLE icon; GPS is absent without a valid fix and present after a 2D/3D fix; Recording shows a dot, Paused shows two bars in the same position, and Idle shows neither; Stationary shows connected or disconnected Wi-Fi after the terminal event; Offline shows neither radio icon; battery operation shows the battery icon; active charging shows the bolt; and when charging completes or pauses at full while USB remains connected, the plug and battery icons appear. Transitions remove each corresponding icon or replace it with the specified alternate, and no icon covers another icon or measurement text.",
       "notes": "Use the pairing, GPS, tracking, network-outage, Offline, and USB cases to create the states. For the plug-and-battery state, use a fully charged or charge-paused unit with USB attached and confirm a non-charging value in BLE Status. Capture one Home image before and after each transition."
     },
     {
@@ -69,7 +69,7 @@
       "sub_category": "Product information",
       "applies_to": ["V1"],
       "description": "About Device and the reopenable Setup Guide show consistent product identity and navigation",
-      "expected_result": "About Device shows the product title, serial number, firmware version, and Open Source Hardware text; serial and firmware match BLE Device Information and the flashed release. Settings > Setup Guide renders a scannable QR for https://l.airgradient.net/GO with only a Back action; Up/Down do not change the page and Enter returns to Settings on the Setup Guide row. Reopening the guide does not clear completed onboarding, and the next cold boot returns to Home without Getting Started.",
+      "expected_result": "Settings > About Device shows the product title, serial number, firmware version, and Open Source Hardware text; serial and firmware match BLE Device Information and the flashed release. About retains its existing layout; Back or double-tap returns to Settings with About Device selected. Settings > Setup Guide renders a scannable QR for https://l.airgradient.net/GO with only a Back action; Up/Down do not change the page and Enter returns to Settings on the Setup Guide row. Reopening the guide does not clear completed onboarding, and the next cold boot returns to Home without Getting Started.",
       "notes": "Scan the QR with a phone and compare identity against the unit label, serial log, and release manifest."
     },
     {
@@ -78,7 +78,7 @@
       "sub_category": "Units and presentation",
       "applies_to": ["V1"],
       "description": "Temperature, altitude, and PM presentation settings update labels, values, and persistence",
-      "expected_result": "Changing Temperature Unit from C to F updates the row label and Home value; changing back restores Celsius. Changing Altitude Unit from m to ft updates the row label and Home value; changing back restores meters. Changing Mass to USAQI updates the PM2.5 label and value. Changes made through either the UI or BLE are reflected in the Settings row, Home value, and BLE Config. Raw BLE temperature, altitude, and PM2.5 remain unchanged. All three choices persist after cold reboot.",
+      "expected_result": "Under Settings > Display & Touch, changing Temperature Unit from C to F updates the row label and Home value; changing back restores Celsius. Changing Altitude Unit from m to ft updates the row label and Home value; changing back restores meters. Changing Mass to USAQI updates the PM2.5 label and value. Changes made through either the UI or BLE are reflected in the Display & Touch row, Home value, and BLE Config. Raw BLE temperature, altitude, and PM2.5 remain unchanged. All three choices persist after cold reboot.",
       "notes": "Record the starting presentation settings and BLE values, verify each display change, then restore the original settings."
     },
     {
@@ -87,7 +87,7 @@
       "sub_category": "Timing and GPS",
       "applies_to": ["V1"],
       "description": "Measurement interval, GPS mode, and auto-lock settings represent fixed and custom values accurately",
-      "expected_result": "With a fixed interval active, the UI lists exactly 3s, 10s, 30s, 60s, 5m, 15m, and 1h without a Custom row. Set measurementInterval to 17 through Local Server Config and wait for GET convergence; Settings shows exactly Measure Int.: 17s, and the interval submenu shows selected Custom (17s) first followed by all seven fixed choices. Change GPS Mode to Always Off and confirm GET still reports measurementInterval 17. Cold reboot preserves the exact summary and selected custom row. Select fixed 3s and confirm Custom disappears, 3s is selected, and GET reports 3. The GPS menu lists Always Off, On When Tracking, and Always On; auto-lock lists Off, 10, 30, and 60 seconds. With 10-second auto-lock selected, lock and unlock using short Power presses, then provide no further input; the device locks 10 through 12 seconds after the accepted unlock input. Select Auto Lock Off, lock and unlock again, and provide no input for 70 seconds; the device remains unlocked throughout the observation window.",
+      "expected_result": "With a fixed interval active, the UI lists exactly 3s, 10s, 30s, 60s, 5m, 15m, and 1h without a Custom row. Set measurementInterval to 17 through Local Server Config and wait for GET convergence; Settings > Operations shows exactly Measure Int.: 17s, and the interval submenu shows selected Custom (17s) first followed by all seven fixed choices. Change GPS to Always Off under Operations and confirm GET still reports measurementInterval 17. Cold reboot preserves the exact summary and selected custom row. Select fixed 3s and confirm Custom disappears, 3s is selected, and GET reports 3. The Operations > GPS menu lists Always Off, On When Tracking, and Always On; Settings > Display & Touch > Auto Lock lists Off, 10, 30, and 60 seconds, with compact summaries such as Auto Lock: 10s. With 10-second auto-lock selected, lock and unlock using short Power presses, then provide no further input; the device locks 10 through 12 seconds after the accepted unlock input. Select Auto Lock Off, lock and unlock again, and provide no input for 70 seconds; the device remains unlocked throughout the observation window.",
       "notes": "Run in Stationary mode with Local Server writes permitted by local or both configuration control. Record the complete starting Local Server Config, including an exact custom interval if present, then restore it after the case. The fixed UI choices start at 3 seconds, while firmware interfaces accept 1 through 3600 seconds. GPS data gating and measurement cadence are separate cases."
     },
     {
@@ -95,9 +95,9 @@
       "category": "User Interface",
       "sub_category": "Indicator settings",
       "applies_to": ["V1"],
-      "description": "Front, rear AQI, and touch indicator settings control V1 hardware and persist",
-      "expected_result": "For front and rear indicators, Off emits no visible light and each step Dim > Mid > Bright increases observed intensity without changing the selected color. For touch indicators, Off emits no flash and Dim > Bright increases flash intensity; center, left, and right flashes correspond only to Enter, Up, and Down. Rear color matches the repository AQI category calculated from corrected PM2.5 and turns off by the next measurement when PM2.5 is unavailable. Front=Dim, rear=Mid, and touch=Bright survive cold reboot and match a BLE Config Read.",
-      "notes": "Run in a dark room, observe every level in ascending order, and record the starting BLE Config values. Use the correction case to create a known AQI category. For unavailable PM, use a battery ship-mode cold boot and observe the rear LED before the first valid SPS30 result; do not disconnect hardware. Restore all three recorded levels."
+      "description": "Rear AQI and touch indicator settings control V1 hardware and persist",
+      "expected_result": "For rear indicators, Off emits no visible light and each step Dim > Mid > Bright increases observed intensity without changing the selected color. For touch indicators, Off emits no flash and Dim > Bright increases flash intensity; center, left, and right flashes correspond only to Enter, Up, and Down. Rear color matches the repository AQI category calculated from corrected PM2.5 and turns off by the next measurement when PM2.5 is unavailable. Rear=Mid and touch=Bright survive cold reboot and match a BLE Config Read.",
+      "notes": "Open Settings > Display & Touch for AQI LED and Touch LED. Run in a dark room, observe every level in ascending order, and record the starting BLE Config values. Use the correction case to create a known AQI category. For unavailable PM, use a battery ship-mode cold boot and observe the rear LED before the first valid SPS30 result; do not disconnect hardware. Restore both recorded levels."
     },
     {
       "id": "ui.settings.audio-and-melodies",
@@ -105,8 +105,8 @@
       "sub_category": "Audio feedback",
       "applies_to": ["V1"],
       "description": "Buzzer and melody settings control ordinary feedback and preview restoration",
-      "expected_result": "With Buzzer Off, an onboarded cold boot produces no ordinary boot sound; with Buzzer On, the same boot plays it. During each Chime and Tetris preview, every audible melody step has a rear-LED color step, and Up, Down, Enter, and short Power do not change the screen until playback ends. Within one display refresh after playback, the recorded buzzer setting, rear brightness, and AQI color are restored. The selected buzzer value matches a BLE Config Read after reboot.",
-      "notes": "Record buzzer, rear brightness, AQI color, and displayed screen before each preview. The first-use welcome is excluded because it overrides the persisted buzzer setting. Restore the recorded buzzer value."
+      "expected_result": "With Buzzer Off, an onboarded cold boot produces no ordinary boot sound; with Buzzer On, the same boot plays it. During each Chime and Tetris preview, every audible melody step has a rear-LED color step, and Up, Down, Enter, and short Power do not change the screen until playback ends. Within one display refresh after playback, the recorded buzzer setting, rear brightness, and AQI color are restored. The selected buzzer value matches a BLE Config Read after reboot. Opening Settings > Operations > Buzzer selects the current value and applying a choice returns to Operations on Buzzer. Opening Settings > Hardware Test > Play Melody lists Chime and Tetris; canceling or finishing playback returns to Hardware Test on Play Melody.",
+      "notes": "Use Operations for Buzzer and Hardware Test for Play Melody. Record buzzer, rear brightness, AQI color, and displayed screen before each preview. The first-use welcome is excluded because it overrides the persisted buzzer setting. Restore the recorded buzzer value."
     },
     {
       "id": "sensors.presentation.corrections-units-and-raw-boundaries",
@@ -124,7 +124,43 @@
       "applies_to": ["V1"],
       "description": "Measurement cadence and V1 SPS30 sleep/wake follow the selected release settings",
       "expected_result": "At 3 seconds, five consecutive completed-measurement timestamps are each 2 through 4 seconds apart, and BLE Measures plus Home update once per completed cycle. At 30 seconds, two consecutive cycles show the SPS30 fan stop after measurement and serial PM power OFF, followed before the next result by PM power ON, \"PM prepare: waking and warming up after power-on\", and \"PM prepare: complete\". PM1/PM2.5/PM10 are present in that next result, no reboot occurs, and the serial capture contains zero \"PMID collapsed\" or \"PMID wait timed out\" warnings.",
-      "notes": "Use an onboarded V1 in a quiet room with serial and bonded BLE Measures capture. Record five 3-second cycles, then two 30-second cycles. Restore the recorded interval."
+      "notes": "Use an onboarded V1 in a quiet room with serial and bonded BLE Measures capture. Record five 3-second cycles, then two 30-second cycles without deliberate shakes so these timestamps measure the regular cadence. Restore the recorded interval."
+    },
+    {
+      "id": "sensors.validity.failed-reading-retention",
+      "category": "Sensor Presentation",
+      "sub_category": "Measurement validity",
+      "applies_to": ["V1"],
+      "description": "PM and CO2 readings remain available for two minutes after communication fails",
+      "expected_result": "For both PM and CO2, the last valid readings remain visible on Home during communication failures, then change to dashes about two minutes after the last successful reading. Valid readings return after communication recovers and a measurement succeeds.",
+      "notes": "Run once for PM and once for CO2 on an awake device with a 3-second measurement interval. Wait for valid readings, then disconnect only that sensor's data connection, keeping it powered and other sensors connected. Confirm read failures in serial logs, wait over two minutes, then reconnect and check recovery. A stopwatch is sufficient; exact boundary timing is covered by automated tests. Do not reboot during the check. Restore the original interval afterward."
+    },
+    {
+      "id": "sensors.refresh.shake-and-progress",
+      "category": "Sensor Presentation",
+      "sub_category": "Measurement scheduling",
+      "applies_to": ["V1"],
+      "description": "Shake refreshes readings with a beep and progress feedback",
+      "expected_result": "An accepted shake gives a short beep when the buzzer is enabled and refreshes Home readings. Progress appears while waiting for measurement or PM warmup, stays visible when opening menus, and clears on completion. Other snackbar messages do not replace it. More shakes while waiting do not add refreshes or beeps. After completion, another shake can refresh again. With the buzzer disabled, refresh still works silently.",
+      "notes": "Use an awake Go with a longer interval, such as 60 seconds, to observe PM warmup. Shake naturally side to side a few times; retry if needed. Try both hands, open a menu or lock/unlock while progress is visible, and check with the buzzer on and off. Serial logs can confirm capture ends on detection and rearms after a short cooldown."
+    },
+    {
+      "id": "sensors.refresh.regular-overlap-and-pm-hold",
+      "category": "Sensor Presentation",
+      "sub_category": "Measurement scheduling",
+      "applies_to": ["V1"],
+      "description": "Shake refresh works alongside regular measurements and PM warmup",
+      "expected_result": "A regular measurement already requested can also complete the refresh without an extra measurement. Otherwise, a shake requests fresh readings even when the next regular reading is close. Regular measurements continue afterward. PM stays awake when the next regular reading is close, avoiding another warmup.",
+      "notes": "Use a 60-second interval. Try shaking during startup warmup and between regular readings, including near the next reading. Use serial logs to follow measurement requests and PM activity; precise timing is not required."
+    },
+    {
+      "id": "sensors.refresh.live-data-without-extra-records",
+      "category": "Sensor Presentation",
+      "sub_category": "Measurement scheduling",
+      "applies_to": ["V1"],
+      "description": "Refresh updates live readings without adding extra history or uploads",
+      "expected_result": "Refreshed readings appear on Home and the connected BLE or Local Server interface. A manual refresh does not add extra chart samples or route points, or trigger an extra cloud upload. Regular recording and cloud updates continue normally. A regular measurement reused for refresh is still recorded normally.",
+      "notes": "Use a longer interval to distinguish manual refreshes from regular readings. Spot-check BLE in Portable or Local Server in Stationary. With tracking enabled, check the route history after a few refreshes. In Stationary with cloud enabled, check that uploads keep their normal cadence."
     },
     {
       "id": "diagnostics.peripheral.success",
@@ -132,8 +168,8 @@
       "sub_category": "Peripheral Test",
       "applies_to": ["V1"],
       "description": "The guided Peripheral Test passes all fitted V1 actuators and air-quality sensor roles",
-      "expected_result": "Prompts occur in this order: front LEDs, rear red/green/blue, three touch LEDs, and buzzer. Select Pass only after the prompted actuator alone produces the requested light or sound. Within five minutes, the AQ summary marks temperature, humidity, CO2, PM, TVOC, NOx, and pressure valid. Every row is PASS; the summary drives green rear LEDs, plays the charge-done melody, and logs \"peripheral test: summary overall=PASS\". Exit logs hardware restoration and restores the recorded LED levels, buzzer value, and AQI color within one refresh.",
-      "notes": "Warm the unit for five minutes before entry and record front/rear/touch brightness, buzzer, and AQI color. Do not select Pass for an actuator that was not observed. Auto-lock must remain suppressed."
+      "expected_result": "Prompts occur in this order: rear red/green/blue, three touch LEDs, and buzzer. Select Pass only after the prompted actuator alone produces the requested light or sound. Within five minutes, the AQ summary marks temperature, humidity, CO2, PM, TVOC, NOx, and pressure valid. Every row is PASS; the summary drives green rear LEDs, plays the charge-done melody, and logs \"peripheral test: summary overall=PASS\". Exit logs hardware restoration and restores the recorded LED levels, buzzer value, and AQI color within one refresh. Regular measurements continue after exit.",
+      "notes": "Warm the unit for five minutes before entry and record rear/touch brightness, buzzer, and AQI color. Do not select Pass for an actuator that was not observed. Auto-lock must remain suppressed."
     },
     {
       "id": "diagnostics.peripheral.failure",
@@ -141,7 +177,7 @@
       "sub_category": "Peripheral Test",
       "applies_to": ["V1"],
       "description": "A deliberately failed Peripheral Test reports failure and restores recorded hardware state",
-      "expected_result": "At the front-LED prompt, observe the working LEDs but select Fail; select Pass for the later rear-LED, touch-LED, and buzzer prompts. Let the automatic AQ sweep complete and require its Temp/Hum, CO2, PM, TVOC/NOx, and Pressure rows to pass. The summary marks only front LEDs FAIL and overall FAIL, drives red rear LEDs, plays the alert melody, and logs \"peripheral test: summary overall=FAIL\". Within one refresh after exit, serial logs restoration and the recorded LED levels, buzzer value, and AQI color return.",
+      "expected_result": "At the rear-LED prompt, observe the working LEDs but select Fail; select Pass for the later touch-LED and buzzer prompts. Let the automatic AQ sweep complete and require its Temp/Hum, CO2, PM, TVOC/NOx, and Pressure rows to pass. The summary marks only Back LED FAIL and overall FAIL, drives red rear LEDs, plays the alert melody, and logs \"peripheral test: summary overall=FAIL\". Within one refresh after exit, serial logs restoration and the recorded LED levels, buzzer value, and AQI color return.",
       "notes": "Record LED/buzzer/AQI state before entry. This verifies the UI failure path; do not disconnect or damage hardware."
     },
     {
@@ -168,8 +204,8 @@
       "sub_category": "Accelerometer Test",
       "applies_to": ["V1"],
       "description": "Accelerometer Test verifies V1 identity, at-rest magnitude, and orientation response",
-      "expected_result": "WHO_AM_I is 0x33 OK. After two seconds at rest, X/Y/Z read successfully, magnitude is 850–1150 mg, Result is PASS, and the entry success cue plays once. Hold each of the six faces upward for two seconds: the axis perpendicular to that face becomes dominant, its sign reverses on the opposite face, and magnitude remains 850–1150 mg. Serial contains the 0x33 initialization and PASS entry lines. Exit restores the recorded buzzer and rear AQI LED state.",
-      "notes": "Record buzzer and rear LED state before entry. Use a level surface for each face and wait for at least four 500 ms screen updates before rotating."
+      "expected_result": "At rest, WHO_AM_I is 0x33 OK, magnitude is around 1 g, and Result is PASS. Rotating Go changes the displayed axes and signs. The entry cue plays once. Shaking while the test is open does not trigger a measurement refresh. After exit, the buzzer and rear AQI LED settings are restored, and shake refresh works again on Home.",
+      "notes": "Open Settings > Hardware Test > Accelerometer Test with no refresh pending. Let Go rest, then rotate and shake it. Return Home and try a normal shake refresh."
     },
     {
       "id": "diagnostics.accelerometer.failure",
@@ -186,8 +222,8 @@
       "sub_category": "GPS modes",
       "applies_to": ["V1"],
       "description": "GPS modes control receiver activity and data exposure",
-      "expected_result": "Run three subruns. Always Off stops GNSS, clears the GPS icon, and omits lat/lon/alt while BLE Measures fix/sat report no fix. On When Tracking has the same idle state, starts GNSS when a route starts, exposes fix/sat and valid position after a 2D/3D fix, then stops GNSS within 10 seconds after route end. Always On starts GNSS while idle and exposes the same fields after fix. Each selected mode matches a BLE Config Read after reboot.",
-      "notes": "Requires bonded BLE, serial logging, and open sky. Record receiver start/stop logs and one BLE Measures payload per state. End the route and restore the recorded GPS mode."
+      "expected_result": "Run three subruns. Always Off stops GNSS, clears the GPS icon, and omits all GPS keys (lat, lon, alt, fix, sat) from BLE Measures. On When Tracking has the same idle state, starts GNSS when a route starts, and exposes fix/sat and valid position after a 2D/3D fix. Pause keeps GNSS running and live GPS fields available while the fix remains valid; Resume does not restart GNSS. Stopping the session stops GNSS within 10 seconds. Always On starts GNSS while idle and exposes the same fields after fix. Each selected mode matches a BLE Config Read after reboot.",
+      "notes": "Requires bonded BLE, serial logging, and open sky. Record receiver start/stop logs and BLE Measures for Idle, Recording, Paused, Resumed, and Stopped; keep open-sky reception during Pause/Resume. End the route and restore the recorded GPS mode."
     },
     {
       "id": "gps.aiding.success",
@@ -213,7 +249,7 @@
       "sub_category": "Manual CO2 calibration",
       "applies_to": ["V1"],
       "description": "S12 and SCD4x production units complete manual CO2 calibration through each supported trigger",
-      "expected_result": "On both S12 and SCD4x units, UI No and Back return without a calibration-start log. UI Yes shows \"Calibrating CO2...\", then \"CO2 cal. done\" and \"CO2 calibration succeeded\" within 90 seconds. A BLE Config co2_cal command emits cmd_progress followed by one cmd_result ok=true within 90 seconds. Local Server Action calibrate-co2 returns empty 200 within 5 seconds, and a Cloud configuration GET with co2CalibrationRequested=true is admitted; each Stationary trigger is confirmed by the same success screen and serial log within 90 seconds.",
+      "expected_result": "On both S12 and SCD4x units, Settings > Operations > CO2 Calibration opens confirmation; No and Back return to Operations on CO2 Calibration without a calibration-start log. UI Yes shows \"Calibrating CO2...\", then \"CO2 cal. done\" and \"CO2 calibration succeeded\" within 90 seconds. A BLE Config co2_cal command emits cmd_progress followed by one cmd_result ok=true within 90 seconds. Local Server Action calibrate-co2 returns empty 200 within 5 seconds, and a Cloud configuration GET with co2CalibrationRequested=true is admitted; each Stationary trigger is confirmed by the same success screen and serial log within 90 seconds.",
       "notes": "Run the UI, BLE Config, Local Server Action, and Cloud configuration GET subruns one at a time on each sensor variant in outdoor air away from people, vehicles, and combustion. Keep SCD4x in periodic measurement for at least three minutes before every subrun. Wait for completion before the next request; results have no request ID. Restore authority and Cloud settings."
     },
     {
@@ -240,8 +276,8 @@
       "sub_category": "GATT protocol",
       "applies_to": ["V1"],
       "description": "The production Portable GATT profile and command contract pass the hardware integration suite",
-      "expected_result": "The Portable BLE integration suite exits with zero failures or unexpected skips; route download tests run against the seeded non-empty route, while the two co2_cal command tests are deselected. Debug capture contains one BLE Measures map with pm1, pm25, pm10, and pres. With a client MTU that requires a long read, BLE Config returns all 17 documented keys without truncation. The complete recorded BLE Config is restored.",
-      "notes": "Seed one completed route with at least one point, bond the test host, and run pytest products/go/tests/ble-integration/ -v --log-cli-level=DEBUG with --deselect for TestConfigCommand::test_command_progress_and_result_format and ::test_read_after_command_returns_config_snapshot. Record the client and negotiated MTU used for the separate Read-Long check."
+      "expected_result": "The Portable BLE integration suite exits with zero failures or unexpected skips; route download tests run against the seeded non-empty route, while the two co2_cal command tests are deselected. Debug capture contains one BLE Measures map with pm1, pm25, pm10, and pres. With a client MTU that requires a long read, BLE Config returns all 17 documented keys without truncation. BLE Status Read contains exactly gps_fix, gps_sat, bat_pct, bat_v, charging, tracking, session, trk, flash_kb, and used_kb. Start, Pause, Resume, and Stop notifications contain exactly tracking, session, and trk. The integer trk is 0 for Idle, 1 for Recording, and 2 for Paused; the boolean tracking is false only in Idle. Session is 0 in Idle and remains the same nonzero ID through Pause/Resume. Repeated Pause while paused or Resume while recording succeeds without another tracking notification; Start while paused returns already_tracking. Plugging or unplugging USB while paused sends a charging delta containing only charging, bat_pct, and bat_v; the following full Status Read retains the paused state and session ID. The complete recorded BLE Config is restored.",
+      "notes": "Seed one completed route with at least one point, bond the test host, and run pytest products/go/tests/ble-integration/ -v --log-cli-level=DEBUG with --deselect for TestConfigCommand::test_command_progress_and_result_format and ::test_read_after_command_returns_config_snapshot. Record the client and negotiated MTU used for the separate Read-Long check. Use the existing Config characteristic for manual Pause/Resume and USB checks; send {op:cmd, cmd:pause_tracking} and {op:cmd, cmd:resume_tracking}. Include Stop while paused, then stop/delete any test route and restore USB state. Legacy Start/Stop remain unchanged. The tracking field will be deprecated soon; new clients should use trk, but this release must still include the legacy field."
     },
     {
       "id": "portable.provisioning.static-ip-verify-then-drop",
@@ -267,8 +303,35 @@
       "sub_category": "Route lifecycle",
       "applies_to": ["V1"],
       "description": "A tracked route records GPS and sensor points and remains exportable after power cycling",
-      "expected_result": "Starting tracking on the device shows \"Tracking start = NNNNN\", logs route creation, and pushes BLE Status tracking=true with the same session ID. After at least five completed outdoor measurements with a 2D/3D fix, sending stop_tracking through BLE Config shows the same ID, logs route closure with at least five points, and pushes BLE Status tracking=false/session=0. Portable BLE History export contains sequential point indices and timestamps plus GPS, PM1/PM2.5/PM10, CO2, gas, temperature, humidity, pressure, and battery fields whenever those fields were valid in the timestamp-matched raw source. Each exported timestamp is within one selected measurement interval of its recorded raw snapshot. The session remains listed and exports identically through Portable BLE History after a ship-mode power cycle.",
+      "expected_result": "Starting tracking on the device shows \"Tracking start = NNNNN\", logs route creation, and shows the recording dot on Home. After at least five completed outdoor measurements with a 2D/3D fix, sending stop_tracking through BLE Config shows the same ID, logs route closure with at least five points, and clears the recording dot. Portable BLE History export contains sequential point indices and timestamps plus GPS, PM1/PM2.5/PM10, CO2, gas, temperature, humidity, pressure, and battery fields whenever those fields were valid in the timestamp-matched raw source. Each exported timestamp is within one selected measurement interval of its recorded raw snapshot. The session remains listed and exports identically through Portable BLE History after a ship-mode power cycle.",
       "notes": "Use bonded BLE, open sky, serial capture, 3- or 10-second cadence, and a unit with no storage errors. Record at least five raw source snapshots during tracking. Stop before power cycling, then compare session ID, point count, and export. Delete the route afterward."
+    },
+    {
+      "id": "tracking.status.session-and-gps",
+      "category": "Tracking & Storage",
+      "sub_category": "Route lifecycle",
+      "applies_to": ["V1"],
+      "description": "Tracking Status shows live session progress and GPS details without inactivity locking",
+      "expected_result": "Tracking > Status opens Session with Back selected. Before the first point, Points is 0 and Last is No points yet. Session shows State, UTC, Active, Elapsed, Points, and Last; the view switch opens GPS details with GPS, Fix, Sats, HDOP, Lat, and Lon. Both views refresh about every five seconds without input, preserve the selected row, leave the top bar unchanged, and show no full-screen flash during a two-minute observation. Neither view auto-locks with Auto Lock set to 10 seconds. Active and Elapsed advance while Recording, Points advances with scheduled recordings, and Last resets after a point. BLE Pause keeps the view open, freezes Active and Points, and lets Elapsed and Last advance; Resume continues the same session. Outdoors, a 2D/3D fix shows coordinates within 1 km of the phone and UTC within 10 seconds. After fix loss, coordinates and UTC show dashes; with GPS Always Off, GPS shows Off and all GPS detail values and UTC show dashes. Back and double Enter return to Tracking with Status selected; Exit and long Enter return Home. Reopening resets to Session with Back selected. Leaving Status starts a fresh 10-second inactivity timeout, while short Power locks immediately. Remote Stop from Status returns to Main Menu with Start Tracking selected.",
+      "notes": "Use bonded Portable BLE, GPS On When Tracking, a phone clock/location, and serial capture. Set a 60-second measurement interval and start just after a measurement to check the empty session. Observe each view for two minutes, then pause for at least 30 seconds and resume through BLE while Status remains open. Compare durations with a stopwatch allowing one five-second display interval plus one second for rounding, and compare the paused count with History export after closing the writer. End History export before Resume. Use a verified GNSS shield for fix loss and BLE Config for GPS Always Off. Restore settings and delete the test route."
+    },
+    {
+      "id": "tracking.route.pause-resume",
+      "category": "Tracking & Storage",
+      "sub_category": "Route lifecycle",
+      "applies_to": ["V1"],
+      "description": "Pause preserves the route and live readings; Resume appends to the same session",
+      "expected_result": "Start a route and record at least three points. Pause from Tracking > Pause Tracking: Home shows two pause bars and \"Tracking paused\", and serial logs the paused session ID and route closure. Record the closed point count. Over at least three further completed measurements, live readings and Home charts continue updating while History export contains the same points. Attempting to delete the paused route is rejected and leaves it intact. Resume through the BLE client: Home shows \"Tracking resumed\" and the recording dot, and serial logs the same session ID. After three further measurements, export contains the unchanged earlier points followed by new points, with no samples from the paused interval and no second session. In a second cycle, pause through BLE and resume through the menu with the same results. Finally pause and Stop from the menu: the pause icon clears, the menu offers Start Tracking, and the completed route can be exported and deleted.",
+      "notes": "Use bonded Portable BLE, a client that can pause/resume tracking and export History, open sky, GPS On When Tracking, and a recorded 3- or 10-second cadence. Capture the session ID, point count after Pause closes the file, measurement timestamps, and exports before and after Resume. End each History export before the next command. Restore the original settings and delete the test route."
+    },
+    {
+      "id": "tracking.route.gps-fix-loss",
+      "category": "Tracking & Storage",
+      "sub_category": "Route lifecycle",
+      "applies_to": ["V1"],
+      "description": "GPS fix loss does not save stale coordinates",
+      "expected_result": "Start tracking outdoors with a GPS fix. Move indoors until the GPS icon disappears, then return outdoors until it returns. Stop and download the route. Readings from the gap are still recorded, but their location is invalid instead of repeating the last known position. Points before and after the gap have valid locations.",
+      "notes": "Use Portable mode and GPS On When Tracking. Allow at least one measurement in each state and note when the icon disappears and returns. In the raw export, invalid location means latitude 91, longitude 181, and altitude -10000."
     },
     {
       "id": "portable.history.download-success",
@@ -312,8 +375,8 @@
       "sub_category": "Clear Data",
       "applies_to": ["V1"],
       "description": "The on-device Clear Data action removes charts and routes without resetting user configuration",
-      "expected_result": "With at least five chart samples, two completed routes, and one active route, confirming Settings > Data > Clear Data stops tracking, shows \"Data cleared\" within 30 seconds, resets every Home chart to no samples, and makes Portable BLE History list return cnt=0. A BLE Status Read reports used_kb no greater than the pre-clear value. Complete BLE Config and saved Wi-Fi equal the recorded snapshots, and the bonded client reconnects without a passkey.",
-      "notes": "Use expendable data. Record complete BLE Config, saved SSID/static-IP/Cloud settings, bond, chart count, route IDs, active session, and used_kb before confirmation."
+      "expected_result": "With at least five chart samples, two completed routes, and one paused route, confirming Settings > Clear Data stops tracking, shows \"Data cleared\" within 30 seconds, resets every Home chart to no samples, and makes Portable BLE History list return cnt=0. The pause icon clears, the menu offers Start Tracking, and a BLE Status Read reports used_kb no greater than the pre-clear value. Complete BLE Config and saved Wi-Fi equal the recorded snapshots, and the bonded client reconnects without a passkey.",
+      "notes": "Use expendable data. Record complete BLE Config, saved SSID/static-IP/Cloud settings, bond, chart count, route IDs, paused session, and used_kb before confirmation."
     },
     {
       "id": "storage.clear-data.ble-success",
@@ -321,7 +384,7 @@
       "sub_category": "Clear Data",
       "applies_to": ["V1"],
       "description": "The BLE Config clear_data command removes charts and routes while preserving the connection and settings",
-      "expected_result": "With at least five chart samples, two completed routes, and active tracking, BLE Config clear_data sends cmd_progress followed within 30 seconds by cmd_result ok=true. BLE Status changes to tracking=false/session=0, Portable BLE History list returns cnt=0, and every Home chart has no samples. BLE remains connected; complete BLE Config and saved Wi-Fi equal the pre-command snapshots, and BLE Status used_kb is no greater than before.",
+      "expected_result": "With at least five chart samples, two completed routes, and active tracking, BLE Config clear_data sends cmd_progress followed within 30 seconds by cmd_result ok=true. Tracking stops, Portable BLE History list returns cnt=0, and every Home chart has no samples. BLE remains connected; complete BLE Config and saved Wi-Fi equal the pre-command snapshots, and BLE Status used_kb is no greater than before.",
       "notes": "Use expendable data and record BLE Config, network settings, chart count, route IDs, active session, and used_kb before writing {op:cmd, cmd:clear_data} to BLE Config."
     },
     {
@@ -338,18 +401,18 @@
       "category": "Stationary Networking",
       "sub_category": "Provisioning",
       "applies_to": ["V1"],
-      "description": "A fresh manufacturing-mode unit reconnects to the transient factory-default Wi-Fi fallback",
-      "expected_result": "With no saved credentials and a 2.4 GHz WPA2 AP named airgradient with password cleanair, short-press BOOT before onboarding. Stationary manufacturing mode shows \"Trying default Wi-Fi...\", associates within the 15-second fallback window, reaches Home, and never opens provisioning. Disable the AP until the disconnected Wi-Fi glyph appears and serial logs \"runtime link lost; scheduling reconnect\" plus \"runtime reconnect: attempting default fallback\". Restore the AP: within 15 seconds the device reconnects, shows \"Wi-Fi connected\", and logs \"wifi reconnected\" without opening provisioning. Remove the AP, perform a Power-button shutdown and cold start, then re-enter manufacturing mode: after the fallback window, provisioning opens and no saved-network entry for airgradient is present.",
-      "notes": "Use a dedicated factory-reset unit and an AP that can be fully disabled. Keep the AP unavailable through at least one runtime reconnect attempt, capture association records and serial throughout, and reset the unit after the case."
+      "description": "Manufacturing reconnects after a Wi-Fi drop, but restarts if the first connection fails",
+      "expected_result": "1. Turn on the factory Wi-Fi and briefly press BOOT at Getting Started. Go shows \"Trying default Wi-Fi...\", connects within 15 seconds, and reaches Home. 2. Turn that Wi-Fi off for 30 seconds. The Wi-Fi icon shows disconnected; Go keeps trying to reconnect without restarting or opening Wi-Fi setup. 3. Turn the Wi-Fi back on. Go reconnects within 15 seconds and shows \"Wi-Fi connected\". 4. Turn the Wi-Fi off again, power Go off and on, then briefly press BOOT. After the 15-second connection timeout, Go shows \"Wi-Fi connection failed\" for one second after the display finishes updating, then restarts to Getting Started. No Wi-Fi setup page appears. 5. Wait 30 seconds without pressing BOOT: Go stays at Getting Started. Press BOOT again to confirm a new manufacturing attempt starts. Repeat the failed-start check with the factory Wi-Fi on but its password changed; the result is the same.",
+      "notes": "Setup: use a test unit at Getting Started with no saved networks. Factory Wi-Fi means a 2.4 GHz WPA2 network named airgradient with password cleanair. Turn the network itself off, not just its internet connection. Record the screen and serial logs; allow extra time for the e-paper refresh. The timeout log is \"manufacturing Wi-Fi timed out; showing failure before reboot\". Also repeat entry with an unrelated saved network: Go must still choose factory Wi-Fi. Check that manufacturing does not save the factory credentials and that existing production corrections survive the timeout restart. Restore the factory password after testing."
     },
     {
       "id": "stationary.provisioning.first-connect",
       "category": "Stationary Networking",
       "sub_category": "Provisioning",
       "applies_to": ["V1"],
-      "description": "First entry into Stationary mode provisions Wi-Fi and persists the network",
-      "expected_result": "With the fallback AP absent, Stationary shows \"Trying default Wi-Fi...\" and then, within 20 seconds, standalone BLE provisioning advertises AirGradient Go <last4> with manufacturer data P-1PSG#<serial>. Encrypted DIS reads the same model, serial, and firmware after Just Works pairing, without deleting the existing Portable bond. Submitting the recorded 2.4 GHz credentials changes the display to Connecting, BLE Provisioning Credentials/Status notifies status=0 within 30 seconds, shows \"Connected! <DHCP IP>\", and reaches Home. After cold reboot, Stationary reconnects to the same SSID without provisioning.",
-      "notes": "Use the approved release provisioning client and record its name/version, a bonded Portable client, and a controllable WPA2 AP. BLE Provisioning Credentials/Status status=0 proves association and IP only. Restore the prior mode or factory-reset after the case."
+      "description": "Normal Stationary mode uses Wi-Fi setup and saved networks, never automatic factory Wi-Fi",
+      "expected_result": "1. With no saved networks, complete Getting Started and select Stationary mode. Go opens app Wi-Fi setup directly, without showing \"Trying default Wi-Fi...\" or joining factory Wi-Fi. 2. Use the provisioning app to save the test Wi-Fi. Go shows Connecting, then \"Connected!\" with an IP address, and reaches Home. The app reports success within 30 seconds. 3. Turn only the test Wi-Fi off for 30 seconds. Go keeps trying the saved network without restarting, opening setup, or joining factory Wi-Fi. Turn the test Wi-Fi back on and confirm Go reconnects. 4. Power Go off and on with both networks available. It reconnects to the saved test Wi-Fi without setup. 5. Turn the test Wi-Fi off and power Go off and on again. The initial saved-network connection fails, Go shows the failure reason, then opens Wi-Fi setup. It never tries factory Wi-Fi during any step.",
+      "notes": "Setup: use two independently controlled 2.4 GHz WPA2 networks. Keep factory Wi-Fi (airgradient / cleanair) on throughout; give the test Wi-Fi a different name. Use the approved provisioning app and record its version. Turn off the test network itself, not just its internet connection. Check serial and router connection logs to confirm factory Wi-Fi is never attempted or joined. Retain the existing BLE checks: AirGradient Go <last4> advertisement, P-1PSG#<serial> manufacturer data, correct model/serial/firmware after pairing, the existing Portable bond preserved, and provisioning status=0 on success. That status confirms Wi-Fi connection and an IP address, not Cloud delivery. Restore both networks and the prior operating mode afterward."
     },
     {
       "id": "stationary.provisioning.portal-success",
@@ -402,7 +465,7 @@
       "sub_category": "Local Server",
       "applies_to": ["V1"],
       "description": "Local Server Actions for LED and GPS tests are admitted and then physically confirmed",
-      "expected_result": "Local Server Action test-leds returns an empty HTTP 200 within 5 seconds; the device logs LED test start, displays the documented front/rear/touch sequence, logs finish, and restores the recorded LED levels/AQI color within one refresh. After that finishes, Local Server Action test-gps returns empty 200 within 5 seconds and opens GPS Test within 10 seconds. Exit GPS Test and confirm its finish log.",
+      "expected_result": "Local Server Action test-leds returns an empty HTTP 200 within 5 seconds; the device logs LED test start, displays the documented rear/touch sequence, logs finish, and restores the recorded LED levels/AQI color within one refresh. After that finishes, Local Server Action test-gps returns empty 200 within 5 seconds and opens GPS Test within 10 seconds. Exit GPS Test and confirm its finish log.",
       "notes": "Record LED state, run actions one at a time with no diagnostic active, and use products/go/tests/local-server-integration/test_actions.py for request formatting. HTTP confirms queue admission; screen and serial prove execution."
     },
     {
@@ -456,7 +519,7 @@
       "sub_category": "Cloud actions",
       "applies_to": ["V1"],
       "description": "Supported action flags from Cloud configuration GET run their observable device workflows",
-      "expected_result": "A Cloud configuration GET response with ledTestRequested=true and gpsTestRequested=true is received within 90 seconds. Serial logs LED test start and finish in that order; the documented LED sequence runs, and the recorded brightness/AQI state is restored before GPS Test opens. GPS Test opens within 10 seconds after LED finish and logs its start. Exit it and require the finish log plus restoration of the recorded GPS mode.",
+      "expected_result": "A Cloud configuration GET response with ledTestRequested=true and gpsTestRequested=true is received within 90 seconds. Serial logs LED test start and finish in that order; the documented rear/touch LED sequence runs, and the recorded brightness/AQI state is restored before GPS Test opens. GPS Test opens within 10 seconds after LED finish and logs its start. Exit it and require the finish log plus restoration of the recorded GPS mode.",
       "notes": "Enable Cloud and permit Cloud configuration GETs, record LED/GPS state, and ensure no Hardware Test is active. Capture the exact response from Cloud server logs and the serial timeline. CO2 calibration is covered separately."
     },
     {
@@ -483,8 +546,8 @@
       "sub_category": "Mode transitions",
       "applies_to": ["V1"],
       "description": "Portable, Stationary, and Offline transitions release and restore the correct resources and persist the selected mode",
-      "expected_result": "Execute all six directed transitions: Portable->Stationary, Stationary->Portable, Portable->Offline, Offline->Portable, Stationary->Offline, and Offline->Stationary. Within 30 seconds, Portable advertises BLE with no Wi-Fi/mDNS/HTTP; Stationary has Wi-Fi/mDNS/HTTP but no Portable data service; Offline has neither radio service. Each Stationary destination produces one Cloud measurement POST in Cloud server logs within 90 seconds. BLE Status notifies disc=op_stationary or disc=op_offline before connected Portable exits. Reboot once in each mode and confirm persistence. An active route retains its session ID through each change. Routes started/stopped on-device in Stationary and Offline each contain at least three points and export through Portable BLE History; Portable device-originated start/stop pushes matching BLE Status deltas.",
-      "notes": "Provision Stationary first and require cloudConnection=true. Run a six-row matrix using serial, scanners, mDNS/Local Server probes, Cloud server logs, and BLE Status. End/delete routes and restore mode/Cloud state."
+      "expected_result": "Execute all six directed transitions: Portable->Stationary, Stationary->Portable, Portable->Offline, Offline->Portable, Stationary->Offline, and Offline->Stationary. Within 30 seconds, Portable advertises BLE with no Wi-Fi/mDNS/HTTP; Stationary has Wi-Fi/mDNS/HTTP but no Portable data service; Offline has neither radio service. Each Stationary destination produces one Cloud measurement POST in Cloud server logs within 90 seconds. BLE Status notifies disc=op_stationary or disc=op_offline before connected Portable exits. Reboot once in each mode and confirm persistence. An active route retains its session ID through each change. Routes started/stopped on-device in Stationary and Offline each contain at least three points and export through Portable BLE History. In an additional Portable->Stationary->Portable round trip with the session Paused, the pause icon persists. Stationary still sends a Cloud measurement POST and performs a Cloud configuration GET within 90 seconds. On returning Portable, the session is still paused: the menu offers Resume Tracking and History shows the same route ID and point count as at Pause.",
+      "notes": "Provision Stationary first and record configuration, then set cloudConnection=true and configurationControl=both for the paused Cloud check. Run a six-row matrix using serial, scanners, mDNS/Local Server probes, Cloud server logs, and BLE Status. Record the paused session ID/count before the extra round trip. End/delete routes and restore mode, Cloud state, and configuration authority."
     },
     {
       "id": "system.uptime.deep-sleep-and-reset-boundaries",
@@ -519,8 +582,8 @@
       "sub_category": "Radio and sleep behavior",
       "applies_to": ["V1"],
       "description": "Offline mode disables radios while measurements, deep-sleep cycles, and route tracking continue",
-      "expected_result": "With a route active, Offline locked, and interval=30, two cycles each log \"enter_sleep: entering deep sleep\" followed by \"run_fast_path: entering fast-path boot\" and append a point to the same session. Compare those timer-wake route gas fields with the same-cycle serial SGP41 raw ticks; they match the raw values, not the 1-500 conditioned indexes. Power wakes the unit through \"run_button_wake_path: entering button-wake boot\", Home is unlocked for at least 10 seconds without input, and the session ID is unchanged. Returning Portable exports all pre-sleep and post-wake points.",
-      "notes": "Record session ID, point count, serial raw gas values, and chart count before sleep. Observe two complete cycles, stop/export/delete the route, and restore interval/mode."
+      "expected_result": "With a route active, Offline locked, and interval=30, two cycles each log \"enter_sleep: entering deep sleep\" followed by \"run_fast_path: entering fast-path boot\" and append a point to the same session. Compare those timer-wake route gas fields with the same-cycle serial SGP41 raw ticks; they match the raw values, not the 1-500 conditioned indexes. Power wakes the unit through \"run_button_wake_path: entering button-wake boot\", Home is unlocked for at least 10 seconds without input, and the session ID is unchanged. Returning Portable exports all pre-sleep and post-wake points. Next pause an active session, record its ID/count, and repeat two locked Offline sleep/wake cycles. The pause icon survives each wake, fast-path measurements continue, and Power wake leaves the session Paused. On returning Portable, the menu offers Resume Tracking and History shows the same route ID with no additional points from the paused cycles. Resume, record another point, and Stop; the same route exports its earlier points plus the resumed point. On each Power wake, reopen Tracking > Status: during Recording, Active and Elapsed include the sleep interval and Points includes the timer-wake records; Last reflects the most recent timer-wake point. During Paused sleep, Active and Points remain unchanged while Elapsed and Last include time asleep. Keeping Status open for at least 30 seconds with Auto Lock set to 10 seconds prevents deep sleep; manually locking allows the next sleep cycle.",
+      "notes": "Record session ID, point count, serial raw gas values, and chart count before sleep. Use GPS On When Tracking. Observe two Recording cycles and two Paused cycles, record the count after Pause closes the file, then resume, stop/export/delete the route, and restore interval, GPS, and mode. Before each Recording and Paused sleep run, photograph Status values and record phone time; compare again immediately after Power wake, allowing one five-second display interval plus one second for rounding. Use serial append timestamps to check Last. Record and restore Auto Lock."
     },
     {
       "id": "power.usb.charging-transition",
@@ -528,8 +591,26 @@
       "sub_category": "Charging",
       "applies_to": ["V1"],
       "description": "USB plug and unplug transitions update charging state without disrupting measurements",
-      "expected_result": "Unplugged below full charge, Home shows battery and the BLE Status charging field has a non-charging value. On each of three USB connections, Home changes to the charging bolt and one BLE Status delta contains exactly charging, bat_pct, and bat_v; a following BLE Status Read contains all nine documented keys with bat_pct 0-100 and nonnegative bat_v. On each removal, Home and BLE Status return to battery operation by the next power poll. Serial FG telemetry continues, PM1/PM2.5/PM10 return by the next completed measurement, no reboot occurs, and the complete capture contains zero \"PMID collapsed\" and \"PMID wait timed out\" warnings.",
+      "expected_result": "Unplugged below full charge, Home shows battery and BLE Status reports a non-charging state. On each of three USB connections, Home changes to the charging bolt and BLE reports charging with battery percentage from 0 to 100 and nonnegative battery voltage; a following Status Read agrees with the notification. On each removal, Home and BLE Status return to battery operation by the next power poll. Serial FG telemetry continues, PM1/PM2.5/PM10 return by the next completed measurement, no reboot occurs, and the complete capture contains zero \"PMID collapsed\" and \"PMID wait timed out\" warnings.",
       "notes": "Start below the full-charge pause, record interval and the initial BLE Status, and hold each connected/disconnected state through one power poll and one measurement. Restore the initial USB state."
+    },
+    {
+      "id": "power.usb.charging-only-boot",
+      "category": "Power Management",
+      "sub_category": "Charging",
+      "applies_to": ["V1"],
+      "description": "Plugging in a powered-off unit shows Charging; Power turns it on and unplugging turns it off",
+      "expected_result": "USB insertion shows \"Charging\", a battery-and-bolt icon, and \"Hold power button / to turn on\". The page stays unchanged for 30 seconds without starting Home or repeatedly refreshing. Pressing Power starts normal operation and reaches Home. In the unplug subrun, the display changes to \"Powered off\" and the unit stays off.",
+      "notes": "Use a partly charged, onboarded unit. Disconnect USB, shut down, and release Power. Plug in USB, wait 30 seconds, then press and release Power. Repeat the shutdown and USB insertion, but unplug instead of pressing Power. Allow about two seconds for unplug detection plus the display refresh."
+    },
+    {
+      "id": "power.usb.charging-only-full",
+      "category": "Power Management",
+      "sub_category": "Charging",
+      "applies_to": ["V1"],
+      "description": "Charging-only mode shows Battery Full when charging finishes",
+      "expected_result": "\"Charging\" changes to \"Battery Full\" with a filled-battery icon. The title and button hint fit without clipping. The page stays unchanged for 30 seconds without repeated refreshes or starting Home. Unplugging shows \"Powered off\"; reconnecting returns to the charging screen and shows \"Battery Full\" once charging is complete.",
+      "notes": "Use a near-full unit to reduce waiting. Shut down with USB disconnected, release Power, then plug in USB and leave it until Battery Full appears. Wait 30 seconds, unplug, wait for Powered off, and reconnect. Charging may appear again briefly while the battery tops up."
     },
     {
       "id": "power.shutdown.ship-mode",
@@ -545,9 +626,9 @@
       "category": "Power Management",
       "sub_category": "USB shutdown",
       "applies_to": ["V1"],
-      "description": "User shutdown remains quiescent when USB prevents BATFET ship mode",
-      "expected_result": "With USB attached, hold Power for at least 2000 ms until the complete shutdown frame appears and serial logs \"shutdown: entering BMS ship mode (QoN)\". For the following 30 seconds the display remains unchanged, no boot splash or boot log appears, and serial shows no reboot loop. A Power press returns to interactive Home within 30 seconds. Complete BLE Config and the recorded completed-route ID/count are unchanged.",
-      "notes": "Record BLE Config and one completed route first. The optional \"enter_ship_mode failed\" log may appear but is not required; USB-powered quiescence is the acceptance criterion."
+      "description": "User shutdown on USB enters charging-only mode without waiting for a watchdog reset",
+      "expected_result": "Hold Power until Powered off appears, then release it. Charging or Battery Full appears within 10 seconds without Getting Ready or Home. The page remains in charging-only mode for five minutes without rebooting. Pressing and releasing Power starts normal operation and reaches Home. Settings and the recorded completed route remain unchanged. Repeat shutdown on USB, then unplug from the charging page: Powered off appears and the unit stays off.",
+      "notes": "Start on Home with USB connected. Record settings and one completed route before testing. Release Power after Powered off appears; keeping it held delays the reboot. Repeat with a full battery. If collecting serial, expect shutdown: rebooting into charging-only mode. Battery-only and protective shutdowns retain their existing behavior."
     },
     {
       "id": "manufacturing.usb-serial.command-protocol",
@@ -564,7 +645,7 @@
       "sub_category": "Factory reset",
       "applies_to": ["V1"],
       "description": "The physical factory-reset gesture clears user state and returns to first-use onboarding",
-      "expected_result": "After seeding the manifest, hold BOOT for at least 2000 ms. Serial logs \"factory_reset\", \"Factory reset success\", and \"Rebooting in 2s\"; reboot begins 2 through 4 seconds later. The device returns to Portable Getting Started. Complete BLE Config equals the pre-seeding factory snapshot, saved Wi-Fi is absent, BLE Status reports tracking=false/session=0, every chart is empty, Portable BLE History cnt=0, and the old client cannot authenticate with its former bond. A new pairing succeeds.",
+      "expected_result": "After seeding the manifest, hold BOOT for at least 2000 ms. Serial logs \"factory_reset\", \"Factory reset success\", and \"Rebooting in 2s\"; reboot begins 2 through 4 seconds later. The device returns to Portable Getting Started. Complete BLE Config equals the pre-seeding factory snapshot, saved Wi-Fi is absent, tracking is stopped, every chart is empty, Portable BLE History cnt=0, and the old client cannot authenticate with its former bond. A new pairing succeeds.",
       "notes": "On a dedicated unit, first factory-reset and record complete BLE Config. Seed temperature F, interval 30, saved Wi-Fi, one bond, five chart samples, two completed routes, and one active route; record all IDs before the physical reset."
     },
     {
@@ -573,7 +654,7 @@
       "sub_category": "Factory reset",
       "applies_to": ["V1"],
       "description": "The BLE factory-reset command reports progress before clearing user state",
-      "expected_result": "Writing {op:cmd, cmd:factory_rst} to BLE Config emits cmd_progress followed by cmd_result ok=true before BLE disconnects. Reboot begins within 10 seconds and returns to Portable Getting Started. Complete BLE Config equals the recorded factory snapshot, saved Wi-Fi is absent, BLE Status is tracking=false/session=0, all charts are empty, Portable BLE History cnt=0, and the old client cannot authenticate with its former bond.",
+      "expected_result": "Writing {op:cmd, cmd:factory_rst} to BLE Config emits cmd_progress followed by cmd_result ok=true before BLE disconnects. Reboot begins within 10 seconds and returns to Portable Getting Started. Complete BLE Config equals the recorded factory snapshot, saved Wi-Fi is absent, tracking is stopped, all charts are empty, Portable BLE History cnt=0, and the old client cannot authenticate with its former bond.",
       "notes": "Run independently on a reseeded dedicated unit. Before the command, seed the same manifest as the button-reset case and subscribe to BLE Config notifications; after reset, pair as a new client for verification."
     },
     {

@@ -262,7 +262,15 @@ bool StorageService::append_route_point(const RoutePoint &point) {
     return false;
   }
 
-  const size_t written = fwrite(&point, sizeof(RoutePoint), 1, _route_file);
+  RoutePoint stored_point = point;
+  if (!is_fix_valid(stored_point.gps.fix)) {
+    // The GPS driver can retain coordinates after losing its fix.
+    stored_point.gps.position.latitude = GPS_LATITUDE_INVALID;
+    stored_point.gps.position.longitude = GPS_LONGITUDE_INVALID;
+    stored_point.gps.altitude_m = GPS_ALTITUDE_INVALID;
+  }
+
+  const size_t written = fwrite(&stored_point, sizeof(RoutePoint), 1, _route_file);
   if (written != 1) {
     AG_LOGE(TAG, "append_route_point: fwrite failed (errno=%d)", errno);
     return false;
@@ -287,14 +295,16 @@ bool StorageService::append_route_point(const RoutePoint &point) {
   return true;
 }
 
-void StorageService::end_route() {
+bool StorageService::end_route() {
   if (_route_file == nullptr) {
-    return;
+    return true;
   }
 
-  // Best-effort final sync; nothing useful to do on the close path.
-  (void)flush_and_sync_route_file();
-  fclose(_route_file);
+  const bool synced = flush_and_sync_route_file();
+  const bool closed = fclose(_route_file) == 0;
+  if (!closed) {
+    AG_LOGE(TAG, "end_route: fclose failed (errno=%d)", errno);
+  }
   _route_file = nullptr;
 
   AG_LOGI(TAG, "end_route: session %" PRIu32 " closed (%" PRIu32 " points total)",
@@ -303,6 +313,7 @@ void StorageService::end_route() {
   _current_point_count = 0;
   _current_session_id = 0;
   _last_fsync_ms = FSYNC_ANCHOR_NONE;
+  return synced && closed;
 }
 
 bool StorageService::flush_and_sync_route_file() {
@@ -461,6 +472,28 @@ uint32_t StorageService::get_session_point_count(uint32_t session_id) const {
   }
 
   return static_cast<uint32_t>(st.st_size / sizeof(RoutePoint));
+}
+
+bool StorageService::try_get_session_point_count(uint32_t session_id, uint32_t &count) const {
+  if (!_nand.is_mounted()) {
+    return false;
+  }
+
+  if (_route_file != nullptr && _current_session_id == session_id) {
+    count = _current_point_count;
+    return true;
+  }
+
+  char path[MAX_PATH_LEN];
+  format_route_path(session_id, path, sizeof(path));
+
+  struct stat st{};
+  if (stat(path, &st) != 0) {
+    return false;
+  }
+
+  count = static_cast<uint32_t>(st.st_size / sizeof(RoutePoint));
+  return true;
 }
 
 uint16_t StorageService::read_route_points(uint32_t session_id, uint32_t offset, RoutePoint *out,

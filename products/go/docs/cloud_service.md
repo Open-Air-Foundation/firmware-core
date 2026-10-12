@@ -169,7 +169,6 @@ and queues a value-only `FetchConfigEventPayload`. Supported fields map into
 | `temperatureUnit` | `"c"`, `"f"` | `use_fahrenheit` |
 | `measurementInterval` | Integer 1 .. 3600 | `measure_interval_seconds` |
 | `gpsMode` | `"off"`, `"tracking"`, `"always"` | `gps_mode` |
-| `frontLedBrightness` | Integer 0 .. 3 | `front_led_brightness` |
 | `backLedBrightness` | Integer 0 .. 3 | `back_led_brightness` |
 | `touchLedIntensity` | Integer 0 .. 2 | `touch_led_intensity` |
 | `buzzerEnabled` | Boolean | `buzzer_enabled` |

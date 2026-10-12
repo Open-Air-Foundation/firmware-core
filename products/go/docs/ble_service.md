@@ -168,7 +168,7 @@ All characteristic payloads use CBOR (RFC 8949) encoded with TinyCBOR's
 |---|---|---|---|
 | Measures | ~120B | ~135B | Yes |
 | Status | ~95B | ~115B | Yes |
-| Config (read, 17 keys) | — | <512B | Yes (Read-Long) |
+| Config (read, 16 keys) | — | <512B | Yes (Read-Long) |
 | Config (notify, one field + type) | — | <180B | Yes |
 | History control (CBOR) | ~40B | ~180B | Yes |
 | History data (binary, 4 pts) | 223B | 223B | Yes |
@@ -267,12 +267,12 @@ is NOTIFY-only and does **not** touch the snapshot:
 | Method | Pushes notify? | NOTIFY delta | Used by |
 |---|---|---|---|
 | `update_status()` | No (set-value only) | — | Steady-state polls (BMS, GPS fix, history-delete, on-connect snapshot) |
-| `notify_tracking_status()` | Yes, when subscribed | `{tracking, session}` | Urgent tracking transitions: start success, start failure, manual stop |
+| `notify_tracking_status()` | Yes, when subscribed | `{tracking, session, trk}` | Tracking transitions: start success, start failure, pause, resume, stop |
 | `notify_charging_status()` | Yes, when subscribed | `{charging, bat_pct, bat_v}` | Charging transitions: plug in, unplug, charge complete |
 | `notify_disconnect()` | Yes, when connected | `{disc}` | Imminent link drop: shutdown (`overheat` for hot or cold battery temperature, `low_batt`, or `user`) or leaving Portable (`op_stationary` or `op_offline`) |
 
 The delta shapes have **disjoint keys** and carry **no** `"type"` discriminator,
-so the client merges whichever keys arrive. The Read value stays the full 9-key
+so the client merges whichever keys arrive. The Read value stays the full 10-key
 snapshot; the `disc` key is NOTIFY-only and never appears in the snapshot.
 
 The Read characteristic remains **authoritative**: a client that just
@@ -287,9 +287,13 @@ changes**, not on every periodic poll:
 
 | Event | Notify? |
 |---|---|
-| `start_tracking` success | Yes (`tracking: true`, `session: N`) |
-| `start_tracking` failed at storage open | Yes (`tracking: false`, `session: 0`) |
-| `stop_tracking` (manual) | Yes (`tracking: false`, `session: 0`) |
+| `start_tracking` success | Yes (`tracking: true`, `session: N`, `trk: 1`) |
+| `start_tracking` failed at storage open | Yes (`tracking: false`, `session: 0`, `trk: 0`) |
+| `pause_tracking` from Recording | Yes, even if sync/close fails (`tracking: true`, same `session: N`, `trk: 2`) |
+| `resume_tracking` from Paused succeeds | Yes (`tracking: true`, same `session: N`, `trk: 1`) |
+| `resume_tracking` cannot reopen the file | No; remains Paused, Config reports `flash_error` |
+| Repeated Pause while Paused / Resume while Recording | No; Config reports success |
+| `stop_tracking` from Recording or Paused | Yes (`tracking: false`, `session: 0`, `trk: 0`) |
 | Charging transition (plug in / unplug / charge complete) | Yes (`charging`, `bat_pct`, `bat_v`) |
 | Imminent link drop — shutdown or leaving Portable | Yes (`disc`) |
 | Resume-after-sleep failed in `init()` | No — BLE not up yet; Read on connect is authoritative |
@@ -320,20 +324,20 @@ briefly before teardown so the fire-and-forget notice can drain:
 Both call sites gate the notify on `is_connected()`, so non-Portable and
 disconnected cases add no work. The `disc` key is never written to the snapshot
 (`notify_disconnect()` uses `notify(data, len)` only), so a Status Read still returns
-the 9-key snapshot.
+the 10-key snapshot.
 
 The on-device snackbar (`"Storage error — can't track"` /
 `"Tracking stopped — storage"`) carries the human-readable reason; the
-tracking notify only carries the binary `tracking` flag and the `session` ID.
-Clients treat any `tracking: true → false` notify that did not follow a
+tracking notify carries `tracking`, `session`, and the `trk` enum.
+Clients treat a transition from `trk: 1` or `trk: 2` to `trk: 0` that did not follow a
 client-issued `stop_tracking` command as "session ended on device — refresh
 and reconcile" without attempting to infer the cause.
 
-`is_recording()` (rather than the raw `_tracking_active` intent flag) is the
-source of truth for the `tracking` field, so the wire never reports tracking
-when no file is actually open.
+The Status APIs take `session_id` and `TrackingState`. Both encoders derive the
+legacy `tracking` boolean using `tracking_session_active(state)`: it is true for
+Recording and Paused. `trk` identifies whether route writes are enabled.
 
-### CBOR Payload (Map) — All 9 Keys Always Present
+### CBOR Payload (Map) — All 10 Keys Always Present
 
 | Key | CBOR Type | Source | Description |
 |---|---|---|---|
@@ -342,10 +346,18 @@ when no file is actually open.
 | `"bat_pct"` | uint | `PowerSnapshot::battery_percentage` | 0-100 (%), 0 if negative |
 | `"bat_v"` | float32 | `PowerSnapshot::battery_voltage` | Volts, 0.0 if negative |
 | `"charging"` | text | `BmsChargingState` | See mapping table below |
-| `"tracking"` | bool | `tracking_active` parameter | Currently tracking? |
-| `"session"` | uint | `session_id` parameter | 0 if not tracking |
+| `"tracking"` | bool | Derived from `TrackingState` | Legacy active-session flag; true for Recording or Paused; will be deprecated soon |
+| `"session"` | uint | `session_id` parameter | Retained while Paused; 0 when Idle |
+| `"trk"` | uint | `TrackingState` parameter | 0 = Idle, 1 = Recording, 2 = Paused |
 | `"flash_kb"` | uint | `StorageService::total_capacity_kb()` | Total NAND FATFS capacity in KB |
 | `"used_kb"` | uint | `StorageService::used_kb()` | Used NAND FATFS capacity in KB |
+
+**Upcoming deprecation:** the BLE `tracking` field will be deprecated soon.
+Clients should use `trk` for tracking state. The current firmware continues to
+send `tracking` in both Read and tracking notifications for compatibility.
+Clients supporting older firmware without `trk` can fall back to `tracking`;
+those versions cannot report Paused. See the
+[BLE client guide](../go_ble_client.md#6-status-characteristic).
 
 The running firmware version is intentionally **not** included here. In Portable
 mode it is exposed once via the standard Device Information Service (DIS)
@@ -377,10 +389,10 @@ config**, **set config values**, and **execute commands**.
 
 ### Read (phone reads characteristic)
 
-Returns the full device configuration as a 17-key CBOR map. The BLE service
+Returns the full device configuration as a 16-key CBOR map. The BLE service
 keeps this value updated whenever the orchestrator calls `update_config()`.
 
-#### CBOR Payload (Map) — 17 Keys
+#### CBOR Payload (Map) — 16 Keys
 
 | Key | CBOR Type | `GoSettings` field | Encoded with |
 |---|---|---|---|
@@ -391,7 +403,6 @@ keeps this value updated whenever the orchestrator calls `update_config()`.
 | `"gps_mode"` | text | `gps_mode` | See mapping below |
 | `"auto_lock"` | uint | `auto_lock_seconds` | `cbor_encode_uint` |
 | `"op_mode"` | text | `operating_mode` | See mapping below |
-| `"fled"` | uint | `front_led_brightness` | `cbor_encode_uint` (0–3) |
 | `"bled"` | uint | `back_led_brightness` | `cbor_encode_uint` (0–3) |
 | `"tled"` | uint | `touch_led_intensity` | `cbor_encode_uint` (0–2) |
 | `"buz"` | bool | `buzzer_enabled` | `cbor_encode_boolean` |
@@ -497,9 +508,18 @@ Supported commands (handled by orchestrator, not BLE service):
 | `"co2_cal"` | Trigger CO2 background calibration |
 | `"clear_data"` | Clear the temporary chart cache and erase all stored route data |
 | `"factory_rst"` | Clear data, restore default settings, delete BLE bonds, then reboot |
-| `"start_tracking"` | Begin GPS + sensor route logging (reports `"already_tracking"` if active) |
-| `"stop_tracking"` | End route logging (reports `"not_tracking"` if idle) |
+| `"start_tracking"` | Begin a new route (reports `"already_tracking"` if Recording or Paused) |
+| `"stop_tracking"` | End a Recording or Paused session (reports `"not_tracking"` if Idle) |
+| `"pause_tracking"` | Sync/close the route and retain the session; repeated Pause succeeds |
+| `"resume_tracking"` | Reopen the retained route for append; repeated Resume while Recording succeeds |
 | `"set_aiding"` | Inject A-GNSS aiding data (position and/or time) into the GPS module |
+
+Pause and Resume use the existing Config characteristic and the
+`{"op":"cmd","cmd":"..."}` command envelope. The legacy Start and Stop commands are
+unchanged; no additional service or characteristic is registered. Pause affects
+route writes only: live Measures, GPS, chart cache, and existing History export
+continue. Deletion of the Recording or Paused session is rejected with
+`session_active`.
 
 #### Set Aiding (orchestrator decodes)
 
@@ -607,8 +627,9 @@ Error strings are defined in `go_ble_protocol.h` and passed to
 | `"calibration_failed"` | `co2_cal` | CO2 calibration procedure failed |
 | `"clear_failed"` | `clear_data` | Route data erase did not complete fully |
 | `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |
-| `"already_tracking"` | `start_tracking` | Tracking session was already active |
-| `"not_tracking"` | `stop_tracking` | No tracking session was active |
+| `"already_tracking"` | `start_tracking` | Session was already Recording or Paused |
+| `"not_tracking"` | `stop_tracking`, `pause_tracking`, `resume_tracking` | No tracking session was active |
+| `"flash_error"` | `start_tracking`, `pause_tracking`, `resume_tracking` | Start could not create a route; Pause sync/close failed (state is Paused); Resume could not reopen (state stays Paused) |
 | `"no_aiding_data"` | `set_aiding` | No valid position or time data in the payload |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
 | `"invalid_config_value"` | `set` | A validated config field has the wrong type, is outside its allowed range, or contains an invalid correction map |
@@ -901,11 +922,11 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 | Method | Description |
 |---|---|
 | `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, always `set_value()` for READ access, additionally `notify()` when `_connected`. No-op if `_measures_char == nullptr`. |
-| `update_status(power, gps, tracking, session_id)` | Encode via `encode_status()`, `set_value()` only. Sole writer of the Status snapshot. Used for steady-state polls (BMS, GPS fix, history-delete reconciliation). |
-| `notify_tracking_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{tracking, session}` transition delta via `notify(data, len)`. Used for urgent tracking transitions (start success, start failure, manual stop). Best-effort delivery — Read remains authoritative. |
-| `notify_charging_status(power, gps, tracking, session_id)` | Refreshes the full 9-key snapshot via `update_status()` (Read stays full), then pushes a `{charging, bat_pct, bat_v}` power delta via `notify(data, len)`. Used for charging transitions (plug in, unplug, charge complete). Disjoint keys from the tracking delta, no `"type"` discriminator — client merges by key. |
+| `update_status(power, gps, session_id, tracking_state)` | Encode via `encode_status()`, `set_value()` only. Sole writer of the Status snapshot. Derives the legacy boolean from the enum. |
+| `notify_tracking_status(power, gps, session_id, tracking_state)` | Refreshes the full 10-key Read snapshot, then pushes `{tracking, session, trk}` via `notify(data, len)` on start success/failure, pause, resume, and stop. Read remains authoritative. |
+| `notify_charging_status(power, gps, session_id, tracking_state)` | Refreshes the full 10-key Read snapshot, then pushes `{charging, bat_pct, bat_v}` on charging transitions. Tracking state remains in the Read snapshot. |
 | `notify_disconnect(reason)` | Pushes a NOTIFY-only `{disc}` delta via `notify(data, len)` (snapshot untouched) announcing an imminent link drop and why (`overheat`/`low_batt`/`user`/`op_stationary`/`op_offline`). Both `OverTemperature` and `UnderTemperature` use the legacy `overheat` value. Called from `change_mode()` (leaving Portable) and `shutdown()`; gated on `is_connected()`; the caller settles before teardown so it can drain. |
-| `update_config(settings)` | Encode the full snapshot via `encode_config()` (17 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
+| `update_config(settings)` | Encode the full snapshot via `encode_config()` (16 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
 | `notify_config(prev, cur)` | Refreshes the snapshot via `update_config(cur)`, then sends the changed-fields delta (`encode_config_delta()`: `"type":"config"` + changed keys) via `notify(data, len)`. |
 | `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `notify(data, len)` (stored value untouched). Sent before long-running commands. |
 | `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `notify(data, len)` (stored value untouched). |
@@ -1149,7 +1170,7 @@ mechanism from `shutdown()` (see the disconnect-notice table under
     Notify["ble_service.notify_measures<br/>(always set_value; notify only when connected)"]
 
     Event --> Raw
-    Raw --> Cache
+    Raw -->|Scheduled origin only| Cache
     Raw --> Notify
     Raw --> Corrected
     Corrected --> Display
@@ -1233,7 +1254,7 @@ The BLE service is fully integrated with the current AGo product code:
 - BLE events are defined in `go_events.h` and dispatched by the orchestrator
 - Route history export uses implemented `StorageService` read/list methods
 - Status reports real filesystem usage (firmware version is exposed via DIS)
-- Clear Data, Factory Reset, Start/Stop Tracking BLE commands are implemented
+- Clear Data, Factory Reset, and Start/Stop/Pause/Resume Tracking commands are implemented
 - Passkey display requests are surfaced through `BlePairingRequest`
 
 ---
@@ -1252,8 +1273,9 @@ The BLE host tests are built as `go_ble_tests` from `go_ble.tests.cpp`. They
 cover:
 
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
-  `encode_status()` (all 9 keys, battery clamping) and `encode_status_transition()`
-  (2-key delta), `encode_config()` (full 17-key snapshot, no `"type"`) and
+  `encode_status()` (all 10 keys, battery clamping, all tracking states) and
+  `encode_status_transition()` (3-key delta, legacy boolean derived from state),
+  `encode_config()` (full 16-key snapshot, no `"type"`) and
   `encode_config_delta()` (`"type":"config"` + changed keys only),
   `notify_config(prev, cur)` (delta via `notify(data, len)`, Read stays full,
   snapshot refreshed first), `notify_command_result()` /

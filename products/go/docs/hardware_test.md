@@ -8,7 +8,9 @@ existing **FG Learning** factory routine. `UIManager` stays hardware-free — it
 renders the submenu and per-flow views from a pushed snapshot — while the
 orchestrator owns every hardware side effect, the flow state machines, and the
 buzzer / LED cues. All flows run in-app on already-initialised services; only
-FG Learning leaves the app (writes factory state and reboots).
+FG Learning leaves the app (writes factory state and reboots). The submenu also
+contains Play Melody, which previews Chime or Tetris using the existing
+synchronized buzzer/LED playback.
 
 ## Files
 
@@ -19,7 +21,7 @@ FG Learning leaves the app (writes factory state and reboots).
 | `products/go/main/go_orchestrator.h` / `go_orchestrator.cpp` | Flow state machines, actuator drives, AQ trigger, GPS/accel polling, cues, FG-learning arm |
 | `products/go/main/go_sensor_producer.h` / `go_sensor_producer.cpp` | `request_self_test()` — bulk AQ sweep in the producer task |
 | `products/go/main/go_events.h` | `SensorTestResults`, `EventType::SensorTestDone` |
-| `products/go/main/accel/` | LIS2DH12 accelerometer HAL + driver + pure sanity helpers |
+| `products/go/main/accel/` | LIS2DH12 driver, shared worker, shake detector, and pure sanity helpers |
 
 ## Dependencies
 
@@ -31,7 +33,7 @@ FG Learning leaves the app (writes factory state and reboots).
 | `BuzzerService` | `buzzer/go_buzzer.h` | Actuator tone + success/alert cues |
 | `SensorProducer` | `go_sensor_producer.h` | `request_self_test()` runs the AQ sweep as the single I2C bus owner |
 | `GpsService` | `gps/gps_service.h` | Ungates the receiver + fast posting for the live GPS screen |
-| `AccelSensor` (LIS2DH12) | `accel/accel_sensor.h` | Live X/Y/Z + WHO_AM_I; created via `GoBoard::new_accel_sensor()` |
+| `AccelService` | `accel/accel_service.h` | Worker-owned configuration and live X/Y/Z + WHO_AM_I reads |
 | `accel_sanity.h` | `accel/accel_sanity.h` | Pure identity + rest-magnitude classification |
 | `ConfigStore` | `airgradient-config` | FG Learning writes `FactorySettings` before reboot |
 
@@ -43,11 +45,11 @@ orchestrator consumes. Opening the submenu is internal navigation
 
 | `UIAction` | Emitted by | Orchestrator response |
 |---|---|---|
-| `RunPeripheralTest` | Peripheral Test row | `start_peripheral_test()` — drive first actuator |
+| `RunPeripheralTest` | Peripheral Test row | `start_peripheral_test()` — wake PM and drive first actuator |
 | `PeripheralStepPass` / `PeripheralStepFail` | Actuator step Pass/Fail | `peripheral_step_result()` — record + advance |
 | `PeripheralTestExit` | Summary tap | `finish_peripheral_test()` — restore hardware |
 | `OpenGpsTest` | GPS Test row | `start_gps_test()` — ungate receiver, fast posting, TTFF timer |
-| `OpenAccelTest` | Accel Test row | `start_accel_test()` — create driver, sample, classify, cue |
+| `OpenAccelTest` | Accel Test row | `start_accel_test()` — request test mode, sample, classify, cue |
 | `ArmFgLearning` | FG Learning confirm → Yes | Write `FactorySettings` + reboot into `FgLearningRunner` |
 
 Cross-service hooks used by the flows:
@@ -55,7 +57,9 @@ Cross-service hooks used by the flows:
 | Method | Source | Purpose |
 |---|---|---|
 | `SensorProducer::request_self_test()` | `go_sensor_producer.h` | Kick the AQ sweep; posts one `SensorTestDone` |
-| `GoBoard::new_accel_sensor()` | `go_board.h` | Create + init the LIS2DH12 on the shared I2C bus; `nullptr` when absent |
+| `AccelService::begin_hardware_test(out)` | `accel/accel_service.h` | Select unfiltered ±4 g configuration and return the first sample |
+| `AccelService::read_hardware_test(out)` | `accel/accel_service.h` | Poll the live test sample through the worker |
+| `AccelService::end_hardware_test()` | `accel/accel_service.h` | Restore filtered interrupt capture |
 
 See [`go_ui.h`](../main/go_ui.h) and [`go_orchestrator.h`](../main/go_orchestrator.h)
 for full signatures.
@@ -64,11 +68,12 @@ for full signatures.
 
 ### Navigation
 
-The **Hardware Test** row is the last Settings content row (mirrors
-**Setup Guide**) and opens `Screen::HardwareTest`. The submenu rows, in order:
+The **Hardware Test** row follows Display & Touch and precedes Clear Data in
+Settings. It opens `Screen::HardwareTest`. The submenu rows, in order:
 
 ```text
-Exit(0)  Back(1)  Peripheral Test(2)  GPS Test(3)  Accel Test(4)  FG Learning(5)
+Exit(0), Back(1), Peripheral Test(2), GPS Test(3), Accelerometer Test(4),
+Fuel Gauge Learning(5), Play Melody(6)
 ```
 
 Exit returns Home; Back returns to Settings on the Hardware Test row. Each live
@@ -77,22 +82,42 @@ screen exits back to the submenu on **any tap**, a **double-press Back**, or a
 `UIManager::handle_input()` and runs the flow's `finish_*` when the screen
 leaves, so no dedicated exit action is needed.
 
+### Play Melody
+
+Play Melody opens the existing Chime/Tetris choice screen. Applying a choice or
+using Back restores the Hardware Test menu on Play Melody. The orchestrator
+pauses input, temporarily enables the buzzer for playback, and restores the
+saved buzzer setting, rear brightness, and AQI state afterward. The choice
+screen retains ordinary settings auto-lock behavior.
+
 ### Peripheral Test
 
 Operator-guided actuator steps (tap **Pass**, or toggle + tap **Fail**) run
 first, then the automatic AQ sweep, then a summary. Overall pass requires all
-four actuators **and** all five sensors.
+three actuators **and** all five sensor roles. The summary contains nine rows:
+one overall header, three actuator results, and five sensor results.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> FrontLed
-    FrontLed --> BackLed: tap confirms
+    [*] --> BackLed
     BackLed --> TouchLeds: tap confirms
     TouchLeds --> Buzzer: tap confirms
-    Buzzer --> Testing: tap confirms
+    Buzzer --> WaitingForSensors: tap confirms
+    WaitingForSensors --> Testing: PM ready and producer available
     Testing --> Summary: SensorTestDone
     Summary --> [*]: tap exits
 ```
+
+Opening Peripheral Test connects and wakes an asleep PM sensor so warmup can
+run during the actuator checks. If PM is still entering sleep, the orchestrator
+waits for `PmSensorAsleep` before connecting and preparing it. PM remains awake
+through the summary, without changing the saved measurement interval.
+
+After the buzzer check, the screen shows the automatic testing view while
+`WaitingForSensors` waits for PM readiness and any outstanding measurement.
+`PmPrepared` or the existing measurement's `SensorDataReady` event lets the
+orchestrator start the sweep once both conditions are met. If PM is already
+ready and the producer is available, the sweep starts immediately.
 
 The AQ sweep runs **inside the sensor producer task** (the normal I2C bus owner)
 via `request_self_test()`: a single `start_measures(1, All)` iteration classified
@@ -100,6 +125,13 @@ per Go sensor role by field validity, posted back as one `SensorTestDone` event
 carrying `SensorTestResults`. The summary cue fires on the overall result —
 **PASS**: green back LED + `PATTERN_CHARGE_DONE`; **FAIL**: red back LED +
 `PATTERN_UNPLUG`. On exit the LED/buzzer are restored to persisted settings.
+
+The sweep shares `_measurement_pending` with normal measurements to prevent
+overlapping requests. Its completion event is `SensorTestDone`;
+`SensorDataReady` completes normal measurements only. `on_sensor_test_done()`
+clears the pending flag before handling the result. On exit, the orchestrator
+resumes the normal PM sleep policy using the time remaining until the next
+scheduled measurement.
 
 ### GPS Test
 
@@ -122,9 +154,15 @@ See [`gps_service.md`](gps_service.md) for the receiver lifecycle.
 
 ### Accelerometer Test
 
-`start_accel_test()` lazily creates the LIS2DH12 (kept for the process lifetime),
-takes one sample, classifies it, and fires a one-shot cue. A 500 ms poll from
+The application creates the LIS2DH12 and starts `AccelService` at startup.
+`start_accel_test()` asks that worker to switch from filtered motion capture
+to unfiltered ±4 g test readings, classifies the first sample, and fires a
+one-shot cue. A 500 ms poll from
 `check_timers()` refreshes the live X/Y/Z while the screen is open (no re-cue).
+All test configuration and reads use synchronous worker requests; the
+orchestrator does not access the driver directly. On exit, the worker restores
+interrupt capture and honors any remaining shake cooldown. See
+[Accelerometer Service](accel_service.md).
 
 ```text
 WHO_AM_I -> read X/Y/Z -> rest-magnitude (~1 g) -> classify
@@ -145,17 +183,17 @@ The FG Learning row is a destructive action guarded by the shared `Confirm`
 screen ("Start FG Learning?"). On **Yes** the orchestrator writes
 `FactorySettings{ fg_learning_stage = Charge, cycle = 1, itpor_losses = 0 }` and
 reboots; the next boot routes into the existing `FgLearningRunner` unchanged.
-This supplements — does not replace — the manufacturing-mode BOOT gesture.
+This is the only entry point for a new learning run. BOOT short-presses only
+enter manufacturing mode before onboarding.
 
 See [`fg_learning.md`](fg_learning.md) for the runner.
 
 ## Edge Cases / Errors
 
-- **Absent accelerometer.** `new_accel_sensor()` returns `nullptr` on init
-  failure (absent / wrong device / bus error). The screen then shows
-  `WHO_AM_I: 0x00 (BAD)`, `X/Y/Z/|a|: --`, `Result: FAIL`, with the alert cue.
-  Entry re-probes each time, so a late/intermittent part is picked up on a later
-  entry.
+- **Unavailable accelerometer worker.** Test requests fail and leave an invalid
+  reading, producing the FAIL screen and alert cue. Opening the screen does
+  not create or reprobe a sensor. A failed test configuration keeps the worker
+  available for commands; a failed restore leaves motion capture unavailable.
 - **Live accel re-classification.** The magnitude check assumes the device is at
   rest, so moving it during the test can flip Result PASS↔FAIL on the next poll.
   The buzzer/LED cue fires only once (on entry); later polls refresh the screen
@@ -167,9 +205,16 @@ See [`fg_learning.md`](fg_learning.md) for the runner.
 - **Mid-flow exit.** Any exit gesture that bypasses a flow's on-screen control
   (double-press Back, long-press Home) still restores hardware: the orchestrator
   detects the screen transition and runs the matching `finish_*`.
+- **Peripheral sweep after exit.** Leaving while waiting for PM cancels the
+  waiting sweep. A sweep already running keeps PM awake until `SensorTestDone`,
+  then releases it without changing the screen. Reopening the test waits for
+  that completion and discards the old result before starting a new sweep.
+- **Sensor worker stopped.** Provisioning or committed OTA clears the pending
+  measurement state and finishes the peripheral test when stopping the worker.
 - **Inert actuators.** On board variants without an LED/buzzer driver the cues
   are silent by design; the display still reports the result.
 - **Auto-lock suppressed.** The inactivity auto-lock is disabled on every
   Hardware Test screen (submenu and live flows), so an idle operator is never
   locked and returned Home mid-test. Auto-lock resumes once the surface is
-  exited.
+  exited. The Play Melody choice screen and FG Learning confirmation retain
+  ordinary auto-lock behavior.

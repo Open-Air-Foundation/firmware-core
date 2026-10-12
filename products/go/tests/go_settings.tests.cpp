@@ -128,7 +128,7 @@ private:
   std::size_t _write_attempt_count = 0;
 };
 
-static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 31;
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 30;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -257,7 +257,6 @@ TEST_CASE("shared Go config fields and update model", "[settings][config]") {
   REQUIRE(static_cast<uint32_t>(GoConfigField::MeasurementInterval) == (1U << 10));
   REQUIRE(static_cast<uint32_t>(GoConfigField::AltitudeUnit) == (1U << 11));
   REQUIRE(static_cast<uint32_t>(GoConfigField::GpsMode) == (1U << 12));
-  REQUIRE(static_cast<uint32_t>(GoConfigField::FrontLedBrightness) == (1U << 13));
   REQUIRE(static_cast<uint32_t>(GoConfigField::BackLedBrightness) == (1U << 14));
   REQUIRE(static_cast<uint32_t>(GoConfigField::TouchLedIntensity) == (1U << 15));
   REQUIRE(static_cast<uint32_t>(GoConfigField::BuzzerEnabled) == (1U << 16));

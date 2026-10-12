@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "go_display_geometry.h"
+#include "go_types.h"
 #include "measures_types.h"
 #include "rtos.h"
 #include "services/provisioning_qr.h"
@@ -16,7 +17,10 @@
 enum class Screen : uint8_t {
   Home,
   MainMenu,
+  TrackingMenu,
   Settings,
+  Operations,
+  DisplayTouch,
   SettingsChoice,
   TagList,
   About,
@@ -30,7 +34,7 @@ enum class Screen : uint8_t {
   ProvisioningConfirm,    ///< Yes/No confirmation overlay for Provisioning actions
   Info,                   ///< Generic single-text presentation surface (bring-up narration, etc.)
   GettingStarted,         ///< One-time first-boot guide (setup QR + single action row)
-  HardwareTest,           ///< Hardware Test submenu (peripheral/GPS/accel/FG-learning entry rows)
+  HardwareTest,           ///< Hardware Test submenu (diagnostics, FG learning, melody preview)
   PeripheralTest,         ///< Guided actuator steps + bulk AQ sensor test + summary
   GpsTest,                ///< Live GPS status: TTFF, fix, satellites, HDOP, position, UTC
   AccelTest,              ///< Live accelerometer: WHO_AM_I, X/Y/Z, magnitude, pass/fail
@@ -43,6 +47,9 @@ enum class Screen : uint8_t {
   FgLearnVerifying,  ///< Learning: re-plugged, checking pass criteria
   FgLearnComplete,   ///< Learning: verified pass (terminal)
   FgLearnFailed,     ///< Learning: rejected (terminal, sticky)
+  ShutdownCharging,  ///< USB-powered cold boot; application remains off
+  ShutdownCharged,   ///< Charging-only mode; charger reports charge complete
+  TrackingStatus,    ///< Read-only current-session and GPS details
 };
 
 enum class Metric : uint8_t {
@@ -120,7 +127,7 @@ struct DisplayValues {
   bool wifi_connected = false; // connected vs disconnected glyph
   bool gps_enabled = true;
   bool gps_fix = false;
-  bool tracking_active = false;
+  TrackingState tracking_state = TrackingState::Idle;
   bool display_off = false;
   bool use_fahrenheit = false;
   bool use_feet = false;
@@ -183,6 +190,9 @@ struct DisplayValues {
   /// Borrowed; UIManager re-encodes on entry. Null/empty skips the QR area.
   const AirgradientProvisioning::QrCode *qr = nullptr;
 
+  /// First-boot guide shows a single bold Enter-hold instruction.
+  bool getting_started_from_boot = false;
+
   // --- Fuel-gauge learning dashboard (factory path) ---
   bool show_fg_dashboard = false;
   FgLearningDashboardData fg_dashboard{};
@@ -218,7 +228,7 @@ struct RtcDisplaySnapshot {
   // Status flags
   bool gps_enabled;
   bool gps_fix;
-  bool tracking_active;
+  TrackingState tracking_state;
   bool ble_enabled;
 
   // Rendering settings
@@ -402,13 +412,21 @@ public:
 
   bool panel_detected() const { return true; }
 
-  bool update(const DisplayValues &values, bool = false) {
+  bool update(const DisplayValues &values, bool wait = false) {
     ++spy_update_count;
+    spy_last_update_wait = wait;
+    if (spy_worker_busy && !wait) {
+      return false;
+    }
+    spy_worker_busy = false;
     spy_last_screen = values.screen;
     return true;
   }
 
-  void update_sync(const DisplayValues &) {}
+  void update_sync(const DisplayValues &values) {
+    ++spy_sync_update_count;
+    spy_last_screen = values.screen;
+  }
   void flush() { ++spy_flush_count; }
   void clear() {}
   void deep_sleep() { spy_deep_sleep_called = true; }
@@ -418,9 +436,12 @@ public:
   inline static bool spy_deep_sleep_called = false;
   inline static uint32_t spy_init_count = 0;
   inline static uint32_t spy_update_count = 0;
+  inline static uint32_t spy_sync_update_count = 0;
   inline static uint32_t spy_flush_count = 0;
   inline static Screen spy_last_screen = Screen::Home;
   inline static bool spy_last_init_deferred = false;
+  inline static bool spy_last_update_wait = false;
+  inline static bool spy_worker_busy = false;
 };
 
 // Stub implementations for host builds.

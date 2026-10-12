@@ -25,7 +25,6 @@ struct GoSettings {
   int auto_lock_seconds = 10; // 0 = auto-lock disabled
 
   // --- LED brightness ---
-  LedBrightness front_led_brightness = LedBrightness::Off;
   LedBrightness back_led_brightness = LedBrightness::Off;
   TouchLedIntensity touch_led_intensity = TouchLedIntensity::Off;
 

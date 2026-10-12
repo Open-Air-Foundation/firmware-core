@@ -72,6 +72,7 @@ bool WifiService::has_saved_networks() const { return _wifi.has_saved_networks()
 // ---------------------------------------------------------------------------
 
 void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *static_ip) {
+  _use_default_credentials = false;
   _connect_saved_internal(static_ip, /*reset_online_latches=*/true, /*arm_window=*/true);
 }
 
@@ -125,6 +126,7 @@ void WifiService::schedule_reconnect(const WifiStaticIpConfig *static_ip) {
 }
 
 void WifiService::try_default_fallback_credentials() {
+  _use_default_credentials = true;
   _connect_fallback_internal(/*reset_online_latches=*/true, /*arm_window=*/true);
 }
 
@@ -144,15 +146,16 @@ void WifiService::_connect_fallback_internal(bool reset_online_latches, bool arm
   // Explicit SSID = transient connect (never saved); single-shot, no retry.
   sta.max_retry_count = 0;
 
+  // Manufacturing must still time out if the driver rejects the attempt.
+  if (arm_window) {
+    _arm_deadline(_cfg.fallback_connect_window_ms);
+  }
+
   const WifiStatus status = _wifi.connect(sta);
   if (status != WifiStatus::Ok) {
     AG_LOGE(TAG, "fallback connect failed: %d", static_cast<int>(status));
     _post_wifi_disconnected(WifiDisconnectReason::unknown);
     return;
-  }
-
-  if (arm_window) {
-    _arm_deadline(_cfg.fallback_connect_window_ms);
   }
 }
 
@@ -161,6 +164,7 @@ void WifiService::_connect_fallback_internal(bool reset_online_latches, bool arm
 // ---------------------------------------------------------------------------
 
 void WifiService::start_provisioning(ProvisioningTransport transport) {
+  _use_default_credentials = false;
   AG_LOGI(TAG, "start_provisioning(%u)", static_cast<unsigned>(transport));
   log_heap(TAG, "wifi.start_provisioning:enter");
   _provisioning_connected_event_pending.store(false);
@@ -344,6 +348,7 @@ void WifiService::_ensure_provisioning_manager() {
 // ---------------------------------------------------------------------------
 
 void WifiService::shutdown() {
+  _use_default_credentials = false;
   _provisioning_connected_event_pending.store(false);
   _reset_deadline();
   _reconnect_at_ms = 0;
@@ -359,6 +364,7 @@ void WifiService::shutdown() {
 }
 
 void WifiService::clear_credentials() {
+  _use_default_credentials = false;
   _wifi.clear_networks();
   _reset_online_latches();
 }
@@ -417,16 +423,18 @@ void WifiService::tick(uint32_t now_ms) {
   }
 
   if (_initial_connect_deadline_ms != 0 && now_ms >= _initial_connect_deadline_ms) {
-    _initial_connect_deadline_ms = 0;
-    AG_LOGW(TAG, "initial connect window expired");
-    _post_wifi_disconnected(WifiDisconnectReason::connection_lost);
+    // Keep the deadline due until admitted so queue pressure cannot strand setup.
+    if (_post_wifi_disconnected(WifiDisconnectReason::connection_lost)) {
+      _initial_connect_deadline_ms = 0;
+      AG_LOGW(TAG, "initial connect window expired");
+    }
   }
 
   if (_reconnect_at_ms != 0 && now_ms >= _reconnect_at_ms) {
     _reconnect_at_ms = 0;
     // Keep has_been_online() latched (stay "runtime") and skip the connect
     // window; the WifiManager terminal disconnect drives the next cycle.
-    if (_wifi.has_saved_networks()) {
+    if (!_use_default_credentials) {
       AG_LOGI(TAG, "runtime reconnect: attempting saved networks");
       const WifiStaticIpConfig *ip = _reconnect_has_static_ip ? &_reconnect_static_ip : nullptr;
       _connect_saved_internal(ip, /*reset_online_latches=*/false, /*arm_window=*/false);
@@ -492,11 +500,11 @@ void WifiService::_reset_online_latches() {
   _rssi.store(WIFI_RSSI_INVALID);
 }
 
-void WifiService::_post_wifi_disconnected(WifiDisconnectReason reason) {
+bool WifiService::_post_wifi_disconnected(WifiDisconnectReason reason) {
   Event evt{};
   evt.type = EventType::WifiDisconnected;
   evt.wifi_disconnect_reason = static_cast<uint8_t>(reason);
-  RTOS::queue_send(_event_queue, &evt);
+  return RTOS::queue_send(_event_queue, &evt);
 }
 
 void WifiService::_on_provisioning_event(const ProvisioningEventInfo &info) {

@@ -269,6 +269,8 @@ catch_discover_tests(go_ui_tests)
 # ---------------------------------------------------------------------------
 
 add_library(go_orchestrator_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/accel/accel_service.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/accel/shake_detector.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_orchestrator.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/serial_command/serial_command.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
@@ -333,7 +335,11 @@ target_link_libraries(go_orchestrator_test_support PUBLIC nmea_native tinycbor)
 
 add_executable(go_orchestrator_tests
     go_orchestrator.tests.cpp
+    go_accel.tests.cpp
 )
+
+# Observe the common reboot() boundary without changing its production API.
+target_link_options(go_orchestrator_tests PRIVATE "-Wl,--wrap=_Z6rebootv")
 
 target_link_libraries(go_orchestrator_tests PRIVATE
     go_orchestrator_test_support
@@ -565,6 +571,8 @@ catch_discover_tests(go_gps_types_tests)
 # ---------------------------------------------------------------------------
 
 add_library(go_app_test_support
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/accel/accel_service.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/accel/shake_detector.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_app.cpp"
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_local_api.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/retained_uptime.cpp"
@@ -739,6 +747,26 @@ target_link_libraries(go_local_api_tests PRIVATE
 )
 
 catch_discover_tests(go_local_api_tests)
+
+# ---------------------------------------------------------------------------
+# go_types tests — header-only type helpers, no hardware or clock access
+# ---------------------------------------------------------------------------
+
+add_executable(go_types_tests
+    go_types.tests.cpp
+)
+
+target_include_directories(go_types_tests PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+)
+
+target_compile_definitions(go_types_tests PRIVATE TEST_HOST)
+
+target_link_libraries(go_types_tests PRIVATE
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(go_types_tests)
 
 # ---------------------------------------------------------------------------
 # go_text_wrap tests
@@ -951,3 +979,19 @@ target_link_libraries(go_display_geometry_tests PRIVATE
 )
 
 catch_discover_tests(go_display_geometry_tests)
+
+# LIS2DH12 register behavior against a native I2C bus fake.
+add_executable(go_lis2dh12_tests
+    go_lis2dh12.tests.cpp
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/accel/lis2dh12.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
+)
+
+target_include_directories(go_lis2dh12_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/driver_stubs"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+)
+target_compile_definitions(go_lis2dh12_tests PRIVATE TEST_HOST)
+target_link_libraries(go_lis2dh12_tests PRIVATE Catch2::Catch2WithMain)
+catch_discover_tests(go_lis2dh12_tests)

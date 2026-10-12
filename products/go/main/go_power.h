@@ -329,6 +329,9 @@ public:
   /// Trigger BMS QoN (ship mode).  Device powers off.  Does not return.
   void shutdown();
 
+  /// Wait for Power release, then reboot via timer-only deep sleep, preserving RTC memory.
+  void reboot();
+
   /// Re-configure the BMS watchdog timeout.  See
   /// BmsDevice::set_watchdog_timeout_ms for semantics.  Forwards directly;
   /// no policy or kick-cadence change is applied here.
@@ -415,11 +418,17 @@ public:
   /// When `should_hold_pm_sensor(sleep_duration_ms)` is true, the PM power
   /// GPIO is held HIGH during deep sleep via `gpio_hold_en()`.  On ESP32-C5
   /// per-pin hold automatically persists through deep sleep.  The caller
-  /// must set `RtcAppState::sensors_warm`
+  /// must set `RtcAppFlag::SensorsWarm` in the saved state
   /// accordingly before calling `save_state()`.
   ///
   /// @param sleep_duration_ms How long to sleep before timer wake.
   void enter_sleep(uint32_t sleep_duration_ms);
+
+  /// Light sleep using the same timer and EXT1 button mask as deep sleep.
+  /// Returns true for a button wake or a held power button. Wake sources are
+  /// cleared and digital GPIO restored before returning. A sleep error falls
+  /// back to a bounded RTOS delay.
+  bool enter_light_sleep(uint32_t sleep_duration_ms);
 
   // -------------------------------------------------------------------------
   // Boot path (static — call before any service is constructed)
@@ -428,6 +437,9 @@ public:
   /// Determine wake cause early in app_main.
   /// Translates esp_sleep_get_wakeup_cause() to WakeCause.
   static WakeCause get_wake_cause();
+
+  /// True only for a hardware power-on reset, not a software reset or sleep wake.
+  static bool is_power_on_reset();
 
   /// Returns true when this boot should follow the abbreviated fast path:
   ///   cause == WakeCause::Timer && state.lock_state == LockState::Locked
@@ -561,3 +573,8 @@ private:
 /// state has been saved.  No dependencies — safe to call early in app_main
 /// before PowerService is constructed.
 RtcAppState load_rtc_app_state();
+
+#ifdef TEST_HOST
+/// Simulate invalid RTC storage independently of host test execution order.
+void invalidate_rtc_app_state_for_test();
+#endif

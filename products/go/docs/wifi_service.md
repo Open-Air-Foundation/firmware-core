@@ -1,7 +1,7 @@
 # Wi-Fi Service
 
 Product service that owns the Stationary networking lifecycle for AirGradient
-Go: saved-credential STA connect, factory-default fallback, interactive
+Go: saved-credential STA connect, manufacturing-only factory Wi-Fi, interactive
 provisioning (BLE / Wi-Fi captive portal), post-online disconnect state, and
 credential clearing. It also coordinates the local HTTP listener and mDNS on
 the HTTP server shared with provisioning. The orchestrator owns mode policy and
@@ -43,8 +43,8 @@ reads.
 | `WifiService(event_queue, deps, cfg)` | — | Construct with the central event queue, borrowed Wi-Fi/BLE/HTTP/local-server dependencies, and product config. Installs Wi-Fi callbacks initially and the provisioning event callback once for the service lifetime. |
 | `has_saved_networks()` | `bool` | True when at least one network is saved. Delegates to `WifiManager`. |
 | `connect_with_saved_credentials(static_ip)` | `void` | Restore Wi-Fi callbacks, arm the initial-connect deadline, and call `WifiManager::connect` with an empty SSID. One saved network connects directly with normal retry/backoff; multiple networks are scanned, ranked by RSSI, and tried with single-attempt failover. Applies `static_ip` when non-null, clears it otherwise. Resets the online latches (fresh bring-up). Posts a synthetic `WifiDisconnected` when the manager returns `NotFound`. |
-| `schedule_reconnect(static_ip)` | `void` | Arm the runtime reconnect timer `reconnect_delay_ms` from now. Unlike the bring-up connect it preserves the `has_been_online()` latch and does not arm the connect window. On expiry, `tick()` reconnects saved networks when present or retries the transient factory-default network otherwise. Used by the orchestrator for runtime disconnects. |
-| `try_default_fallback_credentials()` | `void` | Restore Wi-Fi callbacks, then single-shot STA connect to the factory-default AP (`airgradient` / `cleanair`). The explicit SSID makes the connect transient, so nothing is written to the saved-networks store. Bounded by the fallback window. |
+| `schedule_reconnect(static_ip)` | `void` | Arm the runtime reconnect timer `reconnect_delay_ms` from now. Preserves `has_been_online()` and arms no connect window. `tick()` reuses the credential source explicitly selected at entry: saved networks in normal mode, transient factory Wi-Fi in manufacturing. |
+| `try_default_fallback_credentials()` | `void` | Manufacturing-only, single-shot STA connect to the factory AP (`airgradient` / `cleanair`). The explicit SSID makes the connect transient, so nothing is written to the saved-networks store. Bounded by the fallback window even when the driver rejects the attempt immediately. |
 | `start_provisioning(transport)` | `void` | Clear retained success, stop the local endpoint, cancel STA/deadlines, and start the requested provisioning transport. Defaults to `BleOnly`. |
 | `switch_provisioning_transport()` | `void` | Back-to-back stop/start that flips transport, swallows the intermediate `Stopped`, and requests listener retention when one is already bound. |
 | `stop_provisioning(stop_http_server = true)` | `void` | Tear down provisioning and optionally retain the listener for local-route handoff. Blocks for the component's post-connect hold after `Connected`, then reinstalls Wi-Fi callbacks. |
@@ -130,9 +130,9 @@ Defaults are listed where they exist; the rest come from `GoApp`.
 | `ble_manufacturer_data` | — | BLE manufacturer data after the company ID prefix |
 | `ble_auth_flags` | `AgBleAuth::SC` | Just Works Secure Connections, no BOND, no MITM |
 | `initial_connect_window_ms` | `30000` | Saved-credentials connect window |
-| `fallback_ssid` | `"airgradient"` | Factory-default fallback AP |
-| `fallback_password` | `"cleanair"` | Factory-default fallback AP password |
-| `fallback_connect_window_ms` | `15000` | Factory-default fallback window upper bound |
+| `fallback_ssid` | `"airgradient"` | Manufacturing factory AP |
+| `fallback_password` | `"cleanair"` | Manufacturing factory AP password |
+| `fallback_connect_window_ms` | `15000` | Manufacturing initial connection window before failure display and reboot |
 | `reconnect_delay_ms` | `5000` | Delay between runtime reconnect cycles (after the first online) |
 | `serial_number` / `firmware_version` / `model` | — | Local mDNS TXT identity; strings are borrowed for the service lifetime |
 | `hostname` | — | Local mDNS hostname and provisioning hostname |
@@ -186,36 +186,50 @@ networks are saved. `NotFound` is converted to a synthetic
 routing applies. Other non-OK statuses post a synthetic
 `WifiDisconnected{unknown}`.
 
-The initial-connect deadline is armed only when the manager accepts the
-request (returns `Ok`). The deadline is single-writer: only
+The saved-network initial-connect deadline is armed only when the manager
+accepts the request (returns `Ok`). The deadline is single-writer: only
 `shutdown()`, `connect_with_saved_credentials()`,
 `try_default_fallback_credentials()`, and `tick()` mutate it. The IP
 callback signals a pending clear via the `_clear_deadline_pending`
 atomic, which the next `tick()` consumes — keeping the deadline write
 off the Wi-Fi event-task thread.
 
-### Factory-Default Fallback
+### Manufacturing Factory Wi-Fi
 
 `try_default_fallback_credentials()` connects with an explicit SSID, which
 the manager always treats as a transient connect — the saved-networks store
 is never written. (The HAL forces `WIFI_STORAGE_RAM` once at init, so
 ESP-IDF never persists STA credentials either.) The attempt is single-shot
-(`max_retry_count = 0`); if it fails or the fallback window expires the
-disconnect policy opens provisioning.
+(`max_retry_count = 0`). The orchestrator selects this path only in
+manufacturing, even if saved networks exist. The deadline is armed before
+calling `connect()`, so immediate driver errors cannot leave the startup
+screen stuck. Early disconnects wait for the same deadline; they do not retry
+or start provisioning. If no IP is obtained within 15 seconds, the orchestrator
+stops Wi-Fi, paints `Wi-Fi connection failed`, flushes the display, holds the
+message for one second, and reboots to onboarding. Manufacturing entry must be
+triggered again by the operator.
+
+Normal Stationary entry uses saved networks or opens BLE provisioning
+immediately when the store is empty. It never selects factory credentials
+automatically. Provisioning itself is unchanged.
 
 ### Runtime Reconnect
 
 After the first successful IP (`has_been_online()` latched), a disconnect
 is a _runtime_ event: the orchestrator calls `schedule_reconnect()`
 instead of opening provisioning. The service arms a `reconnect_delay_ms`
-(5 s) timer. When `tick()` fires it, the service checks the credential store:
-saved networks use `_connect_saved_internal()`, while an empty store retries
-the explicit factory-default network through `_connect_fallback_internal()`.
+(5 s) timer. When `tick()` fires it, the service reuses the credential source
+selected by the initial connection action. Normal sessions use
+`_connect_saved_internal()` even if the saved store becomes empty;
+manufacturing uses `_connect_fallback_internal()` even if saved networks exist.
+Saved-network entry, provisioning start, shutdown, and credential clearing
+reset the factory-credential selection so it cannot leak into a normal session.
 Both paths pass `reset_online_latches = false` and `arm_window = false`.
 Preserving the `has_been_online()` latch keeps subsequent delivered failures
 routing back to the runtime branch (reconnect), never the bring-up provisioning
-branch. The fallback path also clears static IP and remains transient, so its
-credentials are never written to the saved-network store.
+branch or the manufacturing startup reboot. The factory path also clears
+static IP and remains transient, so its credentials are never written to the
+saved-network store.
 
 Within each saved-network reconnect cycle the `WifiManager` applies its own
 retry / backoff for retriable reasons (including `no_ap_found`). A
@@ -424,10 +438,11 @@ _svc.wifi.tick(static_cast<uint32_t>(RTOS::get_time_ms()));
 consumes `_clear_deadline_pending` (set by the IP
 callback) to clear the armed connect-window deadline, then checks whether
 it has expired without an IP. On expiry it posts a synthetic
-`WifiDisconnected{connection_lost}` and the orchestrator's disconnect
-policy opens provisioning. `tick()` then checks the separate runtime
-reconnect timer and, on expiry, reconnects saved networks when present or
-retries the transient factory-default network otherwise.
+`WifiDisconnected{connection_lost}`; a full queue leaves the deadline due until
+delivery succeeds. The orchestrator opens provisioning in normal mode or
+shows failure and reboots during manufacturing startup. `tick()` then checks
+the separate runtime reconnect timer and, on expiry, retries the previously
+selected credential source without arming a startup timeout.
 
 The service holds two independent timers — the connect window and the
 runtime reconnect timer — and `next_deadline_ms()` returns the nearer of
@@ -443,16 +458,15 @@ that armed it.
 
 ## Edge Cases / Errors
 
-- **No saved networks at boot.** `connect_with_saved_credentials()`
-  short-circuits through `NotFound` and synthesizes a `no_ap_found`
-  disconnect; the orchestrator opens provisioning per its before-online
-  disconnect policy.
+- **No saved networks at boot.** Normal entry opens provisioning immediately.
+  If the store becomes empty before `connect_with_saved_credentials()` runs,
+  `NotFound` synthesizes `no_ap_found` and normal bring-up still provisions.
 - **STA connect rejected by HAL.** Any non-OK / non-NotFound `connect`
-  status synthesizes a `WifiDisconnected{unknown}`. The deadline is not
-  armed (no spurious tick-driven event).
+  status synthesizes `WifiDisconnected{unknown}`. Saved-network behavior is
+  unchanged (no deadline armed); manufacturing retains its startup deadline.
 - **Fallback AP missing.** The fallback attempt has no auto-retry
-  (`max_retry_count = 0`). On disconnect the orchestrator routes per
-  policy; on timeout `tick()` synthesizes `connection_lost`.
+  (`max_retry_count = 0`). Manufacturing waits until timeout, shows failure,
+  then reboots. A session that already obtained an IP keeps reconnecting.
 - **`requested_by_user` disconnect.** Emitted by the manager during the
   service's own `disconnect()` / `shutdown()` path. Ignored explicitly
   in `_on_disconnected()`.
@@ -514,19 +528,23 @@ in `products/go/tests/go_wifi.tests.cpp` and cover:
 - Saved-credentials connect, including `NotFound` synthesizing a
   disconnect, deadline arming, and the IP callback latching the
   deferred clear.
-- Factory-default fallback connect (transient, never saved), single-shot
-  retry budget, and deadline expiry synthesizing `connection_lost`.
+- Factory-default connect (transient, never saved), single-shot retry budget,
+  deadline retention on immediate driver failure, timeout delivery after queue
+  pressure, and cancellation after success even if the link drops before tick.
 - Provisioning start (cancels in-flight STA, zeros deadlines, installs
   config), stop (reinstalls Wi-Fi callbacks), and switch (swallows the
   intermediate `Stopped`, synthesizes one on start failure).
 - Online latches around `ProvisioningEvent::Connected` so
   `has_been_online()` reads true on the subsequent `Stopped`.
 - Runtime reconnect: `schedule_reconnect()` arms the reconnect timer,
-  `tick()` selects saved or transient fallback credentials without resetting
-  `has_been_online()`, fallback retries do not apply static IP or persist
-  credentials, and `next_deadline_ms()` returns the nearer of the two timers.
+  `tick()` retains the explicitly selected saved or factory credentials without
+  resetting `has_been_online()`. An empty store never enables factory Wi-Fi in
+  normal mode; factory retries ignore saved static IP and never persist
+  credentials. Lifecycle boundaries clear the factory selection, and
+  `next_deadline_ms()` returns the nearer of the two timers.
 - Shutdown path (detaches callbacks, zeroes latches, sets mode `Off`).
 
 The orchestrator tests in `products/go/tests/go_orchestrator.tests.cpp`
-drive the higher-level mode-policy interactions against a stubbed
-`WifiService`.
+drive the higher-level mode policy against a stubbed `WifiService`, including
+immediate normal provisioning, manufacturing failure display and post-paint
+hold before reboot, and unchanged manufacturing reconnection after first IP.

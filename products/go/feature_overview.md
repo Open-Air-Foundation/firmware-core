@@ -60,17 +60,23 @@ The default mode on a fresh device is Portable.
 
 ## Tracking And Route Logging
 
-Tracking is one of the key Go features. When tracking is active, the device
+Tracking is one of the key Go features. While recording, the device
 combines air quality readings with GPS information and stores them as a route.
 
 Tracking supports:
 
-- Starting and stopping from the device menu.
-- Starting and stopping from the connected phone app.
+- Starting, pausing, resuming, and stopping from the device menu.
+- The same commands through the existing BLE Config characteristic.
 - GPS plus sensor data stored together as route points.
 - A unique session ID for each tracking session.
 - Continuing the same session across deep sleep wake-ups.
 - Exporting stored route history to the phone over BLE.
+
+Pause stops new sensor/GPS route points while retaining the session. Resume
+continues the same route without filling in the paused interval. Live readings,
+charts, GPS, and existing data export continue; Stationary cloud upload and
+configuration polling also continue. The display replaces the recording dot
+with a pause icon. A paused route must be stopped before it can be deleted.
 
 The device also keeps a short temporary measurement history for on-device charts.
 This chart data is separate from the persistent route log.
@@ -94,6 +100,23 @@ The display can show:
 User navigation is handled through three touch areas and physical buttons.
 Common actions include opening the menu, changing settings, starting or stopping
 tracking, confirming actions, and locking or unlocking the interface.
+
+### Shake-To-Refresh
+
+While Go is awake, shake it side to side using a natural forearm swing, roughly
+three left/right pairs in about one second. An accepted shake gives a short
+beep when the buzzer is enabled and requests fresh readings. If a regular
+measurement is already requested, its result satisfies the refresh.
+
+The display shows persistent `Waiting...`, `Preparing...`, or `Measuring...`
+progress until the result arrives. Progress remains visible when opening menus,
+and ordinary snackbar messages cannot replace it. Further shakes while refresh
+is pending do not queue more measurements or beep again.
+
+Manual refresh updates current readings without adding chart-history samples
+or route points, changing the regular measurement timer, or triggering an extra
+cloud upload. PM warmup can delay the result. Shake-to-wake from deep sleep is
+not implemented.
 
 ## Lock And Power Button Behavior
 
@@ -120,7 +143,7 @@ Main BLE features:
 - GPS data while tracking or when GPS is enabled.
 - Battery, charging, tracking, GPS, and storage status.
 - Reading and changing device settings.
-- Starting and stopping tracking.
+- Starting, pausing, resuming, and stopping tracking.
 - Clearing data.
 - Factory reset.
 - CO2 calibration command.
@@ -228,6 +251,8 @@ User-visible battery features:
 
 - Battery percentage display.
 - Charging status display.
+- Charging while powered off, with Charging and Battery Full screens. Hold
+  the power button to turn on, or unplug to power off.
 - USB plugged-in indication.
 - Low-battery warnings.
 - Automatic protective shutdown when the battery is critically low.
@@ -246,7 +271,6 @@ variants, it also supports a buzzer.
 
 LED features:
 
-- Front indicator brightness setting.
 - Back AQI LED brightness setting.
 - Touch feedback LED setting.
 - AQI color display based on PM2.5.
@@ -257,7 +281,8 @@ Buzzer and melody features:
 - Buzzer on/off setting.
 - Boot sound pattern.
 - First-time welcome chime.
-- Play Melody menu action.
+- Short acknowledgment beep for an accepted shake refresh.
+- Play Melody under Settings > Hardware Test.
 - Built-in melody choices such as Chime and Tetris.
 - Synchronized buzzer and LED effects for selected melodies.
 
@@ -266,13 +291,16 @@ hardware may not include every indicator supported by V1 hardware.
 
 ## First-Time Setup
 
-On a fresh device, the Go shows a first-time Getting Started flow after boot.
-This flow includes a QR code that points users to the Go setup guide.
+On a fresh device, the Go shows Getting Started after initialization while
+sensors warm up. Holding Enter opens Home immediately; readings show dashes
+until the first measurement arrives.
+This flow includes a QR code labeled `Scan for guide` that points users to the
+Go usage guide. The device can be used without following the guide.
 
 The Getting Started screen is shown until the user completes a first meaningful
 engagement, such as:
 
-- pressing `Start using`,
+- holding Enter on `Hold Enter to start`,
 - successfully pairing with the phone app, or
 - changing the operating mode.
 
@@ -280,6 +308,28 @@ Factory reset clears this state, so the setup guide can be shown again on a
 reset or refurbished unit.
 
 ## Configurable Settings
+
+The main menu offers Exit Menu, Start Tracking / Tracking, Operating Mode, and
+Settings. During a session, Tracking opens Exit, Back, Status, Pause Tracking /
+Resume Tracking, and Stop Tracking. Operating Mode lists Portable, Stationary, and
+Offline. Settings contains Operations, Display & Touch, Hardware Test, Clear
+Data, Setup Guide, and the existing About Device page.
+
+Operations groups measurement interval, CO2 calibration, GPS mode, and buzzer.
+Display & Touch groups temperature/altitude units, PM display, auto-lock, and
+AQI LED and Touch LED brightness. Submenus keep Exit and Back;
+opening Tracking selects Status to show session details. Settings
+and its list submenus select their first content item, while value choices
+select the saved value. Back restores the row that opened the child page.
+
+Tracking Status shows session state, recording time excluding pauses, elapsed
+time including pauses, point count, last-point age, and GPS time. A second view
+shows GPS signal and location details. Values refresh every five seconds while
+the page is open. Unavailable values show `--`.
+
+The page does not auto-lock; use Power to lock or leave to restore normal
+auto-lock. Keeping it open in Offline mode keeps the device awake and uses more
+battery.
 
 The Go stores user settings on the device, so they survive power cycles.
 
@@ -294,7 +344,6 @@ Common configurable settings include:
 - GPS mode: always off, on when tracking, or always on.
 - Operating mode: Portable, Stationary, or Offline.
 - Auto-lock timeout.
-- Front LED brightness.
 - AQI LED brightness.
 - Touch LED brightness.
 - Buzzer enabled or disabled.

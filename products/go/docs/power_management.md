@@ -2,7 +2,8 @@
 
 Product-specific power management for AirGradient Go. Handles BMS status
 polling, battery monitoring, sleep cycle management, RTC state persistence,
-and shutdown. Called synchronously by the orchestrator — no independent task.
+and shutdown. Called synchronously by the orchestrator and GoApp boot paths —
+no independent task.
 
 For AGo, the power service also manages:
 
@@ -42,10 +43,10 @@ For AGo, the power service also manages:
 |---|---|---|
 | `BmsDevice` | `airgradient-bms` (HAL) | BMS telemetry, status, battery %, watchdog reset, PMID, charging, ship mode |
 | `FuelGaugeDevice` | `airgradient-bms` (HAL) | Optional fuel gauge runtime polling (V1 only). Attached via `set_fuel_gauge()` |
-| `gpio::Hal` | `airgradient-gpio` | Configure GPIO wake sources for deep sleep |
+| `gpio::Hal` | `airgradient-gpio` | Configure GPIO wake sources and read button levels |
 | `go_types.h` | product | `RtcAppState`, `WakeCause`, `LockState` |
 | `go_settings.h` | product | `GoSettings` for interval-based sleep decisions |
-| `esp_sleep.h` | ESP-IDF | `esp_sleep_*` functions (deep sleep) |
+| `esp_sleep.h` | ESP-IDF | `esp_sleep_*` functions (deep and light sleep) |
 
 ## PowerSnapshot Fields
 
@@ -272,8 +273,9 @@ wins, so the operator can always get a screen.
      both button pins (ESP32-C5 target uses EXT1; no EXT0 support on this chip)
 3. Calls `esp_deep_sleep_start()` — does **not** return.
 
-The caller must set `RtcAppState::sensors_warm` via
-`should_hold_pm_sensor()` and call `save_state()` **before** `enter_sleep()`.
+The caller must set `RtcAppFlag::SensorsWarm` using `set_flag()` with the
+result of `should_hold_pm_sensor()`, then call `save_state()` **before**
+`enter_sleep()`.
 The same decision controls sensor-producer shutdown: held sleeps stop the task
 with `sleep_pm=false`, while longer sleeps use `sleep_pm=true`. This keeps the
 SPS30's internal measurement state consistent with the persisted warm flag.
@@ -292,6 +294,41 @@ watchdog, brownout, and other non-deep-sleep resets reload its invalid
 initializer and begin a new session. Uptime is not part of `RtcAppState`, and
 `PowerService` does not update it during sleep entry.
 
+## Charging-Only Light Sleep
+
+`GoApp::run_charging_only()` keeps the application off while external power is
+present. After boot detection initializes the charger, the runner initializes
+the fuel gauge, disables PM power, paints `ShutdownCharging` or `ShutdownCharged`
+from the boot-detection status, stops the display
+worker, and puts the panel to sleep. Each iteration feeds the external watchdog
+from the main CPU and calls `enter_light_sleep(2000)`. The LP-core watchdog
+feeder is not started, and the charger is not reinitialized on each poll.
+
+`enter_light_sleep()` uses the existing timer and EXT1 button-mask wake setup.
+After waking, it disables those wake sources and restores the button pins from
+RTC to digital GPIO mode. It returns true for a button wake or a held power
+button. If light-sleep entry fails, it logs the error and delays for the
+requested interval before returning.
+
+A button result restarts the ESP; software reset bypasses charging-only
+detection and enters normal startup. Otherwise, `poll_status()` checks external
+input. Failed or invalid status reads leave the charging page in place and
+retry on the next iteration. A valid reading without external input triggers
+a full `ShutdownUser` refresh, puts the panel to sleep, and calls `shutdown()`.
+There is no cable or button recheck after the refresh, so reconnecting during
+that refresh does not cancel shutdown.
+
+`ChargeTerminationDone` selects "Battery Full" with a filled-battery icon.
+Active charging selects "Charging" with a battery-and-bolt icon. The display
+refreshes only when the selected page changes and sleeps afterward. Unknown
+charging state, failed reads, and `NotCharging` retain the current page;
+`NotCharging` alone is not evidence of a full battery. At startup, Charging is
+the default unless charge completion is confirmed. This loop uses status
+polling only; the orchestrator's runtime thermal and full-charge-pause policies
+do not run here. Charger-chip protections and charge termination remain active.
+User-requested shutdown with USB attached also enters this boot path through
+the one-shot RTC request described under [Shutdown](#shutdown-qon--ship-mode).
+
 ## PM Sensor Warm-Hold
 
 For short deep sleeps (< `sensor_hold_max_sleep_ms`, default 20 s) the SPS30
@@ -300,9 +337,10 @@ per-pin hold persists through deep sleep automatically, so no global
 `gpio_deep_sleep_hold_en()` call is needed. The fan keeps spinning and the
 sensor stays in measurement mode.
 
-On the next timer wake the fast path reads `RtcAppState::sensors_warm`:
+On the next timer wake the fast path reads
+`state.has_flag(RtcAppFlag::SensorsWarm)`:
 
-| `sensors_warm` | Behavior |
+| `SensorsWarm` | Behavior |
 |---|---|
 | `true`  | `release_sleep_gpio_holds()` calls `gpio_hold_dis()` on the pin, `SPS30::init(skip_reset=true)` re-attaches without resetting, **warmup loop skipped entirely** — boot drops from ~14–17 s to ~4–7 s |
 | `false` | Normal cold boot: full `SPS30::init()` with `CMD_RESET`, 10 s interruptible warmup |
@@ -335,49 +373,64 @@ then lets the fresh output driver take over with zero power glitch.
 
 In non-Offline modes (Portable, Stationary) the device stays awake but
 the SPS30 PM sensor may idle for long periods between measurements,
-drawing 45–65 mA of continuous fan current.  When the measurement
-interval is at or above `pm_sleep_threshold_ms` (default 20 s) the
+drawing 45–65 mA of continuous fan current. When the
+time remaining until the next scheduled measurement is at or above
+`pm_sleep_threshold_ms` (default 20 s), the
 orchestrator puts the SPS30 into its native **Sleep** mode (`0x1001`)
 between measurements, then isolates it from the I2C bus (V1) via
 `set_pm_power(false)`.
 
 ### Cycle
 
-```text
-Measurement completes → on_sensor_data() → request_pm_sleep()
-    ↓
-SensorProducer sleeps SPS30 (fan stopped) → posts PmSensorAsleep
-    → orchestrator set_pm_power(false) (isolate bus)
-    ↓
-Idle (PM asleep, fan stopped, ~8 µA)
-    ↓
-Pre-wake timer fires (interval − warmup before next measurement)
-    → set_pm_power(true) (connect bus) → request_prepare()
-    ↓
-SensorProducer pm_wake() + warmup() (~10 s of discard reads)
-    — fan spins up during warmup
-    ↓
-Measurement timer fires → request_measurement(1, All)
-    — PM data is stable, fan has spun up during warmup
+```mermaid
+stateDiagram-v2
+    Ready --> Sleeping: Sleep eligible after result
+    Sleeping --> Asleep: PmSensorAsleep, isolate bus
+    Asleep --> Preparing: Pre-wake or refresh, connect bus and prepare
+    Preparing --> Ready: PmPrepared after wake and warmup
+    Ready --> Ready: Measurement requested and completed
 ```
+
+The producer reports `PmPreparationStarted` before `pm_wake()` and schedules
+PM-only discard reads in its task loop during warmup (about 10 s by default).
+Gas-index sampling continues during this preparation. `PmPrepared` reports
+completion; the orchestrator waits for it before requesting a refresh
+measurement. Startup still uses blocking warmup to condition the gas sensor
+before enabling the sampler. Preparation completion does not guarantee a valid
+reading; normal field validation still applies.
 
 ### Eligibility
 
-The orchestrator checks eligibility inline at each decision point —
-no persistent mode flag is tracked:
+The orchestrator checks eligibility at each decision point. After a result,
+the argument is the remaining time to the regular deadline, clamped to zero
+when overdue:
 
 ```cpp
-_mode != OperatingMode::Offline && should_sleep_pm_sensor(interval_ms)
+_mode != OperatingMode::Offline && should_sleep_pm_sensor(remaining_ms)
 ```
+
+A manual refresh does not move that deadline. When the next scheduled reading
+is close, PM stays ready rather than sleeping and needing another warmup.
+Interval-policy checks, including pre-wake eligibility, still use the configured
+interval. PM operation state prevents duplicate sleep or preparation requests.
+
+Peripheral Test holds PM awake from entry through its summary and waits for
+preparation before reading. Sleep resumes after exit when no read is pending
+and the remaining time permits it. A sweep already running at exit retains PM
+until `SensorTestDone`. The saved measurement interval is unchanged. See
+[Hardware Test](hardware_test.md#peripheral-test).
 
 ### Edge Cases
 
 | Scenario | Handling |
 |---|---|
 | **Unlock** | Display shows cached data; PM wakes at the next pre-wake timer |
-| **Interval shortened below threshold** | `reschedule_sensor_timer()` calls `set_pm_power(true)` + `request_prepare()` (wakes) |
-| **Interval lengthened above threshold** | `reschedule_sensor_timer()` calls `request_pm_sleep()` |
-| **Mode change** | `change_mode()` calls `set_pm_power(true)` + `request_prepare()` (connect + wake) |
+| **Interval shortened below threshold** | Prepare an asleep sensor; a sleeping sensor is prepared after `PmSensorAsleep` |
+| **Interval lengthened above threshold** | Request sleep when PM is ready, no read or refresh is pending, and Peripheral Test is inactive |
+| **Mode change** | `change_mode()` calls `prepare_pm()` to connect and prepare an asleep sensor |
+| **Shake while PM asleep or preparing** | Prepare if asleep, then request the refresh after `PmPrepared` |
+| **Shake while PM sleep is in progress** | Wait for `PmSensorAsleep`, then prepare and measure |
+| **Refresh completes near the regular deadline** | Keep PM awake when the remaining time is below the existing sleep threshold |
 
 ### Methods
 
@@ -461,12 +514,23 @@ chip cannot trigger thrashing.
 |---|---|
 | `ESP_SLEEP_WAKEUP_TIMER` | `Timer` |
 | `ESP_SLEEP_WAKEUP_EXT0/EXT1/GPIO` | `Button` |
-| `ESP_SLEEP_WAKEUP_UNDEFINED` (first power-on) | `PowerOn` |
+| `ESP_SLEEP_WAKEUP_UNDEFINED` (including software reset) | `PowerOn` |
 
 ## Boot Path Routing
 
 `GoApp::run()` selects the boot path via the pure function
-`select_boot_path(cause, state)`:
+`select_boot_path(cause, state, charging_only_eligible)`:
+
+### Charging-Only Boot
+
+After the active factory-learning check, `detect_charging_only_boot()` requires
+`is_power_on_reset()` (`esp_reset_reason() == ESP_RST_POWERON`) and a valid BMS
+status showing external input. Charge completion does not affect eligibility,
+and button state is not checked. Software resets and ordinary deep-sleep wakes
+bypass the probe. A one-shot RTC shutdown request allows the probe on its timer
+wake and selects `ChargingOnly` even if the input cannot be confirmed. Otherwise,
+a true detection result selects `ChargingOnly` before the other boot rules;
+see [Hardware Init](hardware_init.md#boot-path-selection) for retry behavior.
 
 ### Fast-path (timer wake, locked)
 
@@ -516,7 +580,7 @@ All init runs via idempotent GoBoard methods.
 
 Two separate RTC-memory regions survive deep sleep:
 
-### App state (`go_power.cpp`)
+### App State (`go_power.cpp`)
 
 ```cpp
 RTC_DATA_ATTR static RtcAppState s_rtc_state;
@@ -526,11 +590,64 @@ RTC_DATA_ATTR static bool s_rtc_state_valid = false;
 - `save_state(state)` — copies `state` into `s_rtc_state` and sets the valid flag.
 - `load_state()` — returns a copy of `s_rtc_state` if valid; otherwise returns
   a default-constructed `RtcAppState` (safe starting point for fresh power-on).
+- `load_rtc_app_state()` — provides the same load behavior during early boot,
+  before a `PowerService` exists.
+
+[`RtcAppState`](../main/go_types.h) stores boolean state in a four-byte
+`uint32_t flags` mask with explicit `RtcAppFlag` assignments:
+
+| Flag | Bit | Default | Purpose |
+|---|---|---|---|
+| `GpsEnabled` | 0 (`1u << 0`) | Set | Cached GPS-enabled setting |
+| `SensorsWarm` | 1 (`1u << 1`) | Clear | Sensors kept powered during deep sleep |
+| `ChargingOnlyRequested` | 2 (`1u << 2`) | Clear | One-shot charging-only boot request |
+| Reserved | 3–31 | Clear | Future flags |
+
+Call `has_flag(flag)` to read a flag and `set_flag(flag, enabled)` to change
+it. Reads have no side effects; updates preserve all other bits, including
+reserved bits. RTC save/load copies the complete state, preserving the mask.
+
+`mode`, `behavior`, `lock_state`, and `tracking_state` remain separate
+one-byte enums; `tracking_session_id` remains a separate four-byte integer.
+Their defaults are Portable, Idle, Locked, Idle, and zero respectively.
+`tracking_timing` adds four `uint32_t` second-based fields for the original
+session start, accumulated recording duration, current recording-segment start,
+and last accepted-record time. All default to `TRACKING_TIME_INVALID_S`; zero is
+a valid clock value. The timing block occupies 16 bytes and `low_battery_polls`
+(see Low-Battery Watch) one byte plus padding, making the complete structure
+32 bytes, enforced by a size assertion in host and firmware builds.
+
+The saved `tracking_state` enum and `tracking_session_id` preserve Recording or
+Paused across deep sleep. A Recording wake reopens the route for append; a
+Paused wake keeps it closed while continuing measurement, display, and configured
+GPS behavior. Only an explicit Resume returns a paused session to Recording.
+
+Timing anchors use the retained monotonic clock, not GPS/system UTC. Closing and
+reopening the writer for sleep does not change a recording segment. Timer-wake
+accepted writes update the last-record timestamp; both the Sleep and Promote
+paths persist that updated value. Inactive tracking restores invalid timing.
+No point count, GPS fix data, or UI cursor is added to app-state retention.
+The timing data is not persisted in route files and does not migrate an active
+session through a cold boot or firmware update.
+
+`RtcAppFlag::ChargingOnlyRequested` defaults to clear. User shutdown with
+confirmed USB power sets it before a brief timer-woken deep-sleep reboot.
+Charging-only mode saves a default-constructed state before polling,
+consuming the request. The next Power-button software restart therefore
+starts the application normally. `RTC_DATA_ATTR` state survives deep sleep
+but is reinitialized on software restart, so the handoff does not use
+`esp_restart()`.
 
 Under `TEST_HOST`, `RTC_DATA_ATTR` is defined away so the variables become
 ordinary statics — `save_state()` / `load_state()` work identically.
+[Power-service host tests](../tests/go_power.tests.cpp) cover defaults,
+independent flag updates, all eight flag combinations through both loaders,
+reserved-bit preservation, invalid-state fallback, and recording/paused timing
+persistence. [Boot tests](../tests/go_app.tests.cpp) verify timing handoff through
+Sleep/Promote, and that charging-only mode consumes its request before polling
+and the next restart boots normally.
 
-### Display snapshot (`go_display.cpp`)
+### Display Snapshot (`go_display.cpp`)
 
 ```cpp
 RTC_DATA_ATTR static RtcDisplaySnapshot s_rtc_display_snapshot;
@@ -546,11 +663,11 @@ including the altitude unit, from the last displayed frame. Allows the
 button-wake path to render a meaningful Home screen without reading NVS or
 sensors.
 
-### RTC memory budget
+### RTC Memory Budget
 
 | Region | Size | Location |
 |---|---|---|
-| `RtcAppState` + valid flag | ~14 B | `go_power.cpp` |
+| `RtcAppState` + valid flag | 28 B + 1 B, excluding linker alignment | `go_power.cpp` |
 | `PayloadCacheStorageData` | ~1.5 KB | `rtc_payload_cache_storage.cpp` |
 | `RtcDisplaySnapshot` + valid flag | ~45 B | `go_display.cpp` |
 | **Total** | **~1.6 KB** | ESP32-C5: 8 KB available |
@@ -652,6 +769,17 @@ orchestrator and display. The status bar shows a plug icon when
 
 ## Shutdown (QoN / Ship Mode)
 
+For user shutdown with external input in the latest power status, the
+orchestrator completes its normal shutdown page and cleanup, then saves
+`RtcAppFlag::ChargingOnlyRequested` in RTC state and calls `PowerService::reboot()`.
+The power service waits for Power release while feeding the external watchdog,
+then enters deep sleep with only a 1 ms timer wake enabled. This preserves RTC
+memory and reboots into the existing charging-only loop without waiting for an
+external watchdog reset. GoApp consumes the request and paints Charging or
+Battery Full using the existing display initialization. The existing loop
+handles charge completion and cable removal through status polling.
+
+Battery-only user shutdown and protective shutdowns keep the ship-mode path.
 `PowerService::shutdown()` triggers BMS QoN (ship mode) via
 `_bms.enter_ship_mode()`, which writes the BQ25629 registers to cut
 power to the entire system. If the I2C write fails (e.g. VBUS present
@@ -674,9 +802,9 @@ the gesture significant:
   cold-boot path. This is effectively a hardware power-cycle restart.
 
 Once the BATFET opens there is no firmware running to suppress the
-re-wake — it is autonomous BQ25629 behavior. With USB present, ship mode
-is refused (the deep-sleep fallback runs instead), so the restart
-behavior applies only on battery.
+re-wake — it is autonomous BQ25629 behavior. With confirmed USB present, user
+shutdown waits for release and reboots into charging-only mode instead. The
+hardware hold-to-restart behavior applies only on battery.
 
 Ship mode is no longer called directly from `poll_bms()`. Instead,
 safety trips (EDV and high- or low-battery-temperature) set
@@ -746,9 +874,11 @@ transfer fitting inside a single ~6 min window. See
 | `reset_watchdog()` | Yes (mock BmsDevice) | |
 | `save_state()` / `load_state()` | Yes | `RTC_DATA_ATTR` defined away |
 | `enter_sleep()` | No | Calls `esp_sleep_*` + `gpio_hold_en()` |
+| `enter_light_sleep()` | Hardware path only on target | Timer/button wake; host path delays and reads the button |
 | `configure_wake_sources()` | No | Calls `esp_sleep_*` |
 | `release_sleep_gpio_holds()` | No | Calls `gpio_hold_dis()` |
 | `get_wake_cause()` | No | Calls `esp_sleep_get_wakeup_cause()` |
+| `is_power_on_reset()` | Stubbed on host | Checks `ESP_RST_POWERON` on target |
 | `shutdown()` | No | BMS hardware command |
 | `init_ext_watchdog()` | Yes (mock gpio::Hal) | GPIO config via HAL |
 | `reset_ext_watchdog()` | Yes (mock gpio::Hal) | GPIO pulse via HAL |

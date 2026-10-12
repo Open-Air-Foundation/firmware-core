@@ -107,6 +107,7 @@ TEST_CASE("BuzzerService: lifecycle", "[BuzzerService][lifecycle]") {
     Note note{2700, 100};
     svc.play(&note, 1);
     svc.beep(2700, 100);
+    svc.acknowledge_refresh();
     svc.stop();
     svc.pump_for_test(0);
     CHECK_FALSE(svc.is_playing());
@@ -125,6 +126,7 @@ TEST_CASE("BuzzerService: lifecycle", "[BuzzerService][lifecycle]") {
     Note note{2700, 100};
     svc.play(&note, 1);
     svc.beep(2700, 100);
+    svc.acknowledge_refresh();
     svc.stop();
     CHECK_FALSE(svc.is_playing());
     svc.pump_for_test(0);
@@ -244,21 +246,27 @@ TEST_CASE("BuzzerService: play with null/zero args is no-op", "[BuzzerService][p
 // Beep
 // ============================================================================
 
-TEST_CASE("BuzzerService: beep", "[BuzzerService][beep]") {
+TEST_CASE("BuzzerService: beep and refresh acknowledgment", "[BuzzerService][beep]") {
   TestFixture f;
   f.build();
 
-  SECTION("beep is equivalent to play single note") {
-    f.svc->beep(2700, 200);
-
-    REQUIRE_CALL(f.driver, set_freq(2700)).RETURN(true);
-    f.svc->pump_for_test(0);
-    CHECK(f.svc->is_playing());
-
-    REQUIRE_CALL(f.driver, set_freq(0)).RETURN(true);
-    f.svc->pump_for_test(200);
-    CHECK_FALSE(f.svc->is_playing());
+  uint32_t duration_ms = 200;
+  SECTION("beep is equivalent to play single note") { f.svc->beep(2700, duration_ms); }
+  SECTION("refresh acknowledgment lasts 100 ms") {
+    duration_ms = 100;
+    f.svc->acknowledge_refresh();
   }
+
+  REQUIRE_CALL(f.driver, set_freq(2700)).RETURN(true);
+  f.svc->pump_for_test(0);
+  CHECK(f.svc->is_playing());
+
+  f.svc->pump_for_test(duration_ms - 1);
+  CHECK(f.svc->is_playing());
+
+  REQUIRE_CALL(f.driver, set_freq(0)).RETURN(true);
+  f.svc->pump_for_test(duration_ms);
+  CHECK_FALSE(f.svc->is_playing());
 }
 
 // ============================================================================
@@ -506,6 +514,7 @@ TEST_CASE("BuzzerService: mutators before start are no-ops", "[BuzzerService][li
   Note note{2700, 100};
   svc.play(&note, 1);
   svc.beep(2700, 100);
+  svc.acknowledge_refresh();
   svc.stop();
   CHECK_FALSE(svc.is_playing());
 }

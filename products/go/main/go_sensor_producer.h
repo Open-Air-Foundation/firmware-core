@@ -66,7 +66,9 @@ public:
   /// @param iterations Number of averaging iterations (minimum 1 enforced
   ///                   inside the task).
   /// @param groups     Which sensor groups to poll.
-  void request_measurement(uint8_t iterations, SensorGroup groups);
+  /// @param origin     Purpose of this measurement, carried into its result.
+  void request_measurement(uint8_t iterations, SensorGroup groups,
+                           MeasurementOrigin origin = MeasurementOrigin::Scheduled);
 
   /// Trigger a CO2 background calibration.
   /// Non-blocking: returns immediately.  The task runs the blocking
@@ -75,13 +77,12 @@ public:
   void request_co2_calibration();
 
   /// Trigger PM sensor warmup after a power cycle.
-  /// Non-blocking: returns immediately.  The task runs blocking
-  /// SensorManager::warmup() (~10 s) in its own context.
+  /// Non-blocking: the task advances PM-only warmup steps (~10 s total)
+  /// alongside gas-index sampling in its run loop.
   ///
   /// The orchestrator sends this notification `CONFIG_SENSOR_WARMUP_DURATION_MS`
   /// before the next measurement deadline.  The subsequent measurement
-  /// notification latches while warmup is running and is consumed
-  /// immediately after warmup completes.
+  /// request waits for PmPrepared before notifying the worker.
   void request_prepare();
 
   /// Put the PM sensor into low-power sleep, then post PmSensorAsleep so the
@@ -126,8 +127,26 @@ private:
   TempHumData _last_temp_hum{};
   bool _last_temp_hum_valid = false;
 
+  /// Last PM snapshot with valid PM2.5, retained across failed measurements.
+  static constexpr uint32_t PM_VALIDITY_MS = 120000;
+  PMData _last_pm{};
+  uint32_t _last_pm_ms = 0;
+
+  /// Last valid CO2 reading, retained across failed measurements.
+  static constexpr uint32_t CO2_VALIDITY_MS = 120000;
+  CO2Data _last_co2{};
+  uint32_t _last_co2_ms = 0;
+
   // A flag that indicate TVOC and NOx sampling enabled or not
   bool _sampler_enabled = false;
+
+  /// PM preparation after startup shares the task loop with the gas sampler.
+  bool _pm_warmup_active = false;
+  int _pm_warmup_iterations_remaining = 0;
+  uint32_t _next_pm_warmup_step_ms = 0;
+
+  /// Measurement notifications use bits 0-7 for iterations and 8-15 for groups.
+  static constexpr uint32_t NOTIFY_REFRESH = 1u << 16;
 
   /// Sentinel notification value that triggers calibration instead of measurement.
   static constexpr uint32_t NOTIFY_CALIBRATION = UINT32_MAX;
@@ -163,4 +182,6 @@ private:
   void handle_tvoc_nox_learning_offsets();
   void handle_measurement(uint32_t notify_value);
   void handle_sampler_tick();
+  void handle_pm_warmup_tick();
+  void post_pm_event(EventType type);
 };

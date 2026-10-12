@@ -30,6 +30,8 @@ enum class UIAction : uint8_t {
   None,
   StartTracking,
   StopTracking,
+  PauseTracking,
+  ResumeTracking,
   ChangeMode,      ///< Accompanied by UIActionResult::new_mode.
   SettingsChanged, ///< UI Manager updated internal settings state.
   ClearData,
@@ -38,7 +40,7 @@ enum class UIAction : uint8_t {
   PlayMelody,                         ///< Accompanied by UIActionResult::melody.
   ConfirmSwitchProvisioningTransport, ///< User confirmed Yes on switch-transport overlay.
   ConfirmCancelProvisioning,          ///< User confirmed Yes on cancel-setup overlay.
-  AckOnboarding,                      ///< 'Start using' pressed on first-boot Getting Started.
+  AckOnboarding,                      ///< Enter held on first-boot Getting Started.
   ArmFgLearning,      ///< Confirmed: write factory state and reboot into FG learning.
   RunPeripheralTest,  ///< Start the guided actuator + AQ peripheral test flow.
   PeripheralStepPass, ///< Operator confirmed the current actuator step.
@@ -62,7 +64,6 @@ struct PeripheralTestView {
   const char *prompt = nullptr; ///< Actuator prompt (static string), Actuator kind only.
 
   // Summary results (Summary kind only). true = pass.
-  bool front_led = false;
   bool back_led = false;
   bool touch_led = false;
   bool buzzer = false;
@@ -97,6 +98,14 @@ struct UIActionResult {
 // BuildContext — all external state for building a DisplayValues snapshot.
 // ---------------------------------------------------------------------------
 
+struct TrackingStatusSnapshot {
+  uint32_t recording_s = TRACKING_TIME_INVALID_S;
+  uint32_t elapsed_s = TRACKING_TIME_INVALID_S;
+  uint32_t last_record_age_s = TRACKING_TIME_INVALID_S;
+  uint32_t point_count = 0; ///< Meaningful only when point_count_known is true
+  bool point_count_known = false;
+};
+
 struct BuildContext {
   const Measures &sensor_data;
 
@@ -113,7 +122,7 @@ struct BuildContext {
   bool wifi_connected;
   bool gps_enabled;
   bool gps_fix;
-  bool tracking_active;
+  TrackingState tracking_state;
 
   // Settings-derived flags
   bool display_off;
@@ -128,9 +137,10 @@ struct BuildContext {
   // Current timestamp for snackbar expiry
   uint32_t now_ms;
 
-  // --- GPS test screen (Screen::GpsTest only) ---
-  /// Latest parsed fix to render (borrowed; orchestrator owns).  Null = none.
+  // --- Cached GPS data (TrackingStatus and GpsTest) ---
+  /// Latest parsed fix to render (borrowed; orchestrator owns). Null = none.
   const GpsData *gps_data = nullptr;
+  // GPS test timing (Screen::GpsTest only).
   /// Seconds since GPS test entry, frozen once the first valid fix latches.
   uint32_t gps_ttff_secs = 0;
   /// True once the first valid fix has latched the TTFF value.
@@ -151,13 +161,16 @@ struct BuildContext {
   bool accel_read_ok = false;
   /// Overall PASS: identity matched, read ok, and magnitude within tolerance.
   bool accel_pass = false;
+
+  // Current-session values, computed by the orchestrator only for Tracking Status.
+  TrackingStatusSnapshot tracking_status{};
 };
 
 // ---------------------------------------------------------------------------
 // UIManager — pure state machine for screen navigation and UI logic.
 //
 // The UI Manager has ZERO hardware or RTOS dependencies. It is driven
-// entirely by the orchestrator which calls handle_input() and build_values().
+// entirely by the orchestrator via state synchronization, input, and rendering.
 // ---------------------------------------------------------------------------
 
 class UIManager {
@@ -174,22 +187,33 @@ public:
 
   /// Process an input event. Returns an action if the input triggered
   /// an application-level state change (start tracking, change mode, etc.).
-  /// The orchestrator should not call this when the device is locked.
+  /// The owner keeps tracking state synchronized. Do not call while locked.
   UIActionResult handle_input(InputSource source, InputType type);
 
   /// Build a complete DisplayValues snapshot for the Display Service.
-  /// The orchestrator passes in all external state via BuildContext.
+  /// Does not synchronize tracking/navigation state. The caller supplies a
+  /// context matching the state passed to sync_tracking_state().
   DisplayValues build_values(const BuildContext &ctx) const;
 
   /// Force the screen to a specific value. Used by the orchestrator
   /// for Shutdown and for restoring state after deep sleep wake.
+  /// Does not initialize per-screen view or cursor state.
   void set_screen(Screen screen);
+
+  /// Open Tracking Status on Session with Back selected. Used for explicit entry,
+  /// not redraws; tracking state must already be synchronized to an active session.
+  void open_tracking_status();
+
+  /// Sole tracking-state update/reconciliation point. Update from the owner's
+  /// state changes and boot restoration. Idle immediately dismisses TrackingMenu
+  /// and TrackingStatus to MainMenu on the tracking row.
+  void sync_tracking_state(TrackingState state);
 
   /// Get the current screen (for orchestrator decisions).
   Screen current_screen() const;
 
-  /// True when the user is on any menu-navigation screen (MainMenu, Settings,
-  /// SettingsChoice, TagList, Confirm, About).  Used by the orchestrator to
+  /// True when the user is on any menu-navigation screen, including settings
+  /// groups, choices, confirmations, and About. Used by the orchestrator to
   /// suppress background display updates that would interrupt menu interaction.
   bool is_on_menu_screen() const;
 
@@ -205,7 +229,10 @@ public:
 
   /// Show a snackbar message. Duration is armed on the next
   /// clear_expired_snackbar() call (3 seconds from that point).
-  void show_snackbar(const char *text);
+  /// Persistent messages stay on Home and menus; only persistent=true calls
+  /// can replace or clear them (text=nullptr clears).
+  void show_snackbar(const char *text, bool persistent = false);
+  bool snackbar_persistent() const;
 
   /// Clear snackbar if expired. Called by orchestrator before build_values.
   void clear_expired_snackbar(uint32_t now_ms);
@@ -244,7 +271,7 @@ public:
   void set_provisioning_ui_state(ProvisioningUiState s);
 
   /// Enter the Getting Started guide. Encodes the setup QR; from_boot
-  /// selects "Start using" -> AckOnboarding vs "Back" -> About.
+  /// selects Enter hold -> AckOnboarding vs tap "Back" -> Settings.
   void show_getting_started(bool from_boot);
 
   /// Push the current peripheral-test view snapshot for Screen::PeripheralTest.
@@ -283,6 +310,25 @@ public:
   void set_provisioning_connected(uint32_t ip);
 
 private:
+  // Setting/action identities are independent of their menu row positions.
+  enum class SettingId : uint8_t {
+    None,
+    Units,
+    AltitudeUnit,
+    PmDisplay,
+    MeasureInterval,
+    GpsMode,
+    Mode,
+    AutoLock,
+    AqiLed,
+    TouchLed,
+    Buzzer,
+    PlayMelody,
+    Co2Calibration,
+    ClearData,
+    FgLearning,
+  };
+
   Config _config;
 
   // Pre-formatted about screen text
@@ -294,28 +340,35 @@ private:
   Metric _active_metric = Metric::None;
 
   // Menu selection indices (per screen)
+  static constexpr uint8_t FIRST_CONTENT_ROW = 2; // Skip Exit and Back.
   uint8_t _menu_index = 0;
-  uint8_t _settings_index = 1;
+  uint8_t _tracking_menu_index = FIRST_CONTENT_ROW;
+  enum class TrackingStatusView : uint8_t { Session, Gps };
+  TrackingStatusView _tracking_status_view = TrackingStatusView::Session;
+  uint8_t _tracking_status_index = 1; // Back selected on entry.
+  uint8_t _settings_index = FIRST_CONTENT_ROW;
+  uint8_t _group_index = FIRST_CONTENT_ROW;
   uint8_t _settings_choice_index = 1;
   uint8_t _about_index = 1;
   uint8_t _confirm_index = 1;
   uint8_t _tag_list_index = 1;
-  uint8_t _hardware_test_index = 1;
+  uint8_t _hardware_test_index = FIRST_CONTENT_ROW;
   uint8_t _peripheral_index = 0; // Actuator step: 0 = Pass, 1 = Fail.
 
   // Peripheral test view snapshot (owned by the orchestrator flow).
   PeripheralTestView _peripheral_view = {};
 
   // Scroll state
-  uint8_t _settings_scroll_start = 0;
   uint8_t _settings_choice_scroll_start = 0;
   uint8_t _tag_scroll_start = 0;
 
   // Active settings choice context
-  uint8_t _editing_setting_id = 0;
+  SettingId _editing_setting_id = SettingId::None;
+  Screen _choice_parent = Screen::Settings;
 
   // Active confirm context (which setting opened the confirm dialog)
-  uint8_t _confirm_source_setting = 0;
+  SettingId _confirm_source_setting = SettingId::None;
+  Screen _confirm_parent = Screen::Settings;
 
   // Internal settings state.
   // Synced from GoSettings via sync_settings() at startup.
@@ -323,10 +376,9 @@ private:
   uint8_t _setting_altitude_unit = 0; // 0=m, 1=ft
   uint8_t _setting_pm_display = 0;    // 0=ug/m3, 1=USAQI
   int _setting_measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
-  uint8_t _setting_gps_mode = 1;      // 1="On When Tracking"
-  uint8_t _setting_mode = 1;          // 1="Portable"
+  uint8_t _setting_gps_mode = 1; // 1="On When Tracking"
+  OperatingMode _setting_mode = OperatingMode::Portable;
   uint8_t _setting_auto_lock = 0;     // 0="Off"
-  uint8_t _setting_display_led = 0;   // 0="Off"
   uint8_t _setting_aqi_led = 0;       // 0="Off"
   uint8_t _setting_touch_led = 0;     // 0="Off"
   uint8_t _setting_buzzer_volume = 0; // 0="Off"
@@ -359,7 +411,7 @@ private:
   /// Re-encoded on screen entry / transport switch.
   AirgradientProvisioning::QrCode _qr = {};
 
-  // true = boot gate (Start using -> Home); false = About -> Setup Guide (Back).
+  // true = boot gate (Enter hold -> Home); false = Settings -> Setup Guide (Back).
   bool _getting_started_from_boot = false;
 
   // Info screen text (UIManager owns the storage; the renderer borrows
@@ -375,13 +427,16 @@ private:
   // Chart output buffer (mutable: written by const build_values)
   mutable float _chart_buf[UI_CHART_BUF_SIZE] = {};
 
-  // Cached from last build_values call (mutable for const correctness)
-  mutable bool _tracking_active = false;
+  // Explicitly synchronized by the owner; rendering never changes this state.
+  TrackingState _tracking_state = TrackingState::Idle;
 
   // --- Input dispatch (per screen) ---
   UIActionResult dispatch_home(InputSource source, InputType type);
   UIActionResult dispatch_menu(InputSource source, InputType type);
+  UIActionResult dispatch_tracking_menu(InputSource source, InputType type);
+  UIActionResult dispatch_tracking_status(InputSource source, InputType type);
   UIActionResult dispatch_settings(InputSource source, InputType type);
+  UIActionResult dispatch_settings_group(InputSource source, InputType type);
   UIActionResult dispatch_settings_choice(InputSource source, InputType type);
   UIActionResult dispatch_about(InputSource source, InputType type);
   UIActionResult dispatch_confirm(InputSource source, InputType type);
@@ -402,10 +457,11 @@ private:
   void navigate_back();
   void open_main_menu();
   void open_settings();
-  void open_settings_choice(uint8_t setting_id);
+  void open_settings_group(Screen screen);
+  void open_settings_choice(SettingId setting_id);
   void open_about();
   void open_tag_list();
-  void open_confirm(uint8_t source_setting);
+  void open_confirm(SettingId source_setting);
   void open_hardware_test();
   void open_peripheral_test();
   void open_gps_test();
@@ -425,7 +481,10 @@ private:
 
   // --- Row population ---
   void populate_menu_rows(DisplayValues &v) const;
+  void populate_tracking_rows(DisplayValues &v) const;
+  void populate_tracking_status_rows(DisplayValues &v, const BuildContext &ctx) const;
   void populate_settings_rows(DisplayValues &v) const;
+  void populate_settings_group_rows(DisplayValues &v) const;
   void populate_settings_choice_rows(DisplayValues &v) const;
   void populate_measure_interval_choice_rows(DisplayValues &v) const;
   void populate_about_rows(DisplayValues &v) const;
@@ -443,8 +502,9 @@ private:
   void populate_chart(DisplayValues &v, const MeasuresAGo *cache, uint8_t cache_count) const;
 
   // --- Settings choice helpers ---
-  uint8_t setting_option_count(uint8_t setting_id) const;
-  uint8_t setting_current_option(uint8_t setting_id) const;
+  static const SettingId *group_items(Screen screen, uint8_t &count);
+  uint8_t setting_option_count(SettingId setting_id) const;
+  uint8_t setting_current_option(SettingId setting_id) const;
   void apply_setting_choice(uint8_t option_index);
   void sync_choice_scroll();
 

@@ -100,7 +100,8 @@ struct RtcDisplaySnapshot {
   // Battery
   uint8_t battery_pct;  bool is_battery_charging;  bool is_plugged_in;
   // Status flags & rendering settings
-  bool gps_enabled;  bool gps_fix;  bool tracking_active;  bool ble_enabled;
+  bool gps_enabled;  bool gps_fix;  bool ble_enabled;
+  TrackingState tracking_state;
   bool use_fahrenheit;  bool use_feet;  bool pm_use_usaqi;
 };
 ```
@@ -144,6 +145,8 @@ hardware-dependent and excluded from host builds (stubs provided).
 | `MainMenu` | Home with menu overlay |
 | `Settings` / `SettingsChoice` / `TagList` / `About` / `Confirm` | Full-screen lists |
 | `ShutdownUser` | Goodbye screen for user long-press shutdown ("Powered off" / "Hold button" / "to turn on") |
+| `ShutdownCharging` | Charging-only boot page: battery-and-bolt icon, "Charging" / "Hold power button" / "to turn on" |
+| `ShutdownCharged` | Charge-complete page: filled-battery icon, "Battery Full" / "Hold power button" / "to turn on" |
 | `ShutdownDischarge` | Safety-trip shutdown for OverDischarge ("Battery critically low" / "Connect charger" / "Charge before use") |
 | `ShutdownTemperature` | High-temperature safety shutdown ("Battery overheated" / "Move device to a" / "cooler location") |
 | `ShutdownTemperatureLow` | Low-temperature safety shutdown ("Battery too cold" / "Move device to a" / "warmer location") |
@@ -183,7 +186,8 @@ Key points:
 - `provisioning_confirm_index` (`uint8_t`): `0` No (default), `1` Yes
 - `provisioning_ap_ssid` (`const char *`): captive-portal AP SSID (`airgradient-<MAC>`) rendered as the Wi-Fi instruction line
 - `provisioning_ap_password` (`const char *`): captive-portal AP password rendered as the Wi-Fi instruction line (sourced from `UIManager::Config::ap_password`, matches `WifiService::Config::ap_password`)
-- `qr` (`const AirgradientProvisioning::QrCode *`): borrowed pointer to the QR matrix shown on the session screens that render one — the Provisioning page (UIManager re-encodes on session entry and transport switch: BleOnly → companion-app URL, WifiOnly → `WIFI:` join descriptor) and the Getting Started page (setup landing-page URL). Those screens are mutually exclusive, so one pointer serves both. Null or empty matrix skips the QR area
+- `qr` (`const AirgradientProvisioning::QrCode *`): borrowed pointer to the QR matrix shown on the session screens that render one — the Provisioning page (UIManager re-encodes on session entry and transport switch: BleOnly → companion-app URL, WifiOnly → `WIFI:` join descriptor) and the Getting Started page (usage-guide URL, captioned `Scan for guide`). Those screens are mutually exclusive, so one pointer serves both. Null or empty matrix skips the QR area
+- `getting_started_from_boot` (`bool`): renders one bold `Hold Enter to start` line centered inside the first-boot guide's highlighted action, retaining `Or just use it right now` above it. No hold duration is displayed; Settings → Setup Guide keeps its single-line `Back` action
 
 ## Architecture
 
@@ -270,33 +274,30 @@ enum class RefreshMode : uint8_t {
 
 The `update()` method selects the refresh mode using this priority:
 
-1. **Full** — crossing the setup-session boundary (any non-session screen
+1. **Partial, body-only** — destination is `TrackingStatus`, regardless of
+   header changes or the partial-operation budget.
+2. **Full** — crossing the setup-session boundary (any non-session screen
    ↔ `Info` / `Provisioning` / `ProvisioningConfirm`). Resets
    `_diff_count` and `_menu_exited` so the next session starts with a
    fresh partial budget.
-2. **Partial** — in-session transition (both previous and next are
+3. **Partial** — in-session transition (both previous and next are
    session screens). The partial-op counter is **not** consulted inside
    the session. Covers `Info` text updates, Provisioning status updates,
    `Provisioning ↔ ProvisioningConfirm`, and No ↔ Yes toggling.
-3. **Partial** — menu-navigation transition (either previous or next is
+4. **Partial** — menu-navigation transition (either previous or next is
    a menu-navigation screen, and the next screen is not a `Shutdown*`
    variant or PairingPasskey)
-4. **Full** — `_diff_count >= max_partial_ops` (anti-ghosting, default 20)
-5. **Fast** — `_menu_exited` is set (post-menu cleanup)
-6. **Partial** — both screens "navigable" and header unchanged, OR same
+5. **Full** — `_diff_count >= max_partial_ops` (anti-ghosting, default 20)
+6. **Fast** — `_menu_exited` is set (post-menu cleanup)
+7. **Partial** — both screens "navigable" and header unchanged, OR same
    list screen
-7. **Fast** — everything else (fallback)
+8. **Fast** — everything else (fallback)
 
-A screen is **navigable** if the user reaches it through normal menu
-interaction: Home, MainMenu, Settings, SettingsChoice, TagList, Confirm,
-About. PairingPasskey and the `Shutdown*` variants are not navigable —
-transitions involving them always use Fast for clear visual indication.
-
-A screen is **menu-navigation** if it is navigable and not Home (MainMenu,
-Settings, SettingsChoice, TagList, Confirm, About). Transitions where either
-side is a menu-navigation screen force body-only Partial regardless of header
-changes or anti-ghosting counter. This keeps menu interaction responsive and
-flash-free. The anti-ghosting Full refresh is deferred, not skipped.
+**Navigable** screens are Home and menu/list screens, including tracking,
+settings, and diagnostics. PairingPasskey and `Shutdown*` are not navigable.
+**Menu-navigation** means navigable but not Home. Unless a higher-priority rule
+applies, menu transitions use body-only Partial and defer header updates and
+anti-ghosting cleanup until exit.
 
 `_menu_exited` is set during any menu-navigation Partial and cleared when a
 full-screen refresh (Full or Fast) executes. After the user leaves the menu,
@@ -320,9 +321,9 @@ or Partial (capped at `UINT8_MAX` to prevent wrap during long menu sessions).
 `Config::max_partial_ops` (default 20) controls the limit.
 
 During menu navigation, the anti-ghosting threshold may be reached or
-exceeded, but the menu-navigation rule (tier 1) overrides it. The counter
+exceeded, but the menu-navigation rule overrides it. The counter
 keeps incrementing. When a later non-menu update runs, `_diff_count >=
-max_partial_ops` (tier 2) promotes it to Full — an even stronger cleanup
+max_partial_ops` promotes it to Full — an even stronger cleanup
 than the Fast from `_menu_exited`.
 
 ### Fast Refresh: Temperature Override
@@ -374,8 +375,8 @@ rules layered on top of the general matrix:
   partial-op counter and `_menu_exited` flag are reset at the boundary.
 - **All intra-session transitions are Partial, regardless of layout
   change.** This includes `Info` text updates
-  (`Connecting to saved Wi-Fi...` → `Trying default Wi-Fi...` →
-  `Connected!\n<ip>`), Provisioning status updates, the
+  (`Connecting to saved Wi-Fi...` or manufacturing's `Trying default Wi-Fi...`
+  → `Connected!\n<ip>` or a connection-failure message), Provisioning status updates, the
   `Provisioning ↔ ProvisioningConfirm` overlay, the No ↔ Yes toggle in
   the confirmation overlay, and the in-session `Info → Provisioning`
   jump. The partial worker writes the **full canvas** (y = 0..249) for
@@ -417,8 +418,9 @@ Session screens skip `_draw_status_bar()` and `_draw_snackbar()`:
 
 Background display updates are suppressed in two cases:
 
-- **Menu-navigation screens** (MainMenu, Settings, SettingsChoice,
-  TagList, Confirm, About). Background events — sensor data, BLE
+- **Menu-navigation screens** (MainMenu, Settings, Operations, DisplayTouch,
+  SettingsChoice, TagList, Confirm, About, and diagnostic menus/screens).
+  Background events — sensor data, BLE
   connect/disconnect/auth/config writes, BMS charging-status changes,
   and snackbar expiry — do not trigger display updates while the user
   is interacting with a menu.
@@ -438,6 +440,13 @@ internally and pushed to BLE clients; only the e-paper refresh is
 suppressed. The display catches up on the next user-initiated repaint
 or on the next deliberate session render. See `docs/orchestrator.md`
 for the full call-site classification.
+
+Shake-refresh progress is an explicit user-requested update. The orchestrator's
+`update_refresh_display()` submits it with `wait=true` on Home and menus so
+progress text can change and clear while a menu is open. It still skips active
+setup sessions and the pairing focus screen. Snackbar text and persistence
+belong to the orchestrator and UI Manager; Display Service only renders the
+supplied values and selects the normal refresh tier.
 
 ## Rendering Pipeline
 
@@ -466,17 +475,24 @@ Screen dispatch:
   128 px width. Logo removed from home page (kept for display-off only).
 - **MainMenu:** Home screen (metric cleared to None) + overlay at y=162.
   The 2 px-thick 1st grid divider is preserved as the menu top border.
-  Menu rows use full 128 px-wide selection rects.
-- **Settings/SettingsChoice/TagList/Confirm/About:** Full-screen list with
+  Menu rows use full 128 px-wide selection rects. The four rows are Exit Menu,
+  Start Tracking (Idle) / Tracking (Recording or Paused), Operating Mode, and Settings.
+- **TrackingMenu/TrackingStatus/Settings/Operations/DisplayTouch/SettingsChoice/TagList/Confirm/About:** Full-screen list with
   full 128 px-wide selection rects and vertically centered text. A
   separator line between the header rows (Exit/Back) and content rows
   uses a 2 px content offset to avoid touching.
+- **TrackingMenu:** Exit, Back, Status, Pause Tracking / Resume Tracking, and Stop
+  Tracking. Status is selected on entry.
+- **TrackingStatus:** Session and GPS views use nine rows of at most 19 characters,
+  above the snackbar. Only Exit, Back, and the view switch are selectable.
+  Updates are always body-only Partial (Y=18..249), leaving the top bar unchanged;
+  cleanup resumes after exit. See [Tracking Status](ui_manager.md#tracking-status).
 - **PairingPasskey:** "Bluetooth Pairing" title (`helvB14_tf`, baseline
   y=35), 3 px-thick divider at y=49 (shared chrome with `Shutdown*`),
   6-digit passkey (`logisoso32_tr`, baseline y=145), and "Enter on
   phone" hint (`helvR12_tr`, baseline y=215). No status bar, no
   snackbar.
-- **ShutdownUser / ShutdownDischarge / ShutdownTemperature /
+- **ShutdownUser / ShutdownCharging / ShutdownCharged / ShutdownDischarge / ShutdownTemperature /
   ShutdownTemperatureLow:** Unified template — `"AirGradient"` brand header
   (`helvB14_tf`, baseline y=34),
   3 px-thick divider at y=49, reason-specific icon centred at
@@ -486,7 +502,12 @@ Screen dispatch:
   (power circle, battery body, thermometer with heat-wave lines). No
   status bar, no snackbar. The renderer dispatches on the Screen
   variant. The temperature icons use heat-wave lines for high temperature and
-  a snowflake for low temperature.
+  a snowflake for low temperature. `ShutdownCharging` uses a static battery
+  outline and filled lightning bolt drawn with u8g2 primitives. It has no
+  percentage or animation. `ShutdownCharged` fills the battery outline and
+  shows "Battery Full". The display sleeps after painting and refreshes only
+  when charging completes or resumes. On unplug, the charging-only
+  runner wakes the display for a full `ShutdownUser` refresh before shutdown.
 
 ### Fonts
 
@@ -527,8 +548,10 @@ The plug icon appears left of the battery glyph when
 `is_plugged_in && !is_battery_charging` (full-charge pause or charge
 termination done while USB is connected).
 
-When the plug icon is visible and tracking is active, the tracking dot
-shifts left to avoid overlapping the plug glyph.
+Recording shows a dot; Paused shows two bars in the same position; Idle shows
+neither. When the plug icon is visible, either tracking indicator shifts left
+to avoid overlapping it. The tracking enum is retained in the RTC snapshot so
+the pause indicator survives deep sleep.
 
 `_is_header_changed()` includes `is_plugged_in` so plug/unplug
 transitions trigger a status bar redraw.

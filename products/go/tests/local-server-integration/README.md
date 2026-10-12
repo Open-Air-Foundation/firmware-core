@@ -74,7 +74,7 @@ actions. The GPS action leaves the live GPS Test screen open for the operator to
 exit.
 
 Persisted mutation tests require `--ago-allow-config-write`. They round-trip the
-temperature and altitude units, measurement and GPS settings, three LED levels,
+temperature and altitude units, measurement and GPS settings, back and touch LED levels,
 buzzer, CO2 ABC period, and TVOC/NOx learning offsets. Each parameterized case
 changes one field, polls the asynchronous GET snapshot for convergence, and
 restores that field during fixture teardown. They run only when

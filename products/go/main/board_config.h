@@ -120,8 +120,7 @@ inline constexpr gpio_num_t PIN_CAP_INT = GPIO_NUM_1; // active-low
 // ---------------------------------------------------------------------------
 // Accelerometer (LIS2DH12, I2C) — INT1 line
 //
-// INT1 (net ACC_INT) is routed to the ESP32-C5, but the Hardware Test
-// accelerometer flow is poll-only; the pin is recorded here for future use.
+// INT1 (net ACC_INT) starts awake interrupt-burst shake capture.
 // ---------------------------------------------------------------------------
 
 inline constexpr gpio_num_t PIN_ACCEL_INT = GPIO_NUM_3;

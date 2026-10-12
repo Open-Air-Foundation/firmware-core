@@ -86,7 +86,6 @@ private:
     ConfigurationControl configuration_control = ConfigurationControl::Both;
     int measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
     GpsMode gps_mode = GpsMode::OnWhenTracking;
-    LedBrightness front_led_brightness = LedBrightness::Off;
     LedBrightness back_led_brightness = LedBrightness::Off;
     TouchLedIntensity touch_led_intensity = TouchLedIntensity::Off;
     bool buzzer_enabled = false;

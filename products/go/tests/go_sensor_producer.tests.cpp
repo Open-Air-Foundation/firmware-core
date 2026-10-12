@@ -6,9 +6,11 @@
  * (task_notify_wait_impl, queue_send_impl, get_time_ms_impl, delay_ms_impl).
  */
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <trompeloeil.hpp>
 #include <trompeloeil/mock.hpp>
+#include <vector>
 
 #include "go_sensor_producer.h"
 #include "hal/co2_sensor.h"
@@ -125,8 +127,13 @@ public:
   void handle_sampler_tick() { _p.handle_sampler_tick(); }
   void run() { _p.run(); }
 
-  static uint32_t encode_notify(uint8_t iterations, SensorGroup groups) {
-    return (static_cast<uint32_t>(groups) << 8) | iterations;
+  static uint32_t notify_prepare() { return SensorProducer::NOTIFY_PREPARE; }
+  static uint32_t notify_pm_sleep() { return SensorProducer::NOTIFY_PM_SLEEP; }
+
+  static uint32_t encode_notify(uint8_t iterations, SensorGroup groups,
+                                MeasurementOrigin origin = MeasurementOrigin::Scheduled) {
+    return (static_cast<uint32_t>(groups) << 8) | iterations |
+           (origin == MeasurementOrigin::Refresh ? SensorProducer::NOTIFY_REFRESH : 0);
   }
 
 private:
@@ -256,13 +263,18 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
   // handle_prepare
   // -----------------------------------------------------------------------
 
-  SECTION("handle_prepare wakes PM then warms up") {
+  SECTION("handle_prepare wakes PM and reports start without blocking") {
     REQUIRE_CALL(mock_pm, wake()).RETURN(true);
-    // warmup() calls warmup_step() in a loop — expect conditioning + PM reads
-    REQUIRE_CALL(mock_tvoc_nox, run_conditioning()).TIMES(AT_LEAST(1)).RETURN(true);
-    ALLOW_CALL(mock_pm, read(trompeloeil::_)).RETURN(false);
+    FORBID_CALL(mock_tvoc_nox, run_conditioning());
+    FORBID_CALL(mock_pm, read(trompeloeil::_));
+    FORBID_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
+    std::vector<EventType> events;
+    REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+        .LR_SIDE_EFFECT(events.push_back(static_cast<const Event *>(_2)->type))
+        .RETURN(true);
 
     access.handle_prepare();
+    CHECK(events == std::vector<EventType>{EventType::PmPreparationStarted});
   }
 
   SECTION("handle_pm_sleep sleeps PM and posts PmSensorAsleep") {
@@ -341,6 +353,9 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
 
   SECTION("sampler active: strips TvocNox from All, splices cache") {
     access.set_sampler_enabled(true);
+    MeasurementOrigin origin = MeasurementOrigin::Scheduled;
+    SECTION("scheduled measurement") {}
+    SECTION("refresh measurement") { origin = MeasurementOrigin::Refresh; }
 
     // Pre-set the TVOC/NOx cache with known values
     TVOCNOxData cached{.tvoc_index = 150, .tvoc_raw = 25000, .nox_index = 42, .nox_raw = 18000};
@@ -361,17 +376,18 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
         .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
         .RETURN(true);
 
-    uint32_t notify = SensorProducerTestAccess::encode_notify(1, SensorGroup::All);
+    uint32_t notify = SensorProducerTestAccess::encode_notify(1, SensorGroup::All, origin);
     access.handle_measurement(notify);
+    CHECK(captured.sensor_data.origin == origin);
 
     // The posted event should carry the spliced cache, not invalid sentinels
-    CHECK(captured.sensor_data.tvoc_nox.tvoc_index == 150);
-    CHECK(captured.sensor_data.tvoc_nox.tvoc_raw == 25000);
-    CHECK(captured.sensor_data.tvoc_nox.nox_index == 42);
-    CHECK(captured.sensor_data.tvoc_nox.nox_raw == 18000);
+    CHECK(captured.sensor_data.measures.tvoc_nox.tvoc_index == 150);
+    CHECK(captured.sensor_data.measures.tvoc_nox.tvoc_raw == 25000);
+    CHECK(captured.sensor_data.measures.tvoc_nox.nox_index == 42);
+    CHECK(captured.sensor_data.measures.tvoc_nox.nox_raw == 18000);
 
     // Other fields from real reads
-    CHECK(captured.sensor_data.co2.co2 == 400);
+    CHECK(captured.sensor_data.measures.co2.co2 == 400);
   }
 
   // -----------------------------------------------------------------------
@@ -398,8 +414,8 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
     access.handle_measurement(notify);
 
     // TVOC/NOx should come from SensorManager (not spliced cache)
-    CHECK(captured.sensor_data.tvoc_nox.tvoc_raw == 30000);
-    CHECK(captured.sensor_data.tvoc_nox.nox_raw == 20000);
+    CHECK(captured.sensor_data.measures.tvoc_nox.tvoc_raw == 30000);
+    CHECK(captured.sensor_data.measures.tvoc_nox.nox_raw == 20000);
   }
 
   // -----------------------------------------------------------------------
@@ -503,8 +519,361 @@ TEST_CASE("SensorProducer handlers", "[SensorProducer]") {
 }
 
 // ===========================================================================
+// PM retention tests
+// ===========================================================================
+
+TEST_CASE("SensorProducer retains PM for two minutes after a valid reading", "[SensorProducer]") {
+  MockPMSensor mock_pm;
+  ALLOW_CALL(mock_pm, supports_temp_hum()).RETURN(false);
+  Sensors sensors{};
+  sensors.pms_a = &mock_pm;
+  SensorManager manager(sensors);
+
+  uint64_t now = 0;
+  Event captured{};
+  MockRTOS mock_rtos;
+  RTOS::set_instance(&mock_rtos);
+  ALLOW_CALL(mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  ALLOW_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+      .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+      .RETURN(true);
+
+  SensorProducer producer(manager, &event_queue_sentinel, {});
+  SensorProducerTestAccess access(producer);
+  auto measure = [&](const PMData &data, bool success,
+                     MeasurementOrigin origin = MeasurementOrigin::Scheduled) {
+    EXPECT_READ(mock_pm, data, success);
+    access.handle_measurement(SensorProducerTestAccess::encode_notify(1, SensorGroup::PM, origin));
+    REQUIRE(captured.type == EventType::SensorDataReady);
+    CHECK(captured.sensor_data.origin == origin);
+    return captured.sensor_data.measures.pm_a;
+  };
+
+  // No cached sample at startup, including when the clock is zero.
+  CHECK_FALSE(measure({}, false).is_pm_25_valid());
+  const PMData initial{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+  REQUIRE(measure(initial, true).pm_25 == initial.pm_25);
+
+  SECTION("failed reads retain the whole snapshot without extending its lifetime") {
+    for (const uint64_t age_ms : {60000, 119999, 120000, 180000}) {
+      now = age_ms;
+      const PMData result = measure({}, false);
+      if (age_ms < 120000) {
+        CHECK(result.pm_01 == initial.pm_01);
+        CHECK(result.pm_25 == initial.pm_25);
+        CHECK(result.pm_10 == initial.pm_10);
+        CHECK(result.pm_01_sp == initial.pm_01_sp);
+        CHECK(result.pm_25_sp == initial.pm_25_sp);
+        CHECK(result.pm_10_sp == initial.pm_10_sp);
+        CHECK(result.pm_03_pc == initial.pm_03_pc);
+        CHECK(result.pm_05_pc == initial.pm_05_pc);
+        CHECK(result.pm_01_pc == initial.pm_01_pc);
+        CHECK(result.pm_25_pc == initial.pm_25_pc);
+        CHECK(result.pm_5_pc == initial.pm_5_pc);
+        CHECK(result.pm_10_pc == initial.pm_10_pc);
+      } else {
+        CHECK(result.pm_01 == MeasuresInvalid::PM);
+        CHECK(result.pm_25 == MeasuresInvalid::PM);
+        CHECK(result.pm_10 == MeasuresInvalid::PM);
+        CHECK(result.pm_05_pc == MeasuresInvalid::PM);
+      }
+    }
+  }
+
+  SECTION("refresh uses the same cache and expiry") {
+    now = 119999;
+    CHECK(measure({}, false, MeasurementOrigin::Refresh).pm_25 == initial.pm_25);
+    now = 120000;
+    CHECK_FALSE(measure({}, false, MeasurementOrigin::Refresh).is_pm_25_valid());
+  }
+
+  SECTION("a new valid reading replaces the snapshot and restarts its lifetime") {
+    now = 60000;
+    PMData replacement{};
+    replacement.pm_25 = 0; // Zero is valid; unsupported fields remain invalid.
+    CHECK(measure(replacement, true).pm_25 == 0);
+    now = 120000;
+    const PMData retained = measure({}, false);
+    CHECK(retained.pm_25 == 0);
+    CHECK_FALSE(retained.is_pm_01_valid());
+    now = 180000;
+    CHECK_FALSE(measure({}, false).is_pm_25_valid());
+    now = 180001;
+    CHECK(measure(initial, true).pm_25 == initial.pm_25);
+    now = 180002;
+    CHECK(measure({}, false).pm_25 == initial.pm_25);
+  }
+
+  SECTION("a successful read with invalid PM2.5 does not refresh the cache") {
+    now = 60000;
+    CHECK(measure({}, true).pm_25 == initial.pm_25);
+    now = 120000;
+    CHECK_FALSE(measure({}, true).is_pm_25_valid());
+  }
+
+  SECTION("PM retention expires across the 32-bit clock rollover") {
+    now = UINT32_MAX - 60000;
+    REQUIRE(measure(initial, true).pm_25 == initial.pm_25);
+    now += 119999;
+    CHECK(measure({}, false).pm_25 == initial.pm_25);
+    ++now;
+    CHECK_FALSE(measure({}, false).is_pm_25_valid());
+  }
+
+  SECTION("measurements that omit PM do not inject or refresh cached PM") {
+    now = 60000;
+    access.handle_measurement(SensorProducerTestAccess::encode_notify(1, SensorGroup::Other));
+    CHECK_FALSE(captured.sensor_data.measures.pm_a.is_pm_25_valid());
+    now = 120000;
+    CHECK_FALSE(measure({}, false).is_pm_25_valid());
+  }
+
+  SECTION("self-test still reports a failed fresh read with a valid cache") {
+    EXPECT_READ(mock_pm, (PMData{}), false);
+    access.handle_self_test();
+    CHECK(captured.type == EventType::SensorTestDone);
+    CHECK_FALSE(captured.sensor_test_results.pm_pass);
+  }
+}
+
+// ===========================================================================
+// CO2 retention tests
+// ===========================================================================
+
+TEST_CASE("SensorProducer retains CO2 for two minutes after a valid reading", "[SensorProducer]") {
+  MockCO2Sensor mock_co2;
+  ALLOW_CALL(mock_co2, supports_temp_hum()).RETURN(false);
+  Sensors sensors{};
+  sensors.co2 = &mock_co2;
+  SensorManager manager(sensors);
+
+  uint64_t now = 0;
+  Event captured{};
+  MockRTOS mock_rtos;
+  RTOS::set_instance(&mock_rtos);
+  ALLOW_CALL(mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  ALLOW_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+      .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+      .RETURN(true);
+
+  SensorProducer producer(manager, &event_queue_sentinel, {});
+  SensorProducerTestAccess access(producer);
+  auto measure = [&](const CO2Data &data, bool success,
+                     MeasurementOrigin origin = MeasurementOrigin::Scheduled) {
+    EXPECT_READ(mock_co2, data, success);
+    access.handle_measurement(
+        SensorProducerTestAccess::encode_notify(1, SensorGroup::Other, origin));
+    REQUIRE(captured.type == EventType::SensorDataReady);
+    CHECK(captured.sensor_data.origin == origin);
+    return captured.sensor_data.measures.co2;
+  };
+
+  CHECK_FALSE(measure({}, false).is_valid());
+  const CO2Data initial{800};
+  REQUIRE(measure(initial, true).co2 == initial.co2);
+
+  SECTION("failed reads do not extend the lifetime") {
+    for (const uint64_t age_ms : {60000, 119999, 120000, 180000}) {
+      now = age_ms;
+      CHECK(measure({}, false).co2 == (age_ms < 120000 ? initial.co2 : MeasuresInvalid::CO2));
+    }
+  }
+
+  SECTION("refresh uses the same cache and expiry") {
+    now = 119999;
+    CHECK(measure({}, false, MeasurementOrigin::Refresh).co2 == initial.co2);
+    now = 120000;
+    CHECK_FALSE(measure({}, false, MeasurementOrigin::Refresh).is_valid());
+  }
+
+  SECTION("a new valid reading replaces the cache and restarts its lifetime") {
+    now = 60000;
+    const CO2Data replacement{500};
+    CHECK(measure(replacement, true).co2 == replacement.co2);
+    now = 120000;
+    CHECK(measure({}, false).co2 == replacement.co2);
+    now = 180000;
+    CHECK_FALSE(measure({}, false).is_valid());
+    now = 180001;
+    CHECK(measure(initial, true).co2 == initial.co2);
+    now = 180002;
+    CHECK(measure({}, false).co2 == initial.co2);
+  }
+
+  SECTION("out-of-range readings do not refresh the cache") {
+    now = 60000;
+    CHECK(measure({MeasuresRange::MIN_VALID_CO2 - 1}, true).co2 == initial.co2);
+    now = 119999;
+    CHECK(measure({MeasuresRange::MAX_VALID_CO2 + 1}, true).co2 == initial.co2);
+    now = 120000;
+    CHECK_FALSE(measure({}, true).is_valid());
+  }
+
+  SECTION("CO2 retention expires across the 32-bit clock rollover") {
+    now = UINT32_MAX - 60000;
+    REQUIRE(measure(initial, true).co2 == initial.co2);
+    now += 119999;
+    CHECK(measure({}, false).co2 == initial.co2);
+    ++now;
+    CHECK_FALSE(measure({}, false).is_valid());
+  }
+
+  SECTION("measurements that omit CO2 do not inject or refresh cached CO2") {
+    now = 60000;
+    access.handle_measurement(SensorProducerTestAccess::encode_notify(1, SensorGroup::PM));
+    CHECK_FALSE(captured.sensor_data.measures.co2.is_valid());
+    now = 120000;
+    CHECK_FALSE(measure({}, false).is_valid());
+  }
+
+  SECTION("self-test still reports a failed fresh read with a valid cache") {
+    EXPECT_READ(mock_co2, (CO2Data{}), false);
+    access.handle_self_test();
+    CHECK(captured.type == EventType::SensorTestDone);
+    CHECK_FALSE(captured.sensor_test_results.co2_pass);
+  }
+}
+
+// ===========================================================================
 // run() integration tests
 // ===========================================================================
+
+TEST_CASE("SensorProducer PM preparation preserves gas sampling cadence", "[SensorProducer]") {
+  constexpr uint64_t warmup_interval_ms = CONFIG_SENSOR_WARMUP_INTERVAL_MS;
+  constexpr uint64_t warmup_duration_ms = CONFIG_SENSOR_WARMUP_DURATION_MS;
+  constexpr uint64_t sampler_interval_ms = SGP41_INDEX_SAMPLING_INTERVAL_MS;
+  constexpr int boot_warmup_steps = warmup_duration_ms / warmup_interval_ms;
+
+  uint64_t now = 0;
+  uint64_t prepare_offset_ms = sampler_interval_ms - warmup_interval_ms / 2;
+  bool sampler_wired = true;
+  bool cancel_warmup = false;
+  bool repeat_prepare = false;
+
+  SECTION("gas deadline falls between PM discard reads") {}
+  SECTION("gas deadline coincides with PM discard reads") {
+    prepare_offset_ms = sampler_interval_ms;
+  }
+  SECTION("PM preparation completes without a gas sensor") { sampler_wired = false; }
+  SECTION("sleep cancels pending preparation while gas sampling continues") {
+    cancel_warmup = true;
+  }
+  SECTION("duplicate preparation does not restart warmup") { repeat_prepare = true; }
+
+  const uint64_t boot_end_ms = now + boot_warmup_steps * warmup_interval_ms;
+  const uint64_t prepare_ms = boot_end_ms + prepare_offset_ms;
+  const uint64_t prepared_ms = prepare_ms + warmup_duration_ms;
+  const uint64_t sleep_ms = prepare_ms + warmup_duration_ms / 2;
+  const uint64_t finish_ms = prepared_ms + sampler_interval_ms + 1;
+
+  struct Notification {
+    uint64_t at_ms;
+    uint32_t value;
+  };
+  std::vector<Notification> notifications{{prepare_ms, SensorProducerTestAccess::notify_prepare()}};
+  if (repeat_prepare) {
+    notifications.push_back(
+        {prepare_ms + warmup_interval_ms / 2, SensorProducerTestAccess::notify_prepare()});
+  }
+  if (cancel_warmup) {
+    notifications.push_back({sleep_ms, SensorProducerTestAccess::notify_pm_sleep()});
+  }
+
+  MockTVOCNOxSensor mock_tvoc_nox;
+  MockPMSensor mock_pm;
+  Sensors sensors{};
+  sensors.tvoc_nox = sampler_wired ? &mock_tvoc_nox : nullptr;
+  sensors.pms_a = &mock_pm;
+  SensorManager manager(sensors);
+  MockRTOS mock_rtos;
+  RTOS::set_instance(&mock_rtos);
+  SensorProducer producer(manager, &event_queue_sentinel, {});
+  SensorProducerTestAccess access(producer);
+
+  bool boot_complete = false;
+  std::vector<uint64_t> pm_read_times;
+  std::vector<uint64_t> gas_read_times;
+  std::vector<EventType> events;
+  std::vector<uint64_t> event_times;
+  int conditioning_calls = 0;
+  int sleep_calls = 0;
+
+  // Only startup may condition SGP41 or delay the producer task.
+  ALLOW_CALL(mock_tvoc_nox, run_conditioning())
+      .LR_WITH(!boot_complete)
+      .LR_SIDE_EFFECT(++conditioning_calls)
+      .RETURN(true);
+  ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_))
+      .LR_WITH(!boot_complete)
+      .LR_SIDE_EFFECT(now += _1);
+  ALLOW_CALL(mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  REQUIRE_CALL(mock_pm, wake()).TIMES(2).RETURN(true);
+  ALLOW_CALL(mock_pm, supports_temp_hum()).RETURN(false);
+  ALLOW_CALL(mock_pm, sleep()).LR_SIDE_EFFECT(++sleep_calls).RETURN(true);
+  ALLOW_CALL(mock_pm, read(trompeloeil::_))
+      .LR_SIDE_EFFECT(if (boot_complete) { pm_read_times.push_back(now); })
+      .RETURN(false); // Failed discard reads must not abort preparation.
+  ALLOW_CALL(mock_tvoc_nox, read(trompeloeil::_))
+      .LR_SIDE_EFFECT(gas_read_times.push_back(now))
+      .SIDE_EFFECT(_1 = TVOCNOxData{MeasuresInvalid::TVOC, 25000, MeasuresInvalid::NOX, 18000})
+      .RETURN(true);
+  ALLOW_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+      .LR_SIDE_EFFECT(if (boot_complete) {
+        events.push_back(static_cast<const Event *>(_2)->type);
+        event_times.push_back(now);
+      })
+      .RETURN(true);
+
+  size_t notification_index = 0;
+  unsigned wait_count = 0;
+  auto wait_for_notification = [&](uint32_t *value, uint32_t timeout) {
+    boot_complete = true;
+    // Guard against a busy loop instead of a scheduled wait.
+    REQUIRE(timeout > 0);
+    REQUIRE(++wait_count < 100);
+    const uint64_t timeout_ms = timeout == UINT32_MAX ? finish_ms : now + timeout;
+    if (notification_index < notifications.size() &&
+        notifications[notification_index].at_ms <= timeout_ms) {
+      now = notifications[notification_index].at_ms;
+      *value = notifications[notification_index++].value;
+      return true;
+    }
+    now = std::min(timeout_ms, finish_ms);
+    if (now == finish_ms) {
+      access.set_running(false);
+    }
+    return false;
+  };
+  ALLOW_CALL(mock_rtos, task_notify_wait_impl(trompeloeil::_, trompeloeil::_))
+      .LR_RETURN(wait_for_notification(_1, _2));
+
+  access.set_running(true);
+  access.run();
+
+  CHECK(notification_index == notifications.size());
+  CHECK(conditioning_calls == (sampler_wired ? boot_warmup_steps : 0));
+  CHECK(sleep_calls == (cancel_warmup ? 1 : 0));
+  CHECK(events ==
+        std::vector<EventType>{EventType::PmPreparationStarted,
+                               cancel_warmup ? EventType::PmSensorAsleep : EventType::PmPrepared});
+  CHECK(event_times == std::vector<uint64_t>{prepare_ms, cancel_warmup ? sleep_ms : prepared_ms});
+
+  std::vector<uint64_t> expected_pm_read_times;
+  for (uint64_t at = prepare_ms; at < (cancel_warmup ? sleep_ms : prepared_ms);
+       at += warmup_interval_ms) {
+    expected_pm_read_times.push_back(at);
+  }
+  CHECK(pm_read_times == expected_pm_read_times);
+
+  std::vector<uint64_t> expected_gas_read_times;
+  if (sampler_wired) {
+    for (uint64_t at = boot_end_ms + sampler_interval_ms; at < finish_ms;
+         at += sampler_interval_ms) {
+      expected_gas_read_times.push_back(at);
+    }
+  }
+  CHECK(gas_read_times == expected_gas_read_times);
+}
 
 TEST_CASE("SensorProducer run()", "[SensorProducer]") {
   MockTVOCNOxSensor mock_tvoc_nox;
@@ -569,9 +938,10 @@ TEST_CASE("SensorProducer run()", "[SensorProducer]") {
     // SGP41 should NOT be read (sampler strips TvocNox)
     FORBID_CALL(mock_tvoc_nox, read(trompeloeil::_));
 
-    // Capture the posted event
+    // Capture only the result; boot preparation also posts progress events.
     Event captured{};
     REQUIRE_CALL(mock_rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+        .WITH(static_cast<const Event *>(_2)->type == EventType::SensorDataReady)
         .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
         .RETURN(true);
 
@@ -586,7 +956,7 @@ TEST_CASE("SensorProducer run()", "[SensorProducer]") {
 
     CHECK(captured.type == EventType::SensorDataReady);
     // TVOC should be from cache (initial sentinels since no sampler tick yet)
-    CHECK(captured.sensor_data.tvoc_nox.tvoc_index == MeasuresInvalid::TVOC);
+    CHECK(captured.sensor_data.measures.tvoc_nox.tvoc_index == MeasuresInvalid::TVOC);
   }
 
   SECTION("run: timeout fires sampler tick and caches TVOC") {

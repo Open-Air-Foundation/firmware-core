@@ -161,12 +161,15 @@ public:
   bool route_file_exists(uint32_t session_id) const;
 
   /// Append one data point to the current route file.
+  /// Without a valid GPS fix, store invalid position/altitude sentinels.
+  /// The caller's point and all other fields are preserved.
   /// Returns false if no route is active or the write fails.
   [[nodiscard]] bool append_route_point(const RoutePoint &point);
 
   /// Finish the current route tracking session.  Flushes and closes the
   /// route file.  Safe to call when no route is active (no-op).
-  void end_route();
+  /// Returns false on final sync/close failure; the file is closed either way.
+  bool end_route();
 
   /// Returns true if a route file is currently open.
   bool is_route_active() const;
@@ -190,6 +193,13 @@ public:
   /// Get the number of route points in a session file.
   /// Returns 0 if the session does not exist or the file is empty.
   uint32_t get_session_point_count(uint32_t session_id) const;
+
+  /// Query the point count on demand, including buffered complete writes
+  /// for the matching open session; otherwise use file size / sizeof(RoutePoint).
+  /// Returns true even for an empty file (count = 0). Returns false when
+  /// unmounted or stat fails, leaving count unchanged.
+  /// Does not flush, sync, reopen, scan, or write files.
+  bool try_get_session_point_count(uint32_t session_id, uint32_t &count) const;
 
   /// Read route points from a session file.
   /// Reads up to count points starting at point index offset.

@@ -26,21 +26,20 @@ struct Rgb {
 struct LedMap {
   static constexpr uint8_t MAX_BACK = 5;
 
-  int8_t front[2];          ///< single-channel white LEDs
   uint8_t back[MAX_BACK];   ///< AQI ring, in animation order
   uint8_t back_count;
   int8_t touch_select;      ///< pad feedback groups
   int8_t touch_left;
   int8_t touch_right;
 
-  /// v1.0 LED board: LED1/LED2/LED10 touch, five back LEDs, LED25/26 front.
-  static constexpr LedMap v1() { return {{30, 31}, {6, 12, 15, 18, 24}, 5, 27, 3, 0}; }
+  /// v1.0 LED board: LED1/LED2/LED10 touch, five back LEDs.
+  static constexpr LedMap v1() { return {{6, 12, 15, 18, 24}, 5, 27, 3, 0}; }
 
   /// v2.0 main board: only LED1–LED4 are routed (OUT0–OUT11), and the
   /// enclosure shows them left to right as LED4, LED3, LED2, LED1.  All four
   /// are the AQI ring, listed in that order so a chase runs left to right.
   /// There is no touch feedback LED.
-  static constexpr LedMap v2() { return {{-1, -1}, {9, 6, 3, 0, 0}, 4, -1, -1, -1}; }
+  static constexpr LedMap v2() { return {{9, 6, 3, 0, 0}, 4, -1, -1, -1}; }
 };
 
 enum class LedBrightness : uint8_t {
