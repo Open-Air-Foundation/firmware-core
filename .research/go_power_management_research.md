@@ -5,17 +5,17 @@ this branch is not intended for merge. ESP32-C5, ESP-IDF v5.5.4.
 
 ## Status
 
-2026-10-16: Last tested checkpoint: automatic light sleep enabled, CPU power-down
-disabled. Double tap works with the case fitted; BLE connects then immediately
-disconnects. Disabling runtime light sleep restored BLE connection and communication.
-Untested BLE-disconnect diagnostics removed; the cause remains unresolved.
+2026-10-16: CPU power-down trial: displayed advertising average 100.99 mA,
+versus 100.26 mA with CPU power-down off. No saving demonstrated in these captures;
+BLE still cannot connect. Earlier control with runtime light sleep disabled
+restored BLE communication. BLE failure cause remains unresolved.
 Baseline source: `03b78b48aaffd8541147be214a44e74609900e27` plus the
 temporary SCD4x disable committed with this log.
 Current firmware: BLE modem sleep and startup DFS enabled; maximum 240 MHz,
 minimum 48 MHz (confirmed in boot log). Runtime automatic light sleep starts after
 the first completed measurement; tickless idle, wake callbacks, and PM profiling
 remain enabled, including after BLE disconnects.
-CPU and peripheral power-down remain disabled.
+CPU power-down is enabled; peripheral power-down remains disabled.
 
 ## Test Configuration
 
@@ -93,8 +93,8 @@ Power is calculated from the 3.9 V supply setting and measured average current.
 | Above + light sleep, CPU power-down off (initial trial) | Advertising | ~113 mA | ~441 mW | — | [Startup log](result.log) |
 | Above + light sleep, revised wake handling + profiling | Advertising | 100.26 mA | 391.01 mW | 321.88 mA | [2026-10-15 capture](ppk-20261015T154620.png) |
 | Above + light sleep, revised wake handling + profiling | Connected idle | Unavailable: disconnects immediately | — | — | — |
-| Above + CPU power-down | Advertising | — | — | — | — |
-| Above + CPU power-down | Connected idle | — | — | — | — |
+| Above + CPU power-down | Advertising | 100.99 mA | 393.86 mW | 313.26 mA | [CPU power-down capture](ppk-20261015T170750.png) |
+| Above + CPU power-down | Connected idle | Unavailable: cannot connect | — | — | — |
 
 Power reduction = 100 × (baseline − new average power) / baseline.
 Production battery-life conclusions require a later comparison on S12 hardware.
@@ -113,6 +113,11 @@ and 21.48%, respectively. DFS screenshots also show 10-second viewing windows.
 
 Connected idle with DFS is 1.87 mA below advertising. Go stops advertising on
 connection; the cause of this small difference has not been established.
+
+CPU power-down displayed average is 0.73 mA (0.73%) above the preceding trial.
+This screenshot shows a 10-second viewing window; the preceding 100.26 mA value
+covers a one-minute window. These observations do not establish a power saving
+or a repeatable increase. BLE connection still fails with CPU power-down enabled.
 
 ## Activity Log
 
@@ -175,3 +180,14 @@ connection; the cause of this small difference has not been established.
   menuconfig, keeping peripheral power-down and other settings unchanged.
   Configuration edits remain user-operated. Compare advertising against
   100.26 mA with the same case/supply setup; BLE disconnect is a known issue.
+- 2026-10-16: User enabled `PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP` in menuconfig.
+  Active config changes only this option and its legacy alias
+  `ESP_SYSTEM_PM_POWER_DOWN_CPU`; `sdkconfig.old` is the previous-config backup.
+  Peripheral power-down remains off; BLE sleep, DFS, tickless idle, PM profiling,
+  and GPIO wake callbacks remain unchanged. Go build and Markdown lint passed;
+  hardware test pending. No manual config edits or commit by the agent.
+- 2026-10-16: User supplied CPU power-down capture: displayed average 100.99 mA,
+  peak 313.26 mA, charge 1.01 C in the 10-second viewing window. Recording uses
+  the agreed one-minute procedure; window duration is not recording duration.
+  User reports BLE still cannot connect. No firmware/configuration changes made
+  after this result; CPU power-down remains enabled.
