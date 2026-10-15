@@ -415,3 +415,4 @@ Host-testable free functions co-located with GoApp:
 | `measures_to_ago()` | Convert shared `Measures` → product `MeasuresAGo` |
 | `build_fast_path_display()` | Build `DisplayValues` for locked dashboard |
 | `build_wake_values()` | Build `DisplayValues` from RTC snapshot |
+| `configure_esp_power_management()` | Configure CPU DFS Minimum and Maximum Clock Frequencies and Auto Light Sleep Enable |

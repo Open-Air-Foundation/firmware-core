@@ -7,6 +7,7 @@ on:
   push:
     tags:
       - "go-v*"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -65,12 +66,12 @@ jobs:
         uses: actions/cache@v6.1.0
         with:
           path: products/go/managed_components
-          key: idf-managed-${{ runner.os }}-v5.5.4-esp32c5-go-${{ hashFiles('products/**/dependencies.lock', 'products/**/idf_component.yml', 'components/**/idf_component.yml') }}
+          key: idf-managed-${{ runner.os }}-v5.5.5-esp32c5-go-${{ hashFiles('products/**/dependencies.lock', 'products/**/idf_component.yml', 'components/**/idf_component.yml') }}
 
       - name: Build firmware
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v5.5.4
+          esp_idf_version: v5.5.5
           target: esp32c5
           path: products/go
           command: idf.py merge-bin -o airgradient-go-merge.bin -f raw
