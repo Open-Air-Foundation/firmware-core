@@ -58,6 +58,7 @@ idf_component_register(
               esp_driver_ledc
               esp_driver_spi
               esp_driver_usb_serial_jtag
+              esp_pm
              nvs_flash
              u8g2
              fatfs

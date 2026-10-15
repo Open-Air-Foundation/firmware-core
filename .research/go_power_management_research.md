@@ -5,12 +5,13 @@ this branch is not intended for merge. ESP32-C5, ESP-IDF v5.5.4.
 
 ## Status
 
-2026-10-15: BLE modem sleep + DFS measured in both BLE states.
-Automatic light sleep with CPU power-down disabled is next.
+2026-10-15: Automatic light sleep with CPU power-down disabled prepared;
+Go firmware build passed; hardware measurements pending.
 Baseline source: `03b78b48aaffd8541147be214a44e74609900e27` plus the
 temporary SCD4x disable committed with this log.
 Current firmware: BLE modem sleep and startup DFS enabled; maximum 240 MHz,
-minimum detected main-crystal frequency. Automatic light sleep disabled.
+minimum detected main-crystal frequency. Hardware initialization enables automatic
+light sleep at runtime. CPU and peripheral power-down remain disabled.
 
 ## Test Configuration
 
@@ -118,3 +119,10 @@ connection; the cause of this small difference has not been established.
   The existing CPU power-down option has not affected these awake Portable tests.
 - 2026-10-15: Corrected the misread DFS connected-idle average to 109.97 mA,
   as confirmed by the user; recalculated power and savings.
+- 2026-10-15: User enabled tickless idle. Added runtime light-sleep enablement in
+  `GoHardwareBoard::init_core()`, preserving startup DFS limits. Disabled CPU
+  power-down for this stage. Existing timers and GPIO interrupt handling remain
+  unchanged for the initial experiment; button/shake wake behavior is unverified.
+  Idle threshold remains three ticks (30 ms at 100 Hz).
+  Go firmware build passed; host tests skipped as agreed. After flashing, expect
+  a PM configuration log with `Light sleep: ENABLED` during hardware initialization.

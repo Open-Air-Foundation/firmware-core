@@ -18,6 +18,7 @@
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
 #include <esp_app_desc.h>
+#include <esp_pm.h>
 #include <esp_system.h>
 #include <nvs_flash.h>
 
@@ -336,6 +337,16 @@ void GoHardwareBoard::init_core() {
   init_nvs();
   init_buses();
   init_spi();
+
+#if CONFIG_PM_ENABLE && CONFIG_FREERTOS_USE_TICKLESS_IDLE
+  // Power research: enable automatic light sleep with the existing DFS limits.
+  esp_pm_config_t pm_config{};
+  ESP_ERROR_CHECK(esp_pm_get_configuration(&pm_config));
+  if (!pm_config.light_sleep_enable) {
+    pm_config.light_sleep_enable = true;
+    ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
+  }
+#endif
 }
 
 // ===========================================================================
