@@ -5,11 +5,12 @@ this branch is not intended for merge. ESP32-C5, ESP-IDF v5.5.4.
 
 ## Status
 
-2026-10-15: BLE modem sleep advertising and connected idle recorded for one
-minute each, confirmed by the user. DFS is next.
+2026-10-15: BLE modem sleep + DFS measured in both BLE states.
+Automatic light sleep is next.
 Baseline source: `03b78b48aaffd8541147be214a44e74609900e27` plus the
 temporary SCD4x disable committed with this log.
-Current firmware: 240 MHz CPU, ESP-IDF PM disabled, BLE modem sleep enabled.
+Current firmware: BLE modem sleep and startup DFS enabled; maximum 240 MHz,
+minimum detected main-crystal frequency. Automatic light sleep disabled.
 
 ## Test Configuration
 
@@ -60,8 +61,8 @@ Power is calculated from the 3.9 V supply setting and measured average current.
 | Baseline | Connected idle | 140.06 mA | 546.23 mW | 311.69 mA | [2026-10-15 capture](ppk-20261015T124049.png) |
 | BLE modem sleep only | Advertising | 117.90 mA | 459.81 mW | 349.40 mA | [2026-10-15 capture](ppk-20261015T125711.png) |
 | BLE modem sleep only | Connected idle | 116.41 mA | 454.00 mW | 308.56 mA | [2026-10-15 capture](ppk-20261015T125919.png) |
-| BLE modem sleep + DFS | Advertising | — | — | — | — |
-| BLE modem sleep + DFS | Connected idle | — | — | — | — |
+| BLE modem sleep + DFS | Advertising | 111.84 mA | 436.18 mW | 312.47 mA | [2026-10-15 capture](ppk-20261015T143253.png) |
+| BLE modem sleep + DFS | Connected idle | 97.38 mA | 379.78 mW | 303.86 mA | [2026-10-15 capture](ppk-20261015T143554.png) |
 | Above + automatic light sleep | Advertising | — | — | — | — |
 | Above + automatic light sleep | Connected idle | — | — | — | — |
 
@@ -75,6 +76,10 @@ Displayed BLE modem sleep averages are 21.70 mA (15.54%) below the advertising
 baseline and 23.65 mA (16.89%) below the connected-idle baseline. Both recordings
 lasted one minute; screenshots show 10-second views with statistics labeled
 "WINDOW." Full-record averages are not shown; no new capture is required.
+
+Adding DFS reduced displayed average current by 6.06 mA (5.14%) while advertising
+and 19.03 mA (16.35%) while connected. Total reductions from baseline are 19.89%
+and 30.47%, respectively. DFS screenshots also show 10-second viewing windows.
 
 ## Activity Log
 
@@ -97,3 +102,7 @@ lasted one minute; screenshots show 10-second views with statistics labeled
   116.41 mA average, 308.56 mA maximum, and 1.16 C. Firmware unchanged from `e667ffa`.
 - 2026-10-15: User confirmed both BLE modem sleep recordings lasted one minute;
   corrected the capture duration, keeping viewing-window statistics distinct.
+- 2026-10-15: User built and flashed with `CONFIG_PM_ENABLE=y` and
+  `CONFIG_PM_DFS_INIT_AUTO=y`; tickless idle remains disabled. Recorded advertising
+  at 111.84 mA and connected idle at 97.38 mA. Actual minimum frequency from the
+  boot log and negotiated BLE connection parameters are not yet recorded.
