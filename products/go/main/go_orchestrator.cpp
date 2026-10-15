@@ -760,6 +760,10 @@ void Orchestrator::dispatch(const Event &event) {
     on_ble_connected();
     break;
   case EventType::BleDisconnected:
+    if (_research_ble_disconnect[0] == '\0') {
+      (void)snprintf(_research_ble_disconnect, sizeof(_research_ble_disconnect), "BLE err 0x%X",
+                     static_cast<unsigned>(event.ble_disconnect_reason));
+    }
     on_ble_disconnected();
     break;
   case EventType::BleConfigWrite:
@@ -3290,14 +3294,18 @@ bool Orchestrator::update_display(bool wait) {
   _svc.ui_manager.clear_expired_snackbar(now_ms);
   BuildContext ctx = build_context();
   DisplayValues values = _svc.ui_manager.build_values(ctx);
+  // Research overlay only: use existing refreshes; do not change sleep/BLE policy.
+  if (values.screen == Screen::Home && _research_ble_disconnect[0] != '\0') {
+    values.snackbar_text = _research_ble_disconnect;
+  }
   const bool accepted = _svc.display_service.update(values, wait);
 
   // Schedule a follow-up refresh to visually clear the snackbar after it
   // expires.  Only arm once per snackbar — intermediate update_display()
   // calls (from sensor data, input, etc.) that happen before the deadline
   // naturally clear it and the timer fires as a harmless no-op.
-  if (values.snackbar_text != nullptr && !_svc.ui_manager.snackbar_persistent() &&
-      _snackbar_refresh_deadline_ms == 0) {
+  if (values.snackbar_text != nullptr && values.snackbar_text != _research_ble_disconnect &&
+      !_svc.ui_manager.snackbar_persistent() && _snackbar_refresh_deadline_ms == 0) {
     _snackbar_refresh_deadline_ms = now_ms + SNACKBAR_DURATION_MS + 200;
   }
 

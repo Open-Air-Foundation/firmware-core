@@ -67,6 +67,7 @@ static constexpr const char *TAG = "board";
 #if CONFIG_PM_ENABLE && CONFIG_FREERTOS_USE_TICKLESS_IDLE && CONFIG_PM_LIGHT_SLEEP_CALLBACKS
 namespace {
 constexpr uint64_t POWER_RESEARCH_DUMP_INTERVAL_MS = 60000;
+constexpr bool POWER_RESEARCH_GPIO_SLEEP_CALLBACKS = false;
 
 struct ResearchWakePin {
   gpio_num_t pin;
@@ -381,10 +382,12 @@ void GoHardwareBoard::poll_power_research() {
   const uint64_t now = RTOS::get_time_ms();
   if (!_power_research_started) {
     // First completed measurement follows sensor warmup and service startup.
-    esp_pm_sleep_cbs_register_config_t callbacks{};
-    callbacks.enter_cb = research_sleep_enter;
-    callbacks.exit_cb = research_sleep_exit;
-    ESP_ERROR_CHECK(esp_pm_light_sleep_register_cbs(&callbacks));
+    if (POWER_RESEARCH_GPIO_SLEEP_CALLBACKS) {
+      esp_pm_sleep_cbs_register_config_t callbacks{};
+      callbacks.enter_cb = research_sleep_enter;
+      callbacks.exit_cb = research_sleep_exit;
+      ESP_ERROR_CHECK(esp_pm_light_sleep_register_cbs(&callbacks));
+    }
     ESP_ERROR_CHECK(esp_sleep_enable_gpio_wakeup());
 
     esp_pm_config_t pm_config{};

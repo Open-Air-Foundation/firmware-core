@@ -5,17 +5,21 @@ this branch is not intended for merge. ESP32-C5, ESP-IDF v5.5.4.
 
 ## Status
 
-2026-10-16: CPU power-down trial: displayed advertising average 100.99 mA,
-versus 100.26 mA with CPU power-down off. No saving demonstrated in these captures;
-BLE still cannot connect. Earlier control with runtime light sleep disabled
-restored BLE communication. BLE failure cause remains unresolved.
+2026-10-16: With custom GPIO sleep callbacks disabled, BLE stays connected for
+one minute. Advertising average is 97.33 mA; Connected idle is 96.79 mA. Automatic light
+sleep and CPU power-down remain enabled. The previous `0x208` timeout is no longer
+reproduced in this run, implicating our callbacks; the exact mechanism is unknown.
+User retested all touch events: working with callbacks disabled.
 Baseline source: `03b78b48aaffd8541147be214a44e74609900e27` plus the
 temporary SCD4x disable committed with this log.
 Current firmware: BLE modem sleep and startup DFS enabled; maximum 240 MHz,
 minimum 48 MHz (confirmed in boot log). Runtime automatic light sleep starts after
-the first completed measurement; tickless idle, wake callbacks, and PM profiling
-remain enabled, including after BLE disconnects.
+the first completed measurement; tickless idle and PM profiling remain enabled,
+including after BLE disconnects. Custom GPIO sleep callbacks are disabled;
+ESP-IDF Bluetooth wake handling remains unchanged.
 CPU power-down is enabled; peripheral power-down remains disabled.
+
+Advertising and Connected idle captures are complete for this configuration.
 
 ## Test Configuration
 
@@ -38,7 +42,7 @@ CPU power-down is enabled; peripheral power-down remains disabled.
 2. Wait until consumption is stable, exclude boot, then capture **one minute**.
 3. Save average current/power, peak current, and trace. Record board/firmware
    revision and analyzer settings. For connected BLE, record connection interval,
-   peripheral latency, and notification subscriptions.
+   and peripheral latency.
 
 ## Experiment Sequence
 
@@ -59,7 +63,7 @@ Verify BLE discovery, connection, READ/WRITE, button/shake response, and sensor
 updates on hardware.
 Update relevant VHUB coverage. Flashing and captures are user-operated.
 
-## Light-Sleep Checkpoint
+## Light-Sleep Checkpoint Before Callback Isolation
 
 - First measurement enables sleep after startup and warmup. GPIO wake covers
   both buttons, touch INT, and motion INT; normal edge interrupts resume on wake.
@@ -75,6 +79,57 @@ Update relevant VHUB coverage. Flashing and captures are user-operated.
 - Compare counter changes between dumps; mode percentages show PM mode occupancy,
   not exact physical sleep residency. Profiling and dumps add overhead; disable
   profiling for the final consumption comparison after diagnosing sleep behavior.
+
+## BLE Display Diagnostic
+
+- UART is not accessible on Go and native USB logging stops during sleep.
+  Show the first BLE disconnect reason as `BLE err 0x...` in the Home screen's
+  bottom message area. The raw NimBLE code is retained in RAM until reboot.
+- Use existing display refreshes; the message survives measurements and later
+  connection attempts. It temporarily overrides other Home messages.
+- Automatic light sleep and CPU power-down remain enabled. No recovery action,
+  connection-policy change, or configuration change is added.
+- Flash, stay on Home, wait for the first measurement, then attempt BLE connection.
+  Let it disconnect and send the displayed code. Reboot before another fresh
+  attempt; manual disconnections also populate the diagnostic.
+- This is a temporary research display, not production UX or a power comparison.
+
+## GPIO Callback Isolation
+
+- Disable only registration of our GPIO sleep entry/exit callbacks using the
+  temporary source constant `POWER_RESEARCH_GPIO_SLEEP_CALLBACKS=false`.
+  Retain global GPIO wake-source enablement and all menuconfig settings.
+- Keep automatic light sleep, CPU power-down, BLE modem sleep, DFS, profiling,
+  and the disconnect-code display as in the previous test.
+- After flashing, stay on Home, wait for the first measurement, then connect BLE.
+  Report whether it stays connected and READ/WRITE works, or the displayed code.
+  No power capture needed.
+- These research callbacks were added to arm button/touch/motion GPIO wake before
+  sleep and restore normal edge interrupts afterward. They change GPIO interrupt
+  and wake configuration on each sleep attempt; they are not BLE callbacks.
+- Result: BLE stayed connected for one minute (Connected idle). Disabling
+  the callbacks removes the observed timeout in this run; the exact failing
+  callback operation has not been isolated. User retested all touch events and
+  confirmed they work with the callbacks disabled.
+
+## Further Idle-Time Improvements
+
+Automatic light sleep uses available idle gaps. Further savings may require
+targeted code changes to create longer uninterrupted idle periods, rather than
+configuration changes alone. A full redesign is not yet justified.
+
+- Measure actual sleep frequency/duration and identify task, timer, and PM-lock
+  activity before choosing changes; mode percentages alone are insufficient.
+- Investigate unnecessary polling, opportunities for interrupts/blocking waits,
+  combining timer-driven work, and shortening PM-lock duration.
+- Review avoidable display refreshes, logging, and background work while idle.
+- Preserve input responsiveness and sensor timing. Investigate the BLE disconnect
+  separately; more idle time is not an established fix.
+
+CPU power-down adds savings only during sleep. Short sleep periods and transition
+overhead may limit its benefit; this has not been measured yet. SPS30 and other
+board loads remain, so CPU improvements alone cannot eliminate their consumption.
+These are research directions, not implemented changes or product decisions.
 
 ## Results
 
@@ -95,6 +150,8 @@ Power is calculated from the 3.9 V supply setting and measured average current.
 | Above + light sleep, revised wake handling + profiling | Connected idle | Unavailable: disconnects immediately | — | — | — |
 | Above + CPU power-down | Advertising | 100.99 mA | 393.86 mW | 313.26 mA | [CPU power-down capture](ppk-20261015T170750.png) |
 | Above + CPU power-down | Connected idle | Unavailable: cannot connect | — | — | — |
+| Above + custom GPIO callbacks disabled | Advertising | 97.33 mA | 379.59 mW | 385.75 mA | [Callback isolation capture](ppk-20261015T175032.png) |
+| Above + custom GPIO callbacks disabled | Connected idle | 96.79 mA | 377.48 mW | 307.78 mA | [Callback isolation capture](ppk-20261015T173552.png) |
 
 Power reduction = 100 × (baseline − new average power) / baseline.
 Production battery-life conclusions require a later comparison on S12 hardware.
@@ -118,6 +175,13 @@ CPU power-down displayed average is 0.73 mA (0.73%) above the preceding trial.
 This screenshot shows a 10-second viewing window; the preceding 100.26 mA value
 covers a one-minute window. These observations do not establish a power saving
 or a repeatable increase. BLE connection still fails with CPU power-down enabled.
+
+With custom GPIO callbacks disabled, advertising is 97.33 mA and Connected idle
+is 96.79 mA: a 0.54 mA difference. Advertising is 3.66 mA (3.62%) below the prior
+100.99 mA advertising capture with callbacks enabled. Total reductions from the
+matching baselines are 30.28% and 30.89%, respectively. Both one-minute captures
+show 10-second viewing windows. BLE and all touch events work in the user tests;
+the exact callback failure mechanism remains unknown.
 
 ## Activity Log
 
@@ -191,3 +255,29 @@ or a repeatable increase. BLE connection still fails with CPU power-down enabled
   the agreed one-minute procedure; window duration is not recording duration.
   User reports BLE still cannot connect. No firmware/configuration changes made
   after this result; CPU power-down remains enabled.
+- 2026-10-16: Added raw BLE disconnect reason to its app event and a persistent
+  Home display overlay for the first reason. No PM/BLE policy changes. Go build,
+  formatting, and Markdown lint passed; host tests skipped as agreed. Hardware
+  test pending. Configuration untouched; no commit.
+- 2026-10-16: Display diagnostic returned `0x208`. Installed NimBLE headers map
+  this to HCI base `0x200` + `BLE_ERR_CONN_SPVN_TMO` (`0x08`): connection
+  supervision timeout. The controller reports link loss through missing received
+  packets, not an explicit local/remote termination reason. With the sleep-off
+  control working, sleep/wake timing or controller restoration is a suspect;
+  the code does not identify the root cause. No firmware/config changes made.
+  Mapping: [NimBLE return codes](https://mynewt.apache.org/v1_5_0/network/ble_hs/ble_hs_return_codes.html).
+- 2026-10-16: Disabled custom GPIO sleep callback registration for isolation.
+  Global GPIO wake-source enablement, runtime sleep, CPU power-down, and the BLE
+  display diagnostic retained. No menuconfig changes. Go build, formatting, and
+  Markdown lint passed; hardware result pending. Host tests skipped as agreed.
+  Nothing committed.
+- 2026-10-16: User confirmed BLE stays connected for one minute after disabling
+  custom GPIO sleep callbacks. Connected idle capture: displayed average
+  96.79 mA, peak 307.78 mA, 0.97 C in the 10-second view. Automatic light sleep and
+  CPU power-down remain enabled. Prior run was advertising, so the 4.20 mA drop
+  cannot be attributed solely to callback removal. The exact timeout mechanism
+  remains unresolved. No further firmware/config change.
+- 2026-10-16: User retested all touch events with callbacks disabled: all working.
+- 2026-10-16: Completed advertising capture with callbacks disabled and settings
+  unchanged: 97.33 mA average, 385.75 mA peak, 379.59 mW at 3.9 V. Trace:
+  [Advertising capture](ppk-20261015T175032.png). No firmware/config changes.

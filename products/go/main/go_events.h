@@ -30,7 +30,7 @@ enum class EventType : uint8_t {
 
   // --- BLE events ---
   BleConnected,      // no payload
-  BleDisconnected,   // no payload
+  BleDisconnected,   // payload: int ble_disconnect_reason (raw NimBLE code)
   BleConfigWrite,    // no payload (data in BleService pending buffer)
   BleHistoryWrite,   // no payload (data in BleService pending buffer)
   BlePairingRequest, // payload: uint32_t ble_passkey
@@ -126,6 +126,7 @@ struct Event {
     bool ble_auth_ok;                        // BleAuthComplete (1 byte, link encrypted)
     uint8_t tag_index;                       // SaveTag (1 byte)
     uint32_t ble_passkey;                    // BlePairingRequest (4 bytes)
+    int ble_disconnect_reason;               // BleDisconnected (raw NimBLE code)
     uint8_t co2_cal_result;                  // Co2CalibrationDone (1 byte, Co2CalibrationResult)
     uint8_t co2_abc_result;                  // Co2AbcPeriodDone (1 byte, Co2AbcPeriodResult)
     uint8_t tvoc_nox_learning_offset_result; // TvocNoxLearningOffsetDone (1 byte)

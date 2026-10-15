@@ -17,7 +17,7 @@
 // Event types required in go_events.h for compilation:
 //
 //   EventType::BleConnected        — no payload
-//   EventType::BleDisconnected     — no payload
+//   EventType::BleDisconnected     — payload: int ble_disconnect_reason
 //   EventType::BleConfigWrite      — no payload (data in BleService pending buffer)
 //   EventType::BleHistoryWrite     — no payload (data in BleService pending buffer)
 //   EventType::BlePairingRequest   — payload: uint32_t ble_passkey

@@ -734,6 +734,7 @@ void BleService::on_disconnect(uint16_t conn_handle, int reason) {
 
   Event evt{};
   evt.type = EventType::BleDisconnected;
+  evt.ble_disconnect_reason = reason;
   RTOS::queue_send(_event_queue, &evt);
 }
 
