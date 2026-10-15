@@ -6,7 +6,7 @@ this branch is not intended for merge. ESP32-C5, ESP-IDF v5.5.4.
 ## Status
 
 2026-10-15: BLE modem sleep + DFS measured in both BLE states.
-Automatic light sleep is next.
+Automatic light sleep with CPU power-down disabled is next.
 Baseline source: `03b78b48aaffd8541147be214a44e74609900e27` plus the
 temporary SCD4x disable committed with this log.
 Current firmware: BLE modem sleep and startup DFS enabled; maximum 240 MHz,
@@ -41,8 +41,11 @@ minimum detected main-crystal frequency. Automatic light sleep disabled.
 3. **Add DFS:** retain BLE modem sleep and the 240 MHz maximum, record the selected
    minimum frequency, and keep automatic light sleep disabled; measure.
 4. **Add automatic light sleep:** verify wake sources, task waits, peripheral clocks,
-   watchdog timing, and PM locks; enable tickless idle and light sleep; measure.
+   watchdog timing, and PM locks; enable tickless idle and runtime light sleep.
+   Set `CONFIG_PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP=n`; measure.
    Retain the existing GPIO workaround setting and leave peripheral power-down off.
+5. **Add CPU power-down:** set `CONFIG_PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP=y`,
+   keeping all other settings from stage 4; measure.
 
 For each change, run the Go build; host tests are skipped for this research.
 Verify BLE discovery, connection, READ/WRITE, button/shake response, and sensor
@@ -63,8 +66,10 @@ Power is calculated from the 3.9 V supply setting and measured average current.
 | BLE modem sleep only | Connected idle | 116.41 mA | 454.00 mW | 308.56 mA | [2026-10-15 capture](ppk-20261015T125919.png) |
 | BLE modem sleep + DFS | Advertising | 111.84 mA | 436.18 mW | 312.47 mA | [2026-10-15 capture](ppk-20261015T143253.png) |
 | BLE modem sleep + DFS | Connected idle | 97.38 mA | 379.78 mW | 303.86 mA | [2026-10-15 capture](ppk-20261015T143554.png) |
-| Above + automatic light sleep | Advertising | — | — | — | — |
-| Above + automatic light sleep | Connected idle | — | — | — | — |
+| Above + light sleep, CPU power-down off | Advertising | — | — | — | — |
+| Above + light sleep, CPU power-down off | Connected idle | — | — | — | — |
+| Above + CPU power-down | Advertising | — | — | — | — |
+| Above + CPU power-down | Connected idle | — | — | — | — |
 
 Power reduction = 100 × (baseline − new average power) / baseline.
 Production battery-life conclusions require a later comparison on S12 hardware.
@@ -80,6 +85,10 @@ lasted one minute; screenshots show 10-second views with statistics labeled
 Adding DFS reduced displayed average current by 6.06 mA (5.14%) while advertising
 and 19.03 mA (16.35%) while connected. Total reductions from baseline are 19.89%
 and 30.47%, respectively. DFS screenshots also show 10-second viewing windows.
+
+Go stops advertising on connection. A quiet connection can require less radio
+and CPU activity than advertising; negotiated timing and PM lock residency are
+needed to confirm the cause of the larger connected-idle saving with DFS.
 
 ## Activity Log
 
@@ -106,3 +115,5 @@ and 30.47%, respectively. DFS screenshots also show 10-second viewing windows.
   `CONFIG_PM_DFS_INIT_AUTO=y`; tickless idle remains disabled. Recorded advertising
   at 111.84 mA and connected idle at 97.38 mA. Actual minimum frequency from the
   boot log and negotiated BLE connection parameters are not yet recorded.
+- 2026-10-15: Split automatic light sleep and CPU power-down into separate tests.
+  The existing CPU power-down option has not affected these awake Portable tests.
