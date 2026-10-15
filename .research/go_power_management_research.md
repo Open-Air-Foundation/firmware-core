@@ -6,7 +6,7 @@ this branch is not intended for merge. ESP32-C5, ESP-IDF v5.5.4.
 ## Status
 
 2026-10-15: Advertising and connected-idle baselines captured;
-DFS and BLE modem sleep experiment next.
+BLE modem sleep only is next; experiment firmware is not prepared yet.
 Baseline source: `03b78b48aaffd8541147be214a44e74609900e27` plus the
 temporary SCD4x disable committed with this log.
 Current firmware: 240 MHz CPU, ESP-IDF PM and BLE modem sleep disabled.
@@ -35,30 +35,35 @@ Current firmware: 240 MHz CPU, ESP-IDF PM and BLE modem sleep disabled.
 ## Experiment Sequence
 
 1. **Baseline:** disable SCD4x; keep ESP-IDF PM disabled; measure.
-2. **DFS + BLE modem sleep:** retain 240 MHz maximum, record the selected minimum
-   frequency, and keep automatic light sleep disabled; measure.
-3. **Automatic light sleep:** verify wake sources, task waits, peripheral clocks,
+2. **BLE modem sleep only:** enable `CONFIG_BT_LE_SLEEP_ENABLE`, keep the CPU at
+   240 MHz, and leave `CONFIG_PM_ENABLE` disabled; measure.
+3. **Add DFS:** retain BLE modem sleep and the 240 MHz maximum, record the selected
+   minimum frequency, and keep automatic light sleep disabled; measure.
+4. **Add automatic light sleep:** verify wake sources, task waits, peripheral clocks,
    watchdog timing, and PM locks; enable tickless idle and light sleep; measure.
    Retain the existing GPIO workaround setting and leave peripheral power-down off.
 
 For each change, run the Go build; host tests are skipped for this research.
-Verify BLE discovery,
-connection, READ/WRITE, button/shake response, and sensor updates on hardware.
+Verify BLE discovery, connection, READ/WRITE, button/shake response, and sensor
+updates on hardware.
 Update relevant VHUB coverage. Flashing and captures are user-operated.
 
 ## Results
 
-Compare each result against the matching BLE baseline. Power is calculated from
-the 3.9 V supply setting and measured average current.
+Compare each stage with the previous stage to isolate its additional saving,
+and with the baseline for total saving. Match BLE state in both comparisons.
+Power is calculated from the 3.9 V supply setting and measured average current.
 
 | Configuration | BLE State | Average Current | Average Power | Peak Current | Trace |
 |---|---|---|---|---|---|
 | Baseline | Advertising | 139.60 mA | 544.44 mW | 350.19 mA | [2026-10-15 capture](ppk-20261015T081240.png) |
 | Baseline | Connected idle | 140.06 mA | 546.23 mW | 311.69 mA | [2026-10-15 capture](ppk-20261015T124049.png) |
-| DFS + BLE sleep | Advertising | — | — | — | — |
-| DFS + BLE sleep | Connected idle | — | — | — | — |
-| Above + light sleep | Advertising | — | — | — | — |
-| Above + light sleep | Connected idle | — | — | — | — |
+| BLE modem sleep only | Advertising | — | — | — | — |
+| BLE modem sleep only | Connected idle | — | — | — | — |
+| BLE modem sleep + DFS | Advertising | — | — | — | — |
+| BLE modem sleep + DFS | Connected idle | — | — | — | — |
+| Above + automatic light sleep | Advertising | — | — | — | — |
+| Above + automatic light sleep | Connected idle | — | — | — | — |
 
 Power reduction = 100 × (baseline − new average power) / baseline.
 Production battery-life conclusions require a later comparison on S12 hardware.
@@ -79,3 +84,4 @@ average consumption was effectively unchanged. Connection parameters were not re
   commits for subsequent experiments.
 - 2026-10-15: Connected-idle baseline at 3.9 V for one minute: 140.06 mA average,
   311.69 mA maximum, and 8.40 C charge. Firmware unchanged from `bdca1e6`.
+- 2026-10-15: Split BLE modem sleep and DFS into separate measurement stages.
