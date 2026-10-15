@@ -28,7 +28,7 @@ async def status_payload(ago_client: BleakClient) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestStatus:
-    """Verify the Status characteristic returns a valid 9-key CBOR map."""
+    """Verify the Status characteristic returns a valid 10-key CBOR map."""
 
     def test_read_status(self, status_payload: dict):
         """Reading the Status characteristic must return valid CBOR map."""
@@ -37,7 +37,7 @@ class TestStatus:
         )
 
     def test_all_keys_present(self, status_payload: dict):
-        """The Status payload must contain exactly the 9 expected keys."""
+        """The Status payload must contain exactly the 10 expected keys."""
         missing = proto.STATUS_ALL_KEYS - set(status_payload.keys())
         extra = set(status_payload.keys()) - proto.STATUS_ALL_KEYS
         assert not missing, f"Missing Status keys: {missing}"
@@ -48,10 +48,22 @@ class TestStatus:
         for key, expected_types in proto.STATUS_FIELD_TYPES.items():
             assert key in status_payload, f"Status key '{key}' missing"
             value = status_payload[key]
-            assert isinstance(value, expected_types), (
+            assert type(value) in expected_types, (
                 f"Status['{key}']: expected {expected_types}, "
                 f"got {type(value).__name__} = {value!r}"
             )
+
+    def test_tracking_state_valid(self, status_payload: dict):
+        """The enum must agree with the legacy active flag and session ID."""
+        state = status_payload["trk"]
+        assert type(state) is int and state in proto.TRACKING_STATES.values(), (
+            f"Invalid tracking state: {state!r}"
+        )
+        active = state != proto.TRACKING_STATES["idle"]
+        assert status_payload["tracking"] is active
+        session = status_payload["session"]
+        assert type(session) is int
+        assert session > 0 if active else session == 0
 
     def test_charging_state_valid(self, status_payload: dict):
         """The 'charging' field must be one of the known charging state strings."""

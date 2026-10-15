@@ -13,6 +13,8 @@
 #include "go_events.h"
 #include "rtos.h"
 
+#include <algorithm>
+
 static constexpr const char *TAG = "SensorProducer";
 
 // ---------------------------------------------------------------------------
@@ -62,10 +64,14 @@ void SensorProducer::stop(bool sleep_pm) {
   }
 }
 
-void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups) {
+void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups,
+                                         MeasurementOrigin origin) {
   if (_task_handle != nullptr) {
-    // Pack iterations (bits 0-7) and group mask (bits 8-15) into one notify value
+    // Pack iterations (bits 0-7), group mask (bits 8-15), and refresh origin (bit 16).
     uint32_t value = (static_cast<uint32_t>(groups) << 8) | iterations;
+    if (origin == MeasurementOrigin::Refresh) {
+      value |= NOTIFY_REFRESH;
+    }
     RTOS::task_notify_send(_task_handle, value);
   }
 }
@@ -137,6 +143,7 @@ void SensorProducer::task_entry(void *arg) {
 // ---------------------------------------------------------------------------
 
 void SensorProducer::run() {
+  _pm_warmup_active = false;
   const Co2AbcPeriodResult abc_result = _manager.set_co2_abc_period_days(_config.co2_abc_days);
   if (abc_result != Co2AbcPeriodResult::Success) {
     AG_LOGW(TAG, "boot CO2 ABC period (%d days) not applied: result=%u", _config.co2_abc_days,
@@ -144,9 +151,11 @@ void SensorProducer::run() {
   }
 
   AG_LOGI(TAG, "warming up sensors before first measurement");
+  post_pm_event(EventType::PmPreparationStarted);
   _manager.pm_wake(); // no-op unless resuming from sleep
   _manager.warmup();
   AG_LOGI(TAG, "warmup complete");
+  post_pm_event(EventType::PmPrepared);
 
   // Enable the gas-index sampler when a TVOC/NOx sensor is wired and
   // algorithm configuration succeeds. The sampler converts the indefinite
@@ -168,6 +177,11 @@ void SensorProducer::run() {
     uint32_t timeout = UINT32_MAX;
     if (_sampler_enabled) {
       timeout = (next_tick_ms > now) ? (next_tick_ms - now) : 0;
+    }
+    if (_pm_warmup_active) {
+      const uint32_t warmup_timeout =
+          (_next_pm_warmup_step_ms > now) ? (_next_pm_warmup_step_ms - now) : 0;
+      timeout = std::min(timeout, warmup_timeout);
     }
 
     uint32_t notify_value = 0;
@@ -202,6 +216,19 @@ void SensorProducer::run() {
       handle_sampler_tick();
       next_tick_ms = now + SAMPLER_TICK_MS;
     }
+
+    // Service gas first when both deadlines coincide. PM warmup never waits
+    // here; task_notify_wait paces its warmup iterations.
+    handle_pm_warmup_tick();
+  }
+}
+
+void SensorProducer::post_pm_event(EventType type) {
+  Event event{};
+  event.type = type;
+  // The orchestrator waits for these boundaries before sending the next command.
+  if (!RTOS::queue_send(_event_queue, &event, UINT32_MAX)) {
+    AG_LOGW(TAG, "PM event not delivered");
   }
 }
 
@@ -220,18 +247,23 @@ void SensorProducer::handle_calibration() {
 }
 
 void SensorProducer::handle_prepare() {
+  if (_pm_warmup_active) {
+    return;
+  }
+
   AG_LOGI(TAG, "PM prepare: waking and warming up after power-on");
+  post_pm_event(EventType::PmPreparationStarted);
   _manager.pm_wake();
-  _manager.warmup();
-  AG_LOGI(TAG, "PM prepare: complete");
+  _pm_warmup_iterations_remaining =
+      CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS;
+  _next_pm_warmup_step_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  _pm_warmup_active = true;
 }
 
 void SensorProducer::handle_pm_sleep() {
+  _pm_warmup_active = false;
   _manager.pm_sleep();
-
-  Event event{};
-  event.type = EventType::PmSensorAsleep;
-  RTOS::queue_send(_event_queue, &event, 0);
+  post_pm_event(EventType::PmSensorAsleep);
 }
 
 void SensorProducer::handle_self_test() {
@@ -296,6 +328,26 @@ void SensorProducer::handle_measurement(uint32_t notify_value) {
 
   Measures measures = _manager.start_measures(static_cast<int>(iterations), measurement_groups);
 
+  if (has_group(measurement_groups, SensorGroup::PM)) {
+    const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+    if (measures.pm_a.is_pm_25_valid()) {
+      _last_pm = measures.pm_a;
+      _last_pm_ms = now;
+    } else if (_last_pm.is_pm_25_valid() && now - _last_pm_ms < PM_VALIDITY_MS) {
+      measures.pm_a = _last_pm;
+    }
+  }
+
+  if (has_group(measurement_groups, SensorGroup::Other)) {
+    const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+    if (measures.co2.is_valid()) {
+      _last_co2 = measures.co2;
+      _last_co2_ms = now;
+    } else if (_last_co2.is_valid() && now - _last_co2_ms < CO2_VALIDITY_MS) {
+      measures.co2 = _last_co2;
+    }
+  }
+
   // When the sampler is active, the measurement didn't read SGP41
   // (TvocNox bit was stripped). Splice in the cached TVOC/NOx so the
   // orchestrator receives fresh index values.
@@ -320,8 +372,13 @@ void SensorProducer::handle_measurement(uint32_t notify_value) {
 
   Event event{};
   event.type = EventType::SensorDataReady;
-  event.sensor_data = basic;
-  RTOS::queue_send(_event_queue, &event, 0);
+  event.sensor_data.measures = basic;
+  if ((notify_value & NOTIFY_REFRESH) != 0) {
+    event.sensor_data.origin = MeasurementOrigin::Refresh;
+  } else {
+    event.sensor_data.origin = MeasurementOrigin::Scheduled;
+  }
+  RTOS::queue_send(_event_queue, &event, UINT32_MAX);
 }
 
 void SensorProducer::handle_sampler_tick() {
@@ -331,4 +388,31 @@ void SensorProducer::handle_sampler_tick() {
 
   Measures sampler = _manager.start_measures(1, SensorGroup::TvocNox);
   _last_tvoc_nox = sampler.tvoc_nox;
+}
+
+void SensorProducer::handle_pm_warmup_tick() {
+  if (!_pm_warmup_active) {
+    return;
+  }
+
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  if (now < _next_pm_warmup_step_ms) {
+    return;
+  }
+
+  if (_pm_warmup_iterations_remaining == 0) {
+    // Like warmup(), finish only after the final iteration's pacing interval.
+    _pm_warmup_active = false;
+    AG_LOGI(TAG, "PM prepare: complete");
+    post_pm_event(EventType::PmPrepared);
+  } else {
+    AG_LOGI(TAG, "warmup: iteration %d/%d",
+            CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS -
+                _pm_warmup_iterations_remaining + 1,
+            CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS);
+    // Startup already conditioned SGP41; PM wake must not condition it again.
+    _manager.warmup_step(false);
+    --_pm_warmup_iterations_remaining;
+    _next_pm_warmup_step_ms = now + CONFIG_SENSOR_WARMUP_INTERVAL_MS;
+  }
 }

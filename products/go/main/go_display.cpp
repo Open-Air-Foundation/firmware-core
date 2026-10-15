@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "go_text_wrap.h"
+#include "go_type_helpers.hpp"
 
 #include <driver/gpio.h>
 #include <esp_attr.h>
@@ -48,7 +49,7 @@ void save_rtc_display_snapshot(const DisplayValues &values) {
   s_rtc_display_snapshot.is_battery_charging = values.is_battery_charging;
   s_rtc_display_snapshot.gps_enabled = values.gps_enabled;
   s_rtc_display_snapshot.gps_fix = values.gps_fix;
-  s_rtc_display_snapshot.tracking_active = values.tracking_active;
+  s_rtc_display_snapshot.tracking_state = values.tracking_state;
   s_rtc_display_snapshot.ble_enabled = values.ble_enabled;
   s_rtc_display_snapshot.use_fahrenheit = values.use_fahrenheit;
   s_rtc_display_snapshot.use_feet = values.use_feet;
@@ -659,7 +660,9 @@ uint8_t u8x8_d_epd_128x250_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *
 bool is_home_like(Screen screen) { return screen == Screen::Home || screen == Screen::MainMenu; }
 
 bool is_list_screen(Screen screen) {
-  return screen == Screen::Settings || screen == Screen::SettingsChoice ||
+  return screen == Screen::TrackingMenu || screen == Screen::TrackingStatus ||
+         screen == Screen::Settings || screen == Screen::Operations ||
+         screen == Screen::DisplayTouch || screen == Screen::SettingsChoice ||
          screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About ||
          screen == Screen::HardwareTest || screen == Screen::PeripheralTest ||
          screen == Screen::GpsTest || screen == Screen::AccelTest;
@@ -667,7 +670,8 @@ bool is_list_screen(Screen screen) {
 
 // Any reason-specific shutdown screen.
 bool is_shutdown_screen(Screen screen) {
-  return screen == Screen::ShutdownUser || screen == Screen::ShutdownDischarge ||
+  return screen == Screen::ShutdownUser || screen == Screen::ShutdownCharging ||
+         screen == Screen::ShutdownCharged || screen == Screen::ShutdownDischarge ||
          screen == Screen::ShutdownTemperature || screen == Screen::ShutdownTemperatureLow;
 }
 
@@ -956,6 +960,40 @@ void draw_shutdown_power_icon(u8g2_t *u, int center_x, int center_y) {
   u8g2_DrawDisc(u, center_x, center_y, RADIUS - STROKE_W, U8G2_DRAW_ALL);
   u8g2_SetDrawColor(u, 0);
   u8g2_DrawBox(u, center_x - 1, center_y - RADIUS - 4, STROKE_W, RADIUS + 5);
+}
+
+void draw_shutdown_charge_icon(u8g2_t *u, int center_x, int center_y, bool full) {
+  constexpr int BODY_W = 48;
+  constexpr int BODY_H = 30;
+  constexpr int STROKE_W = 2;
+  constexpr int TERMINAL_W = 4;
+  constexpr int TERMINAL_H = 12;
+  constexpr int BOLT_TIP_X = 4;
+  constexpr int BOLT_TIP_Y = 10;
+  constexpr int BOLT_SHOULDER_X = 8;
+  constexpr int BOLT_SHOULDER_Y = 2;
+  const int x = center_x - (BODY_W + TERMINAL_W) / 2;
+  const int y = center_y - BODY_H / 2;
+  const int bolt_x = x + BODY_W / 2;
+
+  u8g2_DrawBox(u, x, y, BODY_W, STROKE_W);
+  u8g2_DrawBox(u, x, y + BODY_H - STROKE_W, BODY_W, STROKE_W);
+  u8g2_DrawBox(u, x, y, STROKE_W, BODY_H);
+  u8g2_DrawBox(u, x + BODY_W - STROKE_W, y, STROKE_W, BODY_H);
+  u8g2_DrawBox(u, x + BODY_W, center_y - TERMINAL_H / 2, TERMINAL_W, TERMINAL_H);
+
+  if (full) {
+    constexpr int FILL_INSET = 5;
+    u8g2_DrawBox(u, x + FILL_INSET, y + FILL_INSET, BODY_W - 2 * FILL_INSET,
+                 BODY_H - 2 * FILL_INSET);
+    return;
+  }
+
+  // Overlapping filled triangles keep the lightning bolt solid at this size.
+  u8g2_DrawTriangle(u, bolt_x + BOLT_TIP_X, center_y - BOLT_TIP_Y, bolt_x - BOLT_SHOULDER_X,
+                    center_y + BOLT_SHOULDER_Y, bolt_x, center_y + BOLT_SHOULDER_Y);
+  u8g2_DrawTriangle(u, bolt_x - BOLT_TIP_X, center_y + BOLT_TIP_Y, bolt_x + BOLT_SHOULDER_X,
+                    center_y - BOLT_SHOULDER_Y, bolt_x, center_y - BOLT_SHOULDER_Y);
 }
 
 void draw_shutdown_battery_low_icon(u8g2_t *u, int center_x, int center_y) {
@@ -1253,7 +1291,12 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
       !entering_system_screen &&
       (is_menu_navigation_screen(_prev_values.screen) || is_menu_navigation_screen(values.screen));
 
-  if (crossing_session_boundary) {
+  if (values.screen == Screen::TrackingStatus) {
+    // Status never refreshes the top bar, even on entry or beyond the partial budget.
+    // Its non-session classification keeps the worker's transfer body-only.
+    _pending_mode = RefreshMode::Partial;
+    _menu_exited = true;
+  } else if (crossing_session_boundary) {
     // Full refresh on the session boundary.  Reset the partial-op counter
     // so the next session's partials start with a fresh budget.
     _pending_mode = RefreshMode::Full;
@@ -1435,7 +1478,11 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     _draw_home(v);
     _draw_menu_overlay(v);
     break;
+  case Screen::TrackingMenu:
+  case Screen::TrackingStatus:
   case Screen::Settings:
+  case Screen::Operations:
+  case Screen::DisplayTouch:
   case Screen::SettingsChoice:
   case Screen::TagList:
   case Screen::Confirm:
@@ -1447,6 +1494,8 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     _draw_full_screen_list(v);
     break;
   case Screen::ShutdownUser:
+  case Screen::ShutdownCharging:
+  case Screen::ShutdownCharged:
   case Screen::ShutdownDischarge:
   case Screen::ShutdownTemperature:
   case Screen::ShutdownTemperatureLow:
@@ -1478,7 +1527,7 @@ bool DisplayService::_is_header_changed(const DisplayValues &a, const DisplayVal
          a.ble_enabled != b.ble_enabled || a.ble_connected != b.ble_connected ||
          a.wifi_enabled != b.wifi_enabled || a.wifi_connected != b.wifi_connected ||
          a.gps_enabled != b.gps_enabled || a.gps_fix != b.gps_fix ||
-         a.tracking_active != b.tracking_active;
+         a.tracking_state != b.tracking_state;
 }
 
 // ===========================================================================
@@ -1534,10 +1583,20 @@ void DisplayService::_draw_status_bar(const DisplayValues &v) {
   }
 
   // 3. Tracking dot (right-pinned; shifts left when plug icon is present)
-  if (v.tracking_active) {
+  if (tracking_session_active(v.tracking_state)) {
     const bool plug_visible = v.is_plugged_in && !v.is_battery_charging;
     const int track_x = plug_visible ? (BATTERY_X - 10 - ICON_GAP - ICON_GAP - 2) : TRACKING_X;
-    u8g2_DrawFilledEllipse(&_u8g2, track_x, ELLIPSE_CY, 2, 2, U8G2_DRAW_ALL);
+    if (v.tracking_state == TrackingState::Paused) {
+      constexpr int PAUSE_BAR_WIDTH = 2;
+      constexpr int PAUSE_BAR_HEIGHT = 6;
+      constexpr int PAUSE_BAR_OFFSET = 3;
+      u8g2_DrawBox(&_u8g2, track_x - PAUSE_BAR_OFFSET, ELLIPSE_CY - PAUSE_BAR_HEIGHT / 2,
+                   PAUSE_BAR_WIDTH, PAUSE_BAR_HEIGHT);
+      u8g2_DrawBox(&_u8g2, track_x + PAUSE_BAR_OFFSET - PAUSE_BAR_WIDTH,
+                   ELLIPSE_CY - PAUSE_BAR_HEIGHT / 2, PAUSE_BAR_WIDTH, PAUSE_BAR_HEIGHT);
+    } else {
+      u8g2_DrawFilledEllipse(&_u8g2, track_x, ELLIPSE_CY, 2, 2, U8G2_DRAW_ALL);
+    }
   }
 
   // 4. Battery + optional plug icon (right-pinned, fixed position)
@@ -1781,6 +1840,14 @@ void DisplayService::_draw_shutdown(Screen s) {
 
   // Reason-specific icon + text.
   switch (s) {
+  case Screen::ShutdownCharging:
+    draw_shutdown_charge_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y, false);
+    draw_shutdown_text(&_u8g2, "Charging", "", "Hold power button", "to turn on");
+    break;
+  case Screen::ShutdownCharged:
+    draw_shutdown_charge_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y, true);
+    draw_shutdown_text(&_u8g2, "Battery Full", "", "Hold power button", "to turn on");
+    break;
   case Screen::ShutdownDischarge:
     draw_shutdown_battery_low_icon(&_u8g2, SCREEN_W / 2, SHUTDOWN_ICON_CENTER_Y);
     draw_shutdown_text(&_u8g2, "Battery", "critically low", "Connect charger", "Charge before use");
@@ -2019,9 +2086,8 @@ void DisplayService::_draw_provisioning_confirm(const DisplayValues &v) {
 
 void DisplayService::_draw_getting_started(const DisplayValues &v) {
   // Simplified sibling of _draw_provisioning with its own layout: a
-  // chunkier 3px QR and a single action row, no status band / helper text.
-  // The whole stack (title -> QR -> caption -> instruction -> button) is
-  // vertically centered in the 250px canvas. See first_boot_onboarding.md.
+  // chunkier 3px QR and a single hold instruction on first boot.
+  // Title -> QR -> caption -> instruction -> action.
   constexpr int TITLE_L1_Y = 44;
   constexpr int TITLE_L2_Y = 64;
   constexpr int QR_TOP_Y = 68;
@@ -2029,6 +2095,10 @@ void DisplayService::_draw_getting_started(const DisplayValues &v) {
   constexpr int QR_CAPTION_Y = 174;
   constexpr int INSTRUCTION_Y = 195;
   constexpr int ACTION_ROW_Y = 204;
+  constexpr int ACTION_X = 12;
+  constexpr int ACTION_W = SCREEN_W - 2 * ACTION_X;
+  constexpr int HOLD_ACTION_H = 24;
+  constexpr int HOLD_ACTION_LABEL_Y = 220;
 
   // --- Title (same font as the Provisioning page) ---
   u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
@@ -2040,15 +2110,23 @@ void DisplayService::_draw_getting_started(const DisplayValues &v) {
 
   // --- QR caption ---
   u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
-  draw_centered_text(&_u8g2, SCREEN_W / 2, QR_CAPTION_Y, "Scan to set up");
+  draw_centered_text(&_u8g2, SCREEN_W / 2, QR_CAPTION_Y, "Scan for guide");
 
   // --- Instruction (names the button action) ---
   u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
   draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_Y, "Or just use it right now");
 
-  // --- Single action row (label from v.rows[0]) ---
+  // --- Single action (label from v.rows[0]) ---
   const char *row0 = (v.row_count >= 1) ? v.rows[0].text : "";
-  draw_provisioning_action_row(&_u8g2, row0, ACTION_ROW_Y, /*selected=*/true);
+  if (v.getting_started_from_boot) {
+    u8g2_DrawBox(&_u8g2, ACTION_X, ACTION_ROW_Y, ACTION_W, HOLD_ACTION_H);
+    u8g2_SetDrawColor(&_u8g2, 1);
+    u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
+    draw_centered_text(&_u8g2, SCREEN_W / 2, HOLD_ACTION_LABEL_Y, row0);
+    u8g2_SetDrawColor(&_u8g2, 0);
+  } else {
+    draw_provisioning_action_row(&_u8g2, row0, ACTION_ROW_Y, /*selected=*/true);
+  }
 }
 
 namespace {

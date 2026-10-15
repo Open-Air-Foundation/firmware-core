@@ -15,6 +15,7 @@
 
 #include "accel/accel_sanity.h"
 #include "accel/accel_sensor.h"
+#include "accel/accel_service.h"
 #include "config_store.h"
 #include "go_ble.h"
 #include "buzzer/go_buzzer.h"
@@ -65,6 +66,7 @@ public:
     PortableWifiProvisioner &portable_provisioner; // attached Portable Wi-Fi provisioning
     GoBoard &board;  // borrowed for init_wifi_subsystem() in Stationary entry
     OtaService &ota; // per-mode OTA wiring (BLE push / WiFi pull)
+    AccelService &accel_service;
   };
 
   /// Construct the orchestrator.
@@ -107,8 +109,9 @@ private:
   Behavior _behavior = Behavior::Idle;
   LockState _lock_state = LockState::Locked;
   bool _gps_enabled = true;
-  bool _tracking_active = false;
+  TrackingState _tracking_state = TrackingState::Idle;
   uint32_t _tracking_session_id = 0;
+  TrackingTiming _tracking_timing{};
 
   // --- Cached data ---
   MeasuresAGo _raw_measures{};       ///< Authoritative sensor results for cloud/storage
@@ -121,9 +124,12 @@ private:
   uint32_t _last_bms_poll_ms = 0;
   uint32_t _last_bms_status_poll_ms = 0;
   uint32_t _last_ext_wdt_ms = 0;
-  uint32_t _last_input_ms = 0;                ///< Reset on every input; drives inactivity
+  uint32_t _last_input_ms = 0;                ///< Inactivity baseline: input or explicit UI exit
   uint32_t _snackbar_refresh_deadline_ms = 0; ///< 0 = inactive; non-zero = absolute deadline
   bool _first_measurement_done = false;
+  bool _tracking_status_was_visible = false; ///< Detect Status exit once; not RTC-persisted
+  bool _tracking_status_refresh_armed = false;
+  uint32_t _tracking_status_refresh_deadline_ms = 0; ///< Zero is valid when armed
 
   // --- OTA ---
   /// Unified OTA poll-timer baseline: 2 s BLE is_ble_active() poll (Portable),
@@ -138,7 +144,10 @@ private:
   bool _local_api_access_gated_for_ota = false;
 
   // --- PM sensor sleep (Portable mode power-cycling) ---
-  bool _pm_prepare_sent = false; ///< PREPARE already sent for the current measurement cycle
+  enum class PmState { Preparing, Ready, Sleeping, Asleep };
+  PmState _pm_state = PmState::Preparing; ///< Producer starts with boot warmup.
+  bool _measurement_pending = false; ///< Normal measurement or peripheral sweep is outstanding.
+  bool _refresh_pending = false;
 
   // --- PM sensor recovery (V1: boost-kill power cycle on persistent failure) ---
   uint32_t _pm_first_fail_ms = 0; ///< 0 = no failure in progress
@@ -162,9 +171,10 @@ private:
   /// on Home, no page transition).
   bool _bring_up_pending = false;
 
-  /// True from cold-boot until the first sensor measurement arrives.
+  /// True until init() opens the first-use guide, or until the first sensor
+  /// measurement arrives on an onboarded cold boot.
   /// Gates the Info -> Home transition in on_sensor_data() and suppresses
-  /// the power short-press lock toggle while "Booting..." is on screen.
+  /// the power short-press lock toggle while the boot splash is on screen.
   bool _boot_splash_active = false;
 
   /// Set on Stationary entry, consumed by on_wifi_connected().
@@ -180,14 +190,13 @@ private:
   struct PeripheralTestState {
     bool active = false;
     enum class Step : uint8_t {
-      FrontLed,
       BackLed,
       TouchLed,
       Buzzer,
+      WaitingForSensors,
       Testing,
       Summary,
-    } step = Step::FrontLed;
-    bool front_led = false;
+    } step = Step::BackLed;
     bool back_led = false;
     bool touch_led = false;
     bool buzzer = false;
@@ -205,14 +214,8 @@ private:
   uint32_t _gps_ttff_ms = GPS_TTFF_PENDING;
 
   // --- Accelerometer (hardware) test flow ---
-  // Active-state is derived from the current screen (Screen::AccelTest). The
-  // driver is created lazily on first entry and kept for the process lifetime
-  // (never freed). Classification uses the pure accel_sanity helpers.
-  //
-  // TODO: fold this into a dedicated accelerometer service when one exists —
-  // the driver handle plus the cached sample/classification state belong there,
-  // leaving the orchestrator to own only the test flow.
-  AccelSensor *_accel = nullptr;
+  // AccelService's worker owns the hardware. The orchestrator caches test
+  // results and classifies them with the pure accel_sanity helpers.
   AccelReading _accel_reading{};
   uint8_t _accel_who_am_i = 0;
   bool _accel_id_ok = false;
@@ -251,6 +254,8 @@ private:
   /// Live accelerometer test poll cadence (~2 Hz X/Y/Z refresh).
   static constexpr uint32_t ACCEL_TEST_POLL_INTERVAL_MS = 500;
   static constexpr uint32_t LOCAL_API_ACTIVATION_RETRY_MS = 5000;
+  static constexpr uint32_t TRACKING_STATUS_REFRESH_INTERVAL_MS = 5000;
+  static constexpr uint32_t TRACKING_STATUS_REFRESH_RETRY_MS = 100;
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
@@ -260,9 +265,17 @@ private:
   void apply_config_update(const GoConfigUpdate &update, GoConfigSource source);
 
   // --- Event handlers ---
-  void on_sensor_data(const MeasuresAGo &data);
+  void on_sensor_data(const MeasuresAGo &data,
+                      MeasurementOrigin origin = MeasurementOrigin::Scheduled);
+  void on_pm_event(EventType type);
+  void prepare_pm();
+  void start_measurement(MeasurementOrigin origin);
+  void try_refresh();
+  void clear_refresh();
+  void update_refresh_display();
   void on_gps_fix(const GpsData &data);
   void on_input(const InputEventData &input);
+  void on_shake_detected(uint32_t detected_ms);
   void on_co2_calibration_done(Co2CalibrationResult result);
   void on_co2_abc_period_done(Co2AbcPeriodResult result);
   void on_tvoc_nox_learning_offset_done(TvocNoxLearningOffsetResult result);
@@ -281,6 +294,8 @@ private:
   /// Begin a new tracking session. Returns false on session-id exhaustion
   /// or storage-open failure; the snackbar + BLE notify fire inline first.
   bool start_tracking();
+  bool pause_tracking();
+  bool resume_tracking();
   void stop_tracking();
   /// persist=false skips onboarding + settings writes (manufacturing path).
   void change_mode(OperatingMode new_mode, bool persist = true);
@@ -289,8 +304,8 @@ private:
   /// Stationary ephemerally (no NVS persist) for production testing.
   void enter_manufacturing_mode();
   /// Persist a fuel-gauge learning run (stage=Charge, cycle=1) and reboot into
-  /// the dedicated factory path. Shared by the manufacturing boot gesture and
-  /// the Hardware Test menu's FG Learning arm. Never returns on hardware.
+  /// the dedicated factory path after Hardware Test menu confirmation.
+  /// Never returns on hardware.
   void arm_fg_learning();
   /// Persist the onboarding flag on first engagement. Idempotent (no
   /// redundant NVS write).
@@ -306,6 +321,11 @@ private:
   void shutdown(ShipModeRequest reason = ShipModeRequest::None);
 
   // --- Timer management ---
+  /// Shared inactivity eligibility; elapsed-time checks remain with the timer.
+  bool auto_lock_allowed() const;
+  bool tracking_status_refresh_allowed() const;
+  void sync_tracking_status_lifecycle();
+  void refresh_tracking_status();
   uint32_t compute_queue_timeout_ms() const;
   void check_timers();
   void on_bms_timer();
@@ -314,12 +334,13 @@ private:
   void reschedule_sensor_timer(const GoSettings &previous_settings);
 
   // --- Display ---
-  void update_display();
+  bool update_display();
   /// Drop-free render variant.  Forwards to DisplayService::update(values,
   /// wait); when wait=true the new frame is queued without being dropped
   /// even if the worker is mid-paint on a prior frame.  Paired with
   /// DisplayService::flush() at call sites that need post-paint guarantees.
-  void update_display(bool wait);
+  /// Returns whether the frame was accepted, not whether painting has finished.
+  bool update_display(bool wait);
   /// Gated background render (skips focus/menu/session screens). wait=true for
   /// fire-once edges (charging / BLE state) so a worker-busy drop can't leave
   /// the screen stale until touch.
@@ -370,14 +391,12 @@ private:
 
   /// Idempotent session-entry preamble: silent unlock + snackbar clear.
   /// No-op when _setup_session_active is already true.  Called by both
-  /// enter_stationary() (Info path) and enter_provisioning_page()
-  /// (post-online auth_failed path).
+  /// enter_stationary() and enter_provisioning_page().
   void begin_session_if_needed();
 
   /// Open Screen::Provisioning, pause sensitive services, start the
-  /// requested transport, and render wait=true.  Called from both the
-  /// bring-up failure path (Info -> Provisioning, session already active)
-  /// and post-online auth_failed (Home -> Provisioning, session starts).
+  /// requested transport, and render wait=true. Normal mode only: called
+  /// without saved credentials or after initial saved-network failure.
   void enter_provisioning_page(ProvisioningTransport transport);
 
   /// Session-leave helpers.  Both poll the battery once for a fresh
@@ -398,19 +417,23 @@ private:
   void run_led_test();
 
   // --- Peripheral (hardware) test flow ---
-  /// Begin the guided actuator + AQ peripheral test. Resets state, drives the
-  /// first actuator, and pushes the first step view.
+  /// Begin the guided actuator + AQ peripheral test. Wakes PM, resets state,
+  /// drives the first actuator, and pushes the first step view.
   void start_peripheral_test();
   /// Record the operator's Pass/Fail for the current actuator step and advance
   /// to the next actuator, or into the automatic AQ sweep.
   void peripheral_step_result(bool pass);
+  /// Start the sweep once PM is ready and the producer has finished any measurement.
+  void try_start_peripheral_sensor_test();
   /// Consume the bulk AQ self-test result, compute overall pass/fail, fire the
   /// success/alert cue, and show the summary.
   void on_sensor_test_done(const SensorTestResults &results);
-  /// Leave the flow: mark inactive and restore LED/buzzer to normal settings.
+  /// Leave the flow: restore PM sleep policy and LED/buzzer settings.
   void finish_peripheral_test();
   /// Drive the actuator for the current step and push its prompt view.
   void drive_peripheral_actuator();
+  /// Resume PM sleep when no measurement or peripheral test owns the sensor.
+  void sleep_pm_if_idle();
 
   /// Enter the live GPS test: reset the TTFF timer, ungate the receiver if
   /// settings leave GPS inactive, speed up posting for a ~1 Hz refresh, render.
@@ -422,14 +445,13 @@ private:
   /// receiver against settings (stop it if the test ungated it).
   void finish_gps_test();
 
-  /// Enter the live accelerometer test: create the driver (once), take a first
-  /// sample, classify, and fire the one-shot pass/fail cue.
+  /// Request unfiltered readings from the worker, classify the first sample,
+  /// and fire the one-shot pass/fail cue.
   void start_accel_test();
   /// Re-sample the accelerometer and re-render (periodic ~2 Hz refresh). No cue.
   void poll_accel_test();
-  /// Read WHO_AM_I + X/Y/Z and update the cached identity/read/magnitude/pass
-  /// state. I2C-touching; shared by start_accel_test() and poll_accel_test().
-  void sample_and_classify_accel();
+  /// Cache and classify a worker reply without accessing the driver.
+  void classify_accel(const AccelService::TestReading &reading, bool available);
   /// Leave the accelerometer test: restore the back LED brightness + live AQI.
   void finish_accel_test();
 
@@ -437,8 +459,7 @@ private:
   bool is_gps_active() const;
   void deactivate_gps();
 
-  /// User intent AND file actually open. Drives every BLE status push so
-  /// the wire never reports tracking when no file is open.
+  /// Recording requires an open route; Paused retains only the session ID.
   bool is_recording() const;
 
   /// Random 5-digit ID with bounded collision retry. Returns 0 on

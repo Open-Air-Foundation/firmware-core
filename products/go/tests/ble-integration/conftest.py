@@ -321,9 +321,9 @@ async def status_notifications(
 ) -> AsyncGenerator[NotificationCollector, None]:
     """Subscribe to Status notifications for the duration of a test.
 
-    The device pushes Status only on urgent tracking transitions (start
-    success, start failure, manual stop). Steady-state polls update the
-    characteristic value silently — clients see those via Read.
+    The device pushes Status on urgent tracking and charging transitions.
+    Steady-state polls update the characteristic value silently — clients
+    see those via Read.
     """
     collector = NotificationCollector(name="Status")
     await ago_client.start_notify(proto.CHAR_STATUS_UUID, collector.callback)

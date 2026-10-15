@@ -117,8 +117,7 @@ inline constexpr uint8_t TOUCH_DELTA_SENSE = 0;       // 0-7, 0 = 128x max sensi
 // ---------------------------------------------------------------------------
 // Accelerometer (LIS2DH12, I2C) — INT1 line
 //
-// INT1 (net ACC_INT) is routed to the ESP32-C5, but the Hardware Test
-// accelerometer flow is poll-only; the pin is recorded here for future use.
+// INT1 (net ACC_INT) starts awake interrupt-burst shake capture.
 // ---------------------------------------------------------------------------
 
 inline constexpr gpio_num_t PIN_ACCEL_INT = GPIO_NUM_3;

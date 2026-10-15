@@ -52,17 +52,16 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | `static_ip.gateway` | `"sgw"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
 | `static_ip.dns_primary` | `"sd1"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
 | `static_ip.dns_secondary` | `"sd2"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
-| `front_led_brightness` | `"lb"` | `int` (stored) / `LedBrightness` (in struct) | `Off` (0) | 0 .. 3 | Front indicator LED brightness: Off / Dim / Mid / Bright |
 | `back_led_brightness` | `"blb"` | `int` (stored) / `LedBrightness` (in struct) | `Off` (0) | 0 .. 3 | Back AQI LED brightness: Off / Dim / Mid / Bright |
 | `touch_led_intensity` | `"tlb"` | `int` (stored) / `TouchLedIntensity` (in struct) | `Off` (0) | 0 .. 2 | Touch feedback LED intensity: Off / Dim / Bright |
-| `onboarding_done` | `"obd"` | `bool` | `false` | — | First-boot guide latch. `false` shows the one-time Getting Started screen after the boot splash; flips `true` on first real engagement (`Start using`, BLE pair/bond, or any operating-mode change). Cleared by factory reset. |
+| `onboarding_done` | `"obd"` | `bool` | `false` | — | First-boot guide latch. `false` shows the one-time Getting Started screen after the boot splash; flips `true` on first real engagement (Enter hold on the guide, BLE pair/bond, or any operating-mode change). Cleared by factory reset. |
 
 ### Measurement Interval Presentation
 
 The firmware persists every valid measurement interval from 1 through 3600
 seconds exactly. The on-device menu offers fixed choices of 3, 10, 30, 60, 300,
 900, and 3600 seconds. When an interface activates another valid value, the
-Settings summary shows the exact seconds and the interval submenu prepends a
+Settings > Operations summary shows the exact seconds and the interval submenu prepends a
 selected `Custom (<seconds>s)` row.
 
 Changing an unrelated UI setting preserves the custom interval. Selecting one
@@ -147,7 +146,6 @@ All validation is implemented in an anonymous namespace in `go_settings.cpp`
 | `tvoc_learning_offset` | `>= 1 && <= 1000` |
 | `nox_learning_offset` | `>= 1 && <= 1000` |
 | `static_ip.*` | No range check; the loader treats `static_ip.ip == 0` as DHCP and short-circuits the other four fields |
-| `front_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |
 | `back_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |
 | `touch_led_intensity` | Underlying int in `0 .. 2` (matches `TouchLedIntensity` enum values) |
 | `onboarding_done` | No range check (bool) |
@@ -200,12 +198,12 @@ Factory reset writes default settings (`disable_cloud=false`,
 ## First-Boot Onboarding Field
 
 `onboarding_done` is the durable latch for the one-time Getting Started
-guide. It defaults to `false`, so a fresh unbox shows the guide once after
-the boot splash hands off on the first `SensorDataReady`. The orchestrator
+guide. It defaults to `false`, so a fresh unbox shows the guide once when
+orchestrator initialization finishes, while sensors warm up. The orchestrator
 flips it to `true` through the idempotent `mark_onboarding_done()` helper on
 the first real engagement:
 
-- a `Start using` press on `Screen::GettingStarted` (boot-gate entry),
+- an Enter hold on `Screen::GettingStarted` (boot-gate entry),
 - a successful (encrypted) BLE pairing/bond (`on_ble_auth_complete(true)`);
   a failed pair leaves the flag untouched, or
 - any operating-mode change (`change_mode()`).
@@ -239,13 +237,17 @@ See [`fg_learning.md`](fg_learning.md) for the factory learning boot path.
 
 ## Relationship to RtcAppState
 
-Some settings fields have a corresponding field in `RtcAppState` (the
+Some settings fields have a corresponding field or flag in `RtcAppState` (the
 RTC-memory cache used to survive deep sleep):
 
-| Setting | `RtcAppState` field | Purpose |
+| Setting | RTC Field or Flag | Purpose |
 |---|---|---|
 | `operating_mode` | `mode` | Settings = durable (NVS, survives power-off). RtcAppState = fast cache (RTC memory, survives deep sleep only). |
-| `gps_mode` | `gps_enabled` | `GpsMode` in settings maps to a boolean in `RtcAppState` (enabled = not AlwaysOff). |
+| `gps_mode` | `RtcAppFlag::GpsEnabled` | Set in `RtcAppState::flags` when the setting is not AlwaysOff. |
+
+The GPS flag is accessed through `has_flag()` and `set_flag()`. See
+[RTC State Persistence](power_management.md#rtc-state-persistence) for the
+flag layout and defaults.
 
 **Startup logic:**
 

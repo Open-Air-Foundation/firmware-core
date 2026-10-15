@@ -12,6 +12,7 @@ portable air quality monitor with GPS, e-paper display, BLE, and battery.
 - **Temp / Humidity** — SHT40 on V1, then fallback from CO2 and pressure
   sensors
 - **Pressure** — Infineon DPS368
+- **Motion** — ST LIS2DH12 accelerometer (interrupt-driven shake detection)
 - **Battery** — TI BQ25629 charger IC; TI BQ27427 Impedance Track fuel gauge
   (V1 board only)
 
@@ -50,8 +51,9 @@ PMID → SPS30 VDD; on V1 it only isolates the SPS30 from the shared I2C
 bus — the sensor stays powered by always-on PMID.
 
 On V1 the ~50 mA fan current is cut between measurements by the SPS30's
-native **Sleep** command (`0x1001`), not the GPIO. After each measurement
-the orchestrator calls `request_pm_sleep()`; the sensor producer sleeps
+native **Sleep** command (`0x1001`), not the GPIO. When enough time remains
+before the next scheduled measurement, the orchestrator calls
+`request_pm_sleep()`; the sensor producer sleeps
 the SPS30 and posts `PmSensorAsleep`, after which the orchestrator
 isolates the bus with `set_pm_power(false)`. The pre-wake path connects
 the bus (`set_pm_power(true)`) then wakes + warms via `request_prepare()`.
@@ -105,6 +107,19 @@ are wiped before power-off. This retains production-configured PM, temperature,
 and humidity corrections. BLE bond deletion is a safe no-op once Stationary
 mode has torn down the BLE host. A plain reboot likewise returns to fresh
 onboarding. Button 2 long press remains factory reset.
+
+Manufacturing connects only to the transient factory Wi-Fi (`airgradient` /
+`cleanair`), even when saved networks exist. If no IP is obtained within the
+15-second startup window, the display paints `Wi-Fi connection failed`, holds
+it for one second after painting, and the device reboots to Getting Started.
+The operator must press Button 2 again to re-enter manufacturing. This path
+never starts provisioning. After a successful connection, later Wi-Fi drops
+use the normal reconnect policy without a startup-timeout reboot.
+
+Normal Stationary mode uses saved networks only and opens BLE provisioning
+immediately when none are saved. Initial saved-network failures retain the
+existing provisioning flow. Normal startup and runtime reconnect never select
+factory credentials automatically.
 
 ### Cell Safety
 
@@ -174,6 +189,8 @@ partition table, and merged factory-flash binary.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — boot paths, event model, module
   structure
 - [`feature_overview.md`](feature_overview.md) — product-facing feature summary
+- [`docs/accel_service.md`](docs/accel_service.md) — interrupt-burst shake
+  detection, cooldown, and shared Hardware Test access
 - [`docs/`](docs) — per-service implementation notes (BLE, cloud, display,
   GPS, input, Local Server, orchestrator, OTA, power, sensor producer,
   settings, storage, UI, Wi-Fi)
@@ -188,7 +205,7 @@ partition table, and merged factory-flash binary.
 - [`docs/fg_learning.md`](docs/fg_learning.md) — factory fuel-gauge learning
   boot path (`FgLearningRunner` / `FgLearningController` split, dashboard)
 - [`docs/hardware_test.md`](docs/hardware_test.md) — on-device Hardware Test
-  surface (Peripheral, GPS, Accelerometer, FG Learning arm)
+  surface (Peripheral, GPS, Accelerometer, Battery Calibration arm)
 - [`go_ble_client.md`](go_ble_client.md) — client-side BLE integration spec
   for mobile app developers (discovery, pairing, GATT, payloads, history)
 - [`specs/`](specs) — design specs and refactor plans (temporary; deleted

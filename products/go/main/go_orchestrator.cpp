@@ -28,12 +28,14 @@
 #include "go_melody.h"
 #include "go_melody_sync.h"
 #include "go_power.h"
+#include "go_type_helpers.hpp"
 #include "rtos.h"
 #include "services/ag_client.h"
 
 static constexpr const char *TAG = "Orchestrator";
 
 static constexpr uint8_t SESSION_ID_LENGTH = 5;
+static constexpr uint32_t MAX_SHAKE_EVENT_AGE_MS = 500;
 
 // 5 random draws against ~90k slots: collision probability is negligible.
 static constexpr int SESSION_ID_MAX_RETRIES = 5;
@@ -123,10 +125,6 @@ static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource sou
     candidate.gps_mode = update.gps_mode;
     has_update = true;
   }
-  if (has_go_config_field(update.update_mask, GoConfigField::FrontLedBrightness)) {
-    candidate.front_led_brightness = update.front_led_brightness;
-    has_update = true;
-  }
   if (has_go_config_field(update.update_mask, GoConfigField::BackLedBrightness)) {
     candidate.back_led_brightness = update.back_led_brightness;
     has_update = true;
@@ -204,12 +202,14 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   _mode = _settings.operating_mode;
 
   // --- Restore RTC state for wake-from-sleep cases ---
+  _tracking_timing = TrackingTiming{};
   if (cause != WakeCause::PowerOn) {
     RtcAppState state = _svc.power_service.load_state();
-    _behavior = state.behavior;
-    _gps_enabled = state.gps_enabled;
-    _tracking_active = state.tracking_active;
+    _behavior = tracking_session_active(state.tracking_state) ? Behavior::Tracking : Behavior::Idle;
+    _gps_enabled = state.has_flag(RtcAppFlag::GpsEnabled);
+    _tracking_state = state.tracking_state;
     _tracking_session_id = state.tracking_session_id;
+    _tracking_timing = tracking_timing_for_state(state.tracking_timing, _tracking_state);
   }
 
   // --- Apply initial lock state ---
@@ -264,18 +264,22 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   // --- Resume route if tracking was active before sleep ---
   // BLE isn't up yet, so the snackbar is the only inline signal; clients
   // observe the cleared state via Read on connect.
-  if (_tracking_active) {
+  if (_tracking_state == TrackingState::Recording) {
     if (!_svc.storage_service.resume_route(_tracking_session_id)) {
       AG_LOGE(TAG, "init: resume_route failed for session %" PRIu32, _tracking_session_id);
-      _tracking_active = false;
+      _tracking_state = TrackingState::Idle;
       _tracking_session_id = 0;
+      _tracking_timing = TrackingTiming{};
       _behavior = Behavior::Idle;
       _svc.ui_manager.show_snackbar("Tracking stopped — storage");
     }
   }
 
+  // Initialize UI state after reopen may have cleared tracking. A prepainted
+  // boot can skip rendering, so input must not depend on a prior display update.
+  _svc.ui_manager.sync_tracking_state(_tracking_state);
+
   // --- LED brightness from settings ---
-  _svc.led_service.front_set_brightness(_settings.front_led_brightness);
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
 
@@ -283,7 +287,8 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   _svc.ui_manager.sync_settings(_settings);
 
   if (!handoff.measurement_completed) {
-    _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+    // Boot warmup runs before the producer consumes this notification.
+    start_measurement(MeasurementOrigin::Scheduled);
   }
 
   _latest_power =
@@ -309,6 +314,18 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   init_ble_if_portable();
   if (_settings.operating_mode == OperatingMode::Stationary) {
     enter_stationary();
+  }
+
+  // The first-use guide needs no readings. Open it once initialization is
+  // complete, while the sensor producer warms up. An active Stationary
+  // session owns its screen and must keep it.
+  if (_boot_splash_active && !_settings.onboarding_done && !_setup_session_active &&
+      _svc.ui_manager.current_screen() == Screen::Info) {
+    _boot_splash_active = false;
+    begin_session_if_needed(); // Silent unlock; sensors and BLE keep running.
+    _svc.ui_manager.show_getting_started(/*from_boot=*/true);
+    AG_LOGI(TAG, "first-boot guide ready; first measurement pending");
+    update_display(/*wait=*/true);
   }
 }
 
@@ -339,6 +356,52 @@ void Orchestrator::run() {
 // Timer management
 // ---------------------------------------------------------------------------
 
+bool Orchestrator::auto_lock_allowed() const {
+  return _lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0 &&
+         !_setup_session_active && !_svc.ui_manager.is_focus_screen() &&
+         !_svc.ui_manager.is_hardware_test_screen() &&
+         _svc.ui_manager.current_screen() != Screen::TrackingStatus;
+}
+
+bool Orchestrator::tracking_status_refresh_allowed() const {
+  return _svc.ui_manager.current_screen() == Screen::TrackingStatus &&
+         _lock_state == LockState::Unlocked && tracking_session_active(_tracking_state);
+}
+
+void Orchestrator::sync_tracking_status_lifecycle() {
+  const bool visible = _svc.ui_manager.current_screen() == Screen::TrackingStatus;
+  const bool entered = visible && !_tracking_status_was_visible;
+  if (_tracking_status_was_visible && !visible) {
+    _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  }
+  _tracking_status_was_visible = visible;
+
+  if (!tracking_status_refresh_allowed()) {
+    _tracking_status_refresh_armed = false;
+  } else if (entered) {
+    _tracking_status_refresh_deadline_ms =
+        static_cast<uint32_t>(RTOS::get_time_ms()) + TRACKING_STATUS_REFRESH_INTERVAL_MS;
+    _tracking_status_refresh_armed = true;
+  }
+}
+
+void Orchestrator::refresh_tracking_status() {
+  // Late timer handlers (for example OTA) can replace the page.
+  sync_tracking_status_lifecycle();
+  if (!_tracking_status_refresh_armed) {
+    return;
+  }
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  if (static_cast<int32_t>(_tracking_status_refresh_deadline_ms - now) > 0) {
+    return;
+  }
+
+  const bool accepted = update_display(/*wait=*/false);
+  _tracking_status_refresh_deadline_ms =
+      static_cast<uint32_t>(RTOS::get_time_ms()) +
+      (accepted ? TRACKING_STATUS_REFRESH_INTERVAL_MS : TRACKING_STATUS_REFRESH_RETRY_MS);
+}
+
 uint32_t Orchestrator::compute_queue_timeout_ms() const {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   uint32_t next = UINT32_MAX;
@@ -351,7 +414,7 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
   uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
   if (!_provisioning_sensitive_services_paused) {
     // Sensor timer deadline
-    {
+    if (!_measurement_pending && _pm_state == PmState::Ready) {
       uint32_t deadline = _last_measurement_ms + interval_ms;
       uint32_t remaining = deadline - now;
       next = std::min(next, remaining);
@@ -366,20 +429,19 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, bms_status_remaining);
   }
 
-  // Inactivity deadline — gated identically to the auto-lock fire below
-  // (skip setup sessions and Hardware Test screens).
-  if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0 &&
-      !_setup_session_active && !_svc.ui_manager.is_hardware_test_screen()) {
+  // Inactivity scheduling and execution share the same eligibility policy.
+  if (auto_lock_allowed()) {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
     uint32_t inact_remaining = (_last_input_ms + inact_interval) - now;
     next = std::min(next, inact_remaining);
   }
 
-  // PM pre-wake deadline (not Offline, interval above threshold, prepare
-  // not yet sent, not in the sensitive-services pause).
+  // PM pre-wake deadline (not Offline, interval above threshold, sensor
+  // asleep, not in the sensitive-services pause).
   bool pm_sleep_eligible =
       _mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms);
-  if (pm_sleep_eligible && !_pm_prepare_sent && !_provisioning_sensitive_services_paused) {
+  if (pm_sleep_eligible && _pm_state == PmState::Asleep &&
+      !_provisioning_sensitive_services_paused) {
     uint32_t measure_deadline = _last_measurement_ms + interval_ms;
     uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
     uint32_t pm_remaining = prepare_deadline - now;
@@ -443,6 +505,12 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, ota_remaining);
   }
 
+  if (_tracking_status_refresh_armed && tracking_status_refresh_allowed()) {
+    const int32_t remaining = static_cast<int32_t>(_tracking_status_refresh_deadline_ms - now);
+    // Clamp this candidate before min() so an overdue refresh cannot be hidden.
+    next = std::min(next, remaining <= 0 ? 0u : static_cast<uint32_t>(remaining));
+  }
+
   // If any deadline already passed, the unsigned subtraction yields a large
   // number — clamp to 0 so check_timers() fires immediately.
   if (next > MAX_REASONABLE_TIMEOUT_MS) {
@@ -466,22 +534,20 @@ void Orchestrator::check_timers() {
     // --- PM pre-wake timer (fires warmup_duration before next measurement) ---
     bool pm_sleep_eligible =
         _mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval);
-    if (pm_sleep_eligible && !_pm_prepare_sent) {
+    if (pm_sleep_eligible && _pm_state == PmState::Asleep) {
       uint32_t measure_deadline = _last_measurement_ms + interval;
       uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
       if ((now - prepare_deadline) < MAX_REASONABLE_TIMEOUT_MS) {
         AG_LOGI(TAG, "PM pre-wake: powering on and requesting prepare");
-        _svc.power_service.set_pm_power(true);
-        _svc.sensor_producer.request_prepare();
-        _pm_prepare_sent = true;
+        prepare_pm();
       }
     }
 
     // --- Sensor timer (single) ---
-    if ((now - _last_measurement_ms) >= interval) {
-      _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+    if ((now - _last_measurement_ms) >= interval && !_measurement_pending &&
+        _pm_state == PmState::Ready) {
+      start_measurement(MeasurementOrigin::Scheduled);
       _last_measurement_ms = now;
-      _pm_prepare_sent = false;
     }
 
     // --- BMS full telemetry timer ---
@@ -511,14 +577,16 @@ void Orchestrator::check_timers() {
     _last_ext_wdt_ms = now;
   }
 
-  // --- Auto-lock timer — suppressed during setup sessions, on focus
-  // screens (PairingPasskey), and on Hardware Test screens, so a
-  // lock-and-return-Home can't interrupt the user mid-flow ---
-  if (_lock_state == LockState::Unlocked && _settings.auto_lock_seconds > 0 &&
-      !_setup_session_active && !_svc.ui_manager.is_focus_screen() &&
-      !_svc.ui_manager.is_hardware_test_screen()) {
+  // Observe page exits before applying inactivity, including a remote Stop.
+  if (_tracking_status_was_visible || _svc.ui_manager.current_screen() == Screen::TrackingStatus) {
+    sync_tracking_status_lifecycle();
+  }
+
+  // --- Auto-lock timer ---
+  if (auto_lock_allowed()) {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
-    if ((now - _last_input_ms) >= inact_interval) {
+    const uint32_t inactivity_now = static_cast<uint32_t>(RTOS::get_time_ms());
+    if ((inactivity_now - _last_input_ms) >= inact_interval) {
       on_inactivity_timeout();
     }
   }
@@ -573,6 +641,10 @@ void Orchestrator::check_timers() {
       }
     }
   }
+
+  if (_tracking_status_refresh_armed) {
+    refresh_tracking_status();
+  }
 }
 
 void Orchestrator::on_bms_timer() {
@@ -590,8 +662,8 @@ void Orchestrator::on_bms_timer() {
 
   // Steady-state Status refresh (value only; urgent transitions push via notify_tracking_status()).
   if (_svc.ble_service.is_initialized()) {
-    _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(),
-                                   _tracking_session_id);
+    _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_session_id,
+                                   _tracking_state);
   }
 }
 
@@ -615,8 +687,8 @@ void Orchestrator::on_bms_status_timer() {
       // Push the charging delta so clients reflect the change without polling
       // (also refreshes the full Status snapshot).
       if (_svc.ble_service.is_initialized()) {
-        _svc.ble_service.notify_charging_status(_latest_power, _latest_gps, is_recording(),
-                                                _tracking_session_id);
+        _svc.ble_service.notify_charging_status(_latest_power, _latest_gps, _tracking_session_id,
+                                                _tracking_state);
       }
 
       // Fire-once edge: block the paint so a worker-busy drop can't leave the
@@ -628,7 +700,11 @@ void Orchestrator::on_bms_status_timer() {
   _last_bms_status_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 }
 
-void Orchestrator::on_inactivity_timeout() { lock(); }
+void Orchestrator::on_inactivity_timeout() {
+  if (auto_lock_allowed()) {
+    lock();
+  }
+}
 
 void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) {
   if (previous_settings.measure_interval_seconds == _settings.measure_interval_seconds) {
@@ -640,12 +716,16 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) 
   uint32_t new_interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
   if (_mode != OperatingMode::Offline &&
       _svc.power_service.should_sleep_pm_sensor(new_interval_ms)) {
-    _svc.sensor_producer.request_pm_sleep();
+    if (!_measurement_pending && !_refresh_pending && !_periph.active &&
+        _pm_state == PmState::Ready) {
+      _svc.sensor_producer.request_pm_sleep();
+      _pm_state = PmState::Sleeping;
+    }
   } else {
     // Back to always-on: connect now, then wake + warm the (possibly asleep) sensor.
-    _svc.power_service.set_pm_power(true);
-    _svc.sensor_producer.request_prepare();
+    prepare_pm();
   }
+  try_refresh();
 }
 
 // ---------------------------------------------------------------------------
@@ -655,11 +735,12 @@ void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) 
 void Orchestrator::dispatch(const Event &event) {
   switch (event.type) {
   case EventType::SensorDataReady:
-    on_sensor_data(event.sensor_data);
+    on_sensor_data(event.sensor_data.measures, event.sensor_data.origin);
     break;
+  case EventType::PmPreparationStarted:
+  case EventType::PmPrepared:
   case EventType::PmSensorAsleep:
-    // PM sleep finished while still connected — isolate the bus now.
-    _svc.power_service.set_pm_power(false);
+    on_pm_event(event.type);
     break;
   case EventType::SensorTestDone:
     on_sensor_test_done(event.sensor_test_results);
@@ -669,6 +750,9 @@ void Orchestrator::dispatch(const Event &event) {
     break;
   case EventType::InputPress:
     on_input(event.input);
+    break;
+  case EventType::ShakeDetected:
+    on_shake_detected(event.shake_detected_ms);
     break;
 
   // BLE events
@@ -706,6 +790,12 @@ void Orchestrator::dispatch(const Event &event) {
   // UI action events (reserved for future programmatic triggers)
   case EventType::UserStartTracking:
     start_tracking();
+    break;
+  case EventType::UserPauseTracking:
+    pause_tracking();
+    break;
+  case EventType::UserResumeTracking:
+    resume_tracking();
     break;
   case EventType::UserStopTracking:
     stop_tracking();
@@ -943,7 +1033,11 @@ void Orchestrator::apply_config_update(const GoConfigUpdate &update, GoConfigSou
 // Event handlers
 // ---------------------------------------------------------------------------
 
-void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
+void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin origin) {
+  _measurement_pending = false;
+  const bool refreshed = _refresh_pending;
+  clear_refresh();
+
   // Always overwrite all fields — single interval, no group-based gating.
   _raw_measures.pm_a = data.pm_a;
   _raw_measures.co2 = data.co2;
@@ -990,44 +1084,46 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
       _pm_first_fail_ms = 0;
       AG_LOGW(TAG, "PM invalid for %" PRIu32 " ms -> power-cycle recovery", PM_RECOVERY_TIMEOUT_MS);
       _svc.power_service.recover_pm_sensor();
-      _svc.sensor_producer.request_prepare();
+      _pm_state = PmState::Asleep;
+      prepare_pm();
     }
   }
 
-  // Hand off the "Booting..." splash. Skip if a setup session owns Info
-  // (Stationary drives its own Info -> Home). First-boot gate diverts to
-  // the guide until onboarding is acked.
+  // Onboarded devices keep the splash until readings arrive. Fresh devices
+  // already left it for the guide in init(). Stationary owns its Info -> Home
+  // transition, so a measurement must not replace that session's screen.
   if (_boot_splash_active) {
     _boot_splash_active = false;
     if (!_setup_session_active && _svc.ui_manager.current_screen() == Screen::Info) {
-      if (!_settings.onboarding_done) {
-        // begin_session_if_needed() silent-unlocks so the Locked device can
-        // press "Start using"; sensors/BLE keep running (no service pause).
-        begin_session_if_needed();
-        _svc.ui_manager.show_getting_started(/*from_boot=*/true);
-        update_display(/*wait=*/true);
-      } else {
-        _svc.ui_manager.reset_to_home();
-      }
+      _svc.ui_manager.reset_to_home();
     }
   }
 
   log_sensor_snapshot(_raw_measures);
 
-  _svc.storage_service.cache_measurement(_raw_measures);
-
   // Unconditional — snapshot is ready for the next Stationary arm.
   _svc.cloud.update_measures_snapshot(_raw_measures);
 
-  if (_tracking_active) {
-    RoutePoint p{};
-    p.timestamp = time(nullptr);
-    p.gps = _latest_gps;
-    p.sensors = _raw_measures;
-    p.battery_percentage = _latest_power.battery_percentage;
-    // Failures are logged by the storage layer; the session keeps running
-    // and re-attempts on each subsequent measurement.
-    (void)_svc.storage_service.append_route_point(p);
+  if (origin == MeasurementOrigin::Scheduled) {
+    _svc.storage_service.cache_measurement(_raw_measures);
+    // Record
+    if (is_recording()) {
+      RoutePoint p{};
+      p.timestamp = time(nullptr);
+      p.gps = _latest_gps;
+      p.sensors = _raw_measures;
+      p.battery_percentage = _latest_power.battery_percentage;
+      const uint32_t record_s = tracking_seconds_from_ms(RTOS::get_retained_time_ms());
+      const uint32_t count_before = _svc.storage_service.current_route_point_count();
+      // Failures are logged by the storage layer; the session keeps running
+      // and re-attempts on each subsequent measurement.
+      (void)_svc.storage_service.append_route_point(p);
+      // A full write can advance the counter even when a subsequent sync fails.
+      if (_svc.storage_service.current_route_point_count() > count_before &&
+          !tracking_timing_record_accepted(_tracking_timing, _tracking_state, record_s)) {
+        _tracking_timing.last_record_s = TRACKING_TIME_INVALID_S;
+      }
+    }
   }
 
   // Update BLE measures characteristic (always for READ; notifies when connected)
@@ -1035,14 +1131,32 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data) {
   // the correction settings from Config.
   _svc.ble_service.notify_measures(_raw_measures, _latest_gps, time(nullptr));
 
-  // Sleep PM sensor after measurement when interval justifies power-cycling.
-  // The producer sleeps the sensor, then posts PmSensorAsleep so we isolate.
-  uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
-  if (_mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms)) {
-    _svc.sensor_producer.request_pm_sleep();
+  try_start_peripheral_sensor_test();
+  sleep_pm_if_idle();
+
+  if (refreshed) {
+    AG_LOGI(TAG, "refresh complete");
+    update_refresh_display();
+  } else {
+    request_background_display_update();
+  }
+}
+
+void Orchestrator::sleep_pm_if_idle() {
+  if (_periph.active || _measurement_pending || _refresh_pending) {
+    return;
   }
 
-  request_background_display_update();
+  // The producer sleeps PM before PmSensorAsleep lets us isolate the bus.
+  uint32_t interval_ms = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  const int32_t until_regular = static_cast<int32_t>(_last_measurement_ms + interval_ms - now);
+  const uint32_t remaining_ms = until_regular > 0 ? static_cast<uint32_t>(until_regular) : 0;
+  if (_pm_state == PmState::Ready && _mode != OperatingMode::Offline &&
+      _svc.power_service.should_sleep_pm_sensor(remaining_ms)) {
+    _svc.sensor_producer.request_pm_sleep();
+    _pm_state = PmState::Sleeping;
+  }
 }
 
 void Orchestrator::on_co2_calibration_done(Co2CalibrationResult result) {
@@ -1122,6 +1236,105 @@ void Orchestrator::on_gps_fix(const GpsData &data) {
   }
 }
 
+void Orchestrator::on_shake_detected(uint32_t detected_ms) {
+  const uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  // Unsigned subtraction keeps event age correct across uptime wraparound.
+  const uint32_t age_ms = now_ms - detected_ms;
+  if (age_ms > MAX_SHAKE_EVENT_AGE_MS || _refresh_pending) {
+    return;
+  }
+  if (!_provisioning_sensitive_services_paused && !_ota_committed && !_periph.active &&
+      _svc.ui_manager.current_screen() != Screen::AccelTest) {
+    AG_LOGI(TAG, "shake accepted; buzzer=%s", _settings.buzzer_enabled ? "on" : "off");
+    _refresh_pending = true;
+    _svc.buzzer_service.acknowledge_refresh();
+    try_refresh();
+    update_refresh_display();
+  }
+}
+
+void Orchestrator::prepare_pm() {
+  if (_pm_state != PmState::Asleep) {
+    return;
+  }
+  _svc.power_service.set_pm_power(true);
+  _pm_state = PmState::Preparing;
+  _svc.sensor_producer.request_prepare();
+}
+
+void Orchestrator::start_measurement(MeasurementOrigin origin) {
+  AG_LOGI(TAG, "measurement requested: %s",
+          origin == MeasurementOrigin::Refresh ? "refresh" : "scheduled");
+  _measurement_pending = true;
+  _svc.sensor_producer.request_measurement(1, SensorGroup::All, origin);
+}
+
+void Orchestrator::try_refresh() {
+  if (!_refresh_pending) {
+    return;
+  }
+  // Wait for an outstanding read. Normal measurements satisfy the refresh;
+  // a peripheral sweep leaves it pending until on_sensor_test_done().
+  if (!_measurement_pending) {
+    if (_pm_state == PmState::Ready) {
+      start_measurement(MeasurementOrigin::Refresh);
+    } else {
+      prepare_pm(); // Preparing/Sleeping wait for the producer's completion event.
+    }
+  }
+
+  const char *text = "Waiting...";
+  if (_pm_state == PmState::Preparing) {
+    text = "Preparing...";
+  } else if (_measurement_pending) {
+    text = "Measuring...";
+  }
+  _svc.ui_manager.show_snackbar(text, /*persistent=*/true);
+  _snackbar_refresh_deadline_ms = 0;
+}
+
+void Orchestrator::on_pm_event(EventType type) {
+  if (_provisioning_sensitive_services_paused) {
+    return;
+  }
+  if (type == EventType::PmPreparationStarted) {
+    _pm_state = PmState::Preparing;
+  } else if (type == EventType::PmPrepared) {
+    _pm_state = PmState::Ready;
+  } else {
+    _pm_state = PmState::Asleep;
+    _svc.power_service.set_pm_power(false);
+    const uint32_t interval = static_cast<uint32_t>(_settings.measure_interval_seconds) * 1000;
+    if (_periph.active || _mode == OperatingMode::Offline ||
+        !_svc.power_service.should_sleep_pm_sensor(interval)) {
+      prepare_pm();
+    }
+  }
+  try_refresh();
+  try_start_peripheral_sensor_test();
+  if (_refresh_pending) {
+    update_refresh_display();
+  }
+}
+
+void Orchestrator::clear_refresh() {
+  if (!_refresh_pending) {
+    return;
+  }
+  _refresh_pending = false;
+  if (_svc.ui_manager.snackbar_persistent()) {
+    _svc.ui_manager.show_snackbar(nullptr, /*persistent=*/true);
+  }
+}
+
+void Orchestrator::update_refresh_display() {
+  if (_setup_session_active || _svc.ui_manager.is_focus_screen()) {
+    return;
+  }
+  // Refresh progress must update and clear on menus as well as Home.
+  update_display(/*wait=*/true);
+}
+
 static const char *input_source_str(InputSource s) {
   switch (s) {
   case InputSource::TouchUp:
@@ -1193,21 +1406,13 @@ void Orchestrator::on_input(const InputEventData &input) {
     return;
   }
 
-  // Arming: a second boot short-press while already in manufacturing mode
-  // persists a fuel-gauge learning run and reboots into the dedicated factory
-  // path. This is the orchestrator's ONLY learning touch point — no tick, no
-  // resume, no verify, no ship hook, no dashboard.
-  if (input.source == InputSource::ButtonBoot && input.type == InputType::ShortPress &&
-      _manufacturing_mode) {
-    arm_fg_learning(); // never returns on hardware
-    return;
-  }
-
   // Manufacturing: boot short-press before onboarding skips the guide and
-  // enters Stationary ephemerally, so production can re-test a fresh unit.
+  // enters Stationary ephemerally. Repeated presses leave the session alone.
   if (input.source == InputSource::ButtonBoot && input.type == InputType::ShortPress &&
       !_settings.onboarding_done) {
-    enter_manufacturing_mode();
+    if (!_manufacturing_mode) {
+      enter_manufacturing_mode();
+    }
     return;
   }
 
@@ -1245,6 +1450,12 @@ void Orchestrator::on_input(const InputEventData &input) {
   switch (result.action) {
   case UIAction::StartTracking:
     start_tracking();
+    break;
+  case UIAction::PauseTracking:
+    pause_tracking();
+    break;
+  case UIAction::ResumeTracking:
+    resume_tracking();
     break;
   case UIAction::StopTracking:
     stop_tracking();
@@ -1284,7 +1495,7 @@ void Orchestrator::on_input(const InputEventData &input) {
     break;
   }
   case UIAction::AckOnboarding:
-    // "Start using": persist the flag and leave the session to Home.
+    // Enter held on the first-boot guide: persist the flag and leave to Home.
     if (mark_onboarding_done()) {
       leave_session_to_home();
     } else {
@@ -1372,7 +1583,7 @@ void Orchestrator::lock() {
   _svc.ui_manager.show_snackbar("Locked");
   _lock_state = LockState::Locked;
   _svc.ui_manager.reset_to_home();
-  update_display();
+  update_display(/*wait=*/true);
 }
 
 void Orchestrator::unlock() {
@@ -1384,7 +1595,7 @@ void Orchestrator::unlock() {
 }
 
 bool Orchestrator::start_tracking() {
-  if (_tracking_active) {
+  if (tracking_session_active(_tracking_state)) {
     return false; // caller treats as "already tracking"
   }
 
@@ -1397,14 +1608,19 @@ bool Orchestrator::start_tracking() {
     AG_LOGE(TAG, "start_tracking: failed to open route (session=%" PRIu32 ")", session_id);
     _svc.ui_manager.show_snackbar("Storage error — can't track");
     update_display();
-    _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, is_recording(),
-                                            _svc.storage_service.current_route_session_id());
+    _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps,
+                                            _svc.storage_service.current_route_session_id(),
+                                            _tracking_state);
     return false;
   }
 
   _tracking_session_id = session_id;
-  _tracking_active = true;
+  _tracking_state = TrackingState::Recording;
   _behavior = Behavior::Tracking;
+  if (!tracking_timing_start(_tracking_timing,
+                             tracking_seconds_from_ms(RTOS::get_retained_time_ms()))) {
+    _tracking_timing = TrackingTiming{};
+  }
 
   if (!was_gps_active && is_gps_active()) {
     _svc.gps_service.start();
@@ -1414,13 +1630,64 @@ bool Orchestrator::start_tracking() {
   (void)snprintf(msg, sizeof(msg), "Tracking start = %05" PRIu32, _tracking_session_id);
   _svc.ui_manager.show_snackbar(msg);
   update_display();
-  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, is_recording(),
-                                          _tracking_session_id);
+  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, _tracking_session_id,
+                                          _tracking_state);
+  return true;
+}
+
+bool Orchestrator::pause_tracking() {
+  if (_tracking_state == TrackingState::Paused) {
+    return true;
+  }
+  if (_tracking_state != TrackingState::Recording) {
+    return false;
+  }
+
+  AG_LOGI(TAG, "pause_tracking: session %" PRIu32, _tracking_session_id);
+  if (!tracking_timing_pause(_tracking_timing,
+                             tracking_seconds_from_ms(RTOS::get_retained_time_ms()))) {
+    _tracking_timing.recording_accumulated_s = TRACKING_TIME_INVALID_S;
+    _tracking_timing.recording_started_s = TRACKING_TIME_INVALID_S;
+  }
+  _tracking_state = TrackingState::Paused;
+  const bool saved = _svc.storage_service.end_route();
+  _svc.ui_manager.show_snackbar(saved ? "Tracking paused" : "Paused - storage sync failed");
+  update_display(/*wait=*/true);
+  // Keep the legacy active-session fields while notifying the new state.
+  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, _tracking_session_id,
+                                          _tracking_state);
+  return saved;
+}
+
+bool Orchestrator::resume_tracking() {
+  if (_tracking_state == TrackingState::Recording) {
+    return true;
+  }
+  if (_tracking_state != TrackingState::Paused) {
+    return false;
+  }
+  if (!_svc.storage_service.resume_route(_tracking_session_id)) {
+    _svc.ui_manager.show_snackbar("Can't resume - storage error");
+    update_display(/*wait=*/true);
+    return false;
+  }
+
+  AG_LOGI(TAG, "resume_tracking: session %" PRIu32, _tracking_session_id);
+  if (!tracking_timing_resume(_tracking_timing,
+                              tracking_seconds_from_ms(RTOS::get_retained_time_ms()))) {
+    _tracking_timing.recording_accumulated_s = TRACKING_TIME_INVALID_S;
+    _tracking_timing.recording_started_s = TRACKING_TIME_INVALID_S;
+  }
+  _tracking_state = TrackingState::Recording;
+  _svc.ui_manager.show_snackbar("Tracking resumed");
+  update_display(/*wait=*/true);
+  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, _tracking_session_id,
+                                          _tracking_state);
   return true;
 }
 
 void Orchestrator::stop_tracking() {
-  if (!_tracking_active) {
+  if (!tracking_session_active(_tracking_state)) {
     return;
   }
 
@@ -1428,8 +1695,9 @@ void Orchestrator::stop_tracking() {
   const bool was_gps_active = is_gps_active();
   const uint32_t ended_session_id = _tracking_session_id;
   _svc.storage_service.end_route();
-  _tracking_active = false;
+  _tracking_state = TrackingState::Idle;
   _tracking_session_id = 0;
+  _tracking_timing = TrackingTiming{};
   _behavior = Behavior::Idle;
 
   if (was_gps_active && !is_gps_active()) {
@@ -1439,9 +1707,9 @@ void Orchestrator::stop_tracking() {
   char msg[48];
   (void)snprintf(msg, sizeof(msg), "Tracking stop = %05" PRIu32, ended_session_id);
   _svc.ui_manager.show_snackbar(msg);
-  update_display();
-  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, is_recording(),
-                                          _tracking_session_id);
+  update_display(/*wait=*/true);
+  _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, _tracking_session_id,
+                                          _tracking_state);
 }
 
 bool Orchestrator::mark_onboarding_done() {
@@ -1491,7 +1759,6 @@ void Orchestrator::run_led_test() {
   static constexpr uint32_t LED_TEST_DURATION_MS = LED_TEST_STEP_COUNT * COLOR_HOLD_MS;
 
   AG_LOGI(TAG, "LED test started");
-  _svc.led_service.front_set_brightness(LedBrightness::Bright);
   _svc.led_service.back_set_brightness(LedBrightness::Bright);
   _svc.led_service.touch_set_intensity(TouchLedIntensity::Bright);
   _svc.led_service.touch_set_all(true);
@@ -1499,7 +1766,6 @@ void Orchestrator::run_led_test() {
   RTOS::delay_ms(LED_TEST_DURATION_MS);
 
   _svc.led_service.touch_set_all(false);
-  _svc.led_service.front_set_brightness(_settings.front_led_brightness);
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
   if (_corrected_measures.pm_a.is_pm_25_valid()) {
@@ -1518,7 +1784,8 @@ void Orchestrator::start_peripheral_test() {
   AG_LOGI(TAG, "peripheral test: start");
   _periph = PeripheralTestState{};
   _periph.active = true;
-  _periph.step = PeripheralTestState::Step::FrontLed;
+  _periph.step = PeripheralTestState::Step::BackLed;
+  prepare_pm();
   drive_peripheral_actuator();
 }
 
@@ -1529,10 +1796,6 @@ void Orchestrator::drive_peripheral_actuator() {
   view.kind = PeripheralTestView::Kind::Actuator;
 
   switch (_periph.step) {
-  case Step::FrontLed:
-    _svc.led_service.front_set_brightness(LedBrightness::Bright);
-    view.prompt = "Front LED on?";
-    break;
   case Step::BackLed: {
     // Cycle red -> green -> blue so the operator sees the RGB channels.
     static constexpr BackStep BACK_LED_CYCLE[] = {
@@ -1570,11 +1833,6 @@ void Orchestrator::peripheral_step_result(bool pass) {
   using Step = PeripheralTestState::Step;
 
   switch (_periph.step) {
-  case Step::FrontLed:
-    _periph.front_led = pass;
-    _periph.step = Step::BackLed;
-    drive_peripheral_actuator();
-    break;
   case Step::BackLed:
     _periph.back_led = pass;
     _periph.step = Step::TouchLed;
@@ -1589,30 +1847,46 @@ void Orchestrator::peripheral_step_result(bool pass) {
   case Step::Buzzer: {
     _periph.buzzer = pass;
     // Actuators done → run the automatic AQ sweep in the producer task.
-    _periph.step = Step::Testing;
+    _periph.step = Step::WaitingForSensors;
     _svc.led_service.back_off(); // clear the cycle before the AQ phase
     PeripheralTestView view{};
     view.kind = PeripheralTestView::Kind::Testing;
     _svc.ui_manager.set_peripheral_test_view(view);
-    _svc.sensor_producer.request_self_test();
+    try_start_peripheral_sensor_test();
     break;
   }
   default:
-    break; // Testing/Summary ignore actuator taps
+    break; // Waiting/Testing/Summary ignore actuator taps
   }
 }
 
+void Orchestrator::try_start_peripheral_sensor_test() {
+  if (!_periph.active || _periph.step != PeripheralTestState::Step::WaitingForSensors ||
+      _pm_state != PmState::Ready || _measurement_pending) {
+    return;
+  }
+
+  _periph.step = PeripheralTestState::Step::Testing;
+  _measurement_pending = true;
+  _svc.sensor_producer.request_self_test();
+}
+
 void Orchestrator::on_sensor_test_done(const SensorTestResults &results) {
+  _measurement_pending = false;
+
   // Only meaningful while the flow is waiting on the AQ sweep.
   if (!_periph.active || _periph.step != PeripheralTestState::Step::Testing) {
+    try_start_peripheral_sensor_test();
+    try_refresh();
+    sleep_pm_if_idle();
     return;
   }
 
   _periph.sensors = results;
   _periph.step = PeripheralTestState::Step::Summary;
 
-  const bool overall = _periph.front_led && _periph.back_led && _periph.touch_led &&
-                       _periph.buzzer && results.all_pass();
+  const bool overall =
+      _periph.back_led && _periph.touch_led && _periph.buzzer && results.all_pass();
   AG_LOGI(TAG, "peripheral test: summary overall=%s", overall ? "PASS" : "FAIL");
 
   // Overall pass/fail cue (buzzer + back LED colour).
@@ -1627,7 +1901,6 @@ void Orchestrator::on_sensor_test_done(const SensorTestResults &results) {
 
   PeripheralTestView view{};
   view.kind = PeripheralTestView::Kind::Summary;
-  view.front_led = _periph.front_led;
   view.back_led = _periph.back_led;
   view.touch_led = _periph.touch_led;
   view.buzzer = _periph.buzzer;
@@ -1649,10 +1922,11 @@ void Orchestrator::finish_peripheral_test() {
   }
   AG_LOGI(TAG, "peripheral test: finish, restoring hardware");
   _periph.active = false;
+  try_refresh();
+  sleep_pm_if_idle();
 
   // Restore LED/buzzer to persisted settings + live AQI.
   _svc.led_service.touch_set_all(false); // clear any steady touch LEDs
-  _svc.led_service.front_set_brightness(_settings.front_led_brightness);
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
   _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
@@ -1719,13 +1993,10 @@ void Orchestrator::finish_gps_test() {
 
 void Orchestrator::start_accel_test() {
   AG_LOGI(TAG, "accel test: start");
-  // Create the driver once (kept for the process lifetime). new_accel_sensor()
-  // probes + init()s and returns null on boards/stubs without an accelerometer.
-  if (_accel == nullptr) {
-    _accel = _svc.board.new_accel_sensor();
-  }
+  AccelService::TestReading reading;
+  const bool available = _svc.accel_service.begin_hardware_test(reading);
   _last_accel_poll_ms = static_cast<uint32_t>(RTOS::get_time_ms());
-  sample_and_classify_accel();
+  classify_accel(reading, available);
 
   // One-shot pass/fail cue on entry (buzzer + back LED), mirroring the
   // peripheral-test overall cue. Lives only here so it fires exactly once per
@@ -1745,21 +2016,19 @@ void Orchestrator::start_accel_test() {
 }
 
 void Orchestrator::poll_accel_test() {
-  sample_and_classify_accel();
+  AccelService::TestReading reading;
+  const bool available = _svc.accel_service.read_hardware_test(reading);
+  classify_accel(reading, available);
   update_display();
 }
 
-void Orchestrator::sample_and_classify_accel() {
-  if (_accel != nullptr) {
-    _accel_who_am_i = _accel->who_am_i();
-    _accel_id_ok = accel_identity_ok(_accel_who_am_i, _accel->expected_who_am_i());
-    _accel_read_ok = _accel->read(_accel_reading);
-  } else {
-    _accel_who_am_i = 0;
-    _accel_id_ok = false;
-    _accel_read_ok = false;
-    _accel_reading = {};
-  }
+void Orchestrator::classify_accel(const AccelService::TestReading &reading, bool available) {
+  _accel_who_am_i = reading.who_am_i;
+  _accel_id_ok = reading.expected_who_am_i != 0 &&
+                 accel_identity_ok(reading.who_am_i, reading.expected_who_am_i);
+  _accel_reading = reading.sample;
+  _accel_read_ok = available && reading.result == AccelReadResult::Ready &&
+                   _accel_reading.is_valid() && !_accel_reading.clipped;
 
   bool magnitude_ok = false;
   if (_accel_read_ok) {
@@ -1779,6 +2048,9 @@ void Orchestrator::finish_accel_test() {
   AG_LOGI(TAG, "accel test: finish");
   // Restore the buzzer enable and the back LED (the cue overrode both).
   _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
+  if (!_svc.accel_service.end_hardware_test()) {
+    AG_LOGW(TAG, "failed to restore accelerometer capture");
+  }
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   if (_corrected_measures.pm_a.is_pm_25_valid()) {
     _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
@@ -1843,18 +2115,15 @@ void Orchestrator::apply_mode_transition(OperatingMode old_mode, OperatingMode n
     init_ble_if_portable();
   }
 
-  // Ensure PM sensor is connected and awake — covers mode changes away
-  // from Portable while PM was slept/isolated.  Must fire before the
+  // Wake PM if it is asleep — covers mode changes away from Portable
+  // while PM was slept/isolated. Must fire before the
   // Stationary early-return below so Stationary entry restores PM after a
   // prior Portable session may have slept it.
-  _svc.power_service.set_pm_power(true);
-  _svc.sensor_producer.request_prepare();
+  prepare_pm();
 
   if (new_mode == OperatingMode::Stationary && old_mode != OperatingMode::Stationary) {
-    // enter_stationary() opens Screen::Info with the bring-up text and
-    // calls update_display(wait=true) itself.  Skip the generic
-    // "Mode changed" snackbar + update_display() so the Info text is
-    // not stomped.
+    // enter_stationary() renders its Info or Provisioning page itself.
+    // Skip the generic "Mode changed" snackbar and display update.
     enter_stationary();
     return;
   }
@@ -1913,9 +2182,9 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
     _svc.serial_command.stop_receiving();
   }
 
-  const bool was_gps_active =
-      previous_settings.gps_mode == GpsMode::AlwaysOn ||
-      (previous_settings.gps_mode == GpsMode::OnWhenTracking && _tracking_active);
+  const bool was_gps_active = previous_settings.gps_mode == GpsMode::AlwaysOn ||
+                              (previous_settings.gps_mode == GpsMode::OnWhenTracking &&
+                               tracking_session_active(_tracking_state));
 
   reschedule_sensor_timer(previous_settings);
 
@@ -1938,9 +2207,6 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
     }
   }
 
-  if (previous_settings.front_led_brightness != _settings.front_led_brightness) {
-    _svc.led_service.front_set_brightness(_settings.front_led_brightness);
-  }
   if (previous_settings.back_led_brightness != _settings.back_led_brightness) {
     _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   }
@@ -1979,16 +2245,17 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
 }
 
 bool Orchestrator::clear_data() {
-  if (_tracking_active) {
+  if (tracking_session_active(_tracking_state)) {
     stop_tracking();
   }
+  _tracking_timing = TrackingTiming{};
 
   _svc.storage_service.clear_cache();
   const bool routes_cleared = _svc.storage_service.clear_routes();
 
   if (_svc.ble_service.is_connected()) {
-    _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(),
-                                   _tracking_session_id);
+    _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_session_id,
+                                   _tracking_state);
   }
 
   _svc.ui_manager.show_snackbar(routes_cleared ? "Data cleared" : "Data clear failed");
@@ -1998,6 +2265,7 @@ bool Orchestrator::clear_data() {
 }
 
 bool Orchestrator::factory_reset(bool preserve_corrections) {
+  const bool wait = _svc.ui_manager.current_screen() == Screen::TrackingStatus;
   const bool should_preserve_corrections = preserve_corrections || _manufacturing_mode;
   AG_LOGI(TAG, "factory_reset: preserve_corrections=%d", should_preserve_corrections);
 
@@ -2033,12 +2301,13 @@ bool Orchestrator::factory_reset(bool preserve_corrections) {
 
   _behavior = Behavior::Idle;
   _lock_state = LockState::Locked;
-  _tracking_active = false;
+  _tracking_state = TrackingState::Idle;
   _tracking_session_id = 0;
+  _tracking_timing = TrackingTiming{};
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
   _svc.ui_manager.reset_to_home();
-  update_display();
+  update_display(wait);
 
   return true;
 }
@@ -2053,6 +2322,7 @@ void Orchestrator::save_tag(uint8_t tag_index, const char *tag_label) {
 
 void Orchestrator::shutdown(ShipModeRequest reason) {
   AG_LOGI(TAG, "shutdown (reason=%d)", static_cast<int>(reason));
+  _svc.accel_service.stop();
 
   // Manufacturing units retain corrections but clear all other settings and
   // Wi-Fi state changed while testing.
@@ -2089,7 +2359,7 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
   _svc.display_service.flush();
 
   // 2. Persist state.
-  if (_tracking_active) {
+  if (tracking_session_active(_tracking_state)) {
     stop_tracking();
   }
   _svc.storage_service.backup_cache();
@@ -2102,7 +2372,16 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
   // the BLE disconnect notice can drain.
   RTOS::delay_ms(SHUTDOWN_POWER_OFF_SETTLE_MS);
 
-  // 5. Ship mode → deep sleep fallback.
+  // 5. User shutdown on USB reboots into the existing charging-only path.
+  if (reason == ShipModeRequest::None &&
+      bms_power_source_has_external_input(_latest_power.charger_status.power_source)) {
+    RtcAppState state = snapshot_state();
+    state.set_flag(RtcAppFlag::ChargingOnlyRequested, true);
+    _svc.power_service.save_state(state);
+    AG_LOGI(TAG, "shutdown: rebooting into charging-only mode");
+    _svc.power_service.reboot();
+    return;
+  }
   _svc.power_service.shutdown(); // BMS QoN — does not return
 }
 
@@ -2118,7 +2397,7 @@ void Orchestrator::on_ble_connected() {
 
   // Seed characteristics for the new client (Read is authoritative on connect).
   _svc.ble_service.notify_measures(_raw_measures, _latest_gps, time(nullptr));
-  _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(), _tracking_session_id);
+  _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_session_id, _tracking_state);
   _svc.ble_service.update_config(_settings);
 
   request_background_display_update(/*wait=*/true);
@@ -2147,7 +2426,7 @@ void Orchestrator::on_ble_auth_complete(bool success) {
       leave_session_to_home();
     } else {
       // Back to the first-boot guide (session is boot-originated); keep the
-      // session so a retry can succeed or "Start using" can dismiss.
+      // session so a retry can succeed or an Enter hold can dismiss.
       _svc.ui_manager.show_getting_started(/*from_boot=*/true);
       update_display(/*wait=*/true);
     }
@@ -2244,7 +2523,7 @@ void Orchestrator::on_ble_config_write() {
       }
     } break;
     case BleCommand::StartTracking: {
-      if (_tracking_active) {
+      if (tracking_session_active(_tracking_state)) {
         _svc.ble_service.notify_command_result(result.cmd, false, BLE_VAL_ERR_ALREADY_TRACKING);
         break;
       }
@@ -2255,10 +2534,25 @@ void Orchestrator::on_ble_config_write() {
                                              ok ? nullptr : BLE_VAL_ERR_FLASH_ERROR);
     } break;
     case BleCommand::StopTracking: {
-      const bool was_tracking = _tracking_active;
+      const bool was_tracking = tracking_session_active(_tracking_state);
       stop_tracking();
       _svc.ble_service.notify_command_result(result.cmd, was_tracking,
                                              was_tracking ? nullptr : BLE_VAL_ERR_NOT_TRACKING);
+    } break;
+    case BleCommand::PauseTracking:
+    case BleCommand::ResumeTracking: {
+      if (!tracking_session_active(_tracking_state)) {
+        _svc.ble_service.notify_command_result(result.cmd, false, BLE_VAL_ERR_NOT_TRACKING);
+        break;
+      }
+      bool ok = false;
+      if (result.cmd == BleCommand::PauseTracking) {
+        ok = pause_tracking();
+      } else {
+        ok = resume_tracking();
+      }
+      _svc.ble_service.notify_command_result(result.cmd, ok,
+                                             ok ? nullptr : BLE_VAL_ERR_FLASH_ERROR);
     } break;
     case BleCommand::SetAiding: {
       const bool has_time = has_aiding_time(result.aiding);
@@ -2327,12 +2621,12 @@ void Orchestrator::on_ble_history_write() {
     break;
   case BleHistoryOp::Delete:
     AG_LOGI(TAG, "BLE history: delete session %" PRIu32, result.session_id);
-    if (_tracking_active && _tracking_session_id == result.session_id) {
+    if (tracking_session_active(_tracking_state) && _tracking_session_id == result.session_id) {
       _svc.ble_service.notify_history_error(BLE_VAL_ERR_SESSION_ACTIVE);
     } else {
       _svc.ble_service.handle_history_delete(result.session_id);
-      _svc.ble_service.update_status(_latest_power, _latest_gps, is_recording(),
-                                     _tracking_session_id);
+      _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_session_id,
+                                     _tracking_state);
     }
     break;
   case BleHistoryOp::Invalid:
@@ -2427,15 +2721,19 @@ void Orchestrator::enter_stationary() {
   // is due as soon as the connection settles, not one hour after entry.
   _last_ota_check_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - OTA_WIFI_CHECK_INTERVAL_MS;
 
-  if (_svc.wifi.has_saved_networks()) {
+  if (_manufacturing_mode) {
+    AG_LOGI(TAG, "stationary: manufacturing — trying default Wi-Fi");
+    _svc.ui_manager.show_info("Trying default Wi-Fi...");
+    _svc.wifi.try_default_fallback_credentials();
+  } else if (_svc.wifi.has_saved_networks()) {
     const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
     AG_LOGI(TAG, "stationary: saved credentials %s static IP", ip != nullptr ? "with" : "without");
     _svc.ui_manager.show_info("Connecting to saved Wi-Fi...");
     _svc.wifi.connect_with_saved_credentials(ip);
   } else {
-    AG_LOGI(TAG, "stationary: no credentials — trying default fallback");
-    _svc.ui_manager.show_info("Trying default Wi-Fi...");
-    _svc.wifi.try_default_fallback_credentials();
+    AG_LOGI(TAG, "stationary: no credentials — opening provisioning");
+    enter_provisioning_page(ProvisioningTransport::BleOnly);
+    return;
   }
 
   // Full refresh — entering the setup session boundary.  wait=true so
@@ -2470,8 +2768,7 @@ void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
   _svc.local_api.set_access(ConfigAccess::Disabled);
   discard_local_requests("entering provisioning");
   // Idempotent — no-op if Info already set up the session; otherwise
-  // performs silent unlock + snackbar clear so a post-online auth_failed
-  // entry from Home lands on the page in a clean state.
+  // performs silent unlock + snackbar clear for direct entry without credentials.
   begin_session_if_needed();
 
   // Stop the on-Info bring-up arm from acting on any further events
@@ -2620,7 +2917,24 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
     return;
   }
 
-  // Bring-up (before first IP): provisioning is the fallback. The connectivity
+  if (_manufacturing_mode) {
+    // Early failures leave the bounded factory attempt armed. Only its expiry
+    // ends the session; a successful IP routes through runtime policy above.
+    if (reason == WifiDisconnectReason::requested_by_user || _svc.wifi.is_connecting()) {
+      return;
+    }
+    AG_LOGW(TAG, "manufacturing Wi-Fi timed out; showing failure before reboot");
+    _bring_up_pending = false;
+    _svc.wifi.shutdown();
+    _svc.ui_manager.show_info("Wi-Fi connection failed");
+    update_display(/*wait=*/true);
+    _svc.display_service.flush();
+    RTOS::delay_ms(STA_RESULT_HOLD_MS);
+    reboot();
+    return;
+  }
+
+  // Normal bring-up (before first IP): provisioning is the fallback. Connectivity
   // reasons reach here only after the WifiManager retry budget / connect
   // window are spent; auth_failed routes here immediately (bad creds).
   // ap_disconnected / handshake_failed / unknown stay — the window
@@ -2816,7 +3130,11 @@ void Orchestrator::pause_provisioning_sensitive_services() {
     return;
   }
   AG_LOGI(TAG, "pausing network-sensitive services");
+  clear_refresh();
   _svc.sensor_producer.stop(/*sleep_pm=*/true);
+  _measurement_pending = false;
+  _pm_state = PmState::Asleep;
+  finish_peripheral_test();
   if (is_gps_active()) {
     _svc.gps_service.stop_and_idle_gnss();
   }
@@ -2832,13 +3150,14 @@ void Orchestrator::resume_provisioning_sensitive_services() {
   AG_LOGI(TAG, "resuming network-sensitive services");
   _svc.power_service.set_pm_power(true);
   _svc.sensor_producer.start();
+  _pm_state = PmState::Preparing;
   if (is_gps_active()) {
     _svc.gps_service.start();
   }
   _provisioning_sensitive_services_paused = false;
   // One immediate measurement so the display refreshes promptly after
   // the resume rather than waiting for the next scheduled tick.
-  _svc.sensor_producer.request_measurement(1, SensorGroup::All);
+  start_measurement(MeasurementOrigin::Scheduled);
   log_heap(TAG, "prov.resume-sensitive:exit");
 }
 
@@ -2961,24 +3280,27 @@ void Orchestrator::exit_ota(const char *snackbar) {
 // Display
 // ---------------------------------------------------------------------------
 
-void Orchestrator::update_display() { update_display(false); }
+bool Orchestrator::update_display() { return update_display(false); }
 
-void Orchestrator::update_display(bool wait) {
+bool Orchestrator::update_display(bool wait) {
+  _svc.ui_manager.sync_tracking_state(_tracking_state);
   uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
   _svc.ui_manager.clear_expired_snackbar(now_ms);
   BuildContext ctx = build_context();
   DisplayValues values = _svc.ui_manager.build_values(ctx);
-  _svc.display_service.update(values, wait);
+  const bool accepted = _svc.display_service.update(values, wait);
 
   // Schedule a follow-up refresh to visually clear the snackbar after it
   // expires.  Only arm once per snackbar — intermediate update_display()
   // calls (from sensor data, input, etc.) that happen before the deadline
   // naturally clear it and the timer fires as a harmless no-op.
-  if (values.snackbar_text != nullptr && _snackbar_refresh_deadline_ms == 0) {
+  if (values.snackbar_text != nullptr && !_svc.ui_manager.snackbar_persistent() &&
+      _snackbar_refresh_deadline_ms == 0) {
     _snackbar_refresh_deadline_ms = now_ms + SNACKBAR_DURATION_MS + 200;
   }
 
   AG_LOGI(TAG, "display update done");
+  return accepted;
 }
 
 void Orchestrator::request_background_display_update(bool wait) {
@@ -3030,6 +3352,16 @@ BuildContext Orchestrator::build_context() const {
   const uint32_t gps_ttff_secs =
       (gps_ttff_fixed ? _gps_ttff_ms : (now_ms - _gps_test_entry_ms)) / 1000;
 
+  TrackingStatusSnapshot tracking_status{};
+  if (tracking_status_refresh_allowed()) {
+    const uint32_t now_s = tracking_seconds_from_ms(RTOS::get_retained_time_ms());
+    tracking_status.recording_s = tracking_recording_s(_tracking_timing, now_s);
+    tracking_status.elapsed_s = tracking_elapsed_s(_tracking_timing, now_s);
+    tracking_status.last_record_age_s = tracking_last_record_age_s(_tracking_timing, now_s);
+    tracking_status.point_count_known = _svc.storage_service.try_get_session_point_count(
+        _tracking_session_id, tracking_status.point_count);
+  }
+
   return BuildContext{
       .sensor_data = _display_measures,
       .battery_pct = battery_pct,
@@ -3045,7 +3377,7 @@ BuildContext Orchestrator::build_context() const {
       .wifi_connected = (_mode == OperatingMode::Stationary) && _svc.wifi.is_online(),
       .gps_enabled = is_gps_active(),
       .gps_fix = is_fix_valid(_latest_gps.fix),
-      .tracking_active = _tracking_active,
+      .tracking_state = _tracking_state,
       .display_off = false,
       .use_fahrenheit = _settings.use_fahrenheit,
       .use_feet = _settings.use_feet,
@@ -3064,6 +3396,7 @@ BuildContext Orchestrator::build_context() const {
       .accel_magnitude_mg = _accel_magnitude_mg,
       .accel_read_ok = _accel_read_ok,
       .accel_pass = _accel_pass,
+      .tracking_status = tracking_status,
   };
 }
 
@@ -3090,9 +3423,13 @@ void Orchestrator::try_enter_sleep() {
 
 void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   AG_LOGI(TAG, "prepare_for_sleep");
+  _tracking_status_refresh_armed = false;
+  _svc.accel_service.stop();
+  clear_refresh();
   log_heap(TAG, "sleep.prepare:enter");
 
   // Ensure pending display refresh completes before stopping worker
+  _svc.ui_manager.sync_tracking_state(_tracking_state);
   _svc.ui_manager.clear_expired_snackbar(static_cast<uint32_t>(RTOS::get_time_ms()));
   BuildContext ctx = build_context();
   DisplayValues values = _svc.ui_manager.build_values(ctx);
@@ -3131,7 +3468,7 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 
   // Persist RTC state with the warm-sensor flag for the next wake cycle.
   RtcAppState state = snapshot_state();
-  state.sensors_warm = hold_pm_sensor;
+  state.set_flag(RtcAppFlag::SensorsWarm, hold_pm_sensor);
   _svc.power_service.save_state(state);
 
   // Reset external watchdog last — gives it the full timeout window during sleep.
@@ -3159,11 +3496,11 @@ bool Orchestrator::is_gps_active() const {
     return true;
   }
   // GpsMode::OnWhenTracking
-  return _tracking_active;
+  return tracking_session_active(_tracking_state);
 }
 
 bool Orchestrator::is_recording() const {
-  return _tracking_active && _svc.storage_service.is_route_active();
+  return _tracking_state == TrackingState::Recording && _svc.storage_service.is_route_active();
 }
 
 uint32_t Orchestrator::generate_session_id() {
@@ -3182,12 +3519,15 @@ uint32_t Orchestrator::generate_session_id() {
 }
 
 RtcAppState Orchestrator::snapshot_state() const {
-  return RtcAppState{
+  RtcAppState state{
       .mode = _mode,
       .behavior = _behavior,
       .lock_state = _lock_state,
-      .gps_enabled = _gps_enabled,
-      .tracking_active = _tracking_active,
+      .tracking_state = _tracking_state,
       .tracking_session_id = _tracking_session_id,
+      .tracking_timing =
+          tracking_session_active(_tracking_state) ? _tracking_timing : TrackingTiming{},
   };
+  state.set_flag(RtcAppFlag::GpsEnabled, _gps_enabled);
+  return state;
 }

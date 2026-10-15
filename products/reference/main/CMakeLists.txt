@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS "main.cpp"
+         "test_accel.cpp"
          "reference_settings.cpp"
          "test_airgradient_client.cpp"
          "test_config.cpp"
@@ -35,6 +36,7 @@ idf_component_register(
              airgradient-wifi
              esp_driver_gpio
              esp_driver_i2c
+             esp_driver_ledc
              esp_driver_spi
              esp_event
              esp_http_server

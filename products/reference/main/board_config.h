@@ -65,6 +65,12 @@ inline constexpr gpio_num_t PIN_NAND_CLK = GPIO_NUM_23;
 // ---------------------------------------------------------------------------
 #elif defined(BOARD_GO)
 
+// LIS2DH12 diagnostic: Go INT1 -> GPIO3, external watchdog -> GPIO2.
+inline constexpr gpio_num_t PIN_ACCEL_INT = GPIO_NUM_3;
+inline constexpr gpio_num_t PIN_ACCEL_TEST_WDT = GPIO_NUM_2;
+inline constexpr uint8_t I2C_ADDR_ACCEL_TEST = 0x18;
+inline constexpr gpio_num_t PIN_ACCEL_TEST_BUZZER = GPIO_NUM_8;
+
 // GPIO — board power rails and control lines
 inline constexpr gpio_num_t PIN_EN_PM = GPIO_NUM_26;
 

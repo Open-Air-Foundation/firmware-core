@@ -184,6 +184,8 @@ static RoutePoint make_route_point(int seed) {
   p.timestamp = static_cast<time_t>(1000 + seed);
   p.gps.position.latitude = static_cast<double>(seed);
   p.gps.position.longitude = static_cast<double>(seed) + 0.5;
+  p.gps.altitude_m = static_cast<float>(seed) + 100.0f;
+  p.gps.fix.fix_type = GpsFixType::Fix3D;
   p.sensors = make_valid_entry(seed);
   return p;
 }
@@ -448,6 +450,59 @@ TEST_CASE("Route: append_route_point", "[StorageService][route]") {
     }
 
     svc.end_route();
+  }
+
+  SECTION("fix loss clears stored coordinates until a valid fix returns") {
+    constexpr uint32_t SESSION_ID = 33333;
+    RoutePoint first = make_route_point(7);
+    first.gps.fix.fix_type = GpsFixType::Fix2D;
+    RoutePoint lost = make_route_point(8);
+    lost.gps.position = first.gps.position;
+    lost.gps.altitude_m = first.gps.altitude_m;
+    lost.gps.fix.fix_type = GpsFixType::NoFix;
+    lost.gps.fix.satellite_count = 3;
+    lost.battery_percentage = 75.0f;
+    const RoutePoint regained = make_route_point(9);
+
+    REQUIRE(svc.create_route(SESSION_ID));
+    REQUIRE(svc.append_route_point(first));
+    REQUIRE(svc.append_route_point(lost));
+    REQUIRE(svc.append_route_point(regained));
+    CHECK(svc.current_route_point_count() == 3);
+    REQUIRE(svc.end_route());
+
+    const std::string path = tmp / "routes/route_33333.bin";
+    FILE *f = fopen(path.c_str(), "rb");
+    REQUIRE(f != nullptr);
+    RoutePoint points[3]{};
+    const size_t count = fread(points, sizeof(RoutePoint), 3, f);
+    fclose(f);
+    REQUIRE(count == 3);
+
+    CHECK(points[0].gps.fix.fix_type == GpsFixType::Fix2D);
+    CHECK(points[0].gps.position.latitude == first.gps.position.latitude);
+    CHECK(points[0].gps.position.longitude == first.gps.position.longitude);
+    CHECK(points[0].gps.altitude_m == first.gps.altitude_m);
+
+    CHECK(points[1].gps.fix.fix_type == GpsFixType::NoFix);
+    CHECK(points[1].gps.position.latitude == GPS_LATITUDE_INVALID);
+    CHECK(points[1].gps.position.longitude == GPS_LONGITUDE_INVALID);
+    CHECK(points[1].gps.altitude_m == GPS_ALTITUDE_INVALID);
+    CHECK(points[1].gps.fix.satellite_count == lost.gps.fix.satellite_count);
+    CHECK(points[1].timestamp == lost.timestamp);
+    CHECK(points[1].sensors.temp_hum_a.temperature == lost.sensors.temp_hum_a.temperature);
+    CHECK(points[1].sensors.temp_hum_a.humidity == lost.sensors.temp_hum_a.humidity);
+    CHECK(points[1].sensors.pm_a.pm_25 == lost.sensors.pm_a.pm_25);
+    CHECK(points[1].sensors.co2.co2 == lost.sensors.co2.co2);
+    CHECK(points[1].battery_percentage == lost.battery_percentage);
+
+    CHECK(points[2].gps.fix.fix_type == GpsFixType::Fix3D);
+    CHECK(points[2].gps.position.latitude == regained.gps.position.latitude);
+    CHECK(points[2].gps.position.longitude == regained.gps.position.longitude);
+    CHECK(points[2].gps.altitude_m == regained.gps.altitude_m);
+    CHECK(lost.gps.position.latitude == first.gps.position.latitude);
+    CHECK(lost.gps.position.longitude == first.gps.position.longitude);
+    CHECK(lost.gps.altitude_m == first.gps.altitude_m);
   }
 
   SECTION("binary round-trip: written RoutePoints match field-by-field when read back") {
@@ -799,6 +854,29 @@ TEST_CASE("Route: durability budget", "[StorageService][route][durability]") {
   svc.set_test_seam(&seam);
   s_fake_rtos.set(0);
 
+  SECTION("pause close reports sync failure but releases the route") {
+    REQUIRE(svc.create_route(40001));
+    seam.fsync_return = -1;
+    CHECK_FALSE(svc.end_route());
+    CHECK_FALSE(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == 0);
+    CHECK(svc.route_file_exists(40001));
+    seam.fsync_return = 0;
+    REQUIRE(svc.resume_route(40001));
+    CHECK(svc.end_route());
+    CHECK(svc.end_route());
+  }
+
+  SECTION("pause close reports fflush failure and allows a later resume") {
+    REQUIRE(svc.create_route(40001));
+    seam.fflush_return = -1;
+    CHECK_FALSE(svc.end_route());
+    CHECK_FALSE(svc.is_route_active());
+    seam.fflush_return = 0;
+    CHECK(svc.resume_route(40001));
+    CHECK(svc.end_route());
+  }
+
   SECTION("empty-file fsync: create_route flushes + fsyncs before returning") {
     REQUIRE(svc.create_route(40001));
     // Pre-append: counts must already reflect the create-time sync.
@@ -938,6 +1016,163 @@ TEST_CASE("Route: durability budget", "[StorageService][route][durability]") {
     CHECK(seam.fflush_count == before_end_flush + 1);
     CHECK(seam.fsync_count == before_end_sync + 1);
   }
+}
+
+// ============================================================================
+// TEST CASE — Route: on-demand point count
+// ============================================================================
+
+TEST_CASE("Route: on-demand point count", "[StorageService][route][point-count]") {
+  TempDir tmp;
+  StubPayloadCacheStorage stub_storage;
+  PayloadCache cache(stub_storage, 16);
+  FakeNandStorage fake_nand(tmp.path);
+  StorageService svc(cache, fake_nand);
+  constexpr uint32_t SESSION_ID = 12345;
+  constexpr uint32_t UNCHANGED_COUNT = 99;
+  uint32_t count = UNCHANGED_COUNT;
+  s_fake_rtos.set(0);
+
+  SECTION("empty open and closed sessions succeed with zero") {
+    REQUIRE(svc.create_route(SESSION_ID));
+    CHECK(svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == 0);
+    REQUIRE(svc.end_route());
+    count = UNCHANGED_COUNT;
+    CHECK(svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == 0);
+  }
+
+  SECTION("missing file fails without changing output or creating files") {
+    CHECK_FALSE(svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == UNCHANGED_COUNT);
+    CHECK_FALSE(std::filesystem::exists(tmp / "routes"));
+  }
+
+  SECTION("unmounted NAND preserves output even with a matching writer") {
+    MockNandStorage nand;
+    bool mounted = true;
+    ALLOW_CALL(nand, is_mounted()).LR_RETURN(mounted);
+    ALLOW_CALL(nand, mount_path()).LR_RETURN(tmp.path);
+    StorageService mounted_svc(cache, nand);
+    REQUIRE(mounted_svc.create_route(SESSION_ID));
+    REQUIRE(mounted_svc.append_route_point(make_route_point(1)));
+    mounted = false;
+
+    CHECK_FALSE(mounted_svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == UNCHANGED_COUNT);
+    REQUIRE(mounted_svc.end_route());
+    CHECK_FALSE(mounted_svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == UNCHANGED_COUNT);
+  }
+
+  SECTION("active writer includes buffered points without flushing or syncing") {
+    REQUIRE(svc.create_route(SESSION_ID));
+    REQUIRE(svc.append_route_point(make_route_point(1))); // First append syncs.
+    REQUIRE(svc.append_route_point(make_route_point(2))); // Inside the sync budget.
+    const std::string path = tmp / "routes/route_12345.bin";
+    const auto size_before = std::filesystem::file_size(path);
+    REQUIRE(size_before == sizeof(RoutePoint));
+    REQUIRE(svc.current_route_point_count() == 2);
+
+    StorageTestSeam seam{};
+    svc.set_test_seam(&seam);
+    CHECK(svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == 2);
+    CHECK(seam.fflush_count == 0);
+    CHECK(seam.fsync_count == 0);
+    CHECK(std::filesystem::file_size(path) == size_before);
+    CHECK(svc.get_session_point_count(SESSION_ID) == 1);
+    CHECK(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == SESSION_ID);
+    svc.set_test_seam(nullptr);
+    REQUIRE(svc.end_route());
+  }
+
+  SECTION("paused closed session derives count from file without reopening") {
+    REQUIRE(svc.create_route(SESSION_ID));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    REQUIRE(svc.append_route_point(make_route_point(2)));
+    REQUIRE(svc.end_route());
+    StorageService restored_svc(cache, fake_nand);
+
+    CHECK(restored_svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == 2);
+    CHECK_FALSE(restored_svc.is_route_active());
+    CHECK(restored_svc.current_route_point_count() == 0);
+    CHECK(restored_svc.current_route_session_id() == 0);
+  }
+
+  SECTION("another session uses its file count while a writer stays open") {
+    constexpr uint32_t OTHER_SESSION_ID = 23456;
+    REQUIRE(svc.create_route(OTHER_SESSION_ID));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    REQUIRE(svc.end_route());
+    REQUIRE(svc.create_route(SESSION_ID));
+    REQUIRE(svc.append_route_point(make_route_point(2)));
+    REQUIRE(svc.append_route_point(make_route_point(3)));
+
+    StorageTestSeam seam{};
+    svc.set_test_seam(&seam);
+    CHECK(svc.try_get_session_point_count(OTHER_SESSION_ID, count));
+    CHECK(count == 1);
+    CHECK_FALSE(svc.try_get_session_point_count(34567, count));
+    CHECK(count == 1);
+    CHECK(seam.fflush_count == 0);
+    CHECK(seam.fsync_count == 0);
+    CHECK(svc.is_route_active());
+    CHECK(svc.current_route_session_id() == SESSION_ID);
+    CHECK(svc.current_route_point_count() == 2);
+    svc.set_test_seam(nullptr);
+    REQUIRE(svc.end_route());
+  }
+
+  SECTION("torn trailing bytes are excluded without truncating the file") {
+    REQUIRE(svc.create_route(SESSION_ID));
+    REQUIRE(svc.append_route_point(make_route_point(1)));
+    REQUIRE(svc.end_route());
+    const std::string path = tmp / "routes/route_12345.bin";
+    constexpr size_t TORN_SIZE = sizeof(RoutePoint) + sizeof(RoutePoint) / 2;
+    std::filesystem::resize_file(path, TORN_SIZE);
+
+    CHECK(svc.try_get_session_point_count(SESSION_ID, count));
+    CHECK(count == 1);
+    CHECK(std::filesystem::file_size(path) == TORN_SIZE);
+    CHECK_FALSE(svc.is_route_active());
+  }
+}
+
+TEST_CASE("Route: complete writes count despite sync failure",
+          "[StorageService][route][durability][point-count]") {
+  TempDir tmp;
+  StubPayloadCacheStorage stub_storage;
+  PayloadCache cache(stub_storage, 16);
+  FakeNandStorage fake_nand(tmp.path);
+  StorageService svc(cache, fake_nand);
+  StorageTestSeam seam{};
+  svc.set_test_seam(&seam);
+  s_fake_rtos.set(0);
+  constexpr uint32_t SESSION_ID = 12345;
+  REQUIRE(svc.create_route(SESSION_ID));
+  REQUIRE(svc.append_route_point(make_route_point(1)));
+  REQUIRE(svc.current_route_point_count() == 1);
+  s_fake_rtos.advance(CONFIG_TRACKING_FSYNC_INTERVAL_MS);
+
+  SECTION("fflush failure") { seam.fflush_return = -1; }
+  SECTION("fsync failure") { seam.fsync_return = -1; }
+
+  CHECK_FALSE(svc.append_route_point(make_route_point(2)));
+  CHECK(svc.current_route_point_count() == 2);
+  const int flush_count = seam.fflush_count;
+  const int sync_count = seam.fsync_count;
+  uint32_t count = 0;
+  CHECK(svc.try_get_session_point_count(SESSION_ID, count));
+  CHECK(count == 2);
+  CHECK(seam.fflush_count == flush_count);
+  CHECK(seam.fsync_count == sync_count);
+  CHECK(svc.is_route_active());
+  svc.set_test_seam(nullptr);
+  REQUIRE(svc.end_route());
 }
 
 // ============================================================================

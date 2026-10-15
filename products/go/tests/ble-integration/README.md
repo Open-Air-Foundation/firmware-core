@@ -14,13 +14,13 @@ history download state machine.
 
 ## Install
 
-```bash
+```sh
 pip install -e products/go/tests/ble-integration
 ```
 
 ## Run
 
-```bash
+```sh
 # Auto-scan for a device whose name starts with "AirGradient Go "
 pytest products/go/tests/ble-integration/ -v
 
@@ -44,7 +44,7 @@ pytest products/go/tests/ble-integration/test_measures.py -v
 All reads, writes, and notifications are logged at `DEBUG` level under the
 `ago_ble_test` logger. Pass `--log-cli-level=DEBUG` to print them live:
 
-```bash
+```sh
 pytest products/go/tests/ble-integration/ -v --log-cli-level=DEBUG
 ```
 
@@ -79,13 +79,15 @@ single notification, then validates it across all tests:
 - GPS fields follow the grouping rule: `fix`+`sat` always appear together;
   position fields only appear when the fix group is present
 
-### `test_status.py` — Status Characteristic (6 tests)
+### `test_status.py` — Status Characteristic (7 Tests)
 
 Reads the Status characteristic once (module-scoped fixture), then validates
 the payload across all tests:
 
-- Payload is a 9-key CBOR map with all expected keys
+- Payload is a 10-key CBOR map with all expected keys, including `trk`
 - Field types match the spec (uint, float, str, bool)
+- `trk` is an integer enum: 0 = Idle, 1 = Recording, 2 = Paused; the legacy
+  `tracking` boolean and session ID agree with that state
 - `"charging"` is a known enum string
 - `"bat_pct"` is in 0-100 range
 - `"bat_v"` is non-negative
@@ -95,15 +97,21 @@ The firmware version is no longer part of Status; it is validated via DIS
 
 ### `test_status_notify.py` — Status NOTIFY (tracking transitions)
 
-Verifies the device pushes Status only on urgent tracking transitions, and that
-each push is a **delta** carrying just `{tracking, session}` while a Status READ
-still returns the full 9-key snapshot:
+Verifies tracking transitions through the existing Status and Config
+characteristics. Each tracking push is a **delta** carrying
+`{tracking, session, trk}`, while Status READ returns the full 10-key snapshot:
 
-- `start_tracking` → Status delta `tracking=true`, `session>0`; matching Config
-  `cmd_result`; READ returns all 9 keys
-- `stop_tracking` → Status delta `tracking=false`, `session=0`; READ returns all
-  9 keys
+- `start_tracking` → `tracking=true`, `session>0`, `trk=1`; matching Config
+  `cmd_result`; READ returns all 10 keys
+- `stop_tracking` → `tracking=false`, `session=0`, `trk=0`; READ agrees
+- `pause_tracking` / `resume_tracking` → `trk=2` / `trk=1`; `tracking` remains
+  true and the session ID stays unchanged in both NOTIFY and READ; each command
+  has a matching successful Config result
 - a redundant `start_tracking` (already tracking) sends no spurious Status NOTIFY
+
+The BLE `tracking` field will be deprecated soon. Clients should use `trk`;
+the tests continue checking `tracking` because the current firmware retains it
+for compatibility. See the [BLE client guide](../../go_ble_client.md#6-status-characteristic).
 
 ### `test_config.py` — Config Characteristic (read/write/notify/command)
 

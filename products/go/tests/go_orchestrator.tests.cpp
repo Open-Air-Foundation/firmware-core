@@ -18,28 +18,46 @@
 #include <trompeloeil.hpp>
 #include <trompeloeil/mock.hpp>
 
+#include <functional>
 #include <memory>
 #include <set>
 #include <map>
 #include <string>
 
+#include "go_app.h"
 #include "go_ble_protocol.h"
 #include "go_board.h"
 #include "go_local_api.h"
 #include "go_orchestrator.h"
+#include "go_type_helpers.hpp"
+#include "go_accel_test_access.h"
 #include "services/ag_client.h"
 
 static constexpr uint32_t TEST_OTA_WIFI_CHECK_INTERVAL_MS = 3'600'000;
+
+static uint32_t reboot_count = 0;
+static std::function<void()> during_reboot;
+
+extern "C" void __wrap__Z6rebootv() {
+  ++reboot_count;
+  if (during_reboot) {
+    during_reboot();
+  }
+}
 
 // ============================================================================
 // External test_spy state (defined in go_orchestrator_stubs.cpp)
 // ============================================================================
 
 namespace test_spy {
+extern std::function<void()> during_melody;
+extern uint32_t buzzer_refresh_ack_count;
+extern uint32_t retained_time_read_count;
 extern bool sensor_started;
 extern bool sensor_stopped;
 extern bool sensor_stop_sleep_pm;
 extern bool measurement_requested;
+extern MeasurementOrigin last_measurement_origin;
 extern uint8_t last_iterations;
 extern SensorGroup last_groups;
 extern bool co2_calibration_requested;
@@ -62,9 +80,6 @@ extern bool input_started;
 extern bool input_stopped;
 
 // --- LedService ---
-extern uint32_t led_front_brightness_count;
-extern LedBrightness led_last_front_brightness;
-extern bool led_front_bright_seen;
 extern uint32_t led_back_brightness_count;
 extern LedBrightness led_last_back_brightness;
 extern bool led_back_bright_seen;
@@ -98,11 +113,19 @@ extern bool clear_routes_result;
 extern bool create_route_result;
 extern bool resume_route_result;
 extern bool append_route_point_result;
+extern bool append_accepts_before_error;
+extern std::map<uint32_t, uint32_t> route_point_counts;
+extern uint32_t session_point_count_query_count;
+extern uint32_t session_point_count_query_id;
+extern bool session_point_count_query_success;
+extern bool end_route_result;
+extern TrackingState ble_tracking_state;
 extern std::set<uint32_t> existing_route_session_ids;
 
 extern bool bms_polled;
 extern uint32_t bms_poll_count;
 extern bool shutdown_called;
+extern bool power_reboot_called;
 extern bool state_saved;
 extern RtcAppState last_saved_state;
 extern RtcAppState state_to_load;
@@ -209,6 +232,7 @@ extern uint32_t wifi_stop_local_endpoint_count;
 extern bool wifi_tick_called;
 extern uint32_t wifi_next_deadline_ms;
 extern bool wifi_is_online;
+extern bool wifi_is_connecting;
 extern bool wifi_has_been_online;
 extern int wifi_rssi;
 extern bool wifi_schedule_reconnect_called;
@@ -255,10 +279,23 @@ class MockRTOS : public trompeloeil::mock_interface<RTOS> {
 public:
   IMPLEMENT_MOCK1(delay_ms_impl);
   IMPLEMENT_MOCK0(get_time_ms_impl);
+  uint64_t retained_time_ms = 0;
+  uint64_t get_retained_time_ms_impl() override {
+    ++test_spy::retained_time_read_count;
+    return retained_time_ms;
+  }
 
   void set_system_time_from_epoch_impl(int64_t epoch_seconds) override {
     system_time_set = true;
     system_time_epoch = epoch_seconds;
+  }
+
+  AccelService *accel_worker = nullptr;
+  bool queue_receive_impl(RtosQueueHandle queue, void *item, uint32_t timeout_ms) override {
+    if (accel_worker != nullptr && AccelServiceTestAccess::is_reply_queue(*accel_worker, queue)) {
+      AccelServiceTestAccess::process_pending(*accel_worker);
+    }
+    return RTOS::queue_receive_impl(queue, item, timeout_ms);
   }
 
   bool system_time_set = false;
@@ -331,14 +368,39 @@ public:
   AccelReading reading{};
   bool read_result = true;
   int read_calls = 0;
+  int power_down_calls = 0;
+  int configure_calls = 0;
+  bool configure_result = true;
+  bool ready = true;
+  AccelConfig last_config{};
 
+  bool configure(const AccelConfig &config) override {
+    ++configure_calls;
+    last_config = config;
+    return configure_result;
+  }
+  bool read_interrupt(bool &active) override {
+    active = false;
+    return true;
+  }
+  bool power_down() override {
+    ++power_down_calls;
+    return true;
+  }
   bool init() override { return who_am_i_value == expected_value; }
   uint8_t who_am_i() override { return who_am_i_value; }
   uint8_t expected_who_am_i() const override { return expected_value; }
-  bool read(AccelReading &out) override {
+  AccelReadResult read(AccelReading &out) override {
     ++read_calls;
+    out = {};
+    if (!read_result) {
+      return AccelReadResult::Error;
+    }
+    if (!ready) {
+      return AccelReadResult::NotReady;
+    }
     out = reading;
-    return read_result;
+    return AccelReadResult::Ready;
   }
 };
 
@@ -459,11 +521,13 @@ class OrchestratorTestAccess {
 public:
   static void dispatch(Orchestrator &o, const Event &evt) { o.dispatch(evt); }
   static void check_timers(Orchestrator &o) { o.check_timers(); }
+  static bool auto_lock_allowed(const Orchestrator &o) { return o.auto_lock_allowed(); }
   static uint32_t compute_queue_timeout_ms(const Orchestrator &o) {
     return o.compute_queue_timeout_ms();
   }
 
   static BuildContext build_context(const Orchestrator &o) { return o.build_context(); }
+  static bool update_display(Orchestrator &o, bool wait = false) { return o.update_display(wait); }
   static RtcAppState snapshot_state(const Orchestrator &o) { return o.snapshot_state(); }
 
   // State readers
@@ -471,8 +535,14 @@ public:
   static Behavior behavior(const Orchestrator &o) { return o._behavior; }
   static LockState lock_state(const Orchestrator &o) { return o._lock_state; }
   static bool gps_enabled(const Orchestrator &o) { return o._gps_enabled; }
-  static bool tracking_active(const Orchestrator &o) { return o._tracking_active; }
+  static bool tracking_active(const Orchestrator &o) {
+    return tracking_session_active(o._tracking_state);
+  }
   static uint32_t tracking_session_id(const Orchestrator &o) { return o._tracking_session_id; }
+  static const TrackingTiming &tracking_timing(const Orchestrator &o) { return o._tracking_timing; }
+  static void set_tracking_timing(Orchestrator &o, const TrackingTiming &timing) {
+    o._tracking_timing = timing;
+  }
   static bool first_measurement_done(const Orchestrator &o) { return o._first_measurement_done; }
   static const MeasuresAGo &cached_measures(const Orchestrator &o) { return o._raw_measures; }
   static const MeasuresAGo &raw_measures(const Orchestrator &o) { return o._raw_measures; }
@@ -482,6 +552,12 @@ public:
   static const GpsData &latest_gps(const Orchestrator &o) { return o._latest_gps; }
   static const PowerSnapshot &latest_power(const Orchestrator &o) { return o._latest_power; }
   static uint32_t last_input_ms(const Orchestrator &o) { return o._last_input_ms; }
+  static bool tracking_status_refresh_armed(const Orchestrator &o) {
+    return o._tracking_status_refresh_armed;
+  }
+  static uint32_t tracking_status_refresh_deadline_ms(const Orchestrator &o) {
+    return o._tracking_status_refresh_deadline_ms;
+  }
   static uint32_t last_measurement_ms(const Orchestrator &o) { return o._last_measurement_ms; }
   static uint32_t snackbar_refresh_deadline_ms(const Orchestrator &o) {
     return o._snackbar_refresh_deadline_ms;
@@ -502,6 +578,14 @@ public:
   }
 
   // --- Accelerometer test flow ---
+  static void start_peripheral_test(Orchestrator &o) { o.start_peripheral_test(); }
+  static void finish_peripheral_test(Orchestrator &o) { o.finish_peripheral_test(); }
+  static void pause_sensitive_services(Orchestrator &o) {
+    o.pause_provisioning_sensitive_services();
+  }
+  static void resume_sensitive_services(Orchestrator &o) {
+    o.resume_provisioning_sensitive_services();
+  }
   static void start_accel_test(Orchestrator &o) { o.start_accel_test(); }
   static void poll_accel_test(Orchestrator &o) { o.poll_accel_test(); }
   static void finish_accel_test(Orchestrator &o) { o.finish_accel_test(); }
@@ -513,6 +597,9 @@ public:
   static void lock(Orchestrator &o) { o.lock(); }
   static void unlock(Orchestrator &o) { o.unlock(); }
   static bool start_tracking(Orchestrator &o) { return o.start_tracking(); }
+  static bool pause_tracking(Orchestrator &o) { return o.pause_tracking(); }
+  static bool resume_tracking(Orchestrator &o) { return o.resume_tracking(); }
+  static TrackingState tracking_state(const Orchestrator &o) { return o._tracking_state; }
   static void stop_tracking(Orchestrator &o) { o.stop_tracking(); }
   static bool clear_data(Orchestrator &o) { return o.clear_data(); }
   static bool factory_reset(Orchestrator &o) { return o.factory_reset(); }
@@ -537,7 +624,23 @@ public:
   }
   static void set_first_measurement_done(Orchestrator &o, bool v) { o._first_measurement_done = v; }
   static void set_latest_power(Orchestrator &o, const PowerSnapshot &v) { o._latest_power = v; }
-  static bool pm_prepare_sent(const Orchestrator &o) { return o._pm_prepare_sent; }
+  static bool pm_preparing(const Orchestrator &o) {
+    return o._pm_state == Orchestrator::PmState::Preparing;
+  }
+  static void sensor_ready(Orchestrator &o) {
+    o._pm_state = Orchestrator::PmState::Ready;
+    o._measurement_pending = false;
+  }
+  static void sensor_asleep(Orchestrator &o) {
+    sensor_ready(o);
+    o._pm_state = Orchestrator::PmState::Asleep;
+  }
+  static void sensor_sleeping(Orchestrator &o) {
+    sensor_ready(o);
+    o._pm_state = Orchestrator::PmState::Sleeping;
+  }
+  static void clear_refresh(Orchestrator &o) { o.clear_refresh(); }
+  static bool refresh_pending(const Orchestrator &o) { return o._refresh_pending; }
   static void change_mode(Orchestrator &o, OperatingMode mode) { o.change_mode(mode); }
   static void enter_manufacturing_mode(Orchestrator &o) { o.enter_manufacturing_mode(); }
   static bool manufacturing_mode(const Orchestrator &o) { return o._manufacturing_mode; }
@@ -631,6 +734,7 @@ struct TestFixture {
   StubGoBoard stub_board;
   PortableWifiProvisioner portable_provisioner;
   OtaService ota_service;
+  AccelService accel_service;
 
   Orchestrator::Services services;
   GoSettings settings;
@@ -641,7 +745,7 @@ struct TestFixture {
   std::unique_ptr<trompeloeil::expectation> _exp_get_float;
   std::unique_ptr<trompeloeil::expectation> _exp_set_float;
 
-  TestFixture()
+  explicit TestFixture(AccelSensor *accel_sensor = nullptr)
       : event_queue(mock_rtos.queue_create_impl(EVENT_QUEUE_DEPTH, sizeof(Event))),
         payload_cache(stub_cache_storage, 16),
         sensor_producer(reinterpret_cast<SensorManager &>(stub_sensor_mgr), nullptr,
@@ -666,12 +770,15 @@ struct TestFixture {
                               *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
                              PortableWifiProvisioner::Config{}),
         ota_service(stub_ble_server, power_service, OtaService::Config{}),
+        accel_service(accel_sensor, test_gpio_hal, event_queue, {.pin_int = 3}),
         services{sensor_producer,   gps_service,          input_service,        display_service,
                  led_service_inert, buzzer_service_inert, storage_service,      power_service,
                  ui_manager,        ble_service,          wifi_service,         cloud_service,
                  local_api,         serial_command,       portable_provisioner, stub_board,
-                 ota_service} {
+                 ota_service,       accel_service} {
     test_spy::reset();
+    reboot_count = 0;
+    during_reboot = nullptr;
     RTOS::set_instance(&mock_rtos);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
     _exp_delay = NAMED_ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
@@ -682,21 +789,67 @@ struct TestFixture {
   }
 
   ~TestFixture() {
+    during_reboot = nullptr;
+    accel_service.stop();
     mock_rtos.queue_delete_impl(event_queue);
     RTOS::set_instance(nullptr);
   }
 
   Orchestrator make_orchestrator() {
-    return {event_queue, services, settings, mock_config, "TEST00"};
+    Orchestrator orch{event_queue, services, settings, mock_config, "TEST00"};
+    // Tests that skip init() model a device whose boot warmup has completed.
+    A::sensor_ready(orch);
+    return orch;
   }
 
 private:
   alignas(8) static inline char _stub_buf[64];
 };
 
+// Execute the worker's real command handler cooperatively when the caller waits.
+struct AccelWorker {
+  TestFixture &fixture;
+  AccelService &service;
+  explicit AccelWorker(TestFixture &f) : fixture(f), service(f.accel_service) {
+    REQUIRE(AccelServiceTestAccess::initialize(service));
+    f.mock_rtos.accel_worker = &service;
+  }
+  ~AccelWorker() {
+    service.stop();
+    fixture.mock_rtos.accel_worker = nullptr;
+  }
+};
+
 // ============================================================================
 // 1. Pure Logic — is_gps_active
 // ============================================================================
+
+// Drive the actual input path while avoiding fixed menu row offsets.
+static void open_ui_row(TestFixture &f, Orchestrator &orch, const std::string &prefix) {
+  for (uint8_t step = 0; step < MAX_LIST_ROWS; ++step) {
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    REQUIRE(values.selected_row < values.row_count);
+    if (std::string(values.rows[values.selected_row].text).rfind(prefix, 0) == 0) {
+      A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+      return;
+    }
+    A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress});
+  }
+  FAIL("Menu row not found: " << prefix);
+}
+
+static void enter_settings(TestFixture &f, Orchestrator &orch) {
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+  A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+  open_ui_row(f, orch, "Settings");
+  REQUIRE(f.ui_manager.current_screen() == Screen::Settings);
+}
+
+static void enter_hardware_test(TestFixture &f, Orchestrator &orch) {
+  enter_settings(f, orch);
+  open_ui_row(f, orch, "Hardware Test");
+  REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
+}
 
 TEST_CASE("is_gps_active: GpsMode determines GPS activity", "[Orchestrator][pure]") {
   TestFixture f;
@@ -745,8 +898,8 @@ TEST_CASE("snapshot_state: captures current application state", "[Orchestrator][
   REQUIRE(state.mode == OperatingMode::Portable);
   REQUIRE(state.behavior == Behavior::Idle);
   REQUIRE(state.lock_state == LockState::Locked);
-  REQUIRE(state.gps_enabled == true);
-  REQUIRE(state.tracking_active == false);
+  REQUIRE(state.has_flag(RtcAppFlag::GpsEnabled) == true);
+  REQUIRE(state.tracking_state == TrackingState::Idle);
   REQUIRE(state.tracking_session_id == 0);
 }
 
@@ -788,30 +941,35 @@ TEST_CASE("init: temperature trip shuts down before interactive operation",
     TestFixture f;
     auto orch = f.make_orchestrator();
     test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverTemperature;
+    f.ui_manager.show_info(BOOT_SPLASH_TEXT);
 
     orch.init(WakeCause::PowerOn);
 
     CHECK(test_spy::shutdown_called);
     CHECK(f.ui_manager.current_screen() == Screen::ShutdownTemperature);
     CHECK_FALSE(test_spy::ble_init_called);
+    CHECK_FALSE(A::setup_session_active(orch));
   }
 
   SECTION("under-temperature uses the low-temperature page") {
     TestFixture f;
     auto orch = f.make_orchestrator();
     test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::UnderTemperature;
+    f.ui_manager.show_info(BOOT_SPLASH_TEXT);
 
     orch.init(WakeCause::PowerOn);
 
     CHECK(test_spy::shutdown_called);
     CHECK(f.ui_manager.current_screen() == Screen::ShutdownTemperatureLow);
     CHECK_FALSE(test_spy::ble_init_called);
+    CHECK_FALSE(A::setup_session_active(orch));
   }
 }
 
-TEST_CASE("init(PowerOn): cold-boot splash flag set when UIManager is on Screen::Info",
+TEST_CASE("init(PowerOn): onboarded device keeps cold-boot splash until first measurement",
           "[Orchestrator][init][boot-splash]") {
   TestFixture f;
+  f.settings.onboarding_done = true;
   auto orch = f.make_orchestrator();
 
   ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
@@ -878,6 +1036,7 @@ TEST_CASE("init: splash flag not set when boot already completed a measurement",
 TEST_CASE("on_sensor_data: first measurement clears splash and resets to Home when onboarded",
           "[Orchestrator][events][boot-splash]") {
   TestFixture f;
+  f.settings.onboarding_done = true;
   auto orch = f.make_orchestrator();
 
   ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
@@ -890,7 +1049,6 @@ TEST_CASE("on_sensor_data: first measurement clears splash and resets to Home wh
   f.ui_manager.show_info("Booting...");
   orch.init(WakeCause::PowerOn);
   // Onboarding already acknowledged — the gate hands off straight to Home.
-  A::settings(orch).onboarding_done = true;
   REQUIRE(A::boot_splash_active(orch));
   REQUIRE(f.ui_manager.current_screen() == Screen::Info);
 
@@ -903,8 +1061,8 @@ TEST_CASE("on_sensor_data: first measurement clears splash and resets to Home wh
   CHECK(f.ui_manager.current_screen() == Screen::Home);
 }
 
-TEST_CASE("on_sensor_data: first measurement shows Getting Started on a fresh first boot",
-          "[Orchestrator][events][boot-splash][onboarding]") {
+TEST_CASE("init(PowerOn): Getting Started is usable before the first measurement",
+          "[Orchestrator][init][boot-splash][onboarding]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
@@ -915,24 +1073,180 @@ TEST_CASE("on_sensor_data: first measurement shows Getting Started on a fresh fi
   ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
-  f.ui_manager.show_info("Booting...");
+  f.ui_manager.show_info(BOOT_SPLASH_TEXT);
   orch.init(WakeCause::PowerOn);
   // Fresh unbox — onboarding_done defaults false.
   REQUIRE_FALSE(A::settings(orch).onboarding_done);
-  REQUIRE(A::boot_splash_active(orch));
-  REQUIRE(f.ui_manager.current_screen() == Screen::Info);
-
-  MeasuresAGo data{};
-  data.co2.co2 = 420;
-  A::on_sensor_data(orch, data);
-
-  CHECK(A::first_measurement_done(orch));
-  CHECK_FALSE(A::boot_splash_active(orch));
+  REQUIRE_FALSE(A::first_measurement_done(orch));
+  REQUIRE_FALSE(A::boot_splash_active(orch));
   // Gate diverts to the one-time guide; the boot-gate session silent-unlocks
-  // so the "Start using" button is pressable on the cold-boot Locked device.
-  CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
-  CHECK(A::setup_session_active(orch));
-  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  // so Enter can be held on the cold-boot Locked device.
+  REQUIRE(f.ui_manager.current_screen() == Screen::GettingStarted);
+  REQUIRE(A::setup_session_active(orch));
+  REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+  CHECK(DisplayService::spy_last_screen == Screen::GettingStarted);
+  CHECK(DisplayService::spy_update_count == 1);
+  CHECK(test_spy::ble_initialized);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_iterations == 1);
+  CHECK(test_spy::last_groups == SensorGroup::All);
+  CHECK_FALSE(A::sensitive_services_paused(orch));
+  CHECK_FALSE(test_spy::sensor_stopped);
+  CHECK_FALSE(test_spy::cache_measurement_called);
+
+  SECTION("Short, double, and power presses leave onboarding open") {
+    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+    A::on_input(orch, {InputSource::TouchEnter, InputType::DoublePress});
+    A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
+    CHECK_FALSE(A::settings(orch).onboarding_done);
+    CHECK_FALSE(A::first_measurement_done(orch));
+    CHECK(A::lock_state(orch) == LockState::Unlocked);
+    CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
+  }
+
+  SECTION("First measurement updates data without dismissing or repainting the guide") {
+    const auto update_count = DisplayService::spy_update_count;
+    MeasuresAGo data{};
+    data.co2.co2 = 420;
+    A::on_sensor_data(orch, data);
+
+    CHECK(A::first_measurement_done(orch));
+    CHECK(test_spy::last_cached_measurement.co2.co2 == 420);
+    CHECK(test_spy::ble_last_measures.co2.co2 == 420);
+    CHECK_FALSE(A::settings(orch).onboarding_done);
+    CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
+    CHECK(A::setup_session_active(orch));
+    CHECK(DisplayService::spy_update_count == update_count);
+  }
+
+  SECTION("Long press completes onboarding before the first measurement") {
+    ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+    A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress});
+    CHECK(A::settings(orch).onboarding_done);
+    CHECK_FALSE(A::setup_session_active(orch));
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+    CHECK(A::lock_state(orch) == LockState::Unlocked);
+    CHECK_FALSE(A::first_measurement_done(orch));
+    CHECK_FALSE(A::raw_measures(orch).co2.is_valid());
+    CHECK_FALSE(A::raw_measures(orch).pm_a.is_pm_25_valid());
+    CHECK_FALSE(A::raw_measures(orch).temp_hum_a.is_temp_valid());
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(values.co2_ppm == MeasuresInvalid::CO2);
+    CHECK(values.pm25_ugm3 == MeasuresInvalid::PM);
+
+    SECTION("First measurement fills Home") {
+      MeasuresAGo data{};
+      data.co2.co2 = 420;
+      A::on_sensor_data(orch, data);
+
+      CHECK(A::first_measurement_done(orch));
+      CHECK(f.ui_manager.current_screen() == Screen::Home);
+      const auto home = f.ui_manager.build_values(A::build_context(orch));
+      CHECK(home.co2_ppm == 420);
+    }
+
+    SECTION("First measurement preserves a menu opened during warmup") {
+      A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+      REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
+      const auto update_count = DisplayService::spy_update_count;
+      const auto selected_row = f.ui_manager.build_values(A::build_context(orch)).selected_row;
+      MeasuresAGo data{};
+      data.co2.co2 = 420;
+      A::on_sensor_data(orch, data);
+
+      CHECK(A::first_measurement_done(orch));
+      CHECK(f.ui_manager.current_screen() == Screen::MainMenu);
+      CHECK(f.ui_manager.build_values(A::build_context(orch)).selected_row == selected_row);
+      CHECK(DisplayService::spy_update_count == update_count);
+    }
+
+    SECTION("Reopened Setup Guide keeps short-press Back") {
+      f.ui_manager.show_getting_started(/*from_boot=*/false);
+      A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+      CHECK(f.ui_manager.current_screen() == Screen::Settings);
+    }
+  }
+
+  SECTION("Failed save leaves onboarding available for another long press") {
+    ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    {
+      REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+      A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress});
+    }
+    CHECK_FALSE(A::settings(orch).onboarding_done);
+    CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
+
+    // A measurement arriving between attempts must not complete onboarding.
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
+    CHECK_FALSE(A::settings(orch).onboarding_done);
+
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+    A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress});
+    CHECK(A::settings(orch).onboarding_done);
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
+
+  SECTION("BLE authentication completes onboarding during warmup") {
+    ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+    f.ui_manager.show_pairing_passkey(123456);
+
+    A::on_ble_auth_complete(orch, true);
+
+    CHECK(A::settings(orch).onboarding_done);
+    CHECK_FALSE(A::first_measurement_done(orch));
+    CHECK_FALSE(A::setup_session_active(orch));
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
+
+  SECTION("First measurement preserves pairing; failed authentication returns to the guide") {
+    f.ui_manager.show_pairing_passkey(123456);
+    const auto update_count = DisplayService::spy_update_count;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(f.ui_manager.current_screen() == Screen::PairingPasskey);
+    CHECK(DisplayService::spy_update_count == update_count);
+
+    A::on_ble_auth_complete(orch, false);
+
+    CHECK_FALSE(A::settings(orch).onboarding_done);
+    CHECK(A::setup_session_active(orch));
+    CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
+  }
+
+  SECTION("Manufacturing shortcut during warmup retains Stationary ownership") {
+    A::on_input(orch, {InputSource::ButtonBoot, InputType::ShortPress});
+    REQUIRE(A::manufacturing_mode(orch));
+    REQUIRE(A::mode(orch) == OperatingMode::Stationary);
+    CHECK_FALSE(A::first_measurement_done(orch));
+    CHECK_FALSE(A::settings(orch).onboarding_done);
+    CHECK(f.ui_manager.current_screen() == Screen::Info);
+
+    A::on_sensor_data(orch, MeasuresAGo{});
+
+    CHECK(f.ui_manager.current_screen() == Screen::Info);
+    CHECK(A::setup_session_active(orch));
+    CHECK_FALSE(A::settings(orch).onboarding_done);
+  }
 }
 
 TEST_CASE("on_sensor_data: splash transition is suppressed when setup session is active",
@@ -960,9 +1274,35 @@ TEST_CASE("on_sensor_data: splash transition is suppressed when setup session is
   CHECK(f.ui_manager.current_screen() == Screen::Info);
 }
 
+TEST_CASE("init(PowerOn): Stationary connection owns the screen before the first measurement",
+          "[Orchestrator][init][boot-splash][onboarding]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Stationary;
+  auto orch = f.make_orchestrator();
+  f.ui_manager.show_info(BOOT_SPLASH_TEXT);
+  test_spy::wifi_has_saved_networks = true;
+
+  orch.init(WakeCause::PowerOn);
+
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+  CHECK_FALSE(A::first_measurement_done(orch));
+  CHECK(A::setup_session_active(orch));
+  CHECK(A::bring_up_pending(orch));
+  CHECK(test_spy::wifi_connect_saved_called);
+  CHECK(f.ui_manager.current_screen() == Screen::Info);
+  const auto values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(std::string(values.info_text) == "Connecting to saved Wi-Fi...");
+
+  A::on_sensor_data(orch, MeasuresAGo{});
+
+  CHECK(f.ui_manager.current_screen() == Screen::Info);
+  CHECK(A::bring_up_pending(orch));
+}
+
 TEST_CASE("on_input: ButtonPower short press is silent during cold-boot splash",
           "[Orchestrator][input][boot-splash]") {
   TestFixture f;
+  f.settings.onboarding_done = true;
   auto orch = f.make_orchestrator();
 
   ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
@@ -994,10 +1334,10 @@ TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][i
       .mode = OperatingMode::Portable,
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
-      .gps_enabled = true,
-      .tracking_active = true,
+      .tracking_state = TrackingState::Recording,
       .tracking_session_id = 12345,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, true);
 
   auto orch = f.make_orchestrator();
 
@@ -1034,10 +1374,10 @@ TEST_CASE(
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
-      .gps_enabled = false,
-      .tracking_active = false,
+      .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, false);
 
   auto orch = f.make_orchestrator();
 
@@ -1090,10 +1430,10 @@ TEST_CASE("init(Button, display_painted + unlocked): resumes route when tracking
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
-      .gps_enabled = true,
-      .tracking_active = true,
+      .tracking_state = TrackingState::Recording,
       .tracking_session_id = 42000,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, true);
 
   auto orch = f.make_orchestrator();
 
@@ -1115,6 +1455,76 @@ TEST_CASE("init(Button, display_painted + unlocked): resumes route when tracking
   REQUIRE(test_spy::route_resumed);
   CHECK_FALSE(test_spy::route_started);
   REQUIRE(test_spy::route_session_id == 42000);
+}
+
+TEST_CASE("init: prepainted boot synchronizes tracking without waiting for input or rendering",
+          "[Orchestrator][init][tracking]") {
+  for (const auto state : {TrackingState::Recording, TrackingState::Paused}) {
+    CAPTURE(state);
+    TestFixture f;
+    f.settings.onboarding_done = true;
+    test_spy::state_to_load.tracking_state = state;
+    test_spy::state_to_load.tracking_session_id = 42000;
+    auto orch = f.make_orchestrator();
+    ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::NOT_FOUND);
+    ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::NOT_FOUND);
+    ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::NOT_FOUND);
+    BootHandoff handoff{};
+    handoff.display_painted = true;
+    handoff.measurement_completed = true;
+    handoff.initial_lock_state = LockState::Unlocked;
+    orch.init(WakeCause::Button, handoff);
+
+    // Inspect UI input directly: neither an orchestrator input nor a later render
+    // may hide missing synchronization in init().
+    f.ui_manager.set_screen(Screen::MainMenu);
+    f.ui_manager.handle_input(InputSource::TouchDown, InputType::ShortPress);
+    const auto action = f.ui_manager.handle_input(InputSource::TouchEnter, InputType::ShortPress);
+    CHECK(action.action == UIAction::None);
+    REQUIRE(f.ui_manager.current_screen() == Screen::TrackingMenu);
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(std::string(values.rows[3].text) ==
+          (state == TrackingState::Recording ? "Pause Tracking" : "Resume Tracking"));
+    CHECK(A::tracking_state(orch) == state);
+    CHECK(A::tracking_session_id(orch) == 42000);
+  }
+}
+
+TEST_CASE("init: failed route reopen synchronizes Idle after any early unlock render",
+          "[Orchestrator][init][tracking]") {
+  for (const bool display_painted : {false, true}) {
+    CAPTURE(display_painted);
+    TestFixture f;
+    f.settings.onboarding_done = true;
+    test_spy::state_to_load.tracking_state = TrackingState::Recording;
+    test_spy::state_to_load.tracking_session_id = 42000;
+    test_spy::resume_route_result = false;
+    auto orch = f.make_orchestrator();
+    ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::NOT_FOUND);
+    ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::NOT_FOUND);
+    ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::NOT_FOUND);
+    BootHandoff handoff{};
+    handoff.display_painted = display_painted;
+    handoff.measurement_completed = true;
+    handoff.initial_lock_state = LockState::Unlocked;
+    orch.init(WakeCause::Button, handoff);
+
+    REQUIRE(A::tracking_state(orch) == TrackingState::Idle);
+    CHECK(A::tracking_session_id(orch) == 0);
+    f.ui_manager.set_screen(Screen::MainMenu);
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(std::string(values.rows[1].text) == "Start Tracking");
+    f.ui_manager.handle_input(InputSource::TouchDown, InputType::ShortPress);
+    const auto action = f.ui_manager.handle_input(InputSource::TouchEnter, InputType::ShortPress);
+    CHECK(action.action == UIAction::StartTracking);
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
 }
 
 // ============================================================================
@@ -1217,6 +1627,37 @@ TEST_CASE("lock: sets Locked and resets UI to home", "[Orchestrator][state]") {
   REQUIRE(f.ui_manager.current_screen() == Screen::Home);
 }
 
+TEST_CASE("lock: always waits for a busy display regardless of screen or auto-lock setting",
+          "[Orchestrator][state][inactivity]") {
+  for (const auto screen : {Screen::Home, Screen::MainMenu, Screen::Settings,
+                            Screen::TrackingStatus, Screen::PairingPasskey}) {
+    for (const bool via_power_button : {false, true}) {
+      CAPTURE(screen, via_power_button);
+      TestFixture f;
+      f.settings.auto_lock_seconds = 0; // Manual locking does not use inactivity eligibility.
+      auto orch = f.make_orchestrator();
+      A::unlock(orch);
+      f.ui_manager.set_screen(screen);
+      REQUIRE_FALSE(A::auto_lock_allowed(orch));
+      DisplayService::spy_worker_busy = true;
+      DisplayService::spy_last_screen = screen;
+      const auto attempts = DisplayService::spy_update_count;
+      if (via_power_button) {
+        A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
+      } else {
+        A::lock(orch);
+      }
+      CHECK(A::lock_state(orch) == LockState::Locked);
+      CHECK(f.ui_manager.current_screen() == Screen::Home);
+      CHECK(DisplayService::spy_last_screen == Screen::Home);
+      CHECK(DisplayService::spy_update_count == attempts + 1);
+      CHECK(DisplayService::spy_last_update_wait);
+      CHECK_FALSE(DisplayService::spy_worker_busy);
+      CHECK(A::settings(orch).auto_lock_seconds == 0);
+    }
+  }
+}
+
 TEST_CASE("unlock: sets Unlocked state", "[Orchestrator][state]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -1233,6 +1674,1590 @@ TEST_CASE("unlock: sets Unlocked state", "[Orchestrator][state]") {
 // ============================================================================
 // 8. State Transitions — tracking
 // ============================================================================
+
+static void check_tracking_timing(const TrackingTiming &actual, const TrackingTiming &expected) {
+  CHECK(actual.session_started_s == expected.session_started_s);
+  CHECK(actual.recording_accumulated_s == expected.recording_accumulated_s);
+  CHECK(actual.recording_started_s == expected.recording_started_s);
+  CHECK(actual.last_record_s == expected.last_record_s);
+}
+
+TEST_CASE("Tracking Status: live and paused snapshots are copied and read only",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.mock_rtos.retained_time_ms = 100'900;
+  REQUIRE(A::start_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  f.mock_rtos.retained_time_ms = 110'900;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  f.ui_manager.set_screen(Screen::TrackingStatus);
+
+  const auto sample = [&] {
+    test_spy::retained_time_read_count = 0;
+    test_spy::session_point_count_query_count = 0;
+    test_spy::measurement_requested = false;
+    test_spy::prepare_requested = false;
+    test_spy::gps_started = false;
+    test_spy::gps_stopped = false;
+    test_spy::gps_stop_and_idle_called = false;
+    test_spy::gps_idle_called = false;
+    const auto timing = A::tracking_timing(orch);
+    const auto last_input = A::last_input_ms(orch);
+    const auto ctx = A::build_context(orch);
+    CHECK(test_spy::retained_time_read_count == 1);
+    CHECK(test_spy::session_point_count_query_count == 1);
+    CHECK(test_spy::session_point_count_query_id == session);
+    CHECK_FALSE(test_spy::measurement_requested);
+    CHECK_FALSE(test_spy::prepare_requested);
+    CHECK_FALSE(test_spy::gps_started);
+    CHECK_FALSE(test_spy::gps_stopped);
+    CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+    CHECK_FALSE(test_spy::gps_idle_called);
+    CHECK(ctx.gps_data == &A::latest_gps(orch));
+    CHECK(A::last_input_ms(orch) == last_input);
+    check_tracking_timing(A::tracking_timing(orch), timing);
+    return ctx.tracking_status;
+  };
+
+  f.mock_rtos.retained_time_ms = 120'999;
+  // The open writer is authoritative even if a persisted count is older.
+  test_spy::route_point_counts[session] = 0;
+  const auto live = sample();
+  CHECK(live.recording_s == 20);
+  CHECK(live.elapsed_s == 20);
+  CHECK(live.last_record_age_s == 10);
+  CHECK(live.point_count_known);
+  CHECK(live.point_count == 1);
+  test_spy::route_point_counts[session] = 1;
+
+  f.mock_rtos.retained_time_ms = 130'900;
+  REQUIRE(A::pause_tracking(orch));
+  REQUIRE_FALSE(test_spy::route_file_open);
+  f.mock_rtos.retained_time_ms = 150'999;
+  const auto paused = sample();
+  CHECK(paused.recording_s == 30);
+  CHECK(paused.elapsed_s == 50);
+  CHECK(paused.last_record_age_s == 40);
+  CHECK(paused.point_count_known);
+  CHECK(paused.point_count == 1);
+
+  f.mock_rtos.retained_time_ms = 170'999;
+  const auto later = sample();
+  CHECK(later.recording_s == 30);
+  CHECK(later.elapsed_s == 70);
+  CHECK(later.last_record_age_s == 60);
+  CHECK(live.recording_s == 20);
+  CHECK(live.elapsed_s == 20);
+  CHECK(paused.elapsed_s == 50);
+}
+
+TEST_CASE("Tracking Status: unknown data differs from a known zero count",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  f.ui_manager.set_screen(Screen::TrackingStatus);
+  const auto initial = A::build_context(orch).tracking_status;
+  CHECK(initial.recording_s == 0);
+  CHECK(initial.elapsed_s == 0);
+  CHECK(initial.last_record_age_s == TRACKING_TIME_INVALID_S);
+  CHECK(initial.point_count_known);
+  CHECK(initial.point_count == 0);
+
+  SECTION("failed checked count and unknown anchors") {
+    test_spy::session_point_count_query_success = false;
+    A::set_tracking_timing(orch, TrackingTiming{});
+  }
+  SECTION("missing closed route and invalid retained time") {
+    REQUIRE(A::pause_tracking(orch));
+    test_spy::route_point_counts.clear();
+    f.mock_rtos.retained_time_ms = static_cast<uint64_t>(TRACKING_TIME_INVALID_S) * 1000;
+  }
+  test_spy::retained_time_read_count = 0;
+  test_spy::session_point_count_query_count = 0;
+  const auto unknown = A::build_context(orch).tracking_status;
+  CHECK(unknown.recording_s == TRACKING_TIME_INVALID_S);
+  CHECK(unknown.elapsed_s == TRACKING_TIME_INVALID_S);
+  CHECK(unknown.last_record_age_s == TRACKING_TIME_INVALID_S);
+  CHECK_FALSE(unknown.point_count_known);
+  CHECK(unknown.point_count == 0);
+  CHECK(test_spy::retained_time_read_count == 1);
+  CHECK(test_spy::session_point_count_query_count == 1);
+
+  uint32_t count = 42;
+  const auto stored_routes = test_spy::route_point_counts.size();
+  CHECK_FALSE(f.storage_service.try_get_session_point_count(A::tracking_session_id(orch), count));
+  CHECK(count == 42);
+  CHECK(test_spy::route_point_counts.size() == stored_routes);
+}
+
+TEST_CASE("Tracking Status: context queries are gated by screen lock and active session",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+
+  SECTION("Home recording") { f.ui_manager.set_screen(Screen::Home); }
+  SECTION("Home paused") {
+    REQUIRE(A::pause_tracking(orch));
+    f.ui_manager.set_screen(Screen::Home);
+  }
+  SECTION("Main Menu") { f.ui_manager.set_screen(Screen::MainMenu); }
+  SECTION("Tracking menu") { f.ui_manager.set_screen(Screen::TrackingMenu); }
+  SECTION("Settings") { f.ui_manager.set_screen(Screen::Settings); }
+  SECTION("GPS test") { f.ui_manager.set_screen(Screen::GpsTest); }
+  SECTION("locked Status") {
+    A::lock(orch);
+    f.ui_manager.set_screen(Screen::TrackingStatus);
+  }
+  SECTION("Idle Status") {
+    A::stop_tracking(orch);
+    f.ui_manager.set_screen(Screen::TrackingStatus);
+  }
+
+  test_spy::retained_time_read_count = 0;
+  test_spy::session_point_count_query_count = 0;
+  const auto ctx = A::build_context(orch);
+  CHECK(test_spy::retained_time_read_count == 0);
+  CHECK(test_spy::session_point_count_query_count == 0);
+  CHECK(ctx.tracking_status.recording_s == TRACKING_TIME_INVALID_S);
+  CHECK(ctx.tracking_status.elapsed_s == TRACKING_TIME_INVALID_S);
+  CHECK(ctx.tracking_status.last_record_age_s == TRACKING_TIME_INVALID_S);
+  CHECK_FALSE(ctx.tracking_status.point_count_known);
+  CHECK(ctx.tracking_status.point_count == 0);
+  CHECK(ctx.gps_data == &A::latest_gps(orch));
+}
+
+static void enter_tracking_status(TestFixture &f, Orchestrator &orch) {
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+  A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+  open_ui_row(f, orch, "Tracking");
+  REQUIRE(f.ui_manager.current_screen() == Screen::TrackingMenu);
+  open_ui_row(f, orch, "Status");
+  REQUIRE(f.ui_manager.current_screen() == Screen::TrackingStatus);
+  A::check_timers(orch); // The event loop observes entry after dispatching the input.
+}
+
+// Timer-only attempts must read one snapshot, without acquiring data or counting as input.
+static void check_tracking_status_tick(Orchestrator &orch, uint32_t attempts) {
+  const auto before = DisplayService::spy_update_count;
+  const auto last_input = A::last_input_ms(orch);
+  const auto timing = A::tracking_timing(orch);
+  test_spy::session_point_count_query_count = 0;
+  test_spy::retained_time_read_count = 0;
+  test_spy::gps_started = false;
+  test_spy::gps_posting_interval_ms = -1;
+  test_spy::measurement_requested = false;
+  test_spy::prepare_requested = false;
+  A::check_timers(orch);
+  CHECK(DisplayService::spy_update_count == before + attempts);
+  CHECK(test_spy::session_point_count_query_count == attempts);
+  CHECK(test_spy::retained_time_read_count == attempts);
+  CHECK(A::last_input_ms(orch) == last_input);
+  CHECK_FALSE(test_spy::gps_started);
+  CHECK(test_spy::gps_posting_interval_ms == -1);
+  CHECK_FALSE(test_spy::measurement_requested);
+  CHECK_FALSE(test_spy::prepare_requested);
+  check_tracking_timing(A::tracking_timing(orch), timing);
+}
+
+TEST_CASE("Tracking Status refresh: five-second cadence in both views states and all modes",
+          "[Orchestrator][tracking][status][refresh]") {
+  for (const auto mode :
+       {OperatingMode::Portable, OperatingMode::Stationary, OperatingMode::Offline}) {
+    for (const bool paused : {false, true}) {
+      for (const bool gps_view : {false, true}) {
+        CAPTURE(mode, paused, gps_view);
+        TestFixture f;
+        f.settings.measure_interval_seconds = 3600;
+        auto orch = f.make_orchestrator();
+        uint32_t now_ms = 0;
+        ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+        A::set_mode(orch, mode);
+        A::unlock(orch);
+        REQUIRE(A::start_tracking(orch));
+        if (paused) {
+          REQUIRE(A::pause_tracking(orch));
+        }
+        CHECK_FALSE(A::tracking_status_refresh_armed(orch));
+        enter_tracking_status(f, orch);
+        CHECK(DisplayService::spy_last_screen == Screen::TrackingStatus);
+        if (gps_view) {
+          open_ui_row(f, orch, "GPS details");
+        }
+        const auto before = f.ui_manager.build_values(A::build_context(orch));
+        CHECK(A::tracking_status_refresh_armed(orch));
+        CHECK(A::tracking_status_refresh_deadline_ms(orch) == 5000);
+        check_tracking_status_tick(orch, 0);
+        now_ms = 4999;
+        check_tracking_status_tick(orch, 0);
+        for (int query = 0; query < 3; ++query) {
+          CHECK(A::compute_queue_timeout_ms(orch) == 1);
+        }
+        CHECK(test_spy::session_point_count_query_count == 0);
+        CHECK(test_spy::retained_time_read_count == 0);
+        now_ms = 5000;
+        f.mock_rtos.retained_time_ms = now_ms;
+        check_tracking_status_tick(orch, 1);
+        CHECK_FALSE(DisplayService::spy_last_update_wait);
+        CHECK_FALSE(DisplayService::spy_worker_busy);
+        CHECK(A::tracking_status_refresh_deadline_ms(orch) == 10'000);
+        check_tracking_status_tick(orch, 0);
+        CHECK(A::lock_state(orch) == LockState::Unlocked);
+        const auto after = f.ui_manager.build_values(A::build_context(orch));
+        CHECK(after.selected_row == before.selected_row);
+        CHECK(std::string(after.rows[2].text) == before.rows[2].text);
+      }
+    }
+  }
+}
+
+TEST_CASE("Tracking Status refresh: busy attempts retry without spinning and restore cadence",
+          "[Orchestrator][tracking][status][refresh]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  DisplayService::spy_worker_busy = true;
+  DisplayService::spy_last_screen = Screen::Home;
+  for (const uint32_t due : {5000u, 5100u}) {
+    now_ms = due;
+    check_tracking_status_tick(orch, 1);
+    CHECK_FALSE(DisplayService::spy_last_update_wait);
+    CHECK(DisplayService::spy_worker_busy);
+    CHECK(DisplayService::spy_last_screen == Screen::Home);
+    CHECK(A::tracking_status_refresh_armed(orch));
+    CHECK(A::tracking_status_refresh_deadline_ms(orch) == due + 100);
+    CHECK(A::compute_queue_timeout_ms(orch) == 100);
+    check_tracking_status_tick(orch, 0);
+    now_ms = due + 99;
+    check_tracking_status_tick(orch, 0);
+    CHECK(A::compute_queue_timeout_ms(orch) == 1);
+  }
+  DisplayService::spy_worker_busy = false;
+  now_ms = 5200;
+  check_tracking_status_tick(orch, 1);
+  CHECK(DisplayService::spy_last_screen == Screen::TrackingStatus);
+  CHECK(A::tracking_status_refresh_deadline_ms(orch) == 10'200);
+  now_ms = 5299;
+  check_tracking_status_tick(orch, 0);
+  now_ms = 10'199;
+  check_tracking_status_tick(orch, 0);
+  now_ms = 10'200;
+  check_tracking_status_tick(orch, 1);
+}
+
+TEST_CASE("Tracking Status refresh: immediate input view Pause and Resume preserve cadence",
+          "[Orchestrator][tracking][status][refresh]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  now_ms = 1000;
+  A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress});
+  check_tracking_status_tick(orch, 0);
+  CHECK(A::last_input_ms(orch) == now_ms);
+  CHECK(A::tracking_status_refresh_deadline_ms(orch) == 5000);
+  now_ms = 2000;
+  open_ui_row(f, orch, "GPS details");
+  check_tracking_status_tick(orch, 0);
+  CHECK(A::last_input_ms(orch) == now_ms);
+  CHECK(A::tracking_status_refresh_deadline_ms(orch) == 5000);
+  const auto before = f.ui_manager.build_values(A::build_context(orch));
+  for (const auto type : {EventType::UserPauseTracking, EventType::UserResumeTracking}) {
+    now_ms += 1000;
+    const auto attempts = DisplayService::spy_update_count;
+    Event event{};
+    event.type = type;
+    DisplayService::spy_worker_busy = true;
+    A::dispatch(orch, event);
+    CHECK(DisplayService::spy_update_count == attempts + 1);
+    CHECK(DisplayService::spy_last_update_wait);
+    CHECK_FALSE(DisplayService::spy_worker_busy);
+    check_tracking_status_tick(orch, 0);
+    CHECK(A::last_input_ms(orch) == 2000);
+    CHECK(A::tracking_status_refresh_deadline_ms(orch) == 5000);
+    const auto after = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(after.selected_row == before.selected_row);
+    CHECK(std::string(after.rows[2].text) == before.rows[2].text);
+  }
+  now_ms = 4999;
+  const auto attempts = DisplayService::spy_update_count;
+  A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress});
+  CHECK(DisplayService::spy_update_count == attempts + 1);
+  check_tracking_status_tick(orch, 0);
+  CHECK(A::tracking_status_refresh_deadline_ms(orch) == 5000);
+  const auto cursor = f.ui_manager.build_values(A::build_context(orch)).selected_row;
+  now_ms = 5000; // A recent input frame intentionally does not postpone the periodic frame.
+  check_tracking_status_tick(orch, 1);
+  CHECK(DisplayService::spy_update_count == attempts + 2);
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).selected_row == cursor);
+  CHECK(A::tracking_status_refresh_deadline_ms(orch) == 10'000);
+}
+
+TEST_CASE("Tracking Status refresh: rendering returns acceptance without lifecycle side effects",
+          "[Orchestrator][tracking][status][refresh]") {
+  TestFixture f;
+  f.settings.auto_lock_seconds = 10;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  bool busy = false;
+  bool wait = false;
+  SECTION("accepted non-waiting render") {}
+  SECTION("rejected non-waiting render") { busy = true; }
+  SECTION("waiting render accepts despite a busy worker") {
+    busy = true;
+    wait = true;
+  }
+  now_ms = 2000;
+  f.ui_manager.open_tracking_status();
+  DisplayService::spy_worker_busy = busy;
+  const auto render = [&] {
+    const auto attempts = DisplayService::spy_update_count;
+    CHECK(A::update_display(orch, wait) == (!busy || wait));
+    CHECK(DisplayService::spy_update_count == attempts + 1);
+    CHECK(DisplayService::spy_last_update_wait == wait);
+    CHECK(DisplayService::spy_worker_busy == (busy && !wait));
+    CHECK(A::last_input_ms(orch) == 1000);
+  };
+  render();
+  CHECK_FALSE(A::tracking_status_refresh_armed(orch));
+  CHECK(A::tracking_status_refresh_deadline_ms(orch) == 0);
+  now_ms = 2500;
+  check_tracking_status_tick(orch, 0); // Entry is observed even when the paint was rejected.
+  CHECK(A::tracking_status_refresh_armed(orch));
+  CHECK(A::tracking_status_refresh_deadline_ms(orch) == 7500);
+  now_ms = 3000;
+  render();
+  CHECK(A::tracking_status_refresh_deadline_ms(orch) == 7500);
+  f.ui_manager.set_screen(Screen::Settings);
+  now_ms = 20'000;
+  render();
+  CHECK(A::tracking_status_refresh_armed(orch));
+  CHECK(A::tracking_status_refresh_deadline_ms(orch) == 7500);
+  A::check_timers(orch); // Exit precedes auto-lock, regardless of render acceptance.
+  CHECK_FALSE(A::tracking_status_refresh_armed(orch));
+  CHECK(A::last_input_ms(orch) == now_ms);
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  CHECK(f.ui_manager.current_screen() == Screen::Settings);
+}
+
+TEST_CASE("Tracking Status refresh: periodic deadlines use the post-attempt timestamp",
+          "[Orchestrator][tracking][status][refresh]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t base_now = 0;
+  bool simulate_delay = false;
+  uint32_t attempts_before = 0;
+  constexpr uint32_t delay_ms = 750;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl())
+      .LR_RETURN(base_now + (simulate_delay && DisplayService::spy_update_count > attempts_before
+                                 ? delay_ms
+                                 : 0));
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  bool busy = false;
+  SECTION("accepted attempt") {}
+  SECTION("rejected attempt") { busy = true; }
+  base_now = 5000;
+  attempts_before = DisplayService::spy_update_count;
+  simulate_delay = true;
+  DisplayService::spy_worker_busy = busy;
+  check_tracking_status_tick(orch, 1);
+  CHECK(DisplayService::spy_update_count == attempts_before + 1);
+  CHECK_FALSE(DisplayService::spy_last_update_wait);
+  CHECK(DisplayService::spy_worker_busy == busy);
+  const uint32_t due = base_now + delay_ms + (busy ? 100 : 5000);
+  CHECK(A::tracking_status_refresh_deadline_ms(orch) == due);
+  simulate_delay = false;
+  DisplayService::spy_worker_busy = false;
+  base_now = due - 1;
+  check_tracking_status_tick(orch, 0);
+  base_now = due;
+  check_tracking_status_tick(orch, 1);
+}
+
+TEST_CASE("Tracking Status refresh: exits cancel and reentry starts a fresh deadline",
+          "[Orchestrator][tracking][status][refresh]") {
+  TestFixture f;
+  f.settings.auto_lock_seconds = 0;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  REQUIRE(A::tracking_status_refresh_armed(orch));
+  now_ms = 3200;
+  check_tracking_status_tick(orch, 0); // Consume entry snackbar expiry while still on Status.
+  CHECK(A::snackbar_refresh_deadline_ms(orch) == 0);
+  now_ms = 4000;
+  bool sleep = false;
+  bool shutdown = false;
+  SECTION("Back") { A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress}); }
+  SECTION("Exit") { open_ui_row(f, orch, "Exit"); }
+  SECTION("Double Enter") { A::on_input(orch, {InputSource::TouchEnter, InputType::DoublePress}); }
+  SECTION("Long Enter") { A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress}); }
+  SECTION("Manual Lock") { A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress}); }
+  SECTION("Remote Stop") {
+    test_spy::ble_pending_config_len = 1;
+    test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+    test_spy::ble_config_decode_result.cmd = BleCommand::StopTracking;
+    Event event{};
+    event.type = EventType::BleConfigWrite;
+    A::dispatch(orch, event);
+  }
+  SECTION("Info rejected paint") {
+    DisplayService::spy_worker_busy = true;
+    f.ui_manager.show_info("Replacing Status");
+    CHECK_FALSE(A::update_display(orch));
+  }
+  SECTION("Pairing") {
+    Event event{};
+    event.type = EventType::BlePairingRequest;
+    event.ble_passkey = 123456;
+    A::dispatch(orch, event);
+  }
+  SECTION("Shutdown") {
+    A::shutdown(orch);
+    shutdown = true;
+    REQUIRE(test_spy::shutdown_called);
+  }
+  SECTION("Sleep final render does not rearm") {
+    A::prepare_for_sleep(orch);
+    sleep = true;
+    CHECK(DisplayService::spy_last_update_wait);
+    CHECK(DisplayService::spy_last_screen == Screen::TrackingStatus);
+    CHECK_FALSE(A::tracking_status_refresh_armed(orch));
+  }
+  A::check_timers(orch);
+  CHECK_FALSE(A::tracking_status_refresh_armed(orch));
+  now_ms = 5000;
+  const auto attempts = DisplayService::spy_update_count;
+  A::check_timers(orch);
+  CHECK(DisplayService::spy_update_count == attempts);
+  CHECK_FALSE(A::tracking_status_refresh_armed(orch));
+  CHECK(A::compute_queue_timeout_ms(orch) > 0);
+  if (!sleep && !shutdown) {
+    now_ms = 6000;
+    DisplayService::spy_worker_busy = false;
+    if (A::lock_state(orch) == LockState::Locked) {
+      A::unlock(orch);
+    }
+    if (!A::tracking_active(orch)) {
+      REQUIRE(A::start_tracking(orch));
+    }
+    f.ui_manager.set_screen(Screen::Home);
+    enter_tracking_status(f, orch);
+    CHECK(A::tracking_status_refresh_armed(orch));
+    CHECK(A::tracking_status_refresh_deadline_ms(orch) == 11'000);
+    now_ms = 10'999;
+    check_tracking_status_tick(orch, 0);
+    now_ms = 11'000;
+    check_tracking_status_tick(orch, 1);
+  }
+}
+
+TEST_CASE("Tracking Status refresh: raw ineligible screens and states cannot schedule work",
+          "[Orchestrator][tracking][status][refresh]") {
+  TestFixture f;
+  f.settings.auto_lock_seconds = 0;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  SECTION("screen changes without a submission leave a stale armed deadline") {
+    f.ui_manager.set_screen(Screen::Settings);
+    REQUIRE(A::tracking_status_refresh_armed(orch));
+  }
+  SECTION("locked Status") {
+    A::lock(orch);
+    f.ui_manager.set_screen(Screen::TrackingStatus);
+  }
+  SECTION("Idle Status") {
+    A::stop_tracking(orch);
+    f.ui_manager.set_screen(Screen::TrackingStatus);
+  }
+  REQUIRE(A::tracking_status_refresh_armed(orch));
+  now_ms = 5001;
+  test_spy::wifi_next_deadline_ms = 6000;
+  test_spy::session_point_count_query_count = 0;
+  test_spy::retained_time_read_count = 0;
+  CHECK(A::compute_queue_timeout_ms(orch) == 999);
+  CHECK(test_spy::session_point_count_query_count == 0);
+  CHECK(test_spy::retained_time_read_count == 0);
+  const auto attempts = DisplayService::spy_update_count;
+  A::check_timers(orch);
+  CHECK(DisplayService::spy_update_count == attempts);
+  CHECK(test_spy::session_point_count_query_count == 0);
+  CHECK(test_spy::retained_time_read_count == 0);
+  CHECK_FALSE(A::tracking_status_refresh_armed(orch));
+  A::update_display(orch);
+  CHECK_FALSE(A::tracking_status_refresh_armed(orch));
+  CHECK(test_spy::session_point_count_query_count == 0);
+  CHECK(test_spy::retained_time_read_count == 0);
+}
+
+TEST_CASE("Tracking Status refresh: ordinary and busy retry deadlines survive uint32 wrap",
+          "[Orchestrator][tracking][status][refresh]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = UINT32_MAX - 4999;
+  bool busy = false;
+  SECTION("accepted deadline is exactly zero") {}
+  SECTION("accepted deadline crosses wrap") { now_ms = UINT32_MAX - 2000; }
+  SECTION("busy retry deadline is exactly zero") {
+    now_ms = UINT32_MAX - 5099;
+    busy = true;
+  }
+  SECTION("busy retry crosses wrap") {
+    now_ms = UINT32_MAX - 5049;
+    busy = true;
+  }
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::set_last_measurement_ms(orch, now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  uint32_t due = now_ms + 5000;
+  REQUIRE(A::tracking_status_refresh_armed(orch));
+  CHECK(A::tracking_status_refresh_deadline_ms(orch) == due);
+  now_ms = due - 1;
+  check_tracking_status_tick(orch, 0);
+  CHECK(A::compute_queue_timeout_ms(orch) == 1);
+  now_ms = due;
+  DisplayService::spy_worker_busy = busy;
+  check_tracking_status_tick(orch, 1);
+  if (busy) {
+    CHECK(DisplayService::spy_worker_busy);
+    due += 100;
+    CHECK(A::tracking_status_refresh_armed(orch));
+    CHECK(A::tracking_status_refresh_deadline_ms(orch) == due);
+    check_tracking_status_tick(orch, 0);
+    now_ms = due - 1;
+    check_tracking_status_tick(orch, 0);
+    CHECK(A::compute_queue_timeout_ms(orch) == 1);
+    DisplayService::spy_worker_busy = false;
+    now_ms = due;
+    check_tracking_status_tick(orch, 1);
+  }
+  CHECK(A::tracking_status_refresh_deadline_ms(orch) == due + 5000);
+  check_tracking_status_tick(orch, 0);
+}
+
+TEST_CASE("Tracking Status refresh: overdue wins over future timers and jumps never catch up",
+          "[Orchestrator][tracking][status][refresh]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  now_ms = 60'000;
+  test_spy::wifi_next_deadline_ms = now_ms + 1000;
+  test_spy::session_point_count_query_count = 0;
+  test_spy::retained_time_read_count = 0;
+  CHECK(A::compute_queue_timeout_ms(orch) == 0);
+  CHECK(test_spy::session_point_count_query_count == 0);
+  CHECK(test_spy::retained_time_read_count == 0);
+  check_tracking_status_tick(orch, 1);
+  CHECK(A::tracking_status_refresh_deadline_ms(orch) == 65'000);
+  check_tracking_status_tick(orch, 0);
+  now_ms = 64'999;
+  check_tracking_status_tick(orch, 0);
+  now_ms = 65'000;
+  check_tracking_status_tick(orch, 1);
+}
+
+TEST_CASE("Tracking Status refresh: timer phase uses the clock after an earlier BMS handler",
+          "[Orchestrator][tracking][status][refresh]") {
+  TestFixture f;
+  f.settings.auto_lock_seconds = 10;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 25'001;
+  bool simulate_delay = false;
+  const auto polls_before = test_spy::bms_poll_count;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl())
+      .LR_RETURN(now_ms + (simulate_delay && test_spy::bms_poll_count > polls_before ? 2 : 0));
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  REQUIRE(A::tracking_status_refresh_deadline_ms(orch) == 30'001);
+  now_ms = 30'000;
+  simulate_delay = true;
+  SECTION("periodic refresh becomes due during BMS handling") {
+    check_tracking_status_tick(orch, 1);
+    CHECK(A::tracking_status_refresh_deadline_ms(orch) == 35'002);
+    simulate_delay = false;
+    now_ms = 30'002;
+    check_tracking_status_tick(orch, 0);
+  }
+  SECTION("exit baseline newer than timer entry must not underflow into auto-lock") {
+    f.ui_manager.set_screen(Screen::Settings);
+    A::check_timers(orch);
+    CHECK(A::last_input_ms(orch) == 30'002);
+    CHECK(A::lock_state(orch) == LockState::Unlocked);
+    CHECK_FALSE(A::tracking_status_refresh_armed(orch));
+    simulate_delay = false;
+    now_ms = 40'001;
+    A::check_timers(orch);
+    CHECK(A::last_input_ms(orch) == 30'002);
+    CHECK(A::lock_state(orch) == LockState::Unlocked);
+    now_ms = 40'002;
+    A::check_timers(orch);
+    CHECK(A::lock_state(orch) == LockState::Locked);
+  }
+  CHECK(test_spy::bms_poll_count == polls_before + 1);
+}
+
+TEST_CASE("Tracking Status refresh: late OTA override is observed before a due periodic frame",
+          "[Orchestrator][tracking][status][refresh]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  now_ms = 60'000;
+  test_spy::ota_is_ble_active = true;
+  test_spy::ota_run_ble_result = OtaStatus::Ok;
+  const auto attempts = DisplayService::spy_update_count;
+  test_spy::session_point_count_query_count = 0;
+  test_spy::retained_time_read_count = 0;
+  A::check_timers(orch);
+  CHECK(test_spy::ota_run_ble_count == 1);
+  CHECK(reboot_count == 1);
+  CHECK(DisplayService::spy_update_count == attempts + 2); // Updating, then Restarting.
+  CHECK(DisplayService::spy_last_screen == Screen::Info);
+  CHECK_FALSE(A::tracking_status_refresh_armed(orch));
+  CHECK(A::last_input_ms(orch) == now_ms);
+  CHECK(test_spy::session_point_count_query_count == 0);
+  CHECK(test_spy::retained_time_read_count == 0);
+}
+
+TEST_CASE("Tracking Status: external transitions reliably paint and preserve view and cursor",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+
+  bool via_ble = false;
+  SECTION("programmatic actions on Session view") {}
+  SECTION("BLE commands on GPS view") {
+    via_ble = true;
+    open_ui_row(f, orch, "GPS details");
+    // Leave the switch row selected on the GPS view.
+  }
+  const auto before = f.ui_manager.build_values(A::build_context(orch));
+  const auto last_input = A::last_input_ms(orch);
+  const auto command = [&](EventType type, BleCommand cmd) {
+    now_ms += 10'000;
+    DisplayService::spy_worker_busy = true;
+    DisplayService::spy_last_screen = Screen::Home;
+    const auto attempts = DisplayService::spy_update_count;
+    Event event{};
+    event.type = type;
+    if (via_ble) {
+      test_spy::ble_pending_config_len = 1;
+      test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+      test_spy::ble_config_decode_result.cmd = cmd;
+      event.type = EventType::BleConfigWrite;
+    }
+    A::dispatch(orch, event);
+    CHECK(DisplayService::spy_update_count == attempts + 1);
+    CHECK(DisplayService::spy_last_update_wait);
+    CHECK_FALSE(DisplayService::spy_worker_busy);
+    CHECK(A::last_input_ms(orch) == last_input);
+    A::check_timers(orch);
+    CHECK(DisplayService::spy_update_count == attempts + (cmd == BleCommand::StopTracking ? 1 : 2));
+    CHECK(A::last_input_ms(orch) == (cmd == BleCommand::StopTracking ? now_ms : last_input));
+  };
+  const auto check_view = [&] {
+    CHECK(DisplayService::spy_last_screen == Screen::TrackingStatus);
+    REQUIRE(f.ui_manager.current_screen() == Screen::TrackingStatus);
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(values.selected_row == before.selected_row);
+    CHECK(std::string(values.rows[2].text) == before.rows[2].text);
+  };
+
+  f.mock_rtos.retained_time_ms = 10'000;
+  command(EventType::UserPauseTracking, BleCommand::PauseTracking);
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  check_view();
+  f.mock_rtos.retained_time_ms = 20'000;
+  command(EventType::UserResumeTracking, BleCommand::ResumeTracking);
+  CHECK(A::tracking_state(orch) == TrackingState::Recording);
+  check_view();
+  command(EventType::UserStopTracking, BleCommand::StopTracking);
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  CHECK(f.ui_manager.current_screen() == Screen::MainMenu);
+  CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
+}
+
+TEST_CASE("Tracking Status: pause and resume storage errors also wait for the display worker",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+
+  test_spy::end_route_result = false;
+  DisplayService::spy_worker_busy = true;
+  CHECK_FALSE(A::pause_tracking(orch));
+  CHECK(DisplayService::spy_last_update_wait);
+  CHECK_FALSE(DisplayService::spy_worker_busy);
+  CHECK(DisplayService::spy_last_screen == Screen::TrackingStatus);
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+
+  test_spy::resume_route_result = false;
+  DisplayService::spy_worker_busy = true;
+  CHECK_FALSE(A::resume_tracking(orch));
+  CHECK(DisplayService::spy_last_update_wait);
+  CHECK_FALSE(DisplayService::spy_worker_busy);
+  CHECK(DisplayService::spy_last_screen == Screen::TrackingStatus);
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+}
+
+TEST_CASE("Tracking Status: leaving for Home reliably paints with a busy worker",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  DisplayService::spy_worker_busy = true;
+
+  SECTION("power button locks") {
+    A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
+    CHECK(A::lock_state(orch) == LockState::Locked);
+  }
+  SECTION("long Enter returns Home") {
+    A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress});
+    CHECK(A::lock_state(orch) == LockState::Unlocked);
+  }
+  SECTION("factory reset returns Home after stopping tracking") {
+    ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, erase(trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+    REQUIRE(A::factory_reset(orch));
+    CHECK(A::lock_state(orch) == LockState::Locked);
+  }
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+  CHECK(DisplayService::spy_last_screen == Screen::Home);
+  CHECK(DisplayService::spy_last_update_wait);
+  CHECK_FALSE(DisplayService::spy_worker_busy);
+}
+
+TEST_CASE("Tracking Status: both views remain unlocked while Recording or Paused",
+          "[Orchestrator][tracking][status]") {
+  for (const auto mode :
+       {OperatingMode::Portable, OperatingMode::Stationary, OperatingMode::Offline}) {
+    for (const bool paused : {false, true}) {
+      for (const bool gps_view : {false, true}) {
+        CAPTURE(mode, paused, gps_view);
+        TestFixture f;
+        f.settings.auto_lock_seconds = 10;
+        f.settings.measure_interval_seconds = 3600;
+        auto orch = f.make_orchestrator();
+        A::set_mode(orch, mode);
+        uint32_t now_ms = 1000;
+        ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+        FORBID_CALL(f.mock_config, commit());
+        A::unlock(orch);
+        REQUIRE(A::start_tracking(orch));
+        if (paused) {
+          REQUIRE(A::pause_tracking(orch));
+        }
+        enter_tracking_status(f, orch);
+        if (gps_view) {
+          open_ui_row(f, orch, "GPS details");
+        }
+        const auto last_input = A::last_input_ms(orch);
+        const auto before = f.ui_manager.build_values(A::build_context(orch));
+
+        for (const uint32_t time_ms : {11'000u, 61'000u, 121'000u}) {
+          now_ms = time_ms;
+          f.mock_rtos.retained_time_ms = now_ms;
+          A::check_timers(orch);
+          Event timeout{};
+          timeout.type = EventType::InactivityTimeout;
+          A::dispatch(orch, timeout);
+          (void)A::build_context(orch);
+          A::update_display(orch);
+          CHECK(A::lock_state(orch) == LockState::Unlocked);
+          CHECK(f.ui_manager.current_screen() == Screen::TrackingStatus);
+          CHECK(A::last_input_ms(orch) == last_input);
+        }
+        const auto after = f.ui_manager.build_values(A::build_context(orch));
+        CHECK(after.selected_row == before.selected_row);
+        CHECK(std::string(after.rows[2].text) == before.rows[2].text);
+        CHECK(A::settings(orch).auto_lock_seconds == 10);
+      }
+    }
+  }
+}
+
+TEST_CASE("Tracking Status: inactivity deadline is excluded from the queue timeout",
+          "[Orchestrator][tracking][status][timers]") {
+  TestFixture f;
+  f.settings.auto_lock_seconds = 10;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  SECTION("Recording") {}
+  SECTION("Paused") { REQUIRE(A::pause_tracking(orch)); }
+
+  now_ms = 10'000;
+  A::check_timers(orch); // The next five-second BMS status poll is now at 15,000.
+  now_ms = 10'999;
+  CHECK(A::compute_queue_timeout_ms(orch) == 4001); // Not the 1 ms inactivity candidate.
+  now_ms = 11'000;
+  CHECK(A::compute_queue_timeout_ms(orch) == 4000); // Not an expired zero-timeout wake.
+  CHECK(A::settings(orch).auto_lock_seconds == 10);
+}
+
+TEST_CASE("Tracking Status: every ordinary exit starts one fresh inactivity window",
+          "[Orchestrator][tracking][status][timers]") {
+  TestFixture f;
+  f.settings.auto_lock_seconds = 10;
+  f.settings.measure_interval_seconds = 3600;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  FORBID_CALL(f.mock_config, commit());
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  now_ms = 70'000;
+
+  Screen destination = Screen::TrackingMenu;
+  SECTION("Back row") { A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress}); }
+  SECTION("Exit row") {
+    A::on_input(orch, {InputSource::TouchUp, InputType::ShortPress});
+    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+    destination = Screen::Home;
+  }
+  SECTION("Double Enter") { A::on_input(orch, {InputSource::TouchEnter, InputType::DoublePress}); }
+  SECTION("Long Enter") {
+    A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress});
+    destination = Screen::Home;
+  }
+  SECTION("Programmatic Stop") {
+    A::stop_tracking(orch);
+    destination = Screen::MainMenu;
+  }
+  SECTION("BLE Stop") {
+    test_spy::ble_pending_config_len = 1;
+    test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+    test_spy::ble_config_decode_result.cmd = BleCommand::StopTracking;
+    Event event{};
+    event.type = EventType::BleConfigWrite;
+    A::dispatch(orch, event);
+    destination = Screen::MainMenu;
+  }
+  SECTION("Stop immediately before the ordinary clock wraps") {
+    now_ms = UINT32_MAX - 5000;
+    A::stop_tracking(orch);
+    destination = Screen::MainMenu;
+  }
+  const uint32_t exit_ms = now_ms;
+  CHECK(f.ui_manager.current_screen() == destination);
+  A::check_timers(orch);
+  CHECK(A::last_input_ms(orch) == exit_ms);
+  REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+
+  now_ms = exit_ms + 5000;
+  A::update_display(orch); // Subsequent paints must not keep extending the window.
+  CHECK(A::last_input_ms(orch) == exit_ms);
+  now_ms = exit_ms + 9999;
+  A::check_timers(orch);
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  now_ms = exit_ms + 10'000;
+  A::check_timers(orch);
+  CHECK(A::lock_state(orch) == LockState::Locked);
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+  CHECK(A::settings(orch).auto_lock_seconds == 10);
+}
+
+TEST_CASE("Tracking Status: screen overrides rebase inactivity once even if the paint is busy",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  now_ms = 70'000;
+  DisplayService::spy_worker_busy = true;
+
+  SECTION("Info replaces the page before rendering") {
+    f.ui_manager.show_info("Replacing Status");
+    CHECK_FALSE(A::update_display(orch));
+    CHECK(f.ui_manager.current_screen() == Screen::Info);
+  }
+  SECTION("Pairing replaces the page before rendering") {
+    Event event{};
+    event.type = EventType::BlePairingRequest;
+    event.ble_passkey = 123456;
+    A::dispatch(orch, event);
+    CHECK(f.ui_manager.current_screen() == Screen::PairingPasskey);
+  }
+  CHECK(A::last_input_ms(orch) == 1000);
+  A::check_timers(orch);
+  CHECK(A::last_input_ms(orch) == 70'000);
+  CHECK_FALSE(A::tracking_status_refresh_armed(orch));
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  now_ms = 75'000;
+  A::update_display(orch, true);
+  A::check_timers(orch);
+  CHECK(A::last_input_ms(orch) == 70'000);
+}
+
+TEST_CASE("Tracking Status: Auto Lock Off remains disabled after leaving",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  f.settings.auto_lock_seconds = 0;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  FORBID_CALL(f.mock_config, commit());
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  now_ms = 70'000;
+  A::stop_tracking(orch);
+  A::check_timers(orch);
+  CHECK(A::last_input_ms(orch) == now_ms);
+  now_ms = 140'000;
+  A::check_timers(orch);
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  CHECK(A::settings(orch).auto_lock_seconds == 0);
+}
+
+TEST_CASE("Tracking Status: manual Power and safety shutdown remain available",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  f.settings.auto_lock_seconds = 10;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  now_ms = 70'000;
+
+  SECTION("Power short press still locks") {
+    A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
+    CHECK(A::lock_state(orch) == LockState::Locked);
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
+  SECTION("Power long press still shuts down") {
+    A::on_input(orch, {InputSource::ButtonPower, InputType::LongPress});
+    CHECK(test_spy::shutdown_called);
+    CHECK(f.ui_manager.current_screen() == Screen::ShutdownUser);
+  }
+  SECTION("BMS timer still handles thermal shutdown") {
+    test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverTemperature;
+    A::check_timers(orch);
+    CHECK(test_spy::bms_polled);
+    CHECK(test_spy::shutdown_called);
+    CHECK(f.ui_manager.current_screen() == Screen::ShutdownTemperature);
+  }
+}
+
+TEST_CASE("Tracking Status: ordinary display updates stay non-blocking",
+          "[Orchestrator][tracking][status]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  enter_tracking_status(f, orch);
+  const auto attempts = DisplayService::spy_update_count;
+  test_spy::session_point_count_query_count = 0;
+  test_spy::retained_time_read_count = 0;
+  A::request_background_display_update(orch);
+  CHECK(DisplayService::spy_update_count == attempts);
+  CHECK(test_spy::session_point_count_query_count == 0);
+  CHECK(test_spy::retained_time_read_count == 0);
+
+  DisplayService::spy_worker_busy = true;
+  A::update_display(orch);
+  CHECK_FALSE(DisplayService::spy_last_update_wait);
+  CHECK(DisplayService::spy_worker_busy);
+
+  f.ui_manager.set_screen(Screen::Home);
+  A::update_display(orch);
+  CHECK_FALSE(DisplayService::spy_last_update_wait);
+  CHECK(DisplayService::spy_worker_busy);
+}
+
+TEST_CASE("tracking transitions: Pause Resume and Stop wait for the display on every page",
+          "[Orchestrator][tracking][display]") {
+  enum class Transition { Pause, PauseCloseFailure, Resume, ResumeOpenFailure, Stop, StopPaused };
+  for (const auto screen :
+       {Screen::Home, Screen::Settings, Screen::TrackingMenu, Screen::TrackingStatus}) {
+    for (const auto transition :
+         {Transition::Pause, Transition::PauseCloseFailure, Transition::Resume,
+          Transition::ResumeOpenFailure, Transition::Stop, Transition::StopPaused}) {
+      CAPTURE(screen, transition);
+      TestFixture f;
+      auto orch = f.make_orchestrator();
+      A::unlock(orch);
+      REQUIRE(A::start_tracking(orch));
+      if (transition == Transition::Resume || transition == Transition::ResumeOpenFailure ||
+          transition == Transition::StopPaused) {
+        REQUIRE(A::pause_tracking(orch));
+      }
+      // Home also covers local menu actions, which navigate Home before execution.
+      f.ui_manager.set_screen(screen);
+      DisplayService::spy_last_screen = screen;
+      DisplayService::spy_worker_busy = true;
+      const auto attempts = DisplayService::spy_update_count;
+      Screen expected_screen = screen;
+      switch (transition) {
+      case Transition::Pause:
+        REQUIRE(A::pause_tracking(orch));
+        CHECK(A::tracking_state(orch) == TrackingState::Paused);
+        break;
+      case Transition::PauseCloseFailure:
+        test_spy::end_route_result = false;
+        REQUIRE_FALSE(A::pause_tracking(orch));
+        CHECK(A::tracking_state(orch) == TrackingState::Paused);
+        break;
+      case Transition::Resume:
+        REQUIRE(A::resume_tracking(orch));
+        CHECK(A::tracking_state(orch) == TrackingState::Recording);
+        break;
+      case Transition::ResumeOpenFailure:
+        test_spy::resume_route_result = false;
+        REQUIRE_FALSE(A::resume_tracking(orch));
+        CHECK(A::tracking_state(orch) == TrackingState::Paused);
+        break;
+      case Transition::Stop:
+      case Transition::StopPaused:
+        A::stop_tracking(orch);
+        CHECK(A::tracking_state(orch) == TrackingState::Idle);
+        if (screen == Screen::TrackingMenu || screen == Screen::TrackingStatus) {
+          expected_screen = Screen::MainMenu;
+        }
+        break;
+      }
+      CHECK(f.ui_manager.current_screen() == expected_screen);
+      CHECK(DisplayService::spy_last_screen == expected_screen);
+      CHECK(DisplayService::spy_update_count == attempts + 1);
+      CHECK(DisplayService::spy_last_update_wait);
+      CHECK_FALSE(DisplayService::spy_worker_busy);
+    }
+  }
+}
+
+TEST_CASE("tracking timing: lifecycle uses retained seconds without changing route decisions",
+          "[Orchestrator][tracking][timing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.mock_rtos.retained_time_ms = 100999;
+  REQUIRE(A::start_tracking(orch));
+  check_tracking_timing(A::tracking_timing(orch), {100, 0, 100, TRACKING_TIME_INVALID_S});
+
+  f.mock_rtos.retained_time_ms = 110000;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK(A::tracking_timing(orch).last_record_s == 110);
+  CHECK(f.storage_service.current_route_point_count() == 1);
+
+  f.mock_rtos.retained_time_ms = 130000;
+  REQUIRE(A::pause_tracking(orch));
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  check_tracking_timing(A::tracking_timing(orch), {100, 30, TRACKING_TIME_INVALID_S, 110});
+  CHECK(tracking_elapsed_s(A::tracking_timing(orch), 150) == 50);
+  CHECK(tracking_recording_s(A::tracking_timing(orch), 150) == 30);
+  CHECK(tracking_last_record_age_s(A::tracking_timing(orch), 150) == 40);
+
+  f.mock_rtos.retained_time_ms = 150000;
+  REQUIRE(A::pause_tracking(orch));
+  REQUIRE_FALSE(A::start_tracking(orch));
+  REQUIRE(A::resume_tracking(orch));
+  check_tracking_timing(A::tracking_timing(orch), {100, 30, 150, 110});
+  f.mock_rtos.retained_time_ms = 170000;
+  REQUIRE(A::resume_tracking(orch));
+  CHECK(A::tracking_timing(orch).recording_started_s == 150);
+  CHECK(tracking_recording_s(A::tracking_timing(orch), 170) == 50);
+
+  test_spy::end_route_result = false;
+  A::stop_tracking(orch);
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
+  check_tracking_timing(A::snapshot_state(orch).tracking_timing, TrackingTiming{});
+}
+
+TEST_CASE("tracking timing: failed start and resume preserve the prior timing",
+          "[Orchestrator][tracking][timing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.mock_rtos.retained_time_ms = 100000;
+  test_spy::create_route_result = false;
+  REQUIRE_FALSE(A::start_tracking(orch));
+  check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
+  test_spy::create_route_result = true;
+  REQUIRE(A::start_tracking(orch));
+
+  f.mock_rtos.retained_time_ms = 130000;
+  test_spy::end_route_result = false;
+  REQUIRE_FALSE(A::pause_tracking(orch));
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  const auto paused = A::tracking_timing(orch);
+  CHECK(paused.recording_accumulated_s == 30);
+  CHECK(paused.recording_started_s == TRACKING_TIME_INVALID_S);
+
+  f.mock_rtos.retained_time_ms = 150000;
+  test_spy::resume_route_result = false;
+  REQUIRE_FALSE(A::resume_tracking(orch));
+  check_tracking_timing(A::tracking_timing(orch), paused);
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+}
+
+TEST_CASE("tracking timing: invalid transition time changes timing validity not route behavior",
+          "[Orchestrator][tracking][timing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  SECTION("Unrepresentable start time") {
+    f.mock_rtos.retained_time_ms = UINT64_MAX;
+    REQUIRE(A::start_tracking(orch));
+    CHECK(A::tracking_state(orch) == TrackingState::Recording);
+    CHECK(test_spy::route_file_open);
+    check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
+  }
+  SECTION("Bad pause cannot keep a live segment running") {
+    f.mock_rtos.retained_time_ms = 100000;
+    REQUIRE(A::start_tracking(orch));
+    f.mock_rtos.retained_time_ms = 110000;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    f.mock_rtos.retained_time_ms = UINT64_MAX;
+    REQUIRE(A::pause_tracking(orch));
+    CHECK(A::tracking_state(orch) == TrackingState::Paused);
+    check_tracking_timing(A::tracking_timing(orch),
+                          {100, TRACKING_TIME_INVALID_S, TRACKING_TIME_INVALID_S, 110});
+    f.mock_rtos.retained_time_ms = 150000;
+    REQUIRE(A::resume_tracking(orch));
+    CHECK(A::tracking_state(orch) == TrackingState::Recording);
+    CHECK(tracking_elapsed_s(A::tracking_timing(orch), 160) == 60);
+    CHECK(tracking_recording_s(A::tracking_timing(orch), 160) == TRACKING_TIME_INVALID_S);
+    f.mock_rtos.retained_time_ms = 160000;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(A::tracking_timing(orch).last_record_s == 160);
+    CHECK(tracking_last_record_age_s(A::tracking_timing(orch), 170) == 10);
+    CHECK(tracking_recording_s(A::tracking_timing(orch), 170) == TRACKING_TIME_INVALID_S);
+  }
+  SECTION("Backward resume does not fabricate an active segment") {
+    f.mock_rtos.retained_time_ms = 100000;
+    REQUIRE(A::start_tracking(orch));
+    f.mock_rtos.retained_time_ms = 130000;
+    REQUIRE(A::pause_tracking(orch));
+    f.mock_rtos.retained_time_ms = 99000;
+    REQUIRE(A::resume_tracking(orch));
+    CHECK(A::tracking_state(orch) == TrackingState::Recording);
+    CHECK(test_spy::route_file_open);
+    CHECK(A::tracking_timing(orch).recording_accumulated_s == TRACKING_TIME_INVALID_S);
+    CHECK(A::tracking_timing(orch).recording_started_s == TRACKING_TIME_INVALID_S);
+    CHECK(A::tracking_timing(orch).session_started_s == 100);
+  }
+}
+
+TEST_CASE("tracking timing: only accepted scheduled route points advance last-record time",
+          "[Orchestrator][tracking][timing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  f.mock_rtos.retained_time_ms = 100000;
+  REQUIRE(A::start_tracking(orch));
+  f.mock_rtos.retained_time_ms = 110000;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  REQUIRE(A::tracking_timing(orch).last_record_s == 110);
+  f.mock_rtos.retained_time_ms = 120000;
+
+  SECTION("Rejected write") {
+    test_spy::append_route_point_result = false;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(A::tracking_timing(orch).last_record_s == 110);
+    CHECK(f.storage_service.current_route_point_count() == 1);
+  }
+  SECTION("Accepted write followed by sync failure") {
+    test_spy::append_route_point_result = false;
+    test_spy::append_accepts_before_error = true;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(A::tracking_timing(orch).last_record_s == 120);
+    CHECK(f.storage_service.current_route_point_count() == 2);
+  }
+  SECTION("Accepted write with invalid time invalidates the previous age") {
+    f.mock_rtos.retained_time_ms = UINT64_MAX;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(A::tracking_timing(orch).last_record_s == TRACKING_TIME_INVALID_S);
+    CHECK(f.storage_service.current_route_point_count() == 2);
+    CHECK(A::tracking_timing(orch).session_started_s == 100);
+    f.mock_rtos.retained_time_ms = 130000;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK(A::tracking_timing(orch).last_record_s == 130);
+  }
+  SECTION("Manual refresh is not a route point") {
+    Event event{};
+    event.type = EventType::SensorDataReady;
+    event.sensor_data.origin = MeasurementOrigin::Refresh;
+    A::dispatch(orch, event);
+    CHECK(A::tracking_timing(orch).last_record_s == 110);
+    CHECK(f.storage_service.current_route_point_count() == 1);
+  }
+  SECTION("Paused data is not a route point") {
+    REQUIRE(A::pause_tracking(orch));
+    const auto paused = A::tracking_timing(orch);
+    f.mock_rtos.retained_time_ms = 130000;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    check_tracking_timing(A::tracking_timing(orch), paused);
+    CHECK(A::tracking_state(orch) == TrackingState::Paused);
+    return;
+  }
+  CHECK(A::tracking_state(orch) == TrackingState::Recording);
+  CHECK(test_spy::route_file_open);
+}
+
+TEST_CASE("tracking timing: recording and paused sleep preserve timing across per-boot clock reset",
+          "[Orchestrator][tracking][timing][init]") {
+  TestFixture f;
+  f.settings.onboarding_done = true;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  f.mock_rtos.retained_time_ms = 100000;
+  REQUIRE(A::start_tracking(orch));
+  f.mock_rtos.retained_time_ms = 110000;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  f.mock_rtos.retained_time_ms = 130000;
+  bool paused = false;
+  SECTION("Recording") {}
+  SECTION("Paused") {
+    REQUIRE(A::pause_tracking(orch));
+    paused = true;
+  }
+  const auto before = A::tracking_timing(orch);
+  A::prepare_for_sleep(orch);
+  REQUIRE(test_spy::state_saved);
+  check_tracking_timing(test_spy::last_saved_state.tracking_timing, before);
+  CHECK_FALSE(test_spy::route_file_open);
+
+  test_spy::state_to_load = test_spy::last_saved_state;
+  f.mock_rtos.retained_time_ms = 200000;
+  auto restored = f.make_orchestrator();
+  restored.init(WakeCause::Button, {.measurement_completed = true});
+  check_tracking_timing(A::tracking_timing(restored), before);
+  CHECK(tracking_elapsed_s(A::tracking_timing(restored), 200) == 100);
+  CHECK(tracking_recording_s(A::tracking_timing(restored), 200) == (paused ? 30 : 100));
+  CHECK(tracking_last_record_age_s(A::tracking_timing(restored), 200) == 90);
+  CHECK(A::tracking_state(restored) == (paused ? TrackingState::Paused : TrackingState::Recording));
+  CHECK(test_spy::route_file_open == !paused);
+}
+
+TEST_CASE("tracking timing: cold boot, inactive RTC and failed reopen discard stale timing",
+          "[Orchestrator][tracking][timing][init]") {
+  TestFixture f;
+  f.settings.onboarding_done = true;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  test_spy::state_to_load.tracking_state = TrackingState::Recording;
+  test_spy::state_to_load.tracking_session_id = 12345;
+  test_spy::state_to_load.tracking_timing = {100, 0, 100, 110};
+  f.mock_rtos.retained_time_ms = 200000;
+  WakeCause cause = WakeCause::Button;
+  SECTION("Fresh power-on") { cause = WakeCause::PowerOn; }
+  SECTION("Inactive retained session") {
+    test_spy::state_to_load.tracking_state = TrackingState::Idle;
+    test_spy::state_to_load.tracking_session_id = 0;
+  }
+  SECTION("Recording route cannot be reopened") { test_spy::resume_route_result = false; }
+  orch.init(cause, {.measurement_completed = true});
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
+  check_tracking_timing(A::snapshot_state(orch).tracking_timing, TrackingTiming{});
+}
+
+TEST_CASE("tracking timing: mismatched RTC segment invalidates active duration only",
+          "[Orchestrator][tracking][timing][init]") {
+  TestFixture f;
+  f.settings.onboarding_done = true;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  test_spy::state_to_load.tracking_session_id = 12345;
+  SECTION("Recording with a paused timing value") {
+    test_spy::state_to_load.tracking_state = TrackingState::Recording;
+    test_spy::state_to_load.tracking_timing = {100, 30, TRACKING_TIME_INVALID_S, 110};
+  }
+  SECTION("Paused with a running segment") {
+    test_spy::state_to_load.tracking_state = TrackingState::Paused;
+    test_spy::state_to_load.tracking_timing = {100, 0, 100, 110};
+  }
+  f.mock_rtos.retained_time_ms = 200000;
+  orch.init(WakeCause::Button, {.measurement_completed = true});
+  CHECK(A::tracking_state(orch) == test_spy::state_to_load.tracking_state);
+  CHECK(tracking_elapsed_s(A::tracking_timing(orch), 200) == 100);
+  CHECK(tracking_recording_s(A::tracking_timing(orch), 200) == TRACKING_TIME_INVALID_S);
+  CHECK(tracking_last_record_age_s(A::tracking_timing(orch), 200) == 90);
+}
+
+TEST_CASE("tracking timing: inactive Stop is a no-op while Clear Data clears stale timing",
+          "[Orchestrator][tracking][timing]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  const TrackingTiming stale{100, 0, 100, 110};
+  REQUIRE(A::tracking_state(orch) == TrackingState::Idle);
+  A::set_tracking_timing(orch, stale);
+  check_tracking_timing(A::snapshot_state(orch).tracking_timing, TrackingTiming{});
+
+  SECTION("Stop preserves private timing while already Idle") {
+    A::stop_tracking(orch);
+    check_tracking_timing(A::tracking_timing(orch), stale);
+  }
+  SECTION("Clear Data discards private timing even while Idle") {
+    REQUIRE(A::clear_data(orch));
+    check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
+  }
+
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  check_tracking_timing(A::snapshot_state(orch).tracking_timing, TrackingTiming{});
+}
+
+TEST_CASE("pause/resume: keep session, GPS and live data; record results only while Recording",
+          "[Orchestrator][tracking][pause]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  REQUIRE(A::start_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  test_spy::reset();
+
+  REQUIRE(A::pause_tracking(orch));
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  CHECK(A::tracking_session_id(orch) == session);
+  CHECK(test_spy::route_ended);
+  CHECK_FALSE(test_spy::route_file_open);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+  CHECK(A::is_gps_active(orch));
+  CHECK(test_spy::ble_last_status_tracking);
+  CHECK(test_spy::ble_last_status_session == session);
+  CHECK(test_spy::ble_tracking_state == TrackingState::Paused);
+  REQUIRE(A::pause_tracking(orch));
+  CHECK(test_spy::ble_notify_tracking_status_count == 1);
+  CHECK_FALSE(A::start_tracking(orch));
+
+  Event reading{};
+  reading.type = EventType::SensorDataReady;
+  reading.sensor_data.measures.co2.co2 = 555;
+  A::dispatch(orch, reading);
+  CHECK_FALSE(test_spy::route_point_appended);
+  CHECK(test_spy::last_cached_measurement.co2.co2 == 555);
+  CHECK(test_spy::cloud_last_snapshot.co2.co2 == 555);
+  CHECK(test_spy::ble_last_measures.co2.co2 == 555);
+
+  REQUIRE(A::resume_tracking(orch));
+  CHECK(test_spy::route_resumed);
+  CHECK(test_spy::route_session_id == session);
+  CHECK(A::tracking_state(orch) == TrackingState::Recording);
+  CHECK_FALSE(test_spy::gps_started);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+  REQUIRE(A::resume_tracking(orch));
+  CHECK(test_spy::ble_notify_tracking_status_count == 2);
+
+  // The first result processed after Resume is eligible for route recording.
+  A::dispatch(orch, reading);
+  CHECK(test_spy::route_point_appended);
+  CHECK(test_spy::last_route_point.sensors.co2.co2 == 555);
+}
+
+TEST_CASE("pause/resume: storage failures retain a paused session",
+          "[Orchestrator][tracking][pause]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  REQUIRE(A::start_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  test_spy::end_route_result = false;
+  CHECK_FALSE(A::pause_tracking(orch));
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  CHECK_FALSE(test_spy::route_file_open);
+  const auto paused = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(paused.snackbar_text != nullptr);
+  CHECK(std::string(paused.snackbar_text) == "Paused - storage sync failed");
+
+  test_spy::resume_route_result = false;
+  test_spy::route_started = false;
+  CHECK_FALSE(A::resume_tracking(orch));
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  CHECK(A::tracking_session_id(orch) == session);
+  CHECK_FALSE(test_spy::route_started);
+  CHECK_FALSE(test_spy::route_file_open);
+
+  A::stop_tracking(orch);
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  CHECK(A::tracking_session_id(orch) == 0);
+  CHECK_FALSE(test_spy::ble_last_status_tracking);
+  CHECK(test_spy::ble_tracking_state == TrackingState::Idle);
+  CHECK_FALSE(A::pause_tracking(orch));
+  CHECK_FALSE(A::resume_tracking(orch));
+}
+
+TEST_CASE("paused tracking survives button wake without reopening the route",
+          "[Orchestrator][tracking][pause][init]") {
+  TestFixture f;
+  test_spy::state_to_load.tracking_state = TrackingState::Paused;
+  test_spy::state_to_load.tracking_session_id = 12345;
+  auto orch = f.make_orchestrator();
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  orch.init(WakeCause::Button);
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  CHECK(A::tracking_session_id(orch) == 12345);
+  CHECK_FALSE(test_spy::route_resumed);
+  CHECK(A::is_gps_active(orch));
+  CHECK(A::snapshot_state(orch).tracking_state == TrackingState::Paused);
+  CHECK(A::build_context(orch).tracking_state == TrackingState::Paused);
+}
+
+TEST_CASE("paused route may be exported but cannot be deleted",
+          "[Orchestrator][tracking][pause][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  REQUIRE(A::start_tracking(orch));
+  REQUIRE(A::pause_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  Event event{};
+  event.type = EventType::BleHistoryWrite;
+
+  test_spy::ble_pending_history_len = 1;
+  test_spy::ble_history_decode_result.op = BleHistoryOp::Start;
+  test_spy::ble_history_decode_result.session_id = session;
+  A::dispatch(orch, event);
+  CHECK(test_spy::ble_history_start_called);
+  CHECK(test_spy::ble_history_start_session == session);
+  CHECK_FALSE(test_spy::ble_notify_history_error_called);
+
+  test_spy::ble_pending_history_len = 1;
+  test_spy::ble_history_decode_result.op = BleHistoryOp::Delete;
+  A::dispatch(orch, event);
+  CHECK_FALSE(test_spy::ble_history_delete_called);
+  REQUIRE(test_spy::ble_notify_history_error_called);
+  CHECK(std::string(test_spy::ble_last_history_error) == BLE_VAL_ERR_SESSION_ACTIVE);
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+}
+
+TEST_CASE("paused session survives reconnect and is saved for sleep",
+          "[Orchestrator][tracking][pause]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  REQUIRE(A::start_tracking(orch));
+  REQUIRE(A::pause_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  test_spy::reset();
+  Event event{};
+  event.type = EventType::BleConnected;
+  A::dispatch(orch, event);
+  CHECK(test_spy::ble_tracking_state == TrackingState::Paused);
+  CHECK(test_spy::ble_last_status_tracking);
+  CHECK(test_spy::ble_last_status_session == session);
+  CHECK_FALSE(test_spy::route_resumed);
+
+  A::prepare_for_sleep(orch);
+  CHECK(test_spy::state_saved);
+  CHECK(test_spy::last_saved_state.tracking_state == TrackingState::Paused);
+  CHECK(test_spy::last_saved_state.tracking_session_id == session);
+  CHECK_FALSE(test_spy::route_file_open);
+  CHECK_FALSE(test_spy::gps_stop_and_idle_called);
+}
+
+TEST_CASE("BLE pause/resume preserve legacy session commands",
+          "[Orchestrator][tracking][pause][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  const auto command = [&](BleCommand cmd) {
+    test_spy::ble_pending_config_len = 1;
+    test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+    test_spy::ble_config_decode_result.cmd = cmd;
+    Event event{};
+    event.type = EventType::BleConfigWrite;
+    A::dispatch(orch, event);
+  };
+  command(BleCommand::PauseTracking);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_NOT_TRACKING);
+  command(BleCommand::StartTracking);
+  REQUIRE(test_spy::ble_last_command_success);
+  const auto session = A::tracking_session_id(orch);
+  command(BleCommand::PauseTracking);
+  REQUIRE(test_spy::ble_last_command_success);
+  command(BleCommand::StartTracking);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_ALREADY_TRACKING);
+  command(BleCommand::ResumeTracking);
+  CHECK(test_spy::ble_last_command_success);
+  CHECK(A::tracking_session_id(orch) == session);
+  command(BleCommand::PauseTracking);
+  command(BleCommand::StopTracking);
+  CHECK(test_spy::ble_last_command_success);
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+}
 
 TEST_CASE("start_tracking: generates session ID and starts route", "[Orchestrator][tracking]") {
   TestFixture f;
@@ -1385,6 +3410,7 @@ TEST_CASE("clear_data: clears cache and routes, stopping tracking first",
   CHECK_FALSE(A::tracking_active(orch));
   CHECK(A::behavior(orch) == Behavior::Idle);
   CHECK(A::tracking_session_id(orch) == 0);
+  check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
   CHECK(test_spy::route_ended);
   CHECK(test_spy::cache_cleared);
   CHECK(test_spy::routes_cleared);
@@ -1417,6 +3443,7 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
           "[Orchestrator][factory_reset]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  A::set_tracking_timing(orch, {100, 20, 130, 140});
 
   A::settings(orch).operating_mode = OperatingMode::Offline;
   A::settings(orch).gps_mode = GpsMode::AlwaysOff;
@@ -1450,6 +3477,7 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
   CHECK(A::lock_state(orch) == LockState::Locked);
   CHECK_FALSE(A::tracking_active(orch));
   CHECK(A::tracking_session_id(orch) == 0);
+  check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
   CHECK(*f.local_api.get_config().configuration_control == "both");
   CHECK(*f.local_api.get_config().pm_standard == "ugm3");
   CHECK_FALSE(f.local_api.get_system_info().wifi_rssi.has_value());
@@ -1686,30 +3714,28 @@ TEST_CASE("manufacturing: boot short-press after onboarding does not enter Stati
   CHECK_FALSE(test_spy::wifi_try_fallback_called);
 }
 
-TEST_CASE("manufacturing: second boot short-press arms a fuel-gauge learning run",
+TEST_CASE("manufacturing: repeated boot short-presses do not arm fuel-gauge learning",
           "[Orchestrator][manufacturing][fg]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   test_spy::wifi_has_saved_networks = false;
 
+  FORBID_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_));
+  FORBID_CALL(f.mock_config, commit());
+
   // First press -> manufacturing mode (ephemeral, no commit).
   A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
   REQUIRE(A::manufacturing_mode(orch));
 
-  // Second press -> persist the learning run (stage=Charge, cycle=1) + reboot
-  // (reboot is a no-op under TEST_HOST).
-  std::map<std::string, int> writes;
-  std::map<std::string, int> *writes_ptr = &writes;
-  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
-      .SIDE_EFFECT((*writes_ptr)[std::string(_1)] = _2)
-      .RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
-
+  // Further presses must neither arm learning nor restart Stationary bring-up.
+  test_spy::wifi_try_fallback_called = false;
+  A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
   A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
 
-  CHECK(writes["fs_s"] == static_cast<int>(FgLearningStage::Charge));
-  CHECK(writes["fs_c"] == 1);
-  CHECK(writes["fs_i"] == 0);
+  CHECK(A::manufacturing_mode(orch));
+  CHECK(A::mode(orch) == OperatingMode::Stationary);
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+  CHECK_FALSE(test_spy::wifi_try_fallback_called);
 }
 
 TEST_CASE("manufacturing: shutdown resets settings while preserving corrections",
@@ -2289,6 +4315,7 @@ TEST_CASE("check_timers: fires measurement when interval elapses", "[Orchestrato
   REQUIRE(test_spy::measurement_requested);
   REQUIRE(test_spy::last_iterations == 1);
   REQUIRE(test_spy::last_groups == SensorGroup::All);
+  CHECK(A::last_measurement_ms(orch) == 11000); // Next regular deadline follows the request time.
 }
 
 TEST_CASE("check_timers: no measurement when interval not yet elapsed", "[Orchestrator][timers]") {
@@ -2358,6 +4385,87 @@ TEST_CASE("compute_queue_timeout: BMS full poll dominates when status poll not d
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(3000);
   uint32_t timeout = A::compute_queue_timeout_ms(orch);
   REQUIRE(timeout <= 2000);
+}
+
+TEST_CASE("auto-lock eligibility is shared by scheduling, timer firing, and timeout events",
+          "[Orchestrator][timers][inactivity]") {
+  struct EligibilityCase {
+    const char *name;
+    Screen screen;
+    bool unlocked;
+    int auto_lock_seconds;
+    bool setup_session;
+    bool allowed;
+  };
+  const EligibilityCase cases[] = {
+      {"Home", Screen::Home, true, 10, false, true},
+      {"Menu", Screen::MainMenu, true, 10, false, true},
+      {"Locked", Screen::Home, false, 10, false, false},
+      {"Disabled", Screen::Home, true, 0, false, false},
+      {"Setup", Screen::Info, true, 10, true, false},
+      {"Focus", Screen::PairingPasskey, true, 10, false, false},
+      {"Hardware menu", Screen::HardwareTest, true, 10, false, false},
+      {"Peripheral test", Screen::PeripheralTest, true, 10, false, false},
+      {"GPS test", Screen::GpsTest, true, 10, false, false},
+      {"Accelerometer test", Screen::AccelTest, true, 10, false, false},
+      {"Tracking Status", Screen::TrackingStatus, true, 10, false, false},
+  };
+  for (const auto &item : cases) {
+    for (const bool via_event : {false, true}) {
+      CAPTURE(item.name, via_event);
+      TestFixture f;
+      f.settings.auto_lock_seconds = item.auto_lock_seconds;
+      f.settings.measure_interval_seconds = 3600;
+      auto orch = f.make_orchestrator();
+      uint32_t now_ms = 1000;
+      ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+      A::unlock(orch);
+      now_ms = 10'000;
+      A::check_timers(orch); // Rebase due BMS work before the inactivity boundary at 11,000.
+      if (!item.unlocked) {
+        A::lock(orch);
+      }
+      f.ui_manager.set_screen(item.screen);
+      A::set_setup_session_active(orch, item.setup_session);
+      CHECK(A::auto_lock_allowed(orch) == item.allowed);
+
+      now_ms = 10'999;
+      const auto with_setting = A::compute_queue_timeout_ms(orch);
+      A::settings(orch).auto_lock_seconds = 0;
+      const auto without_inactivity = A::compute_queue_timeout_ms(orch);
+      A::settings(orch).auto_lock_seconds = item.auto_lock_seconds;
+      if (item.allowed) {
+        CHECK(with_setting == 1);
+        CHECK(without_inactivity > with_setting);
+      } else {
+        CHECK(with_setting == without_inactivity);
+      }
+
+      now_ms = 11'000;
+      DisplayService::spy_worker_busy = true;
+      const auto updates_before_timeout = DisplayService::spy_update_count;
+      if (via_event) {
+        Event timeout{};
+        timeout.type = EventType::InactivityTimeout;
+        A::dispatch(orch, timeout);
+      } else {
+        A::check_timers(orch);
+      }
+      if (item.allowed) {
+        CHECK(A::lock_state(orch) == LockState::Locked);
+        CHECK(f.ui_manager.current_screen() == Screen::Home);
+        CHECK(DisplayService::spy_last_screen == Screen::Home);
+        CHECK(DisplayService::spy_last_update_wait);
+        CHECK_FALSE(DisplayService::spy_worker_busy);
+      } else {
+        CHECK(A::lock_state(orch) == (item.unlocked ? LockState::Unlocked : LockState::Locked));
+        CHECK(f.ui_manager.current_screen() == item.screen);
+        if (via_event) {
+          CHECK(DisplayService::spy_update_count == updates_before_timeout);
+        }
+      }
+    }
+  }
 }
 
 TEST_CASE("check_timers: fires inactivity when unlocked and due", "[Orchestrator][timers]") {
@@ -2496,10 +4604,10 @@ TEST_CASE("button wake: pre-armed snackbar clears in single timer fire",
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
-      .gps_enabled = false,
-      .tracking_active = false,
+      .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, false);
 
   auto orch = f.make_orchestrator();
 
@@ -3056,6 +5164,30 @@ TEST_CASE("shutdown: works without active tracking", "[Orchestrator][shutdown]")
   REQUIRE_FALSE(test_spy::route_ended); // no route was active
 }
 
+TEST_CASE("shutdown: USB user request saves RTC handoff and reboots", "[Orchestrator][shutdown]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  PowerSnapshot power{};
+  power.charger_status.power_source = BmsPowerSource::UsbDcp;
+  A::set_latest_power(orch, power);
+  SECTION("user shutdown") {
+    A::shutdown(orch);
+    CHECK(test_spy::cache_backed_up);
+    CHECK(test_spy::state_saved);
+    CHECK(test_spy::last_saved_state.has_flag(RtcAppFlag::ChargingOnlyRequested));
+    CHECK(test_spy::power_reboot_called);
+    CHECK_FALSE(test_spy::shutdown_called);
+    CHECK(f.ui_manager.current_screen() == Screen::ShutdownUser);
+    CHECK(DisplayService::spy_last_screen == Screen::ShutdownUser);
+  }
+  SECTION("protective shutdown keeps ship mode") {
+    A::shutdown(orch, ShipModeRequest::OverTemperature);
+    CHECK_FALSE(test_spy::power_reboot_called);
+    CHECK_FALSE(test_spy::last_saved_state.has_flag(RtcAppFlag::ChargingOnlyRequested));
+    CHECK(test_spy::shutdown_called);
+  }
+}
+
 TEST_CASE("shutdown: pushes a disc notice to a connected client", "[Orchestrator][shutdown][ble]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -3064,21 +5196,25 @@ TEST_CASE("shutdown: pushes a disc notice to a connected client", "[Orchestrator
 
   SECTION("over-temperature maps to overheat") {
     A::shutdown(orch, ShipModeRequest::OverTemperature);
+    CHECK_FALSE(test_spy::power_reboot_called);
     CHECK(test_spy::ble_notify_disconnect_called);
     CHECK(test_spy::ble_last_disc_reason == BleDiscReason::Overheat);
   }
   SECTION("under-temperature maps to overheat for protocol compatibility") {
     A::shutdown(orch, ShipModeRequest::UnderTemperature);
+    CHECK_FALSE(test_spy::power_reboot_called);
     CHECK(test_spy::ble_notify_disconnect_called);
     CHECK(test_spy::ble_last_disc_reason == BleDiscReason::Overheat);
   }
   SECTION("over-discharge maps to low_batt") {
     A::shutdown(orch, ShipModeRequest::OverDischarge);
+    CHECK_FALSE(test_spy::power_reboot_called);
     CHECK(test_spy::ble_notify_disconnect_called);
     CHECK(test_spy::ble_last_disc_reason == BleDiscReason::LowBatt);
   }
   SECTION("user long-press maps to user") {
     A::shutdown(orch, ShipModeRequest::None);
+    CHECK_FALSE(test_spy::power_reboot_called);
     CHECK(test_spy::ble_notify_disconnect_called);
     CHECK(test_spy::ble_last_disc_reason == BleDiscReason::User);
   }
@@ -3105,8 +5241,8 @@ TEST_CASE("dispatch: routes SensorDataReady to on_sensor_data", "[Orchestrator][
 
   Event evt{};
   evt.type = EventType::SensorDataReady;
-  evt.sensor_data = MeasuresAGo{};
-  evt.sensor_data.co2.co2 = 999;
+  evt.sensor_data.measures = MeasuresAGo{};
+  evt.sensor_data.measures.co2.co2 = 999;
 
   A::dispatch(orch, evt);
 
@@ -3147,7 +5283,6 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
       static_cast<uint32_t>(GoConfigField::HumidityCorrection) |
       static_cast<uint32_t>(GoConfigField::MeasurementInterval) |
       static_cast<uint32_t>(GoConfigField::GpsMode) |
-      static_cast<uint32_t>(GoConfigField::FrontLedBrightness) |
       static_cast<uint32_t>(GoConfigField::BackLedBrightness) |
       static_cast<uint32_t>(GoConfigField::TouchLedIntensity) |
       static_cast<uint32_t>(GoConfigField::BuzzerEnabled);
@@ -3157,7 +5292,6 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   evt.fetch_config.update.configuration_control = ConfigurationControl::Local;
   evt.fetch_config.update.measure_interval_seconds = 30;
   evt.fetch_config.update.gps_mode = GpsMode::AlwaysOn;
-  evt.fetch_config.update.front_led_brightness = LedBrightness::Dim;
   evt.fetch_config.update.back_led_brightness = LedBrightness::Mid;
   evt.fetch_config.update.touch_led_intensity = TouchLedIntensity::Bright;
   evt.fetch_config.update.buzzer_enabled = true;
@@ -3181,7 +5315,6 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   CHECK(A::settings(orch).configuration_control == ConfigurationControl::Both);
   CHECK(A::settings(orch).measure_interval_seconds == 30);
   CHECK(A::settings(orch).gps_mode == GpsMode::AlwaysOn);
-  CHECK(A::settings(orch).front_led_brightness == LedBrightness::Dim);
   CHECK(A::settings(orch).back_led_brightness == LedBrightness::Mid);
   CHECK(A::settings(orch).touch_led_intensity == TouchLedIntensity::Bright);
   CHECK(A::settings(orch).buzzer_enabled);
@@ -3620,10 +5753,10 @@ TEST_CASE("dispatch: BleAuthComplete failure in setup session returns to boot gu
   CHECK(A::setup_session_active(orch));
   CHECK_FALSE(A::settings(orch).onboarding_done);
 
-  // Boot variant: action row reads "Start using" (not "Back").
+  // Boot variant: action row names the hold gesture (not "Back").
   DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
   REQUIRE(v.row_count == 1);
-  CHECK(std::string(v.rows[0].text) == "Start using");
+  CHECK(std::string(v.rows[0].text) == "Hold Enter to start");
 }
 
 TEST_CASE("dispatch: BleAuthComplete is no-op when not on passkey screen", "[Orchestrator][ble]") {
@@ -3871,21 +6004,11 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
   A::unlock(orch);
   test_spy::reset();
 
-  // Navigate: Home → MainMenu → Settings → CO2: Calibrate → Confirm → Yes
-  // This triggers UIAction::CalibrateCo2 through the UI state machine.
   InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
   InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
-
-  A::on_input(orch, touch_enter); // Home → MainMenu
-  A::on_input(orch, touch_down);  // 0→1
-  A::on_input(orch, touch_down);  // 1→2
-  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-
-  // Navigate to CO2: Calibrate (index 15) — 14 down presses from Back (1)
-  for (int i = 0; i < 14; ++i)
-    A::on_input(orch, touch_down);
-
-  A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
+  enter_settings(f, orch);
+  open_ui_row(f, orch, "Operations");
+  open_ui_row(f, orch, "CO2 Calibration");
   CHECK(f.ui_manager.current_screen() == Screen::Confirm);
 
   // Navigate to Yes (index 4): 3 down presses from Back (1)
@@ -3912,22 +6035,10 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
 
   // Home → MainMenu → Settings
-  A::on_input(orch, touch_enter); // Home → MainMenu
-  A::on_input(orch, touch_down);  // 0→1
-  A::on_input(orch, touch_down);  // 1→2
-  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-
-  // Hardware Test is the last content row (index 17): 16 downs from Back (1).
-  for (int i = 0; i < 16; ++i)
-    A::on_input(orch, touch_down);
-  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
+  enter_hardware_test(f, orch);
   REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
 
-  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
-  A::on_input(orch, touch_down);  // 2→3 (GPS Test)
-  A::on_input(orch, touch_down);  // 3→4 (Accel Test)
-  A::on_input(orch, touch_down);  // 4→5 (FG Learning)
-  A::on_input(orch, touch_enter); // → Confirm (cursor at 1 = Back)
+  open_ui_row(f, orch, "Battery Calibration");
   REQUIRE(f.ui_manager.current_screen() == Screen::Confirm);
 
   // Navigate to Yes (index 4): 3 downs from Back (1).
@@ -3951,10 +6062,9 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   CHECK(writes["fs_i"] == 0);
 }
 
-TEST_CASE("LED test exercises every mapped group and restores configured state",
+TEST_CASE("LED test exercises back and touch LEDs and restores configured state",
           "[Orchestrator][led-test]") {
   TestFixture f;
-  f.settings.front_led_brightness = LedBrightness::Dim;
   f.settings.back_led_brightness = LedBrightness::Mid;
   f.settings.touch_led_intensity = TouchLedIntensity::Dim;
   auto orch = f.make_orchestrator();
@@ -3967,9 +6077,6 @@ TEST_CASE("LED test exercises every mapped group and restores configured state",
   REQUIRE_CALL(f.mock_rtos, delay_ms_impl(3000));
   A::run_led_test(orch);
 
-  CHECK(test_spy::led_front_brightness_count == 2);
-  CHECK(test_spy::led_front_bright_seen);
-  CHECK(test_spy::led_last_front_brightness == LedBrightness::Dim);
   CHECK(test_spy::led_back_brightness_count == 2);
   CHECK(test_spy::led_back_bright_seen);
   CHECK(test_spy::led_last_back_brightness == LedBrightness::Mid);
@@ -4020,7 +6127,6 @@ TEST_CASE("LED test does not interrupt an interactive hardware test",
 
   A::run_led_test(orch);
 
-  CHECK(test_spy::led_front_brightness_count == 0);
   CHECK(test_spy::led_back_brightness_count == 0);
   CHECK(test_spy::led_back_play_count == 0);
   CHECK(test_spy::led_touch_intensity_count == 0);
@@ -4036,25 +6142,24 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   test_spy::reset();
 
   InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
-  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
 
   // Home → MainMenu → Settings → Hardware Test → Peripheral Test.
-  A::on_input(orch, touch_enter); // Home → MainMenu
-  A::on_input(orch, touch_down);  // 0→1
-  A::on_input(orch, touch_down);  // 1→2
-  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 16; ++i)
-    A::on_input(orch, touch_down);
-  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
-  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
-  A::on_input(orch, touch_enter); // → RunPeripheralTest
+  enter_hardware_test(f, orch);
+  open_ui_row(f, orch, "Peripheral Test");
   REQUIRE(f.ui_manager.current_screen() == Screen::PeripheralTest);
 
-  // Four operator-guided actuator confirms (Pass). The AQ sweep must not
-  // start until all actuators are done.
+  const auto first_view = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(std::string(first_view.rows[0].text) == "Back LED cycling?");
+  bool back_pass = true;
+  SECTION("all actuators pass") {}
+  SECTION("back LED failure fails the overall result") {
+    back_pass = false;
+    A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress});
+  }
+
+  // Three actuator confirmations precede the AQ sweep.
   CHECK_FALSE(test_spy::self_test_requested);
-  A::on_input(orch, touch_enter); // Front LED pass
-  A::on_input(orch, touch_enter); // Back LED pass
+  A::on_input(orch, touch_enter); // Back LED result
   A::on_input(orch, touch_enter); // Touch LED pass
   CHECK_FALSE(test_spy::self_test_requested);
   A::on_input(orch, touch_enter); // Buzzer pass → triggers AQ sweep
@@ -4067,6 +6172,13 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   evt.sensor_test_results = SensorTestResults{true, true, true, true, true};
   A::dispatch(orch, evt);
   CHECK(f.ui_manager.current_screen() == Screen::PeripheralTest);
+  const auto summary = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(summary.row_count == 9);
+  CHECK(std::string(summary.rows[0].text) ==
+        (back_pass ? "PASS - tap to exit" : "FAIL - tap to exit"));
+  CHECK(std::string(summary.rows[1].text) == (back_pass ? "Back LED: PASS" : "Back LED: FAIL"));
+  CHECK(std::string(summary.rows[2].text) == "Touch LED: PASS");
+  CHECK(std::string(summary.rows[3].text) == "Buzzer: PASS");
 
   // Tap on the summary exits back to the Hardware Test submenu.
   A::on_input(orch, touch_enter);
@@ -4081,19 +6193,10 @@ TEST_CASE("Peripheral Test: double-press back mid-flow restores and exits",
   A::unlock(orch);
   test_spy::reset();
 
-  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
-  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
   InputEventData double_back{InputSource::TouchEnter, InputType::DoublePress};
 
-  A::on_input(orch, touch_enter); // Home → MainMenu
-  A::on_input(orch, touch_down);
-  A::on_input(orch, touch_down);
-  A::on_input(orch, touch_enter); // → Settings
-  for (int i = 0; i < 16; ++i)
-    A::on_input(orch, touch_down);
-  A::on_input(orch, touch_enter); // → Hardware Test submenu
-  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
-  A::on_input(orch, touch_enter); // → RunPeripheralTest
+  enter_hardware_test(f, orch);
+  open_ui_row(f, orch, "Peripheral Test");
   REQUIRE(f.ui_manager.current_screen() == Screen::PeripheralTest);
 
   // Double-press Back mid-flow leaves the screen; the orchestrator's guard
@@ -4104,19 +6207,8 @@ TEST_CASE("Peripheral Test: double-press back mid-flow restores and exits",
 
 // Navigate Home → Settings → Hardware Test → GPS Test (leaves cursor on GpsTest).
 static void enter_gps_test(TestFixture &f, Orchestrator &orch) {
-  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
-  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
-
-  A::on_input(orch, touch_enter); // Home → MainMenu
-  A::on_input(orch, touch_down);  // 0→1
-  A::on_input(orch, touch_down);  // 1→2
-  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 16; ++i)
-    A::on_input(orch, touch_down);
-  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
-  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
-  A::on_input(orch, touch_down);  // 2→3 (GPS Test)
-  A::on_input(orch, touch_enter); // → OpenGpsTest
+  enter_hardware_test(f, orch);
+  open_ui_row(f, orch, "GPS Test");
   REQUIRE(f.ui_manager.current_screen() == Screen::GpsTest);
 }
 
@@ -4191,44 +6283,38 @@ TEST_CASE("GPS Test: AlwaysOn leaves the receiver running on entry and exit",
 
 // Navigate Home → Settings → Hardware Test → Accel Test (cursor on AccelTest).
 static void enter_accel_test(TestFixture &f, Orchestrator &orch) {
-  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
-  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
-
-  A::on_input(orch, touch_enter); // Home → MainMenu
-  A::on_input(orch, touch_down);  // 0→1
-  A::on_input(orch, touch_down);  // 1→2
-  A::on_input(orch, touch_enter); // → Settings (cursor at 1)
-  for (int i = 0; i < 16; ++i)
-    A::on_input(orch, touch_down);
-  A::on_input(orch, touch_enter); // → Hardware Test submenu (cursor at 1)
-  A::on_input(orch, touch_down);  // 1→2 (Peripheral Test)
-  A::on_input(orch, touch_down);  // 2→3 (GPS Test)
-  A::on_input(orch, touch_down);  // 3→4 (Accel Test)
-  A::on_input(orch, touch_enter); // → OpenAccelTest
+  enter_hardware_test(f, orch);
+  open_ui_row(f, orch, "Accelerometer Test");
   REQUIRE(f.ui_manager.current_screen() == Screen::AccelTest);
 }
 
 TEST_CASE("Accel Test: entry classifies PASS on a healthy at-rest sensor",
           "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
   accel.who_am_i_value = 0x33;
   accel.expected_value = 0x33;
   accel.reading = {0, 0, 1000}; // 1 g on Z at rest
   accel.read_result = true;
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
   enter_accel_test(f, orch);
 
-  CHECK(f.stub_board.new_accel_sensor_calls == 1);
+  CHECK(f.stub_board.new_accel_sensor_calls == 0);
   CHECK(A::accel_who_am_i(orch) == 0x33);
   CHECK(A::accel_id_ok(orch));
   CHECK(A::accel_read_ok(orch));
   CHECK(A::accel_magnitude_mg(orch) == 1000);
   CHECK(A::accel_pass(orch));
+
+  CHECK(accel.last_config.sample_rate_hz == 100);
+  CHECK(accel.last_config.range == AccelRange::G4);
+  CHECK_FALSE(accel.last_config.high_pass);
+  CHECK(accel.last_config.interrupt.high_axes == 0);
+  CHECK(accel.last_config.interrupt.low_axes == 0);
 
   // Exit (any tap) returns to the Hardware Test submenu on the Accel row.
   InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
@@ -4238,14 +6324,14 @@ TEST_CASE("Accel Test: entry classifies PASS on a healthy at-rest sensor",
 
 TEST_CASE("Accel Test: wrong WHO_AM_I fails identity and overall",
           "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
   accel.who_am_i_value = 0x00; // absent / wrong device
   accel.expected_value = 0x33;
   accel.reading = {0, 0, 1000};
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
   enter_accel_test(f, orch);
@@ -4255,14 +6341,14 @@ TEST_CASE("Accel Test: wrong WHO_AM_I fails identity and overall",
 }
 
 TEST_CASE("Accel Test: read failure fails overall", "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
   accel.who_am_i_value = 0x33;
   accel.expected_value = 0x33;
   accel.read_result = false; // present but unreadable
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
   enter_accel_test(f, orch);
@@ -4272,16 +6358,39 @@ TEST_CASE("Accel Test: read failure fails overall", "[Orchestrator][hwtest][acce
   CHECK_FALSE(A::accel_pass(orch));
 }
 
+TEST_CASE("Accel Test: configuration and sample validity gate classification",
+          "[Orchestrator][hwtest][accel]") {
+  FakeAccel accel;
+  TestFixture f(&accel);
+  auto orch = f.make_orchestrator();
+  accel.reading = {0, 0, 1000};
+  AccelWorker worker(f);
+  SECTION("configuration failure") { accel.configure_result = false; }
+  SECTION("sample not ready") { accel.ready = false; }
+  SECTION("invalid X") { accel.reading.x_mg = AccelReading::INVALID; }
+  SECTION("invalid Y") { accel.reading.y_mg = AccelReading::INVALID; }
+  SECTION("invalid Z") { accel.reading.z_mg = AccelReading::INVALID; }
+  SECTION("clipped sample") { accel.reading.clipped = true; }
+  A::start_accel_test(orch);
+  CHECK_FALSE(A::accel_read_ok(orch));
+  CHECK_FALSE(A::accel_pass(orch));
+  A::poll_accel_test(orch);
+  CHECK_FALSE(A::accel_read_ok(orch));
+  if (!accel.configure_result) {
+    CHECK(accel.read_calls == 0);
+  }
+}
+
 TEST_CASE("Accel Test: out-of-band magnitude fails overall", "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
   accel.who_am_i_value = 0x33;
   accel.expected_value = 0x33;
   accel.reading = {0, 0, 2000}; // 2 g → out of the 850–1150 mg band
   accel.read_result = true;
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
   enter_accel_test(f, orch);
@@ -4295,7 +6404,7 @@ TEST_CASE("Accel Test: absent driver (nullptr) fails safely", "[Orchestrator][hw
   TestFixture f;
   auto orch = f.make_orchestrator();
 
-  f.stub_board.accel_to_return = nullptr; // board without an accelerometer
+  CHECK_FALSE(f.accel_service.start()); // Driver probe returned nullptr.
 
   A::unlock(orch);
   enter_accel_test(f, orch);
@@ -4305,30 +6414,29 @@ TEST_CASE("Accel Test: absent driver (nullptr) fails safely", "[Orchestrator][hw
   CHECK_FALSE(A::accel_pass(orch));
 }
 
-TEST_CASE("Accel Test: driver created once and reused across entries",
-          "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+TEST_CASE("Accel Test: entries reuse the service-owned driver", "[Orchestrator][hwtest][accel]") {
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
-  // Two entries → the lazily-created driver is kept, not recreated.
+  // Both entries use the existing service; the orchestrator never creates a driver.
   A::start_accel_test(orch);
   A::start_accel_test(orch);
 
-  CHECK(f.stub_board.new_accel_sensor_calls == 1);
+  CHECK(f.stub_board.new_accel_sensor_calls == 0);
 }
 
 TEST_CASE("Accel Test: poll re-samples and refreshes classification",
           "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
   accel.reading = {0, 0, 1000};
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
   enter_accel_test(f, orch);
@@ -4344,11 +6452,11 @@ TEST_CASE("Accel Test: poll re-samples and refreshes classification",
 
 TEST_CASE("Accel Test: poll deadline caps the queue timeout while open",
           "[Orchestrator][hwtest][accel]") {
-  TestFixture f;
+  FakeAccel accel;
+  TestFixture f(&accel);
   auto orch = f.make_orchestrator();
 
-  FakeAccel accel;
-  f.stub_board.accel_to_return = &accel;
+  AccelWorker worker(f);
 
   A::unlock(orch);
   enter_accel_test(f, orch);
@@ -4404,6 +6512,33 @@ TEST_CASE("Co2CalibrationDone Unsupported shows snackbar", "[Orchestrator][calib
 // 23. prepare_for_sleep
 // ============================================================================
 
+TEST_CASE("prepare_for_sleep: reconciles tracking navigation before its final render",
+          "[Orchestrator][sleep][tracking]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  SECTION("Idle dismisses obsolete Status") {
+    f.ui_manager.sync_tracking_state(TrackingState::Recording);
+    f.ui_manager.set_screen(Screen::TrackingStatus);
+    A::prepare_for_sleep(orch);
+    CHECK(f.ui_manager.current_screen() == Screen::MainMenu);
+    CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(std::string(values.rows[1].text) == "Start Tracking");
+    CHECK(test_spy::last_saved_state.tracking_state == TrackingState::Idle);
+  }
+  SECTION("Paused state controls the menu label") {
+    REQUIRE(A::start_tracking(orch));
+    REQUIRE(A::pause_tracking(orch));
+    f.ui_manager.sync_tracking_state(TrackingState::Recording);
+    f.ui_manager.set_screen(Screen::TrackingMenu);
+    A::prepare_for_sleep(orch);
+    CHECK(f.ui_manager.current_screen() == Screen::TrackingMenu);
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(std::string(values.rows[3].text) == "Resume Tracking");
+    CHECK(test_spy::last_saved_state.tracking_state == TrackingState::Paused);
+  }
+}
+
 TEST_CASE("prepare_for_sleep: stops all services, saves state, and deep sleeps display",
           "[Orchestrator][sleep]") {
   TestFixture f;
@@ -4451,7 +6586,7 @@ TEST_CASE("prepare_for_sleep: short sleep keeps PM measuring and saves warm stat
   CHECK(test_spy::sensor_stopped);
   CHECK_FALSE(test_spy::sensor_stop_sleep_pm);
   CHECK(test_spy::state_saved);
-  CHECK(test_spy::last_saved_state.sensors_warm);
+  CHECK(test_spy::last_saved_state.has_flag(RtcAppFlag::SensorsWarm));
 }
 
 TEST_CASE("prepare_for_sleep: long sleep sleeps PM and saves cold state",
@@ -4466,7 +6601,7 @@ TEST_CASE("prepare_for_sleep: long sleep sleeps PM and saves cold state",
   CHECK(test_spy::sensor_stopped);
   CHECK(test_spy::sensor_stop_sleep_pm);
   CHECK(test_spy::state_saved);
-  CHECK_FALSE(test_spy::last_saved_state.sensors_warm);
+  CHECK_FALSE(test_spy::last_saved_state.has_flag(RtcAppFlag::SensorsWarm));
 }
 
 TEST_CASE("prepare_for_sleep: flushes and closes route file when tracking is active",
@@ -4500,7 +6635,7 @@ TEST_CASE("prepare_for_sleep: flushes and closes route file when tracking is act
   // end_route() that closes the file, not stop_tracking().  The next wake
   // will call resume_route() to reopen the file in append mode.
   CHECK(test_spy::state_saved);
-  CHECK(test_spy::last_saved_state.tracking_active == true);
+  CHECK(test_spy::last_saved_state.tracking_state == TrackingState::Recording);
   CHECK(test_spy::last_saved_state.tracking_session_id != 0);
 }
 
@@ -4517,10 +6652,10 @@ TEST_CASE("init(Timer, promoted, locked): RTC restored, measures seeded, no meas
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
-      .gps_enabled = true,
-      .tracking_active = true,
+      .tracking_state = TrackingState::Recording,
       .tracking_session_id = 55555,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, true);
 
   auto orch = f.make_orchestrator();
 
@@ -4574,10 +6709,10 @@ TEST_CASE("init(Timer, promoted, unlocked): RTC restored, unlock called, no meas
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
-      .gps_enabled = false,
-      .tracking_active = false,
+      .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, false);
 
   auto orch = f.make_orchestrator();
 
@@ -4625,10 +6760,10 @@ TEST_CASE("init(Timer, promoted, unlocked, painted): state set directly, no upda
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
-      .gps_enabled = true,
-      .tracking_active = false,
+      .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, true);
 
   auto orch = f.make_orchestrator();
 
@@ -4661,10 +6796,10 @@ TEST_CASE("init(Timer, promoted, no measures): RTC restored, measurement request
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
-      .gps_enabled = true,
-      .tracking_active = false,
+      .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, true);
 
   auto orch = f.make_orchestrator();
 
@@ -4699,10 +6834,10 @@ TEST_CASE("init(PowerOn, default handoff): no RTC restored, locked, measurement 
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
-      .gps_enabled = false,
-      .tracking_active = true,
+      .tracking_state = TrackingState::Recording,
       .tracking_session_id = 99999,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, false);
 
   auto orch = f.make_orchestrator();
 
@@ -4739,10 +6874,10 @@ TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with bu
       .mode = OperatingMode::Offline,
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
-      .gps_enabled = false,
-      .tracking_active = false,
+      .tracking_state = TrackingState::Idle,
       .tracking_session_id = 0,
   };
+  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, false);
 
   auto orch = f.make_orchestrator();
 
@@ -4822,17 +6957,38 @@ TEST_CASE("background suppression: sensor data on MainMenu does not update displ
   CHECK(DisplayService::spy_update_count == 0);
 }
 
-TEST_CASE("background suppression: sensor data on Settings does not update display",
+TEST_CASE("background suppression: settings groups do not update display",
           "[Orchestrator][display][suppression]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  f.ui_manager.set_screen(Screen::Settings);
+  for (Screen screen : {Screen::Settings, Screen::Operations, Screen::DisplayTouch}) {
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    f.ui_manager.set_screen(screen);
 
-  DisplayService::spy_update_count = 0;
-  MeasuresAGo data{};
-  A::on_sensor_data(orch, data);
+    DisplayService::spy_update_count = 0;
+    MeasuresAGo data{};
+    A::on_sensor_data(orch, data);
 
-  CHECK(DisplayService::spy_update_count == 0);
+    CHECK(DisplayService::spy_update_count == 0);
+  }
+}
+
+TEST_CASE("settings groups and moved melody choices retain inactivity lock",
+          "[Orchestrator][timers][menu]") {
+  for (const char *group : {"Operations", "Display & Touch", "Hardware Test"}) {
+    TestFixture f;
+    f.settings.auto_lock_seconds = 10;
+    auto orch = f.make_orchestrator();
+    A::unlock(orch);
+    enter_settings(f, orch);
+    open_ui_row(f, orch, group);
+    if (std::string(group) == "Hardware Test") {
+      open_ui_row(f, orch, "Play Melody");
+    }
+    ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
+    A::check_timers(orch);
+    CHECK(A::lock_state(orch) == LockState::Locked);
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
 }
 
 TEST_CASE("background suppression: BLE connect on MainMenu does not update display",
@@ -5146,6 +7302,7 @@ struct PmSleepFixture {
   StubGoBoard stub_board;
   PortableWifiProvisioner portable_provisioner;
   OtaService ota_service;
+  AccelService accel_service;
 
   MockRTOS mock_rtos;
   MockConfigStore mock_config;
@@ -5191,11 +7348,12 @@ struct PmSleepFixture {
                               *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
                              PortableWifiProvisioner::Config{}),
         ota_service(stub_ble_server, power_service, OtaService::Config{}),
+        accel_service(nullptr, test_gpio_hal, nullptr, {}),
         services{sensor_producer,   gps_service,          input_service,        display_service,
                  led_service_inert, buzzer_service_inert, storage_service,      power_service,
                  ui_manager,        ble_service,          wifi_service,         cloud_service,
                  local_api,         serial_command,       portable_provisioner, stub_board,
-                 ota_service} {
+                 ota_service,       accel_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     settings.operating_mode = OperatingMode::Portable;
@@ -5215,11 +7373,239 @@ struct PmSleepFixture {
 
   ~PmSleepFixture() { RTOS::set_instance(nullptr); }
 
-  Orchestrator make_orchestrator() { return {nullptr, services, settings, mock_config, "TEST00"}; }
+  Orchestrator make_orchestrator() {
+    Orchestrator orch{nullptr, services, settings, mock_config, "TEST00"};
+    A::sensor_ready(orch);
+    return orch;
+  }
 
 private:
   alignas(8) static inline char _stub_buf[64];
 };
+
+static void confirm_peripheral_actuators(Orchestrator &orch) {
+  const InputEventData pass{InputSource::TouchEnter, InputType::ShortPress};
+  A::on_input(orch, pass); // Back LED
+  A::on_input(orch, pass); // Touch LEDs
+  A::on_input(orch, pass); // Buzzer
+}
+
+TEST_CASE("Peripheral Test: wakes PM and waits for preparation before the sweep",
+          "[Orchestrator][hwtest][peripheral][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.ui_manager.set_screen(Screen::PeripheralTest);
+
+  bool sleep_pending = false;
+  bool already_preparing = false;
+  SECTION("PM asleep") { A::sensor_asleep(orch); }
+  SECTION("PM sleep in progress") {
+    sleep_pending = true;
+    A::sensor_sleeping(orch);
+  }
+  SECTION("PM warmup in progress") {
+    already_preparing = true;
+    Event event{};
+    event.type = EventType::PmPreparationStarted;
+    A::dispatch(orch, event);
+  }
+
+  A::start_peripheral_test(orch);
+  CHECK(test_spy::prepare_requested == (!sleep_pending && !already_preparing));
+  confirm_peripheral_actuators(orch);
+  CHECK_FALSE(test_spy::self_test_requested);
+
+  Event event{};
+  if (sleep_pending) {
+    event.type = EventType::PmSensorAsleep;
+    A::dispatch(orch, event);
+    CHECK(test_spy::prepare_requested);
+    CHECK(test_spy::pm_power_on);
+    CHECK_FALSE(test_spy::self_test_requested);
+  }
+
+  event.type = EventType::PmPreparationStarted;
+  A::dispatch(orch, event);
+  CHECK_FALSE(test_spy::self_test_requested);
+  event.type = EventType::PmPrepared;
+  A::dispatch(orch, event);
+  CHECK(test_spy::self_test_requested);
+  CHECK_FALSE(test_spy::pm_sleep_requested);
+  CHECK(A::settings(orch).measure_interval_seconds == 60);
+
+  test_spy::self_test_requested = false;
+  A::dispatch(orch, event);
+  CHECK_FALSE(test_spy::self_test_requested); // Never launch the same sweep twice.
+}
+
+TEST_CASE("Peripheral Test: serializes the sweep with scheduled measurements",
+          "[Orchestrator][hwtest][peripheral][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.ui_manager.set_screen(Screen::PeripheralTest);
+  uint64_t now = 60000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  A::check_timers(orch);
+  REQUIRE(test_spy::measurement_requested);
+  test_spy::measurement_requested = false;
+
+  A::start_peripheral_test(orch);
+  confirm_peripheral_actuators(orch);
+  CHECK_FALSE(test_spy::self_test_requested);
+  A::on_sensor_data(orch, MeasuresAGo{});
+  REQUIRE(test_spy::self_test_requested);
+  CHECK_FALSE(test_spy::pm_sleep_requested);
+
+  now += 60000;
+  A::check_timers(orch);
+  CHECK_FALSE(test_spy::measurement_requested);
+  Event done{};
+  done.type = EventType::SensorTestDone;
+  done.sensor_test_results = SensorTestResults{true, true, true, true, true};
+  A::dispatch(orch, done);
+  const auto view = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(std::string(view.rows[0].text) == "PASS - tap to exit");
+  A::check_timers(orch);
+  CHECK(test_spy::measurement_requested);
+}
+
+TEST_CASE("Peripheral Test: holds PM awake until any test exit",
+          "[Orchestrator][hwtest][peripheral][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.ui_manager.set_screen(Screen::PeripheralTest);
+  A::start_peripheral_test(orch);
+
+  // A normal measurement or an interval update cannot sleep PM during the test.
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK_FALSE(test_spy::pm_sleep_requested);
+  const GoSettings previous = A::settings(orch);
+  A::settings(orch).measure_interval_seconds = 120;
+  A::reschedule_sensor_timer(orch, previous);
+  CHECK_FALSE(test_spy::pm_sleep_requested);
+
+  InputType exit = InputType::DoublePress;
+  SECTION("double-press back during actuators") {}
+  SECTION("long-press home during actuators") { exit = InputType::LongPress; }
+  SECTION("tap completed summary") {
+    confirm_peripheral_actuators(orch);
+    Event done{};
+    done.type = EventType::SensorTestDone;
+    A::dispatch(orch, done);
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK_FALSE(test_spy::pm_sleep_requested);
+    exit = InputType::ShortPress;
+  }
+  A::on_input(orch, {InputSource::TouchEnter, exit});
+  CHECK(f.ui_manager.current_screen() != Screen::PeripheralTest);
+  CHECK(test_spy::pm_sleep_requested);
+  CHECK(A::settings(orch).measure_interval_seconds == 120);
+}
+
+TEST_CASE("Peripheral Test: early exit cancels a sweep waiting for PM",
+          "[Orchestrator][hwtest][peripheral][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.ui_manager.set_screen(Screen::PeripheralTest);
+  bool sleep_pending = false;
+  SECTION("wake already requested") { A::sensor_asleep(orch); }
+  SECTION("sleep still in progress") {
+    sleep_pending = true;
+    A::sensor_sleeping(orch);
+  }
+  A::start_peripheral_test(orch);
+  confirm_peripheral_actuators(orch);
+  A::on_input(orch, {InputSource::TouchEnter, InputType::DoublePress});
+  test_spy::prepare_requested = false;
+  Event event{};
+  event.type = sleep_pending ? EventType::PmSensorAsleep : EventType::PmPrepared;
+  A::dispatch(orch, event);
+  CHECK_FALSE(test_spy::self_test_requested);
+  CHECK_FALSE(test_spy::prepare_requested);
+  CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+}
+
+TEST_CASE("Peripheral Test: an in-flight sweep retains PM ownership after exit",
+          "[Orchestrator][hwtest][peripheral][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.ui_manager.set_screen(Screen::PeripheralTest);
+  A::start_peripheral_test(orch);
+  confirm_peripheral_actuators(orch);
+  REQUIRE(test_spy::self_test_requested);
+  A::on_input(orch, {InputSource::TouchEnter, InputType::DoublePress});
+  CHECK_FALSE(test_spy::pm_sleep_requested);
+
+  SECTION("completion restores sleep without changing the screen") {
+    Event done{};
+    done.type = EventType::SensorTestDone;
+    A::dispatch(orch, done);
+    CHECK(test_spy::pm_sleep_requested);
+    CHECK(f.ui_manager.current_screen() == Screen::HardwareTest);
+  }
+  SECTION("scheduled and refresh requests wait for completion after exit") {
+    uint64_t now = 60000;
+    ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+    A::check_timers(orch);
+    CHECK_FALSE(test_spy::measurement_requested);
+    Event shake{};
+    shake.type = EventType::ShakeDetected;
+    shake.shake_detected_ms = static_cast<uint32_t>(now);
+    A::dispatch(orch, shake);
+    CHECK_FALSE(test_spy::measurement_requested);
+    Event done{};
+    done.type = EventType::SensorTestDone;
+    A::dispatch(orch, done);
+    CHECK(test_spy::measurement_requested);
+    CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
+    CHECK_FALSE(test_spy::pm_sleep_requested);
+  }
+  SECTION("reopening waits for the old sweep and discards its result") {
+    f.ui_manager.set_screen(Screen::PeripheralTest);
+    A::start_peripheral_test(orch);
+    test_spy::self_test_requested = false;
+    confirm_peripheral_actuators(orch);
+    CHECK_FALSE(test_spy::self_test_requested);
+    Event done{};
+    done.type = EventType::SensorTestDone;
+    done.sensor_test_results = SensorTestResults{true, true, true, true, true};
+    A::dispatch(orch, done);
+    CHECK(test_spy::self_test_requested);
+    const auto view = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(view.row_count != 9); // The old result must not become the new summary.
+    CHECK_FALSE(test_spy::pm_sleep_requested);
+  }
+}
+
+TEST_CASE("Peripheral Test: stopping the producer cancels pending test ownership",
+          "[Orchestrator][hwtest][peripheral][pm_sleep]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  f.ui_manager.set_screen(Screen::PeripheralTest);
+  A::start_peripheral_test(orch);
+  confirm_peripheral_actuators(orch);
+  REQUIRE(test_spy::self_test_requested);
+
+  A::pause_sensitive_services(orch);
+  A::resume_sensitive_services(orch);
+  Event ready{};
+  ready.type = EventType::PmPrepared;
+  A::dispatch(orch, ready);
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK(test_spy::pm_sleep_requested);
+}
 
 TEST_CASE("PM sleep: on_sensor_data requests PM sleep for Portable + long interval",
           "[Orchestrator][pm_sleep]") {
@@ -5238,6 +7624,7 @@ TEST_CASE("PM sleep: on_sensor_data requests PM sleep for Portable + long interv
 
 TEST_CASE("PM sleep: PmSensorAsleep event isolates the PM bus", "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
 
@@ -5287,6 +7674,7 @@ TEST_CASE("PM sleep: on_sensor_data requests PM sleep in Stationary mode",
   PmSleepFixture f;
   f.settings.measure_interval_seconds = 60;
   f.settings.operating_mode = OperatingMode::Stationary;
+  test_spy::wifi_has_saved_networks = true; // keep provisioning from pausing sensors
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
 
@@ -5300,9 +7688,11 @@ TEST_CASE("PM sleep: on_sensor_data requests PM sleep in Stationary mode",
 
 TEST_CASE("PM sleep: mode change powers on and wakes PM", "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
+  test_spy::wifi_has_saved_networks = true;
   f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   test_spy::pm_power_set = false;
   test_spy::pm_power_on = false;
@@ -5319,6 +7709,7 @@ TEST_CASE("PM sleep: check_timers fires prepare at warmup deadline", "[Orchestra
   f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Advance time to prepare deadline: 60000 - 10000 = 50000 ms after last measurement
   f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(50000);
@@ -5331,7 +7722,7 @@ TEST_CASE("PM sleep: check_timers fires prepare at warmup deadline", "[Orchestra
   CHECK(test_spy::prepare_requested);
   CHECK(test_spy::pm_power_set);
   CHECK(test_spy::pm_power_on);
-  CHECK(A::pm_prepare_sent(orch));
+  CHECK(A::pm_preparing(orch));
 }
 
 TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
@@ -5340,6 +7731,7 @@ TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
   f.settings.measure_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Advance time to 49s — 1s before prepare deadline
   f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(49000);
@@ -5349,7 +7741,7 @@ TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
   A::check_timers(orch);
 
   CHECK_FALSE(test_spy::prepare_requested);
-  CHECK_FALSE(A::pm_prepare_sent(orch));
+  CHECK_FALSE(A::pm_preparing(orch));
 }
 
 TEST_CASE("PM sleep: check_timers skips prepare for short interval", "[Orchestrator][pm_sleep]") {
@@ -5357,6 +7749,7 @@ TEST_CASE("PM sleep: check_timers skips prepare for short interval", "[Orchestra
   f.settings.measure_interval_seconds = 10; // below threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Even past the would-be deadline, prepare should not fire
   f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
@@ -5374,6 +7767,7 @@ TEST_CASE("PM sleep: reschedule requests PM sleep when interval increases above 
   f.settings.measure_interval_seconds = 10; // starts below threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_ready(orch); // Boot measurement has already completed.
 
   // Change interval to above threshold
   A::settings(orch).measure_interval_seconds = 60;
@@ -5392,6 +7786,7 @@ TEST_CASE("PM sleep: reschedule powers on and wakes PM when interval decreases b
   f.settings.measure_interval_seconds = 60; // starts above threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Change interval to below threshold
   A::settings(orch).measure_interval_seconds = 10;
@@ -5711,7 +8106,7 @@ TEST_CASE("Stationary entry with saved credentials calls connect_with_saved_cred
   CHECK(test_spy::wifi_static_ip_was_null); // settings.static_ip.ip == 0
 }
 
-TEST_CASE("Stationary entry without saved credentials calls try_default_fallback_credentials",
+TEST_CASE("Stationary entry without saved credentials opens BLE provisioning immediately",
           "[Orchestrator][stationary][entry]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -5720,8 +8115,11 @@ TEST_CASE("Stationary entry without saved credentials calls try_default_fallback
 
   A::change_mode(orch, OperatingMode::Stationary);
 
-  CHECK(test_spy::wifi_try_fallback_called);
+  CHECK_FALSE(test_spy::wifi_try_fallback_called);
   CHECK_FALSE(test_spy::wifi_connect_saved_called);
+  CHECK(test_spy::wifi_start_provisioning_called);
+  CHECK(test_spy::wifi_start_provisioning_transport == ProvisioningTransport::BleOnly);
+  CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
 }
 
 TEST_CASE("Stationary entry forwards static IP when settings.static_ip.ip != 0",
@@ -5780,7 +8178,8 @@ TEST_CASE("Cold-boot Stationary calls init_wifi_subsystem exactly once",
   orch.init(WakeCause::PowerOn);
 
   CHECK(f.stub_board.init_wifi_subsystem_calls == 1);
-  CHECK(test_spy::wifi_try_fallback_called);
+  CHECK(test_spy::wifi_start_provisioning_called);
+  CHECK_FALSE(test_spy::wifi_try_fallback_called);
 }
 
 TEST_CASE("Portable -> Stationary tears down BLE before bringing up Wi-Fi",
@@ -6299,18 +8698,23 @@ TEST_CASE("enter_stationary initializes both cloud runtime gates from active set
   CHECK_FALSE(test_spy::cloud_last_config_fetch_enabled);
 }
 
-TEST_CASE("enter_stationary without saved credentials shows fallback Info text",
+TEST_CASE("manufacturing entry uses factory Wi-Fi even with saved credentials",
           "[Orchestrator][session][bring_up]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_networks = false;
+  A::set_manufacturing_mode(orch, true);
+  test_spy::wifi_has_saved_networks = true;
 
   A::enter_stationary(orch);
 
   CHECK(f.ui_manager.current_screen() == Screen::Info);
   CHECK(test_spy::wifi_try_fallback_called);
+  CHECK_FALSE(test_spy::wifi_connect_saved_called);
+  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+  const auto values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(std::string(values.info_text) == "Trying default Wi-Fi...");
 }
 
 TEST_CASE("enter_stationary clears any pre-existing snackbar on entry",
@@ -6353,6 +8757,7 @@ TEST_CASE("change_mode(Stationary) still re-enables PM power",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::set_mode(orch, OperatingMode::Portable);
+  A::sensor_asleep(orch);
   test_spy::wifi_has_saved_networks = true;
   test_spy::pm_power_set = false;
   test_spy::pm_power_on = false;
@@ -6409,6 +8814,93 @@ TEST_CASE("bring-up disconnect shows failure Info before opening provisioning",
   CHECK(DisplayService::spy_flush_count >= 1);
   CHECK(test_spy::wifi_start_provisioning_called);
   CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
+}
+
+TEST_CASE("manufacturing startup failures wait for the connection window",
+          "[Orchestrator][manufacturing][wifi]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::enter_manufacturing_mode(orch);
+  test_spy::wifi_is_connecting = true;
+
+  for (const auto reason :
+       {WifiDisconnectReason::auth_failed, WifiDisconnectReason::no_ap_found,
+        WifiDisconnectReason::assoc_failed, WifiDisconnectReason::dhcp_failed,
+        WifiDisconnectReason::connection_lost, WifiDisconnectReason::unknown,
+        WifiDisconnectReason::handshake_failed, WifiDisconnectReason::ap_disconnected}) {
+    A::dispatch(orch, make_wifi_disconnected(reason));
+    CHECK(reboot_count == 0);
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_schedule_reconnect_called);
+    CHECK(f.ui_manager.current_screen() == Screen::Info);
+  }
+
+  test_spy::wifi_is_connecting = false;
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::requested_by_user));
+  CHECK(reboot_count == 0);
+  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+}
+
+TEST_CASE("manufacturing timeout paints and holds failure before reboot without persisting",
+          "[Orchestrator][manufacturing][wifi]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  FORBID_CALL(f.mock_config, commit());
+  A::enter_manufacturing_mode(orch);
+  DisplayService::spy_flush_count = 0;
+  bool held_failure = false;
+  auto check_failure = [&] {
+    CHECK(f.ui_manager.current_screen() == Screen::Info);
+    const auto values = f.ui_manager.build_values(A::build_context(orch));
+    REQUIRE(values.info_text != nullptr);
+    CHECK(std::string(values.info_text) == "Wi-Fi connection failed");
+    CHECK(DisplayService::spy_last_screen == Screen::Info);
+    CHECK(DisplayService::spy_flush_count == 1);
+    CHECK(test_spy::wifi_shutdown_called);
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_schedule_reconnect_called);
+  };
+  REQUIRE_CALL(f.mock_rtos, delay_ms_impl(1000)).LR_SIDE_EFFECT({
+    check_failure();
+    CHECK(reboot_count == 0);
+    held_failure = true;
+  });
+  during_reboot = [&] {
+    check_failure();
+    CHECK(held_failure);
+  };
+
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::connection_lost));
+
+  CHECK(reboot_count == 1);
+  CHECK_FALSE(A::settings(orch).onboarding_done);
+  CHECK_FALSE(test_spy::wifi_clear_credentials_called);
+}
+
+TEST_CASE("manufacturing after first IP keeps runtime reconnect even for a queued timeout",
+          "[Orchestrator][manufacturing][wifi][reconnect]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::enter_manufacturing_mode(orch);
+  test_spy::wifi_has_been_online = true;
+  test_spy::wifi_is_online = true;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+  test_spy::wifi_is_online = false;
+
+  for (const auto reason :
+       {WifiDisconnectReason::connection_lost, WifiDisconnectReason::auth_failed,
+        WifiDisconnectReason::no_ap_found, WifiDisconnectReason::assoc_failed,
+        WifiDisconnectReason::dhcp_failed, WifiDisconnectReason::unknown,
+        WifiDisconnectReason::handshake_failed, WifiDisconnectReason::ap_disconnected}) {
+    const int reconnects = test_spy::wifi_schedule_reconnect_count;
+    A::dispatch(orch, make_wifi_disconnected(reason));
+    CHECK(test_spy::wifi_schedule_reconnect_count == reconnects + 1);
+    CHECK(reboot_count == 0);
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_shutdown_called);
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
 }
 
 TEST_CASE("on_wifi_connected reconnect on Home arms the \"Wi-Fi connected\" snackbar",
@@ -7685,4 +10177,431 @@ TEST_CASE("provisioning success publishes online RSSI",
 
   REQUIRE(f.local_api.get_system_info().wifi_rssi.has_value());
   CHECK(*f.local_api.get_system_info().wifi_rssi == -58);
+}
+
+TEST_CASE("Shake: orchestrator delegates acknowledgment regardless of sound setting",
+          "[Orchestrator][Shake]") {
+  TestFixture f;
+  GoSettings settings;
+  settings.buzzer_enabled = true;
+  SECTION("sound enabled on locked Home") {}
+  SECTION("sound disabled") { settings.buzzer_enabled = false; }
+  f.settings = settings;
+  auto orch = f.make_orchestrator();
+  Event event{};
+  event.type = EventType::ShakeDetected;
+  event.shake_detected_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  test_spy::reset();
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == 1); // BuzzerService owns the sound-enabled check.
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
+  CHECK_FALSE(test_spy::prepare_requested);
+  CHECK(test_spy::led_back_play_count == 0);
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+}
+
+TEST_CASE("Shake: event freshness has a 500 ms limit across uptime wraparound",
+          "[Orchestrator][Shake]") {
+  TestFixture f;
+  f.settings.buzzer_enabled = true;
+  auto orch = f.make_orchestrator();
+  uint64_t now = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  for (const uint32_t detected_ms : {1000u, UINT32_MAX - 200}) {
+    for (const uint32_t age_ms : {0u, 499u, 500u, 501u, 5000u}) {
+      CAPTURE(detected_ms, age_ms);
+      now = static_cast<uint64_t>(detected_ms) + age_ms;
+      Event event{};
+      event.type = EventType::ShakeDetected;
+      event.shake_detected_ms = detected_ms;
+      test_spy::reset();
+      A::clear_refresh(orch); // Each table entry is an independent gesture.
+      A::dispatch(orch, event);
+      CHECK(test_spy::buzzer_refresh_ack_count == (age_ms <= 500 ? 1 : 0));
+    }
+  }
+}
+
+TEST_CASE("Shake: Hardware Test uses the worker's sensor and ignores shakes on its screen",
+          "[Orchestrator][Shake][hwtest]") {
+  FakeAccel sensor;
+  TestFixture f(&sensor);
+  GoSettings settings;
+  settings.buzzer_enabled = true;
+  f.settings = settings;
+  auto orch = f.make_orchestrator();
+  sensor.reading = {0, 0, 1000};
+  AccelWorker worker(f);
+  auto &service = worker.service;
+  Event event{};
+  event.type = EventType::ShakeDetected;
+  event.shake_detected_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  A::unlock(orch);
+  enter_accel_test(f, orch);
+  CHECK(A::accel_pass(orch));
+  CHECK(A::accel_magnitude_mg(orch) == 1000);
+  CHECK(f.stub_board.new_accel_sensor_calls == 0);
+  CHECK(AccelServiceTestAccess::running(service));
+  CHECK(sensor.power_down_calls == 0);
+  CHECK(sensor.last_config.range == AccelRange::G4);
+  CHECK_FALSE(sensor.last_config.high_pass);
+  test_spy::reset();
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == 0);
+}
+
+TEST_CASE("Shake: application flows ignore events without stopping the worker",
+          "[Orchestrator][Shake]") {
+  FakeAccel sensor;
+  TestFixture f(&sensor);
+  f.settings.buzzer_enabled = true;
+  auto orch = f.make_orchestrator();
+  AccelWorker worker(f);
+  const int configurations = sensor.configure_calls;
+  uint64_t now = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  void (*finish)(Orchestrator &) = nullptr;
+  SECTION("peripheral test") {
+    A::start_peripheral_test(orch);
+    finish = A::finish_peripheral_test;
+  }
+  SECTION("provisioning") {
+    A::pause_sensitive_services(orch);
+    finish = A::resume_sensitive_services;
+  }
+  SECTION("OTA") {
+    A::enter_ota(orch);
+    finish = [](Orchestrator &o) { A::exit_ota(o, nullptr); };
+  }
+  Event event{};
+  event.type = EventType::ShakeDetected;
+  event.shake_detected_ms = static_cast<uint32_t>(now);
+  test_spy::reset();
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == 0);
+  REQUIRE(finish != nullptr);
+  finish(orch);
+  A::dispatch(orch, event); // A fresh queued event is accepted once the flow ends.
+  CHECK(test_spy::buzzer_refresh_ack_count == 1);
+  now += 501;
+  test_spy::reset();
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == 0);
+  event.shake_detected_ms = static_cast<uint32_t>(now);
+  A::clear_refresh(orch);
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == 1);
+  CHECK(AccelServiceTestAccess::running(worker.service));
+  CHECK(sensor.power_down_calls == 0);
+  CHECK(sensor.configure_calls == configurations);
+}
+
+TEST_CASE("Shake: buffered shakes after melody playback are accepted by age",
+          "[Orchestrator][Shake]") {
+  FakeAccel sensor;
+  TestFixture f(&sensor);
+  f.settings.buzzer_enabled = true;
+  auto orch = f.make_orchestrator();
+  AccelWorker worker(f);
+  uint64_t now = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  uint32_t remaining_playback_ms = 501;
+  SECTION("event expires while the melody plays") {}
+  SECTION("event remains fresh when the melody ends") { remaining_playback_ms = 500; }
+  A::unlock(orch);
+  enter_hardware_test(f, orch);
+  open_ui_row(f, orch, "Play Melody");
+  test_spy::reset();
+  bool played = false;
+  test_spy::during_melody = [&] {
+    played = true;
+    CHECK(AccelServiceTestAccess::running(worker.service));
+    Event event{};
+    event.type = EventType::ShakeDetected;
+    event.shake_detected_ms = static_cast<uint32_t>(now);
+    REQUIRE(RTOS::queue_send(f.event_queue, &event, 0));
+    now += remaining_playback_ms;
+  };
+  open_ui_row(f, orch, "Chime");
+  REQUIRE(played);
+  test_spy::during_melody = nullptr;
+  Event event{};
+  REQUIRE(RTOS::queue_receive(f.event_queue, &event, 0));
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == (remaining_playback_ms <= 500 ? 1 : 0));
+  test_spy::reset();
+  event.shake_detected_ms = static_cast<uint32_t>(now);
+  A::clear_refresh(orch);
+  A::dispatch(orch, event);
+  CHECK(test_spy::buzzer_refresh_ack_count == 1);
+  CHECK(sensor.power_down_calls == 0);
+  CHECK(sensor.configure_calls == 1);
+}
+
+TEST_CASE("Refresh: result origin controls recording while all current readings update",
+          "[Orchestrator][Shake][refresh]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 60;
+  f.settings.buzzer_enabled = true;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  REQUIRE(A::start_tracking(orch));
+  uint64_t now = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  MeasurementOrigin origin = MeasurementOrigin::Refresh;
+  SECTION("manual measurement") {}
+  SECTION("reuse scheduled measurement") {
+    now = 60000;
+    A::check_timers(orch);
+    origin = MeasurementOrigin::Scheduled;
+  }
+  const uint32_t regular_clock = A::last_measurement_ms(orch);
+  test_spy::reset();
+
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(now);
+  A::dispatch(orch, shake);
+  CHECK(test_spy::measurement_requested == (origin == MeasurementOrigin::Refresh));
+  CHECK(test_spy::last_measurement_origin == origin);
+  A::dispatch(orch, shake);
+  CHECK(test_spy::buzzer_refresh_ack_count == 1);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Measuring...");
+
+  Event result{};
+  result.type = EventType::SensorDataReady;
+  result.sensor_data.origin = origin;
+  result.sensor_data.measures.co2.co2 = 650;
+  result.sensor_data.measures.pm_a.pm_25 = 12.0f;
+  test_spy::measurement_requested = false;
+  A::dispatch(orch, result);
+  CHECK(A::raw_measures(orch).co2.co2 == 650);
+  CHECK(test_spy::ble_last_measures.co2.co2 == 650);
+  CHECK(test_spy::cloud_last_snapshot.co2.co2 == 650);
+  CHECK(f.local_api.get_measures().co2.co2 == 650);
+  CHECK(test_spy::cache_measurement_called == (origin == MeasurementOrigin::Scheduled));
+  CHECK(test_spy::route_point_appended == (origin == MeasurementOrigin::Scheduled));
+  CHECK_FALSE(test_spy::measurement_requested); // No follow-up after satisfying the refresh.
+  CHECK_FALSE(A::refresh_pending(orch));
+  CHECK_FALSE(f.ui_manager.snackbar_persistent());
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).snackbar_text == nullptr);
+  CHECK(A::last_measurement_ms(orch) == regular_clock);
+}
+
+TEST_CASE("Refresh: sleep and preparation complete before measurement is requested",
+          "[Orchestrator][Shake][refresh]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  uint64_t now = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  bool sleep_pending = false;
+  SECTION("already asleep") { A::sensor_asleep(orch); }
+  SECTION("sleep already requested") {
+    sleep_pending = true;
+    A::sensor_sleeping(orch);
+  }
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(now);
+  A::dispatch(orch, shake);
+  CHECK_FALSE(test_spy::measurement_requested);
+  CHECK(test_spy::prepare_requested == !sleep_pending);
+  if (sleep_pending) {
+    Event asleep{};
+    asleep.type = EventType::PmSensorAsleep;
+    A::dispatch(orch, asleep);
+  }
+  CHECK(test_spy::prepare_requested);
+  CHECK(test_spy::pm_power_on);
+  Event preparation{};
+  preparation.type = EventType::PmPreparationStarted;
+  A::dispatch(orch, preparation);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Preparing...");
+  CHECK_FALSE(test_spy::measurement_requested);
+
+  now += CONFIG_SENSOR_WARMUP_DURATION_MS;
+  preparation.type = EventType::PmPrepared;
+  A::dispatch(orch, preparation);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
+  CHECK(A::last_measurement_ms(orch) == 0);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Measuring...");
+}
+
+TEST_CASE("Refresh: progress survives other messages and menu navigation",
+          "[Orchestrator][Shake][refresh][snackbar]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::snackbar_refresh_deadline_ms(orch) != 0);
+  SECTION("refresh starts on Home") {}
+  SECTION("refresh starts while a menu is open") { f.ui_manager.set_screen(Screen::MainMenu); }
+  A::sensor_asleep(orch);
+
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  uint32_t renders = DisplayService::spy_update_count;
+  A::dispatch(orch, shake);
+  CHECK(DisplayService::spy_update_count == renders + 1);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(A::snackbar_refresh_deadline_ms(orch) == 0);
+
+  if (f.ui_manager.current_screen() == Screen::Home) {
+    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+  }
+  REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
+  CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Preparing...");
+  A::unlock(orch); // The ordinary "Unlocked" message cannot replace refresh progress.
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Preparing...");
+  CHECK(A::snackbar_refresh_deadline_ms(orch) == 0);
+
+  Event prepared{};
+  prepared.type = EventType::PmPrepared;
+  renders = DisplayService::spy_update_count;
+  A::dispatch(orch, prepared);
+  CHECK(DisplayService::spy_update_count == renders + 1);
+  CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Measuring...");
+
+  Event result{};
+  result.type = EventType::SensorDataReady;
+  result.sensor_data.origin = MeasurementOrigin::Refresh;
+  renders = DisplayService::spy_update_count;
+  A::dispatch(orch, result);
+  CHECK(DisplayService::spy_update_count == renders + 1);
+  CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
+  CHECK(f.ui_manager.current_screen() == Screen::MainMenu);
+  CHECK_FALSE(A::refresh_pending(orch));
+  CHECK_FALSE(f.ui_manager.snackbar_persistent());
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).snackbar_text == nullptr);
+
+  A::unlock(orch); // Ordinary snackbars work again after completion.
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) == "Unlocked");
+}
+
+TEST_CASE("Refresh: starts near the regular deadline and keeps PM awake afterward",
+          "[Orchestrator][Shake][refresh]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  uint64_t now = 59000;
+  SECTION("one second before the regular deadline") {}
+  SECTION("nine seconds before the regular deadline") { now = 51000; }
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(now);
+  A::dispatch(orch, shake);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Measuring...");
+  CHECK(A::last_measurement_ms(orch) == 0);
+
+  now += 100;
+  Event result{};
+  result.type = EventType::SensorDataReady;
+  result.sensor_data.origin = MeasurementOrigin::Refresh;
+  test_spy::measurement_requested = false;
+  A::dispatch(orch, result);
+  CHECK_FALSE(A::refresh_pending(orch));
+  CHECK_FALSE(test_spy::measurement_requested);
+  CHECK_FALSE(test_spy::pm_sleep_requested);
+  CHECK(A::last_measurement_ms(orch) == 0);
+
+  now = 60000;
+  A::check_timers(orch);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Scheduled);
+  CHECK(A::last_measurement_ms(orch) == 60000);
+
+  now = 60100;
+  result.sensor_data.origin = MeasurementOrigin::Scheduled;
+  A::dispatch(orch, result);
+  CHECK(test_spy::pm_sleep_requested); // Enough time to warm up before the next regular cycle.
+}
+
+TEST_CASE("Refresh: PM sleep policy uses time remaining before the regular measurement",
+          "[Orchestrator][Shake][refresh][pm_sleep]") {
+  struct Scenario {
+    uint64_t completed_ms;
+    bool should_sleep;
+  };
+  const Scenario scenarios[] = {
+      {40000, true},  // 20 seconds remaining: meets the existing sleep threshold.
+      {40001, false}, // Just below the threshold.
+      {45000, false}, // 15 seconds remaining: keep awake even though warmup would fit.
+      {60000, false}, // Regular measurement is due now.
+      {61000, false}, // Overdue: clamp remaining time to zero.
+  };
+  for (const auto &scenario : scenarios) {
+    CAPTURE(scenario.completed_ms);
+    PmSleepFixture f;
+    f.settings.measure_interval_seconds = 60;
+    auto orch = f.make_orchestrator();
+    ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(scenario.completed_ms);
+    Event result{};
+    result.type = EventType::SensorDataReady;
+    result.sensor_data.origin = MeasurementOrigin::Refresh;
+    A::dispatch(orch, result);
+    CHECK(test_spy::pm_sleep_requested == scenario.should_sleep);
+  }
+}
+
+TEST_CASE("Refresh: uses PM preparation already started by the regular timer",
+          "[Orchestrator][Shake][refresh]") {
+  PmSleepFixture f;
+  f.settings.measure_interval_seconds = 60;
+  auto orch = f.make_orchestrator();
+  A::sensor_asleep(orch);
+  uint64_t now = 50000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  A::check_timers(orch);
+  REQUIRE(test_spy::prepare_requested);
+  REQUIRE(A::pm_preparing(orch));
+  REQUIRE_FALSE(test_spy::measurement_requested);
+  test_spy::prepare_requested = false;
+
+  now = 55000;
+  Event shake{};
+  shake.type = EventType::ShakeDetected;
+  shake.shake_detected_ms = static_cast<uint32_t>(now);
+  A::dispatch(orch, shake);
+  REQUIRE(A::refresh_pending(orch));
+  CHECK_FALSE(test_spy::prepare_requested);
+  CHECK_FALSE(test_spy::measurement_requested);
+  REQUIRE(f.ui_manager.snackbar_persistent());
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) ==
+        "Preparing...");
+
+  now = 60000;
+  Event prepared{};
+  prepared.type = EventType::PmPrepared;
+  A::dispatch(orch, prepared);
+  CHECK(test_spy::measurement_requested);
+  CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Refresh);
+  CHECK(A::last_measurement_ms(orch) == 0);
+
+  test_spy::measurement_requested = false;
+  A::check_timers(orch);
+  CHECK_FALSE(test_spy::measurement_requested); // Wait for the refresh already requested.
 }

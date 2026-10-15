@@ -17,13 +17,15 @@ sleep cycle.
 | Dependency | Source | Usage |
 |---|---|---|
 | `SensorProducer` | product (`go_sensor_producer.h`) | Request measurement cycles |
+| `AccelService` | product (`accel/accel_service.h`) | Deliver shake events; serialize Hardware Test sensor access |
+| `BuzzerService` | product (`buzzer/go_buzzer.h`) | Acknowledge accepted refreshes, respecting sound settings |
 | `GpsService` | product (`go_gps.h`) | Read latest GPS fix |
 | `InputService` | product (`go_input.h`) | Started/stopped by orchestrator; posts `InputPress` events |
 | `DisplayService` | product (`go_display.h`) | Render display frames |
 | `StorageService` | product (`go_storage.h`) | Cache measurements, persist route data |
 | `PowerService` | product (`go_power.h`) | BMS polling, sleep entry, RTC state, shutdown |
 | `UIManager` | product (`go_ui.h`) | Screen navigation, input dispatch, display value building |
-| `LedService` | product (`led/go_led.h`) | Front/back/touch LED brightness, AQI color, touch flash, animations |
+| `LedService` | product (`led/go_led.h`) | Back/touch LED brightness, AQI color, touch flash, animations |
 | `BleService` | product (`go_ble.h`) | Portable BLE peripheral; initialised on Portable entry, torn down on leave |
 | `WifiService` | product (`go_wifi.h`) | Stationary Wi-Fi lifecycle: saved-credentials connect, factory fallback, provisioning, disconnect routing |
 | `GoLocalApiService` | product (`go_local_api.h`) | Cached local HTTP snapshots, request admission, and FIFO config/action handoff |
@@ -88,8 +90,9 @@ each dimension of boot state.
 
 ### RTC State Restoration
 
-RTC state (`_behavior`, `_gps_enabled`, `_tracking_active`,
-`_tracking_session_id`) is restored for all non-PowerOn wake causes:
+RTC state (`_gps_enabled`, `_tracking_state`, `_tracking_session_id`) is restored
+for all non-PowerOn wake causes. `_behavior` is derived from the restored
+tracking state: Recording and Paused both use `Behavior::Tracking`.
 
 ```cpp
 if (cause != WakeCause::PowerOn) {
@@ -120,16 +123,22 @@ The display hasn't been painted yet or shows stale content. `init()` calls
 
 **`initial_lock_state == Locked` (default):**
 
-No lock state change. Device stays locked.
+The initial state is locked. Opening the first-use guide or a Stationary
+session later in `init()` silently unlocks the device.
 
 **Cold-boot splash:**
 
-When `GoApp` already painted `Screen::Info` with `Booting...` and the boot
+When `GoApp` already painted `Screen::Info` with `Getting Ready` and the boot
 handoff does not contain a completed measurement, `init()` arms
-`_boot_splash_active`. The splash remains visible until the first
-`SensorDataReady` event. If Stationary setup takes ownership of
-`Screen::Info` before that event, the flag is cleared without resetting the
-session page.
+`_boot_splash_active`. After the initial power checks and service initialization,
+an un-onboarded device clears that flag and opens `GettingStarted` through a
+silently unlocked session. Sensor warmup continues independently, and Enter
+can open Home before readings are available; Home shows dashes until they arrive.
+`_first_measurement_done` remains false until actual sensor data is received.
+
+Onboarded devices retain the splash until the first `SensorDataReady` event.
+An active Stationary session keeps its connection screen. Sensor events update
+cached data without dismissing the guide, menus, or pairing screen.
 
 ### Raw and Corrected Measures
 
@@ -158,23 +167,28 @@ on the next event loop iteration.
 
 ### Route Resumption
 
-If `_tracking_active` is true after RTC state restoration, the orchestrator
+If `_tracking_state` is `Recording` after RTC state restoration, the orchestrator
 calls `storage.resume_route(_tracking_session_id)` to reopen the route file
 in append mode. The helper truncates any torn trailing record from a prior
 boot before opening so the next append lands on a clean record boundary.
 
 On a persistent NAND fault the call returns `false`; `init()` then clears
-`_tracking_active` / `_tracking_session_id` and shows the
+the session ID, sets `_tracking_state` to `Idle`, and shows the
 `"Tracking stopped — storage"` snackbar inline. BLE is not yet up at that
 point in init(); the on-connect `update_status()` carries the same value, so
 a late-joining client reads the post-failure state via the Status
 characteristic without missing the transition.
 
+A restored Paused session keeps its ID and leaves the route closed. Sensor
+readings, display, and GPS continue according to their existing settings; route
+writes resume only after an explicit Resume action.
+
 ### Fast-path storage-failure promotion
 
 The fast path (`go_app.cpp`) uses `storage.resume_route()` only — it never
-starts a new session because `state.tracking_active` is set exclusively by
-the orchestrator's `prepare_for_sleep`. On `resume_route()` or
+starts a new session. It reopens and appends only when the saved
+`state.tracking_state` is `Recording`; Paused keeps the route closed.
+On `resume_route()` or
 `append_route_point()` failure the fast path forces a promotion to
 interactive mode rather than handling the failure itself: there is no UI or
 BLE service active in the fast path to surface the error, and the
@@ -205,14 +219,17 @@ The orchestrator owns the authoritative application state:
 | `_mode` | `OperatingMode` | `Portable` | Portable / Stationary / Offline |
 | `_behavior` | `Behavior` | `Idle` | Tracking / Idle / Shutdown |
 | `_lock_state` | `LockState` | `Locked` | Locked / Unlocked |
+| `_pm_state` | `PmState` | `Preparing` | PM preparation, ready, sleep-in-progress, or asleep |
+| `_measurement_pending` | `bool` | `false` | A normal measurement or peripheral-test sweep is outstanding |
+| `_refresh_pending` | `bool` | `false` | An accepted shake is waiting for a measurement result |
 | `_gps_enabled` | `bool` | `true` | Whether GPS data is used (derived from `GpsMode` setting) |
-| `_tracking_active` | `bool` | `false` | True while a route is being logged |
+| `_tracking_state` | `TrackingState` | `Idle` | Idle (0), Recording (1), or Paused (2); Paused retains the session |
 | `_tracking_session_id` | `uint32_t` | `0` | 5-digit session ID; 0 = no active session |
 | `_provisioning_sensitive_services_paused` | `bool` | `false` | True while sensor producer / GPS / PM rail are paused for the active provisioning transport; gates sensor / BMS / PM / snackbar-refresh deadlines |
 | `_local_api_activation_retry_deadline_ms` | `uint32_t` | `0` | Absolute 5 s retry deadline for local HTTP or mDNS activation; 0 when inactive |
-| `_setup_session_active` | `bool` | `false` | True between Stationary setup entry (`Screen::Info` or pre-online `Screen::Provisioning`) and the leave-to-Home / leave-to-Portable boundary; gates power-button short-press, auto-lock, and background-render suppression |
+| `_setup_session_active` | `bool` | `false` | True between first-use guide or Stationary setup entry (`Screen::Info` or pre-online `Screen::Provisioning`) and the leave-to-Home / leave-to-Portable boundary; gates power-button short-press, auto-lock, and background-render suppression |
 | `_bring_up_pending` | `bool` | `false` | True while `Screen::Info` is showing the STA-attempt narration; lets `on_wifi_connected()` distinguish the on-Info success path from the post-online reconnect path |
-| `_boot_splash_active` | `bool` | `false` | True while cold boot is showing `Booting...` on `Screen::Info`; cleared by first sensor data and suppresses ButtonPower short-press lock toggles |
+| `_boot_splash_active` | `bool` | `false` | Tracks the cold-boot `Getting Ready` splash on `Screen::Info`; cleared when `init()` opens the first-use guide or when first sensor data arrives. Suppresses ButtonPower short-press lock toggles |
 | `_last_ota_check_ms` | `uint32_t` | `0` | Unified OTA poll-timer baseline: 2 s BLE `is_ble_active()` poll (Portable), 1 h WiFi check (Stationary). See [Firmware Update (OTA)](#firmware-update-ota) |
 | `_ota_committed` | `bool` | `false` | True once a transfer committed (full quiesce + "Updating firmware…" paint ran). Gates `exit_ota()`'s full-resume + queue-drain vs the lightweight cloud re-arm |
 
@@ -240,13 +257,14 @@ the nearest deadline.
 
 | Timer | Interval | Active When |
 |---|---|---|
-| PM pre-wake | `measure_interval - CONFIG_SENSOR_WARMUP_DURATION_MS` | Not Offline, interval ≥ `pm_sleep_threshold_ms`, prepare not yet sent, sensitive services not paused |
-| Sensor (all groups) | `measure_interval_seconds * 1000` | Sensitive services not paused |
+| PM pre-wake | `measure_interval - CONFIG_SENSOR_WARMUP_DURATION_MS` | Not Offline, interval ≥ `pm_sleep_threshold_ms`, PM asleep, sensitive services not paused |
+| Sensor (all groups) | `measure_interval_seconds * 1000` | PM ready, no measurement pending, sensitive services not paused |
 | BMS full poll | `BMS_POLL_INTERVAL_MS` (30000 ms) | Sensitive services not paused |
 | BMS status poll | `BMS_STATUS_POLL_INTERVAL_MS` (5000 ms) | Sensitive services not paused |
 | External watchdog | `EXT_WDT_INTERVAL_MS` (60000 ms) | Always — never suppressed during a setup session |
-| Inactivity | `auto_lock_seconds * 1000` | Unlocked, auto-lock > 0, and no setup session active |
-| Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | Snackbar active, sensitive services not paused |
+| Inactivity | `auto_lock_seconds * 1000` | `auto_lock_allowed()`: unlocked, auto-lock > 0, no setup session, focus screen, Hardware Test screen, or Tracking Status |
+| Tracking Status | `TRACKING_STATUS_REFRESH_INTERVAL_MS` (5000 ms); rejected submissions retry after `TRACKING_STATUS_REFRESH_RETRY_MS` (100 ms) | Status visible, unlocked, and Recording or Paused |
+| Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | Non-persistent snackbar active, sensitive services not paused |
 | Wi-Fi initial-connect / fallback | `WifiService::next_deadline_ms()` | While the service has armed a deadline (Stationary bring-up) |
 | Local endpoint activation retry | `LOCAL_API_ACTIVATION_RETRY_MS` (5000 ms) | Stationary + online after local HTTP or mDNS activation fails |
 | OTA poll | `OTA_BLE_POLL_INTERVAL_MS` (2000 ms) / `OTA_WIFI_CHECK_INTERVAL_MS` (3600000 ms) | Portable + (authenticated client or latched `is_ble_active()`); or Stationary + online + no setup session + cloud enabled. See [Firmware Update (OTA)](#firmware-update-ota) |
@@ -275,17 +293,22 @@ Events are dispatched by type:
 
 | EventType | Handler |
 |---|---|
-| `SensorDataReady` | `on_sensor_data()` — cache, update back AQI LEDs (`back_update_aqi` / `back_clear_aqi`), clear cold-boot splash if active, log full `MeasuresAGo` snapshot, store route point if tracking, update BLE measures, update display |
+| `SensorDataReady` | `on_sensor_data(measures, origin)` — complete pending measurement/refresh, update current readings and consumers, and start a waiting peripheral sweep when ready; cache and record only scheduled results |
+| `PmPreparationStarted`, `PmPrepared`, `PmSensorAsleep` | `on_pm_event()` — advance PM state, manage bus isolation, and continue a pending refresh or peripheral test |
+| `ShakeDetected` | `on_shake_detected()` — check eligibility and event age, acknowledge once, request or reuse a measurement |
+| `SensorTestDone` | `on_sensor_test_done()` — clear the pending-measurement flag, show the peripheral-test result if still relevant, or release an exited sweep |
 | `GpsFixUpdate` | `on_gps_fix()` — cache GPS if `is_gps_active()` |
 | `InputPress` | `on_input()` — touch flash on touch events, shutdown, lock/unlock, forward to UIManager |
 | `UserStartTracking` | `start_tracking()` |
+| `UserPauseTracking` | `pause_tracking()` |
+| `UserResumeTracking` | `resume_tracking()` |
 | `UserStopTracking` | `stop_tracking()` |
 | `UserChangeMode` | `change_mode()` |
 | `UserToggleGps` | Set `_gps_enabled` |
 | `SettingsChanged` | `apply_settings_change()` |
 | `ClearData` | `clear_data()` |
 | `SaveTag` | `save_tag()` |
-| `InactivityTimeout` | `on_inactivity_timeout()` → `lock()` |
+| `InactivityTimeout` | `on_inactivity_timeout()` calls `lock()` only when `auto_lock_allowed()` |
 | `MeasurementTimer` | `check_timers()` (legacy event, re-checks all timers) |
 | `WakeFromSleep` | No-op (handled in `init()`) |
 | `BleConnected` | Push current measures/status/config, dismiss passkey overlay |
@@ -312,12 +335,7 @@ Events are dispatched by type:
    device (battery-only hold-to-restart) — see
    [Power Management](power_management.md)
 2. **Long press ButtonBoot** — `factory_reset()`, then reboot on success
-3. **Short press ButtonBoot while `_manufacturing_mode`** (the _second_
-   press) — arm a fuel-gauge learning run: `save_factory_settings(Charge,
-   cycle 1)` then reboot. The next boot routes into the dedicated factory
-   path. This is the orchestrator's **only** learning touch point — no tick,
-   resume, verify, ship hook, or dashboard. See [`fg_learning.md`](fg_learning.md)
-4. **Short press ButtonBoot while `!onboarding_done`** —
+3. **Short press ButtonBoot while `!onboarding_done`** —
     `enter_manufacturing_mode()`: skip the Getting Started guide and enter
     Stationary ephemerally (`change_mode(Stationary, persist=false)`), so
     production can test a fresh unit without latching `onboarding_done`.
@@ -325,15 +343,20 @@ Events are dispatched by type:
     but clears all other Go settings, routes, and Wi-Fi credentials at
     `shutdown()`. BLE bond deletion is a safe no-op after Stationary has torn
     down the BLE host. Nothing else is persisted, so a reboot also returns to
-    fresh onboarding
-5. **Short press ButtonPower while `_setup_session_active` or
+    fresh onboarding.
+4. **Short press ButtonPower while `_setup_session_active` or
    `_boot_splash_active`** — suppressed (no lock toggle); the setup
    instructions or cold-boot splash stay visible
-6. **Short press ButtonPower** — toggle lock/unlock
-7. **Locked** — touch shows "Unlock First" snackbar; other inputs ignored
-8. **Unlocked** — forward to `UIManager::handle_input()`, then handle the
+5. **Short press ButtonPower** — toggle lock/unlock
+6. **Locked** — touch shows "Unlock First" snackbar; other inputs ignored
+7. **Unlocked** — forward to `UIManager::handle_input()`, then handle the
     returned `UIActionResult` (start/stop tracking, change mode,
     provisioning confirm-switch / confirm-cancel, etc.)
+
+Fuel-gauge learning starts only through **Settings → Hardware Test → Battery
+Calibration → Yes**. The `ArmFgLearning` UI action saves factory state (`Charge`,
+cycle 1) and reboots into the dedicated factory path. The orchestrator owns none
+of the learning run; see [`fg_learning.md`](fg_learning.md).
 
 The catch-all render at the tail of `on_input()` uses
 `update_display(/*wait=*/true)` for every input-driven render. Because
@@ -359,15 +382,17 @@ calls `_svc.wifi.switch_provisioning_transport()`.
 
 ### lock()
 
-Sets `LockState::Locked`, resets UI to home screen, updates display. Sleep
-eligibility is evaluated on the next main loop iteration.
+Sets Locked, returns Home, and calls `update_display(true)` so a busy worker
+cannot drop the frame. This waits for the previous operation, not completion of
+the new frame. Manual locking bypasses auto-lock eligibility; sleep eligibility
+is checked on the next loop iteration.
 
 ### unlock()
 
 Sets `LockState::Unlocked`, resets the inactivity timer, requests a quick
 single-iteration measurement, and updates the display.
 
-### start_tracking() / stop_tracking()
+### Tracking Lifecycle
 
 Manages route lifecycle through `StorageService`. `start_tracking()`
 returns `bool` so the BLE `StartTracking` command-result reports the real
@@ -375,7 +400,7 @@ outcome instead of the pre-spec "was-idle" heuristic.
 
 `start_tracking()`:
 
-1. Returns `false` immediately if `_tracking_active` is already true.
+1. Returns `false` immediately if a session is Recording or Paused.
 2. Generates a 5-digit session ID (10000–99999) via `generate_session_id()`,
    which probes each random candidate against
    `storage.route_file_exists()` and retries up to 5 times on collision.
@@ -383,40 +408,159 @@ outcome instead of the pre-spec "was-idle" heuristic.
    order of `1.7×10⁻¹⁰`; on exhaustion the helper returns 0.
 3. Calls `storage.create_route(session_id)`. On `session_id == 0` or
    open-failure, shows the `"Storage error — can't track"` snackbar
-   inline, pushes a BLE Status notify with `tracking=false`, and returns
-   `false` without touching `_tracking_active` or `_behavior`.
-4. On success sets `_tracking_active = true`, `_behavior = Tracking`,
+   inline, pushes a BLE Status notify with `tracking=false`, `session=0`,
+   `trk=0`, and returns `false` while remaining Idle.
+4. On success sets `_tracking_state = Recording`, `_behavior = Tracking`,
    brings up GPS if the `GpsMode` requires it, shows the
    `"Tracking start = NNNNN"` snackbar, and pushes a BLE Status notify
-   with `tracking=true`.
+   with `tracking=true`, the new session ID, and `trk=1`.
 
-`stop_tracking()` runs the symmetric teardown: `end_route()` on the
-storage, clear tracking state, deactivate GPS if no longer needed,
-`"Tracking stop = NNNNN"` snackbar, and a BLE Status notify with
-`tracking=false`. It stays `void` — a best-effort `end_route()` cannot
-fail in a way the phone needs to know about.
+`pause_tracking()` changes Recording to Paused, flushes/closes the route with
+`end_route()`, and retains the session ID. It shows `"Tracking paused"` on success
+or `"Paused - storage sync failed"` on failure and publishes `trk=2`. A failed
+sync/close returns `false` but still leaves the session Paused with its file
+closed. Repeating Pause while Paused succeeds without another state notification.
+
+`resume_tracking()` reopens the retained file through `resume_route()` before
+changing Paused to Recording. Failure leaves the session Paused and shows
+`"Can't resume - storage error"`; success shows `"Tracking resumed"` and publishes
+`trk=1`. Repeating Resume while Recording succeeds without another state
+notification. Pause and Resume both return `false` when Idle.
+
+Pause and Resume keep GPS running according to `GpsMode`, including
+`OnWhenTracking`. Live measurements, chart cache, BLE Measures, Stationary cloud
+upload/config polling, and existing History export continue. Paused sessions
+remain protected from History deletion until stopped.
+
+`stop_tracking()` accepts Recording or Paused. It calls `end_route()`, sets Idle,
+clears the session ID, deactivates GPS if no longer needed, and shows
+`"Tracking stop = NNNNN"`. Status reports `tracking=false`, `session=0`, `trk=0`.
+The stop path remains best-effort and does not propagate close errors.
 
 The "actually recording" state is derived, not stored:
 
 ```cpp
 bool Orchestrator::is_recording() const {
-    return _tracking_active && _svc.storage_service.is_route_active();
+    return _tracking_state == TrackingState::Recording && _svc.storage_service.is_route_active();
 }
 ```
 
-All BLE Status writes (set-value and notify) pass `is_recording()` so the
-wire never reports tracking when no file is actually open.
+`on_sensor_data()` uses `is_recording()` to gate route writes. BLE Status APIs
+receive the enum and session ID, and derive the legacy `tracking` flag as true
+for Recording or Paused. That BLE field will be deprecated soon; clients should
+use `trk` to distinguish the three states.
 
 `on_sensor_data()` calls `storage.append_route_point()` but discards the
 return — the storage layer logs the underlying error, and the session
 keeps running so subsequent appends can retry against a recovered NAND.
-The session ends only on manual `stop_tracking()`, deep sleep, or a
-fresh failure of `resume_route()` on the next wake.
+Deep sleep closes an open file but preserves the session state and ID. A failed
+Recording restore on wake clears the session; a failed explicit Resume keeps
+the session Paused so the user can retry or Stop.
+
+#### Tracking Timing Helpers
+
+[`go_types.h`](../main/go_types.h) defines the plain `TrackingTiming` value and
+its invalid sentinel. [`go_type_helpers.hpp`](../main/go_type_helpers.hpp)
+provides the pure, header-only operations, including `tracking_session_active()`.
+Helper users include the `.hpp` explicitly; data-only users need only the `.h`.
+There is no compiled helper source or support library. Focused tests live in
+[`go_types.tests.cpp`](../tests/go_types.tests.cpp).
+
+The orchestrator owns `_tracking_timing` and includes it in
+`RtcAppState::tracking_timing` for active sessions. Derived durations are exposed
+on the Tracking Status screen through a by-value snapshot; BLE and the local
+HTTP API do not expose them. The timing hooks do not change tracking commands,
+GPS operation, or route-error decisions.
+
+The value contains four `uint32_t` fields, totaling 16 bytes:
+
+- `session_started_s`: original session-start anchor, including pauses when
+  calculating elapsed time.
+- `recording_accumulated_s`: the sum of completed recording segments.
+- `recording_started_s`: the current recording-segment anchor; invalid while
+  paused. Active duration adds this segment to the accumulated duration.
+- `last_record_s`: the last caller-confirmed accepted write, not a guarantee
+  that the record was synchronized to storage.
+
+All timing uses monotonic seconds supplied by the caller, not GPS or wall time.
+`tracking_seconds_from_ms()` divides retained milliseconds before narrowing,
+avoiding the 32-bit millisecond rollover at about 49.7 days. It reserves
+`TRACKING_TIME_INVALID_S` (`UINT32_MAX`) for unknown values and rejects an
+unrepresentable conversion. Zero remains valid. The helpers subtract
+whole-second anchors; subsecond fractions are discarded, including across
+pause/resume segments.
+
+Successful Start initializes timing from `RTOS::get_retained_time_ms()`.
+Pause accumulates the active segment at the state transition, even when the
+subsequent route close reports failure. Resume establishes the next segment
+only after the existing reopen succeeds. Failed Start/Resume and repeated
+Pause/Resume leave timing unchanged. Stop, Clear Data, and successful factory
+reset clear the timing value with the existing session lifecycle.
+
+For scheduled route writes, the orchestrator samples retained time and compares
+the existing writer count immediately before and after append. Count advancement
+timestamps an accepted record even when append subsequently reports a sync
+failure. Rejected writes, manual Refresh measurements, and paused measurements
+do not update the timestamp. These counts are temporary observations, not a
+second persistent counter. The boot fast path uses the same acceptance rule.
+
+Normal deep sleep copies the timing value without a Pause/Resume transition, so
+recording time includes sleep while Recording and remains frozen while Paused.
+Both interactive and fast-path restore reconcile the active-segment marker with
+the authoritative tracking state using `tracking_timing_for_state()`. Inactive
+RTC timing is discarded; a mismatched segment makes recording duration unknown
+without discarding independently usable session-start or last-record anchors.
+Power-on starts with invalid timing, and a failed Recording reopen clears timing
+alongside the existing transition to Idle. The fast path saves updated timing
+before returning to sleep or promoting to the interactive orchestrator.
+
+The caller must supply nondecreasing timestamps and own the actual tracking
+lifecycle. Helpers reject invalid or inconsistent inputs without changing the
+value; duration queries return the invalid sentinel instead of underflowing or
+wrapping. They check against retained anchors, not a separate last-observation
+timestamp. The record helper additionally takes the actual `TrackingState` and
+is called only after confirming a write was accepted. A valid accepted-record
+timestamp can recover even when accumulated recording duration is unknown.
+
+If a timing helper rejects an actual transition, recording behavior still follows
+the existing lifecycle: Start leaves all timing unknown; Pause/Resume invalidate
+only the recording accumulator and segment anchor. An accepted write with an
+invalid timestamp invalidates only `last_record_s` rather than retaining the
+previous point's age. No new retry, stop, repair, or shutdown policy is introduced.
+
+#### Tracking Status Snapshots
+
+Tracking → Status exposes the current session while Recording or Paused.
+While Status is visible and unlocked, `build_context()` reads retained time and
+queries `try_get_session_point_count()` once per snapshot. It returns derived
+durations and a count with separate validity; unknown is not zero. Counts are
+not retained in RTC, and no extra sensor or GPS readings are requested.
+
+UI tracking state is synchronized after boot's route-reopen outcome, before
+display updates, and before the final sleep render. Input uses that maintained
+state. Pause, Resume (including reopen failure), and Stop use waiting display
+updates; Pause/Resume preserve the Status view, and Stop returns it to Main Menu.
+
+`auto_lock_allowed()` supplies one eligibility policy for scheduling and timeout
+handling. Status is exempt, but manual locking and safety shutdowns remain
+available. Leaving Status starts a fresh configured timeout once, including
+after remote Stop; repaints and Pause/Resume do not extend it. The saved setting
+is unchanged. Keeping Status open also keeps Offline mode awake.
+
+Entry, input, and tracking changes repaint immediately. The timer loop observes
+page entry/exit through `sync_tracking_status_lifecycle()`: entry arms a
+five-second deadline; exit cancels it and restarts inactivity.
+`refresh_tracking_status()` submits without waiting, then schedules the next
+periodic refresh after five seconds or retries a rejection after 100 ms.
+Manual redraws do not restart this schedule. Lock, Stop, and sleep cancel it;
+refreshes preserve the view, cursor, and inactivity baseline.
+Outside Status, its handlers are skipped once exit cleanup is complete.
 
 ### change_mode()
 
 Updates `_mode`, persists it to NVS, and syncs `UIManager` so the
-Settings menu reflects the new mode. Tears down the outgoing radio
+Main Menu > Operating Mode choice reflects the new mode. Tears down the outgoing
+radio
 (BLE for Portable, Wi-Fi via `WifiService::shutdown()` for Stationary)
 and brings up the incoming radio (`init_ble_if_portable()` on entry to
 Portable, `enter_stationary()` on entry to Stationary). The PM bus is
@@ -438,7 +582,7 @@ Notifications are fire-and-forget (no completion signal), so the settle gives
 the queued notice a few connection intervals to drain to the client before the
 link drops. The wait is gated on `is_connected()`, so disconnected and
 non-Portable transitions add no delay. Because `change_mode()` is the single
-choke point for every leave-Portable path (`UserChangeMode` event, the Settings
+choke point for every leave-Portable path (`UserChangeMode` event, the Operating Mode
 menu `UIAction::ChangeMode`, and the BLE config-set), device- and BLE-initiated
 mode changes behave identically. An `op_mode` change produces **no** Config
 delta — the BLE config-set path skips its own `notify_config()` when the write
@@ -582,9 +726,12 @@ again.
 ```mermaid
 stateDiagram-v2
     [*] --> EnterStationary
-    EnterStationary --> Info: show "Connecting to saved Wi-Fi..." or "Trying default Wi-Fi..."
+    EnterStationary --> Info: saved Wi-Fi or manufacturing factory Wi-Fi
+    EnterStationary --> Provisioning: normal mode without saved networks
     Info --> Home: STA success -- Connected! + 1 s hold + leave to Home unlocked
-    Info --> Provisioning: STA failure (auth or window expiry) -- pause sensitive services
+    Info --> Provisioning: normal STA failure -- pause sensitive services
+    Info --> Reboot: manufacturing timeout -- paint failure + 1 s hold
+    Reboot --> GettingStarted: operator must re-enter manufacturing
     Provisioning --> ProvisioningConfirm: TouchEnter on row 0 or 1
     ProvisioningConfirm --> Provisioning: No
     ProvisioningConfirm --> Provisioning: Yes on row 0 -- switch transport
@@ -598,15 +745,17 @@ stateDiagram-v2
 `_board.init_wifi_subsystem()` (idempotent), runs the silent session
 preamble, sets `_bring_up_pending`, opens `Screen::Info` with the
 attempt-specific narration text, and starts the STA attempt with
-`update_display(wait=true)`. STA success goes through
-`on_wifi_connected()`; STA failure routes through the disconnect policy.
+`update_display(wait=true)`. Manufacturing explicitly selects factory Wi-Fi,
+even if saved networks exist. Normal mode without saved networks instead enters
+BLE provisioning immediately, without a factory-Wi-Fi attempt. STA success goes
+through `on_wifi_connected()`; STA failure routes through the disconnect policy.
 
 ### Session State Helpers
 
 | Helper | Role |
 |---|---|
 | `begin_session_if_needed()` | Idempotent session preamble. Sets `_setup_session_active`, silently flips `_lock_state = Unlocked` (no `"Unlocked"` snackbar), and clears any pending snackbar so leftover `"Mode changed"` / `"Locked"` / stale `"Wi-Fi connected"` cannot leak onto session screens. Called by `enter_stationary()` and `enter_provisioning_page()`. |
-| `enter_provisioning_page(transport)` | Entry into `Screen::Provisioning`. Calls `begin_session_if_needed()`, clears `_bring_up_pending` (defangs the on-Info success arm), runs `pause_provisioning_sensitive_services()`, opens the page via `UIManager::open_provisioning()`, kicks off the transport, and ends with `update_display(wait=true)`. Used by the pre-online STA-fail bring-up path. |
+| `enter_provisioning_page(transport)` | Entry into `Screen::Provisioning`. Calls `begin_session_if_needed()`, clears `_bring_up_pending` (defangs the on-Info success arm), runs `pause_provisioning_sensitive_services()`, opens the page via `UIManager::open_provisioning()`, kicks off the transport, and ends with `update_display(wait=true)`. Used by normal entry without saved networks and normal pre-online STA failure. |
 | `leave_session_to_home()` | Success-path leave. Clears the `Connected!` page state, calls `UIManager::reset_to_home()`, polls the BMS once for a fresh battery icon, resumes paused services, rebases periodic clocks, silently unlocks, clears the session gate, and ends with `update_display(wait=true) + DisplayService::flush()`. Used by both STA-only success (Info) and provisioning-success (Provisioning). |
 | `leave_session_to_portable()` | Cancel / abort path. Mirrors the success leave but routes through `change_mode(Portable)` (which fires its own `"Mode changed"` snackbar). The session gate stays true through `change_mode()` so any background-render path that fires mid-teardown still no-ops. |
 | `rebase_periodic_clocks()` | Roll `_last_measurement_ms` / `_last_bms_poll_ms` / `_last_bms_status_poll_ms` forward to `now` on resume so paused timers do not fire back-to-back catching up. The external watchdog clock is deliberately not rebased. |
@@ -619,9 +768,12 @@ attempt-specific narration text, and starts the STA attempt with
 idles the GNSS receiver if GPS is active, and drops the PM sensor power
 rail so the Wi-Fi driver has enough DMA-capable contiguous heap while
 the provisioning transport stack is active.
+It also cancels pending refresh UI and clears the pending-measurement flag;
+PM state becomes `Asleep` after stopping the producer with PM sleep enabled.
 `resume_provisioning_sensitive_services()` re-enables PM, restarts the
-sensor producer and GPS, and requests one immediate measurement so the
-post-resume display refreshes promptly. The pause is idempotent — the
+sensor producer and GPS, sets PM state to `Preparing`, and requests one
+immediate scheduled measurement so the post-resume display refreshes promptly.
+The pause is idempotent — the
 STA-only `Screen::Info` bring-up phase never triggers it.
 
 Sensor-measurement, BMS full poll, BMS status poll, PM pre-wake, and
@@ -635,6 +787,17 @@ gated on the broader `_setup_session_active` so users on
 `on_wifi_disconnected(reason)` runs only in Stationary mode and reads
 `WifiService::has_been_online()` to split the policy:
 
+Manufacturing startup waits for the 15-second factory connection window,
+including after an immediate connection error. When that deadline expires
+without any successful IP, Wi-Fi shuts down, `Wi-Fi connection failed` is
+painted with `update_display(wait=true)` and `flush()`, and the message is held
+for `STA_RESULT_HOLD_MS` (one second) before `reboot()`. Nothing is persisted;
+the next boot returns to onboarding and needs another operator button press.
+Manufacturing never opens provisioning. Once any IP has been obtained, the
+runtime column below applies to manufacturing too: no timeout reboot.
+
+The before-online column below describes normal mode:
+
 | Reason | Before First Online (bring-up) | After First Online (runtime) |
 |---|---|---|
 | `auth_failed` | Open provisioning | Schedule reconnect |
@@ -647,7 +810,7 @@ gated on the broader `_setup_session_active` so users on
 
 The policy splits on `has_been_online()`:
 
-- **Bring-up** (before the first successful IP for the current Stationary
+- **Normal Bring-up** (before the first successful IP for the current Stationary
   entry — cold boot into Stationary or a mode change to Stationary):
   provisioning is the fallback. The connectivity-class reasons reach this
   table only after the `WifiManager` retry budget and the 30 s connect
@@ -659,8 +822,9 @@ The policy splits on `has_been_online()`:
 - **Runtime** (after the first online): the orchestrator never opens
   provisioning and never gives up. Any reason except `requested_by_user`
   schedules a reconnect via `WifiService::schedule_reconnect()`, which
-  retries saved networks when present or the transient factory-default
-  network otherwise (see the Wi-Fi service doc).
+  retains the credential source selected on entry: saved networks in normal
+  mode, transient factory credentials in manufacturing (see the Wi-Fi service
+  doc). An empty saved-network store never enables factory credentials.
   `requested_by_user` is the service's own teardown and is left alone.
 
 A runtime reconnect preserves the `has_been_online()` latch, so repeated
@@ -829,8 +993,9 @@ for the component-facing contract and edge cases.
 
 ### `update_display()`
 
-Builds a `BuildContext` from cached state and asks the UIManager to produce
-a `DisplayValues` snapshot:
+Builds and submits a UI frame, returning whether the display accepted it.
+Status lifecycle and refresh scheduling belong to the timer handlers, not this
+function. Frame preparation uses a `BuildContext` and `DisplayValues` snapshot:
 
 1. Clear expired snackbar
 2. `build_context()` — convert cached `MeasuresAGo` to `Measures`, read
@@ -841,8 +1006,8 @@ a `DisplayValues` snapshot:
    altitude, and PM presentation flags come from the active `GoSettings`
 3. `UIManager::build_values(ctx)` — produce `DisplayValues`
 4. `DisplayService::update(values)` — non-blocking render submission
-5. If a snackbar is active and no refresh timer is pending, schedule a
-   one-shot `_snackbar_refresh_deadline_ms` to guarantee the snackbar is
+5. If a non-persistent snackbar is active and no refresh timer is pending,
+   schedule a one-shot `_snackbar_refresh_deadline_ms` to guarantee the snackbar is
    visually cleared even if no other events trigger `update_display()`
 
 The `BuildContext` requires a `const Measures &` reference. The orchestrator
@@ -851,15 +1016,17 @@ from the cached `MeasuresAGo` each time `build_context()` is called.
 
 ### Background Display Suppression
 
-Display-update call sites are split into two categories:
+Ordinary display-update call sites are split into two categories:
 
 **User-initiated** — call `update_display()` directly (always repaint):
-`on_input()`, `lock()`, `unlock()`, `start_tracking()`, `stop_tracking()`,
+`on_input()`, `lock()`, `unlock()`, `start_tracking()`, `pause_tracking()`,
+`resume_tracking()`, `stop_tracking()`,
 `change_mode()`, `clear_data()`, `factory_reset()`, `save_tag()`,
 `shutdown()`, `on_co2_calibration_done()`, `on_ble_pairing_request()`.
 
 **Background** — call `request_background_display_update()`:
-`on_sensor_data()`, `on_ble_connected()`, `on_ble_disconnected()`,
+`on_sensor_data()` when no refresh is pending, `on_ble_connected()`,
+`on_ble_disconnected()`,
 `on_ble_auth_complete()`, `on_ble_config_write()` (Set branch),
 `on_bms_status_timer()`, snackbar refresh timer in `check_timers()`.
 
@@ -878,14 +1045,21 @@ void Orchestrator::request_background_display_update() {
 }
 ```
 
-When the user is on any menu-navigation screen (MainMenu, Settings,
-SettingsChoice, TagList, Confirm, About) or anywhere inside the setup
-session (`Info`, `Provisioning`, `ProvisioningConfirm`), background
+When the user is on any menu-navigation screen (MainMenu, Settings, Operations,
+DisplayTouch, SettingsChoice, TagList, Confirm, About) or anywhere inside the
+setup session (`Info`, `Provisioning`, `ProvisioningConfirm`), background
 events still update data caches, send BLE notifications, etc. — only
 the e-paper refresh is skipped. The display catches up on the next
 user-initiated repaint (input, lock/unlock, returning to Home, or the
 explicit `update_display(wait=true)` calls from the setup session
 helpers).
+
+Shake-refresh start, PM progress changes, and completion use
+`update_refresh_display()`. This helper calls `update_display(wait=true)` on
+Home and menus, skipping active setup sessions and the pairing focus screen.
+It keeps refresh progress current and clears it even while a menu is open.
+`try_refresh()` owns the progress text; `update_display()` only builds and
+submits the current UI snapshot.
 
 ### Drop-Free Renders for Critical Transitions
 
@@ -948,23 +1122,25 @@ after `stop()` to ensure the worker task is no longer using the SPI bus.
 |---|---|
 | `AlwaysOff` | `false` |
 | `AlwaysOn` | `true` |
-| `OnWhenTracking` | `_tracking_active` |
+| `OnWhenTracking` | `tracking_session_active(_tracking_state)` — Recording or Paused |
 
-GPS hardware is always powered on and the GPS task always runs. This method
-only controls whether `GpsFixUpdate` events update the cached GPS data.
+This method gates cached GPS updates and the start/stop decisions for the
+receiver. Pause and Resume leave the receiver and cached fix intact.
 
 ## Sensor Scheduling
 
-The orchestrator maintains a single timer (`_last_measurement_ms`).
-`check_timers()` fires when `measure_interval_seconds` elapses, always
-requesting `SensorGroup::All` with a single
-`request_measurement(1, SensorGroup::All)` call.
+The orchestrator maintains a single regular timer (`_last_measurement_ms`).
+When `measure_interval_seconds` elapses, `check_timers()` requests a scheduled
+measurement only if PM is ready and no measurement is pending. The common
+`start_measurement(origin)` helper marks the request pending and requests one
+iteration of `SensorGroup::All`. A scheduled request advances the regular
+timer baseline; a manual refresh does not.
 
 When the interval setting changes, `reschedule_sensor_timer()` resets the
 baseline to `now` and reconciles PM sensor power with the new interval:
-powers off if the new interval crosses above `pm_sleep_threshold_ms`,
-powers on if it crosses below.  If the interval is unchanged, the
-baseline and PM power are not touched.
+requests sleep when eligible and PM is ready with no measurement or refresh
+pending, or prepares an asleep sensor when the interval requires it to stay
+awake. If the interval is unchanged, the baseline and PM power are not touched.
 
 Iterations are always 1 — AGo sensors perform internal averaging, and the
 per-iteration 2 s delay is skipped for single iterations.
@@ -972,10 +1148,12 @@ per-iteration 2 s delay is skipped for single iterations.
 `on_sensor_data()` always overwrites all fields in `_raw_measures`, then derives
 `_corrected_measures` with the active measurement corrections. Sensor readings come from the `SensorDataReady` payload; `MeasuresPower`
 is refreshed from `_latest_power` (`PowerSnapshot`) because Go battery and
-charger telemetry is owned by `PowerService`, not `SensorProducer`. In
-non-Offline modes with a long enough interval, it requests PM sleep via
-`request_pm_sleep()` to stop the fan until the next pre-wake timer fires
-(the producer sleeps the SPS30, then the bus is isolated on `PmSensorAsleep`).
+charger telemetry is owned by `PowerService`, not `SensorProducer`.
+The event wraps readings and `MeasurementOrigin` in `SensorEventData`.
+Both origins update the current display values, raw BLE readings, corrected
+local API snapshot, PM AQI LEDs, and raw cloud snapshot. Only `Scheduled`
+results enter chart cache and route storage. A refresh does not trigger a
+cloud upload or change its timer.
 Sensor failures are immediately visible (display shows dashes) rather
 than masked by stale cached data.
 
@@ -987,14 +1165,74 @@ the latest BMS snapshot used by the cache and cloud snapshot.
 
 ### PM Sensor Sleep
 
-When `mode != Offline` and `measure_interval_seconds * 1000 >=
-pm_sleep_threshold_ms`, the orchestrator sleeps the SPS30 between
-measurements.  A `_pm_prepare_sent` flag prevents duplicate pre-wake
-signals within the same measurement cycle; it is reset when the
-measurement timer fires.
+PM uses `Preparing`, `Ready`, `Sleeping`, and `Asleep` states. Preparation
+requests move an asleep sensor to `Preparing`; `PmPrepared` marks completion.
+Sleep requests move it to `Sleeping`; `PmSensorAsleep` marks completion and
+allows the orchestrator to isolate the bus. Boot preparation also reports
+`PmPreparationStarted`. A measurement result clears `_measurement_pending`
+without changing PM state.
+
+After each result, the orchestrator computes the time remaining until the
+next regular measurement, clamping overdue deadlines to zero. In non-Offline
+modes, ready PM sleeps only if
+`PowerService::should_sleep_pm_sensor(remaining_ms)` permits it. The existing
+threshold is 20 s by default. Thus a manual refresh near the next regular
+measurement leaves PM awake instead of requiring another warmup. The regular
+pre-wake timer prepares an asleep sensor one warmup duration before its deadline.
+
+Peripheral Test wakes PM on entry and holds it awake through the summary.
+Its sweep waits for PM readiness and any outstanding normal measurement, then
+sets the shared `_measurement_pending` flag until `SensorTestDone`. The
+`try_start_peripheral_sensor_test()` call in `on_sensor_data()` starts a sweep
+that was waiting for that normal measurement to finish. `sleep_pm_if_idle()`
+preserves the regular sleep policy while preventing sleep during the test or
+an outstanding read. The measurement interval stays unchanged. See
+[Hardware Test](hardware_test.md#peripheral-test) for the complete flow.
 
 See [Power Management — PM Sensor Sleep](power_management.md#pm-sensor-sleep-active-mode-power-cycling)
 for the full cycle, edge cases, and method documentation.
+
+### Shake-To-Refresh
+
+`AccelService` starts in the application wiring alongside the other workers.
+It detects motion without application policy; the orchestrator handles the
+timestamped `ShakeDetected` event. See [Accelerometer Service](accel_service.md)
+for the gesture, interrupt capture, and one-second cooldown.
+
+`on_shake_detected()` ignores events older than 500 ms, further shakes while a
+refresh is pending, and shakes during paused provisioning services, committed
+OTA, an active Peripheral Test, or the Accelerometer Test screen. An accepted
+shake sets `_refresh_pending` and calls `BuzzerService::acknowledge_refresh()`
+(2700 Hz, 100 ms, subject to the buzzer setting).
+
+`try_refresh()` follows the current measurement and PM state:
+
+| State | Action |
+|---|---|
+| Normal measurement already requested | Reuse its result; keep the original measurement origin |
+| Peripheral sweep still running after test exit | Wait for `SensorTestDone`, then request the refresh |
+| No measurement pending, PM ready | Request `MeasurementOrigin::Refresh` immediately |
+| PM asleep | Connect PM and request preparation; measure after `PmPrepared` |
+| PM preparing | Wait for `PmPrepared`, then request the refresh |
+| PM sleeping | Wait for `PmSensorAsleep`, then prepare and measure |
+
+A nearby regular deadline is not a reason to defer a manual refresh. If the
+refresh starts first, a regular measurement that becomes due waits for that
+result and PM readiness, then proceeds through the regular timer. If a regular
+measurement was already requested, its result serves both purposes and is
+recorded normally.
+
+The orchestrator chooses persistent snackbar text: `Preparing...` during
+warmup, `Measuring...` for an outstanding measurement, otherwise `Waiting...`.
+`on_pm_event()` retries the refresh at PM boundaries. `on_sensor_data()` clears
+the pending refresh and its persistent message, including when sensor fields
+are invalid. `clear_refresh()` also handles cancellation during provisioning
+pause and sleep preparation. There is no refresh timeout.
+
+Ordinary snackbars cannot overwrite or clear persistent progress. Progress
+remains visible on Home and menus while the display is on; setup and pairing
+screens keep their existing suppression. See
+[Snackbar Lifecycle](ui_manager.md#snackbar-lifecycle).
 
 ## Session ID Generation
 
@@ -1049,8 +1287,8 @@ all timer logic for host testability.
 The primary path for UI actions (start tracking, change mode, etc.) is
 through `UIManager::handle_input()` returning `UIActionResult`. The
 `EventType` enum values for these actions also serve as programmatic
-triggers — for example, BLE `start_tracking` / `stop_tracking` commands
-dispatch through the same `start_tracking()` / `stop_tracking()` methods.
+triggers — BLE Start, Pause, Resume, and Stop dispatch through the same tracking
+lifecycle methods as the UI actions.
 
 ### Invalid Sentinel Initialization
 

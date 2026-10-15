@@ -171,7 +171,6 @@ TEST_CASE("Go local API initializes safe snapshots") {
   REQUIRE(config.configuration_control.has_value());
   REQUIRE(config.measurement_interval_seconds.has_value());
   REQUIRE(config.gps_mode.has_value());
-  REQUIRE(config.front_led_brightness.has_value());
   REQUIRE(config.back_led_brightness.has_value());
   REQUIRE(config.touch_led_intensity.has_value());
   REQUIRE(config.buzzer_enabled.has_value());
@@ -185,7 +184,6 @@ TEST_CASE("Go local API initializes safe snapshots") {
   CHECK(*config.configuration_control == "both");
   CHECK(*config.measurement_interval_seconds == MEASURE_INTERVAL_SECONDS_DEFAULT);
   CHECK(*config.gps_mode == "tracking");
-  CHECK(*config.front_led_brightness == static_cast<int>(LedBrightness::Off));
   CHECK(*config.back_led_brightness == static_cast<int>(LedBrightness::Off));
   CHECK(*config.touch_led_intensity == static_cast<int>(TouchLedIntensity::Off));
   CHECK_FALSE(*config.buzzer_enabled);
@@ -351,7 +349,6 @@ TEST_CASE("Go local API maps the supported active config subset") {
   settings.configuration_control = ConfigurationControl::Local;
   settings.measure_interval_seconds = 30;
   settings.gps_mode = GpsMode::AlwaysOn;
-  settings.front_led_brightness = LedBrightness::Dim;
   settings.back_led_brightness = LedBrightness::Mid;
   settings.touch_led_intensity = TouchLedIntensity::Bright;
   settings.buzzer_enabled = true;
@@ -371,7 +368,6 @@ TEST_CASE("Go local API maps the supported active config subset") {
   CHECK(*config.configuration_control == "local");
   CHECK(config.measurement_interval_seconds == 30);
   CHECK(config.gps_mode == "always");
-  CHECK(config.front_led_brightness == static_cast<int>(LedBrightness::Dim));
   CHECK(config.back_led_brightness == static_cast<int>(LedBrightness::Mid));
   CHECK(config.touch_led_intensity == static_cast<int>(TouchLedIntensity::Bright));
   CHECK(config.buzzer_enabled == true);
@@ -434,7 +430,6 @@ TEST_CASE("Go local API translates one atomic supported update") {
   partial.configuration_control = "local";
   partial.measurement_interval_seconds = 30;
   partial.gps_mode = "off";
-  partial.front_led_brightness = 1;
   partial.back_led_brightness = 2;
   partial.touch_led_intensity = 2;
   partial.buzzer_enabled = true;
@@ -455,8 +450,8 @@ TEST_CASE("Go local API translates one atomic supported update") {
       field_mask(GoConfigField::TemperatureCorrection) |
       field_mask(GoConfigField::HumidityCorrection) |
       field_mask(GoConfigField::MeasurementInterval) | field_mask(GoConfigField::GpsMode) |
-      field_mask(GoConfigField::FrontLedBrightness) | field_mask(GoConfigField::BackLedBrightness) |
-      field_mask(GoConfigField::TouchLedIntensity) | field_mask(GoConfigField::BuzzerEnabled);
+      field_mask(GoConfigField::BackLedBrightness) | field_mask(GoConfigField::TouchLedIntensity) |
+      field_mask(GoConfigField::BuzzerEnabled);
   CHECK(request.config.update_mask == expected_mask);
   CHECK(request.config.pm_use_usaqi);
   CHECK(request.config.use_fahrenheit);
@@ -465,7 +460,6 @@ TEST_CASE("Go local API translates one atomic supported update") {
   CHECK(request.config.configuration_control == ConfigurationControl::Local);
   CHECK(request.config.measure_interval_seconds == 30);
   CHECK(request.config.gps_mode == GpsMode::AlwaysOff);
-  CHECK(request.config.front_led_brightness == LedBrightness::Dim);
   CHECK(request.config.back_led_brightness == LedBrightness::Mid);
   CHECK(request.config.touch_led_intensity == TouchLedIntensity::Bright);
   CHECK(request.config.buzzer_enabled);
@@ -724,10 +718,6 @@ TEST_CASE("Go local API rejects invalid interval, GPS mode, and output settings"
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::GpsMode);
 
-  partial = LocalServerConfig{};
-  partial.front_led_brightness = -1;
-  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
-                 ConfigFieldId::FrontLedBrightness);
   partial = LocalServerConfig{};
   partial.back_led_brightness = static_cast<int>(LedBrightness::Bright) + 1;
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,

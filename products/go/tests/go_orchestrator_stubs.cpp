@@ -22,13 +22,16 @@
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_storage.h"
+#include "go_type_helpers.hpp"
 #include "go_ulp.h"
 #include "services/ag_client.h"
 #include "go_wifi.h"
 #include "services/local_server.h"
 
+#include <functional>
 #include <algorithm>
 #include <cstring>
+#include <map>
 #include <set>
 
 // ============================================================================
@@ -36,12 +39,16 @@
 // ============================================================================
 
 namespace test_spy {
+std::function<void()> during_melody;
+uint32_t buzzer_refresh_ack_count = 0;
+uint32_t retained_time_read_count = 0;
 
 // --- SensorProducer ---
 bool sensor_started = false;
 bool sensor_stopped = false;
 bool sensor_stop_sleep_pm = false;
 bool measurement_requested = false;
+MeasurementOrigin last_measurement_origin = MeasurementOrigin::Scheduled;
 uint8_t last_iterations = 0;
 SensorGroup last_groups = SensorGroup::None;
 bool co2_calibration_requested = false;
@@ -66,9 +73,6 @@ bool input_started = false;
 bool input_stopped = false;
 
 // --- LedService ---
-uint32_t led_front_brightness_count = 0;
-LedBrightness led_last_front_brightness = LedBrightness::Off;
-bool led_front_bright_seen = false;
 uint32_t led_back_brightness_count = 0;
 LedBrightness led_last_back_brightness = LedBrightness::Off;
 bool led_back_bright_seen = false;
@@ -110,6 +114,12 @@ bool clear_routes_result = true;
 bool create_route_result = true;
 bool resume_route_result = true;
 bool append_route_point_result = true;
+bool append_accepts_before_error = false;
+std::map<uint32_t, uint32_t> route_point_counts;
+uint32_t session_point_count_query_count = 0;
+uint32_t session_point_count_query_id = 0;
+bool session_point_count_query_success = true;
+bool end_route_result = true;
 
 // Session IDs that should appear "already on NAND" to the orchestrator's
 // session-ID collision retry probe. Tests pre-populate this set to force
@@ -125,6 +135,7 @@ bool ble_connected = false;
 bool ble_authenticated = false;
 bool ble_notify_measures_called = false;
 MeasuresAGo ble_last_measures{};
+TrackingState ble_tracking_state = TrackingState::Idle;
 bool ble_update_status_called = false;
 bool ble_notify_tracking_status_called = false;
 uint32_t ble_notify_tracking_status_count = 0;
@@ -199,6 +210,7 @@ uint32_t wifi_stop_local_endpoint_count = 0;
 bool wifi_tick_called = false;
 uint32_t wifi_next_deadline_ms = 0;
 bool wifi_is_online = false;
+bool wifi_is_connecting = false;
 bool wifi_has_been_online = false;
 int wifi_rssi = WIFI_RSSI_INVALID;
 bool wifi_schedule_reconnect_called = false;
@@ -235,6 +247,7 @@ bool ota_run_wifi_invoke_download_started = false;
 bool bms_polled = false;
 uint32_t bms_poll_count = 0;
 bool shutdown_called = false;
+bool power_reboot_called = false;
 bool state_saved = false;
 RtcAppState last_saved_state{};
 RtcAppState state_to_load{};        // tests set this before init(Button)
@@ -252,10 +265,14 @@ bool recover_pm_sensor_called = false;
 uint32_t recover_pm_sensor_count = 0;
 
 void reset() {
+  during_melody = nullptr;
+  buzzer_refresh_ack_count = 0;
+  retained_time_read_count = 0;
   sensor_started = false;
   sensor_stopped = false;
   sensor_stop_sleep_pm = false;
   measurement_requested = false;
+  last_measurement_origin = MeasurementOrigin::Scheduled;
   last_iterations = 0;
   co2_calibration_requested = false;
   prepare_requested = false;
@@ -277,9 +294,6 @@ void reset() {
   input_started = false;
   input_stopped = false;
 
-  led_front_brightness_count = 0;
-  led_last_front_brightness = LedBrightness::Off;
-  led_front_bright_seen = false;
   led_back_brightness_count = 0;
   led_last_back_brightness = LedBrightness::Off;
   led_back_bright_seen = false;
@@ -312,6 +326,12 @@ void reset() {
   create_route_result = true;
   resume_route_result = true;
   append_route_point_result = true;
+  append_accepts_before_error = false;
+  route_point_counts.clear();
+  session_point_count_query_count = 0;
+  session_point_count_query_id = 0;
+  session_point_count_query_success = true;
+  end_route_result = true;
   existing_route_session_ids.clear();
 
   ble_init_called = false;
@@ -321,6 +341,7 @@ void reset() {
   ble_authenticated = false;
   ble_notify_measures_called = false;
   ble_last_measures = MeasuresAGo{};
+  ble_tracking_state = TrackingState::Idle;
   ble_update_status_called = false;
   ble_notify_tracking_status_called = false;
   ble_notify_tracking_status_count = 0;
@@ -393,6 +414,7 @@ void reset() {
   wifi_tick_called = false;
   wifi_next_deadline_ms = 0;
   wifi_is_online = false;
+  wifi_is_connecting = false;
   wifi_has_been_online = false;
   wifi_rssi = WIFI_RSSI_INVALID;
   wifi_schedule_reconnect_called = false;
@@ -424,6 +446,7 @@ void reset() {
   bms_polled = false;
   bms_poll_count = 0;
   shutdown_called = false;
+  power_reboot_called = false;
   state_saved = false;
   last_saved_state = RtcAppState{};
   state_to_load = RtcAppState{};
@@ -442,8 +465,11 @@ void reset() {
   DisplayService::spy_deep_sleep_called = false;
   DisplayService::spy_init_count = 0;
   DisplayService::spy_update_count = 0;
+  DisplayService::spy_sync_update_count = 0;
   DisplayService::spy_flush_count = 0;
   DisplayService::spy_last_screen = Screen::Home;
+  DisplayService::spy_last_update_wait = false;
+  DisplayService::spy_worker_busy = false;
 }
 
 } // namespace test_spy
@@ -466,8 +492,10 @@ void SensorProducer::stop(bool sleep_pm) {
   test_spy::sensor_stop_sleep_pm = sleep_pm;
 }
 
-void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups) {
+void SensorProducer::request_measurement(uint8_t iterations, SensorGroup groups,
+                                         MeasurementOrigin origin) {
   test_spy::measurement_requested = true;
+  test_spy::last_measurement_origin = origin;
   test_spy::last_iterations = iterations;
   test_spy::last_groups = groups;
 }
@@ -589,6 +617,9 @@ bool StorageService::create_route(uint32_t session_id) {
   test_spy::route_started = true;
   test_spy::route_file_open = true;
   test_spy::route_session_id = session_id;
+  _current_session_id = session_id;
+  _current_point_count = 0;
+  test_spy::route_point_counts[session_id] = 0;
   return true;
 }
 
@@ -599,6 +630,8 @@ bool StorageService::resume_route(uint32_t session_id) {
   test_spy::route_resumed = true;
   test_spy::route_file_open = true;
   test_spy::route_session_id = session_id;
+  _current_session_id = session_id;
+  _current_point_count = test_spy::route_point_counts[session_id];
   return true;
 }
 
@@ -606,23 +639,48 @@ bool StorageService::route_file_exists(uint32_t session_id) const {
   return test_spy::existing_route_session_ids.count(session_id) > 0;
 }
 
+bool StorageService::try_get_session_point_count(uint32_t session_id, uint32_t &count) const {
+  ++test_spy::session_point_count_query_count;
+  test_spy::session_point_count_query_id = session_id;
+  if (!test_spy::session_point_count_query_success || session_id == 0) {
+    return false;
+  }
+  if (test_spy::route_file_open && _current_session_id == session_id) {
+    count = _current_point_count;
+    return true;
+  }
+  const auto it = test_spy::route_point_counts.find(session_id);
+  if (it == test_spy::route_point_counts.end()) {
+    return false;
+  }
+  count = it->second;
+  return true;
+}
+
 bool StorageService::append_route_point(const RoutePoint &point) {
   test_spy::route_point_appended = true;
   test_spy::last_route_point = point;
+  if (test_spy::append_route_point_result || test_spy::append_accepts_before_error) {
+    ++_current_point_count;
+    test_spy::route_point_counts[_current_session_id] = _current_point_count;
+  }
   return test_spy::append_route_point_result;
 }
 
-void StorageService::end_route() {
+bool StorageService::end_route() {
   if (!test_spy::route_file_open) {
-    return; // no-op, same as real end_route() when _route_file == nullptr
+    return true; // no-op, same as real end_route() when _route_file == nullptr
   }
   test_spy::route_file_open = false;
   test_spy::route_ended = true;
+  _current_point_count = 0;
+  _current_session_id = 0;
+  return test_spy::end_route_result;
 }
 
 bool StorageService::is_route_active() const { return test_spy::route_file_open; }
 
-uint32_t StorageService::current_route_point_count() const { return 0; }
+uint32_t StorageService::current_route_point_count() const { return _current_point_count; }
 
 bool StorageService::delete_route(uint32_t /*session_id*/) { return true; }
 
@@ -681,6 +739,8 @@ void PowerService::recover_pm_sensor() {
 bool PowerService::reset_watchdog() { return true; }
 
 void PowerService::shutdown() { test_spy::shutdown_called = true; }
+
+void PowerService::reboot() { test_spy::power_reboot_called = true; }
 
 bool PowerService::set_watchdog_timeout_ms(uint32_t /*timeout_ms*/) { return true; }
 
@@ -820,25 +880,28 @@ void BleService::notify_measures(const MeasuresAGo &m, const GpsData & /*gps*/, 
   test_spy::ble_last_measures = m;
 }
 void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
-                               bool tracking, uint32_t session_id) {
+                               uint32_t session_id, TrackingState tracking_state) {
+  test_spy::ble_tracking_state = tracking_state;
   test_spy::ble_update_status_called = true;
-  test_spy::ble_last_status_tracking = tracking;
+  test_spy::ble_last_status_tracking = tracking_session_active(tracking_state);
   test_spy::ble_last_status_session = session_id;
 }
 
 void BleService::notify_tracking_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
-                                        bool tracking, uint32_t session_id) {
+                                        uint32_t session_id, TrackingState tracking_state) {
+  test_spy::ble_tracking_state = tracking_state;
   test_spy::ble_notify_tracking_status_called = true;
   ++test_spy::ble_notify_tracking_status_count;
-  test_spy::ble_last_status_tracking = tracking;
+  test_spy::ble_last_status_tracking = tracking_session_active(tracking_state);
   test_spy::ble_last_status_session = session_id;
 }
 
 void BleService::notify_charging_status(const PowerSnapshot & /*power*/, const GpsData & /*gps*/,
-                                        bool tracking, uint32_t session_id) {
+                                        uint32_t session_id, TrackingState tracking_state) {
+  test_spy::ble_tracking_state = tracking_state;
   test_spy::ble_notify_charging_status_called = true;
   ++test_spy::ble_notify_charging_status_count;
-  test_spy::ble_last_status_tracking = tracking;
+  test_spy::ble_last_status_tracking = tracking_session_active(tracking_state);
   test_spy::ble_last_status_session = session_id;
 }
 
@@ -932,7 +995,7 @@ size_t BleService::encode_measures(uint8_t * /*buf*/, size_t /*sz*/, const Measu
   return 0;
 }
 size_t BleService::encode_status(uint8_t * /*buf*/, size_t /*sz*/, const PowerSnapshot & /*p*/,
-                                 const GpsData & /*g*/, bool /*t*/, uint32_t /*s*/) {
+                                 const GpsData & /*g*/, uint32_t /*s*/, TrackingState /*state*/) {
   return 0;
 }
 size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSettings & /*s*/) {
@@ -1034,7 +1097,7 @@ void WifiService::shutdown() {
 void WifiService::clear_credentials() { test_spy::wifi_clear_credentials_called = true; }
 
 bool WifiService::is_online() const { return test_spy::wifi_is_online; }
-bool WifiService::is_connecting() const { return false; }
+bool WifiService::is_connecting() const { return test_spy::wifi_is_connecting; }
 bool WifiService::is_provisioning() const { return test_spy::wifi_provisioning_active; }
 ProvisioningTransport WifiService::current_transport() const {
   return ProvisioningTransport::BleOnly;
@@ -1056,7 +1119,7 @@ void WifiService::_on_disconnected(WifiDisconnectReason /*r*/) {}
 void WifiService::_reset_deadline() {}
 void WifiService::_arm_deadline(uint32_t /*window_ms*/) {}
 void WifiService::_reset_online_latches() {}
-void WifiService::_post_wifi_disconnected(WifiDisconnectReason /*r*/) {}
+bool WifiService::_post_wifi_disconnected(WifiDisconnectReason /*r*/) { return true; }
 
 // ============================================================================
 // PortableWifiProvisioner stubs
@@ -1238,12 +1301,6 @@ LedService::~LedService() = default;
 bool LedService::init() { return true; }
 bool LedService::start() { return true; }
 
-void LedService::front_set_brightness(LedBrightness brightness) {
-  ++test_spy::led_front_brightness_count;
-  test_spy::led_last_front_brightness = brightness;
-  test_spy::led_front_bright_seen |= brightness == LedBrightness::Bright;
-}
-
 void LedService::back_solid(Rgb /*color*/) {}
 void LedService::back_blink(Rgb /*color*/, uint32_t /*period_ms*/) {}
 void LedService::back_breathe(Rgb /*color*/, uint32_t /*period_ms*/) {}
@@ -1286,7 +1343,6 @@ void LedService::_enqueue(const Cmd & /*cmd*/) {}
 void LedService::_process_cmd(const Cmd & /*cmd*/, uint32_t /*now_ms*/) {}
 void LedService::_tick_back(uint32_t /*now_ms*/) {}
 void LedService::_tick_touch(uint32_t /*now_ms*/) {}
-void LedService::_render_front() {}
 void LedService::_render_back() {}
 void LedService::_render_touch() {}
 bool LedService::_is_back_static() const { return true; }
@@ -1331,6 +1387,7 @@ bool BuzzerService::start() { return true; }
 
 void BuzzerService::play(const Note * /*notes*/, uint8_t /*count*/) {}
 void BuzzerService::beep(uint32_t /*freq_hz*/, uint32_t /*duration_ms*/) {}
+void BuzzerService::acknowledge_refresh() { ++test_spy::buzzer_refresh_ack_count; }
 void BuzzerService::set_enabled(bool /*enabled*/) {}
 void BuzzerService::stop() {}
 bool BuzzerService::is_playing() const { return false; }
@@ -1358,5 +1415,8 @@ void BuzzerService::pump_for_test(uint32_t /*now_ms*/) {}
 #include "go_melody_sync.h"
 
 uint32_t play_synced(BuzzerService & /*buzzer*/, LedService & /*led*/, MelodySelect /*melody*/) {
+  if (test_spy::during_melody) {
+    test_spy::during_melody();
+  }
   return 0;
 }

@@ -17,6 +17,26 @@ enum class Behavior : uint8_t {
   Shutdown,
 };
 
+// Values are also exposed by the BLE Status trk field.
+enum class TrackingState : uint8_t {
+  Idle = 0,
+  Recording = 1,
+  Paused = 2,
+};
+
+// --- Tracking timing data; pure operations live in go_type_helpers.hpp ---
+
+inline constexpr uint32_t TRACKING_TIME_INVALID_S = UINT32_MAX;
+
+struct TrackingTiming {
+  uint32_t session_started_s = TRACKING_TIME_INVALID_S;
+  uint32_t recording_accumulated_s = TRACKING_TIME_INVALID_S; ///< Completed active segments
+  uint32_t recording_started_s = TRACKING_TIME_INVALID_S; ///< Current segment; invalid if paused
+  uint32_t last_record_s = TRACKING_TIME_INVALID_S;       ///< Last accepted write, not sync
+};
+
+static_assert(sizeof(TrackingTiming) == 16, "Tracking timing must contain four 32-bit fields");
+
 enum class LockState : uint8_t {
   Locked,
   Unlocked,
@@ -52,17 +72,35 @@ enum class InputType : uint8_t {
 //
 // Saved to RTC memory before deep sleep; restored on wake to resume application
 // state without full re-initialization. Defaults represent a safe starting
-// point for a fresh power-on (Offline, Idle, Locked).
+// point for a fresh power-on (Portable, Idle, Locked).
+
+enum class RtcAppFlag : uint32_t {
+  GpsEnabled = 1u << 0,
+  SensorsWarm = 1u << 1,           ///< Sensors kept powered during last deep sleep
+  ChargingOnlyRequested = 1u << 2, ///< One-shot request after USB-powered user shutdown
+  // Bits 3–31 are reserved for future flags.
+};
 
 struct RtcAppState {
   OperatingMode mode = OperatingMode::Portable;
   Behavior behavior = Behavior::Idle;
   LockState lock_state = LockState::Locked;
-  bool gps_enabled = true;
-  bool tracking_active = false;
+  TrackingState tracking_state = TrackingState::Idle;
   uint32_t tracking_session_id = 0; ///< 5-digit session ID; 0 = no active session
-  bool sensors_warm = false;        ///< Sensors kept powered during last deep sleep
+  uint32_t flags = static_cast<uint32_t>(RtcAppFlag::GpsEnabled);
+  TrackingTiming tracking_timing{};
+
+  constexpr bool has_flag(RtcAppFlag flag) const {
+    return (flags & static_cast<uint32_t>(flag)) != 0;
+  }
+
+  constexpr void set_flag(RtcAppFlag flag, bool enabled) {
+    const auto mask = static_cast<uint32_t>(flag);
+    flags = enabled ? (flags | mask) : (flags & ~mask);
+  }
 };
+
+static_assert(sizeof(RtcAppState) == 28, "RTC app state layout must remain 28 bytes");
 
 // --- Forward declarations for BootHandoff pointer members ---
 

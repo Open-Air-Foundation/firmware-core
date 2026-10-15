@@ -1,7 +1,7 @@
 /**
  * AirGradient Go -- LED service declaration
  *
- * Drives three LED groups (front, back, touch) through an abstract
+ * Drives two LED groups (back, touch) through an abstract
  * LedDriver surface.  Uses an adaptive render loop that sleeps when
  * all LEDs are static and ticks at frame rate only when an animation
  * is active.
@@ -40,9 +40,6 @@ public:
 
   bool init();
   bool start();
-
-  // --- Front (static) ---
-  void front_set_brightness(LedBrightness brightness);
 
   // --- Back (animated) ---
   void back_solid(Rgb color);
@@ -91,7 +88,6 @@ private:
 
   struct Cmd {
     enum class Kind : uint8_t {
-      FrontSetBrightness,
       BackSolid,
       BackBlink,
       BackBreathe,
@@ -146,7 +142,6 @@ private:
   void _process_cmd(const Cmd &cmd, uint32_t now_ms);
   void _tick_back(uint32_t now_ms);
   void _tick_touch(uint32_t now_ms);
-  void _render_front();
   void _render_back();
   void _render_touch();
   bool _is_back_static() const;
@@ -185,7 +180,6 @@ private:
 
   // Worker-owned state
   uint32_t _now_ms = 0; // Current time snapshot for this processing cycle
-  LedBrightness _front_brightness = LedBrightness::Off;
   BackEffectState _back_effect;
   LedBrightness _back_brightness = LedBrightness::Off;
   TouchLedIntensity _touch_intensity = TouchLedIntensity::Off;
@@ -199,7 +193,6 @@ private:
   bool _has_saved_back_effect = false;
 
   // Dirty flags
-  bool _front_dirty = false;
   bool _back_dirty = false;
   bool _touch_dirty = false;
 

@@ -201,9 +201,17 @@ in any (mode, behavior) combination.
 Transitions:
 
 - Mode changes: user navigates UI menu
-- Tracking start / stop: user navigates UI menu, or BLE `start_tracking` /
-  `stop_tracking` command
+- Tracking start / pause / resume / stop: device menu or BLE `start_tracking`,
+  `pause_tracking`, `resume_tracking`, and `stop_tracking` commands
 - Shutdown: physical button long press (Button 1) → BMS QoN
+
+`TrackingState` adds the route lifecycle within this model: Idle (0), Recording
+(1), and Paused (2). Recording and Paused both retain `Behavior::Tracking` and
+the session ID, but only Recording appends route points. Pause closes the file;
+Resume reopens it for append. RTC state preserves the enum across deep sleep.
+Live sensing, chart cache, GPS, and enabled connectivity continue while Paused.
+See [Tracking Lifecycle](docs/orchestrator.md#tracking-lifecycle) and the
+[BLE Status contract](go_ble_client.md#6-status-characteristic).
 
 ### UI State Machine
 
@@ -264,7 +272,9 @@ Posted into the queue by background tasks.
 
 | Event | Source | Payload |
 |---|---|---|
-| `SensorDataReady` | Sensor Task | `MeasuresAGo` struct |
+| `SensorDataReady` | Sensor Task | `SensorEventData`: `MeasuresAGo` plus `MeasurementOrigin` (`Scheduled` or `Refresh`) |
+| `PmPreparationStarted`, `PmPrepared`, `PmSensorAsleep` | Sensor Task | PM operation boundary; no payload |
+| `ShakeDetected` | Accelerometer Worker | Monotonic detection timestamp in milliseconds |
 | `GpsFixUpdate` | GPS Task | `GpsData` from `airgradient-gps` — position, altitude, fix type, DOP, satellite count, timestamp |
 | `InputPress` | Input Task | source (touch_up / down / enter, btn_power, btn_boot), type (short / long) |
 | `BleConnected` | BLE Service | client connected |
@@ -315,7 +325,8 @@ orchestrator-level state changes.
 | Task | Role | Blocks? | Posts to Queue | Notes |
 |---|---|---|---|---|
 | Orchestrator | Main event loop | Yes | -- | Usually waits on its event queue; also performs explicit bounded lifecycle waits and foreground OTA calls |
-| Sensor Producer | Wraps SensorManager | Yes | `SensorDataReady` | Waits for RTOS task notification from orchestrator |
+| Sensor Producer | Wraps SensorManager | Yes | `SensorDataReady`, PM boundary and diagnostic events | Waits for RTOS task notification from orchestrator |
+| Accelerometer Worker | Interrupt-burst motion capture and Hardware Test access | Yes | `ShakeDetected` | No idle XYZ polling; stops burst on shake, then waits through a 1 s cooldown |
 | GPS Producer | UART NMEA read loop | Yes | `GpsFixUpdate` | Product-specific, uses `airgradient-gps` (`GpsSensor` / `NmeaGps`) |
 | Input Producer | Classifies raw ISR events | Yes | `InputPress` | Debounce + long-press detection |
 | Cloud Task | HTTP POST + FETCH via AgClient | Yes | `PostMeasuresResult`, `FetchConfigResult` | Stationary + online only; heap deferred to `start()` |
@@ -339,27 +350,32 @@ In Portable and Stationary modes (always-awake), the producer also drives
 a gas-index sampler that feeds the Sensirion algorithm at a fixed cadence
 (default 10 s) independent of the measurement interval.
 
-```text
-Sensor Task:
-  warmup()
-  configure gas-index sampler (if SGP41 is wired)
-
-  loop:
-    Wait for task notification (with sampler timeout when active)
-
-    If notified:
-      handle_calibration / handle_prepare / handle_measurement
-
-    If sampler tick due:
-      handle_sampler_tick → read SGP41, advance algorithm, cache result
-```
+The task performs startup warmup and configures the gas-index sampler before
+entering its loop. Each iteration waits for a notification or the earliest
+active deadline: a gas sample or a PM warmup step. It dispatches the notification,
+services any due gas sample, then advances PM warmup. See the
+[task loop](docs/sensor_producer.md#task-loop) for the control flow.
 
 The orchestrator controls when to measure by sending a task notification
-that encodes both the iteration count (always 1) and which sensor groups
+that encodes the iteration count (always 1), measurement origin, and which sensor groups
 to poll (`SensorGroup::PM`, `SensorGroup::Other`, `SensorGroup::TvocNox`,
 or `SensorGroup::All`). When the sampler is active, the producer strips
 `TvocNox` from measurement masks and splices its cached TVOC/NOx into
-the result. See [Sensor Producer](docs/sensor_producer.md) for details.
+the result. After startup, PM preparation uses timed PM-only warmup steps and
+reports start/completion events while gas-index sampling continues.
+The orchestrator tracks PM state and one outstanding measurement so shake
+refresh can reuse a scheduled request or wait for PM preparation before sending
+its own request. See [Sensor Producer](docs/sensor_producer.md) for details.
+
+### Accelerometer Worker
+
+`AccelService` owns LIS2DH12 access, including Hardware Test configuration and
+reads. GPIO3 interrupts start filtered 100 Hz capture; a Y-axis side-to-side
+shake posts `ShakeDetected` and immediately ends polling. The detector owns
+the one-second cooldown timing, and the service keeps the interrupt masked
+during that wait. Application startup starts the worker; the orchestrator
+handles accepted-shake ACK and measurement requests. No accelerometer wake
+from deep sleep is configured. See [Accelerometer Service](docs/accel_service.md).
 
 ### Gas Index in Offline Mode
 
@@ -513,6 +529,13 @@ The Offline fast path follows the same boundary: storage receives raw values,
 while the display receives a corrected copy. See
 [`docs/measurement_corrections.md`](docs/measurement_corrections.md).
 
+Manual refresh results update the current readings, BLE, local API, AQI LEDs,
+and cloud snapshot. Only scheduled results enter the RTC chart cache and route
+files. A regular measurement already requested when a shake is accepted serves
+the refresh and retains its scheduled origin. Manual refresh does not reset
+regular measurement or cloud-post timers. See
+[Shake-To-Refresh](docs/orchestrator.md#shake-to-refresh).
+
 ## Power Management
 
 ### Sleep Eligibility
@@ -554,9 +577,9 @@ configured interval.
 5. Backup chart cache to RTC memory
 6. Persist app state to RTC memory:
    - Current mode, behavior, lock status
-   - Tracking-in-progress flag, session ID
-   - GPS enabled / disabled
-   - sensors_warm flag (set when sleep < sensor_hold_max_sleep_ms)
+   - Tracking-state enum, session ID
+   - RtcAppFlag::GpsEnabled in the flags mask
+   - RtcAppFlag::SensorsWarm (set when sleep < sensor_hold_max_sleep_ms)
 7. Pulse external watchdog (gives it a full timeout window during sleep)
 8. If sleep < sensor_hold_max_sleep_ms (20 s):
    - gpio_hold_en(PIN_PM_POWER) — hold PM sensor power HIGH
@@ -572,34 +595,38 @@ sleep) and the full 10 s warmup runs on wake.
 
 ### Wake and Boot Path
 
-Deep sleep reboots the CPU. All tasks restart from `app_main`. Two
-abbreviated paths exist to avoid the full event-loop overhead when it is
-not needed.
-
-```text
-app_main:
-  GoHardwareBoard board;
-  GoApp app(board);
-  app.run();
-
-GoApp::run():
-  cause = PowerService::get_wake_cause()
-  path = select_boot_path(cause, load_rtc_app_state())
-
-  FastPath    → run_fast_path(state)        // never returns
-  ButtonWake  → run_button_wake_path(state) // never returns
-  Interactive → run_interactive(cause, {})  // never returns
-```
-
-`select_boot_path()` is a pure function (host-testable):
+Deep sleep reboots the CPU. All tasks restart from `app_main`, which creates
+the board and calls `GoApp::run()`. Active factory fuel-gauge learning takes
+priority. Otherwise, the app probes charging-only eligibility and passes it
+to the pure, host-testable `select_boot_path(cause, state,
+charging_only_eligible)` function:
 
 | Wake Cause | Condition | Path |
 |---|---|---|
+| Timer wake after user shutdown | One-shot RTC charging-only request | `ChargingOnly` |
+| `PowerOn` | Hardware power-on reset with confirmed external input | `ChargingOnly` |
 | `Timer` + `Locked` | `is_fast_path_wake()` | `FastPath` — measure, display, sleep or promote |
 | `Timer` + `Unlocked` | Not fast-path eligible | `Interactive` |
 | `Button` + `Offline` | -- | `ButtonWake` — four-phase early paint |
 | `Button` + non-Offline | -- | `Interactive` |
-| `PowerOn` | -- | `Interactive` |
+| `PowerOn` | Not charging-only eligible, including software reset | `Interactive` |
+
+Charging-only boot shows a static battery-and-bolt icon with "Charging" and
+"Hold power button / to turn on". Charge completion shows a filled battery
+and "Battery Full", including when already full at boot. Only charging-state
+transitions repaint the page. The charger is initialized once, PM power is
+disabled, and sensors, radios, storage, and the orchestrator remain unstarted.
+The main CPU feeds the external watchdog and uses two-second light sleeps to
+poll external-power status; no LP-core feeder runs. Button wake restarts into
+normal startup. A valid unplug reading refreshes "Powered off" and calls
+`shutdown()` without rechecking the cable or button after the refresh.
+Cold-boot charging-only eligibility requires `ESP_RST_POWERON` and external
+input, regardless of charge completion; there is no startup button override.
+User shutdown with USB attached sets `RtcAppFlag::ChargingOnlyRequested`
+after its normal shutdown page and cleanup, then uses a brief timer-woken
+deep-sleep reboot. Boot consumes the request and enters the same charging-only
+display and polling path. See
+[Hardware Init](docs/hardware_init.md#boot-path-selection) for detection rules.
 
 Hardware initialization is managed by **GoHardwareBoard** through
 fine-grained init methods and lazy service accessors. `init_nvs()`,
@@ -638,21 +665,31 @@ On a fresh interactive power-on with no RTC snapshot and no fast-path
 measurement, `GoApp` initializes SPI and starts a deferred `Screen::Info`
 `Getting Ready` splash before core initialization. Core and I2C initialization
 run while the display refreshes; `GoApp` flushes that refresh before mounting
-NAND storage. The orchestrator keeps the splash until the first
-`SensorDataReady` event, then runs the first-boot gate: when the durable
-`onboarding_done` NVS flag is unset it shows the one-time
-`Screen::GettingStarted` guide (setup QR + `Start using`), otherwise it resets
-the UI to Home. A short press on Button 1 is ignored while the splash is active
-so the first boot screen is not replaced by an unlock / lock transition.
+NAND storage. At the end of initialization, the orchestrator replaces the splash
+with the one-time `Screen::GettingStarted` guide when the durable
+`onboarding_done` NVS flag is unset. Sensors warm up in the background.
+Onboarded devices keep the splash until the first `SensorDataReady` event,
+then enter Home. Stationary connection screens retain control of their own
+transition to Home. A short press on Button 1 is ignored while the splash is
+active so it is not replaced by an unlock / lock transition.
 
 **First-boot onboarding.** The Getting Started guide is informational and
-non-blocking — the device is already measuring and BLE-discoverable while
-it shows. The boot-gate entry reuses the setup-session machinery
+non-blocking — sensor warmup and measurements continue, and Portable BLE is
+discoverable while it shows. The boot-gate entry reuses the setup-session machinery
 (`begin_session_if_needed()` silent-unlock so the cold-boot Locked device
-can press the button). `onboarding_done` flips `true` via the idempotent
-`mark_onboarding_done()` on the first real engagement (`Start using`, a
-BLE pairing/bond, or any `change_mode()`), and the guide auto-shows only
-once. Factory reset clears the flag so refurbished units re-show it.
+can hold Enter). Leaving the guide requires the default one-second Enter long
+press; short presses and double taps leave the guide open. The QR caption reads
+`Scan for guide`, and a single bold `Hold Enter to start` instruction appears
+inside the highlighted action, below `Or just use it right now`. The screen
+does not display a hold duration. `onboarding_done` flips `true` via the idempotent
+`mark_onboarding_done()` on the first real engagement (the Enter hold,
+a BLE pairing/bond, or any `change_mode()`), and the guide auto-shows
+only once. Factory reset clears the flag so refurbished units re-show it.
+
+The Enter hold works before the first measurement. Home shows dashes until
+readings arrive, and `_first_measurement_done` stays false until then, preserving
+the sleep gate. A measurement updates cached data without dismissing the guide
+or replacing a menu or pairing screen the user has opened.
 
 Full composition also starts `SerialCommandService` before onboarding and parks
 its receive task when onboarding completes. See
@@ -688,9 +725,17 @@ explicit synchronization needed.
 
 ### Shutdown
 
-Button 1 long press triggers BMS QoN (ship mode) via
+On battery, Button 1 long press triggers BMS QoN (ship mode) via
 `BmsDevice::enter_ship_mode()` on the BQ25629. The device fully powers
 off. GPS module loses power. Next power-on is a fresh boot.
+
+When the latest power status reports USB input, the orchestrator saves existing
+data and a one-shot RTC request after the normal shutdown page and cleanup.
+PowerService waits for button release and reboots through deep sleep into
+charging-only mode.
+The charging-only loop feeds the watchdog and handles unplug; the
+orchestrator has no separate charging loop. Protective shutdowns retain the
+existing ship-mode/deep-sleep fallback.
 
 Button 1 (`PIN_BUTTON_POWER`, GPIO5) is wired to **both** the ESP32 GPIO
 **and** the BQ25629 `/QON` pin. This makes the gesture matter:
@@ -703,9 +748,9 @@ Button 1 (`PIN_BUTTON_POWER`, GPIO5) is wired to **both** the ESP32 GPIO
   line qualifies a ship-mode wake (≥ ~17 ms) and the BQ25629 re-closes
   the BATFET, so the device powers back on. Because the BATFET cut drops
   the RTC domain too, this comes up as `WakeCause::PowerOn` — a full cold
-  boot (RTC state wiped), not a deep-sleep wake. With USB present,
-  `enter_ship_mode()` is refused and the path falls back to deep sleep, so
-  the restart behavior only applies on battery.
+  boot (RTC state wiped), not a deep-sleep wake. With confirmed USB present,
+  user shutdown waits for release and enters charging-only mode instead, so
+  the hardware hold-to-restart behavior only applies on battery.
 
 Ship mode is also triggered automatically by the EDV and high- or
 low-battery-temperature safety trips — see
@@ -1061,12 +1106,12 @@ sequenceDiagram
     - _board.power().set_pm_power(true) — drives EN_PM GPIO only;
       `EN_OTG` already armed by `init_bms()`
     - _board.load_settings()
-    - _board.sensors(state.sensors_warm) — SPS30 warm: skip_reset
-   - If sensors_warm: skip warmup (200 ms settle only)
+    - _board.sensors(state.has_flag(RtcAppFlag::SensorsWarm)) — SPS30 warm: skip_reset
+   - If RtcAppFlag::SensorsWarm is set: skip warmup (200 ms settle only)
      Else: interruptible warmup loop with button checks
    - One-shot measurement (skip if button pressed)
-   - One-shot GPS via _board.new_gps_driver() if tracking + GPS active
-   - Storage: _board.storage().cache_measurement() + route point
+   - One-shot GPS via _board.new_gps_driver() when GPS is active, including Paused
+   - Storage: cache_measurement() always; route point only while Recording
      - One _board.power().poll_bms() snapshot supplies route SOC, display,
        and thermal shutdown policy
      - Display + sleep decision via _board.power().decide_sleep()
@@ -1138,6 +1183,7 @@ Detailed implementation documentation for each service:
 
 - [Settings Service](docs/settings.md)
 - [Sensor Producer](docs/sensor_producer.md)
+- [Accelerometer Service](docs/accel_service.md)
 - [GPS Service](docs/gps_service.md)
 - [Input Service](docs/input_service.md)
 - [Storage Service](docs/storage_service.md)
