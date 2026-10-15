@@ -65,7 +65,7 @@ Power is calculated from the 3.9 V supply setting and measured average current.
 | BLE modem sleep only | Advertising | 117.90 mA | 459.81 mW | 349.40 mA | [2026-10-15 capture](ppk-20261015T125711.png) |
 | BLE modem sleep only | Connected idle | 116.41 mA | 454.00 mW | 308.56 mA | [2026-10-15 capture](ppk-20261015T125919.png) |
 | BLE modem sleep + DFS | Advertising | 111.84 mA | 436.18 mW | 312.47 mA | [2026-10-15 capture](ppk-20261015T143253.png) |
-| BLE modem sleep + DFS | Connected idle | 97.38 mA | 379.78 mW | 303.86 mA | [2026-10-15 capture](ppk-20261015T143554.png) |
+| BLE modem sleep + DFS | Connected idle | 109.97 mA | 428.88 mW | 303.86 mA | [2026-10-15 capture](ppk-20261015T143554.png) |
 | Above + light sleep, CPU power-down off | Advertising | — | — | — | — |
 | Above + light sleep, CPU power-down off | Connected idle | — | — | — | — |
 | Above + CPU power-down | Advertising | — | — | — | — |
@@ -83,12 +83,11 @@ lasted one minute; screenshots show 10-second views with statistics labeled
 "WINDOW." Full-record averages are not shown; no new capture is required.
 
 Adding DFS reduced displayed average current by 6.06 mA (5.14%) while advertising
-and 19.03 mA (16.35%) while connected. Total reductions from baseline are 19.89%
-and 30.47%, respectively. DFS screenshots also show 10-second viewing windows.
+and 6.44 mA (5.53%) while connected. Total reductions from baseline are 19.89%
+and 21.48%, respectively. DFS screenshots also show 10-second viewing windows.
 
-Go stops advertising on connection. A quiet connection can require less radio
-and CPU activity than advertising; negotiated timing and PM lock residency are
-needed to confirm the cause of the larger connected-idle saving with DFS.
+Connected idle with DFS is 1.87 mA below advertising. Go stops advertising on
+connection; the cause of this small difference has not been established.
 
 ## Activity Log
 
@@ -113,7 +112,9 @@ needed to confirm the cause of the larger connected-idle saving with DFS.
   corrected the capture duration, keeping viewing-window statistics distinct.
 - 2026-10-15: User built and flashed with `CONFIG_PM_ENABLE=y` and
   `CONFIG_PM_DFS_INIT_AUTO=y`; tickless idle remains disabled. Recorded advertising
-  at 111.84 mA and connected idle at 97.38 mA. Actual minimum frequency from the
+  at 111.84 mA and connected idle at 109.97 mA. Actual minimum frequency from the
   boot log and negotiated BLE connection parameters are not yet recorded.
 - 2026-10-15: Split automatic light sleep and CPU power-down into separate tests.
   The existing CPU power-down option has not affected these awake Portable tests.
+- 2026-10-15: Corrected the misread DFS connected-idle average to 109.97 mA,
+  as confirmed by the user; recalculated power and savings.
