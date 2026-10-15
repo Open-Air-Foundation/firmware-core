@@ -5,7 +5,8 @@ this branch is not intended for merge. ESP32-C5, ESP-IDF v5.5.4.
 
 ## Status
 
-2026-10-15: Baseline captured; DFS and BLE modem sleep experiment next.
+2026-10-15: Advertising and connected-idle baselines captured;
+DFS and BLE modem sleep experiment next.
 Baseline source: `03b78b48aaffd8541147be214a44e74609900e27` plus the
 temporary SCD4x disable committed with this log.
 Current firmware: 240 MHz CPU, ESP-IDF PM and BLE modem sleep disabled.
@@ -53,7 +54,7 @@ the 3.9 V supply setting and measured average current.
 | Configuration | BLE State | Average Current | Average Power | Peak Current | Trace |
 |---|---|---|---|---|---|
 | Baseline | Advertising | 139.60 mA | 544.44 mW | 350.19 mA | [2026-10-15 capture](ppk-20261015T081240.png) |
-| Baseline | Connected idle | — | — | — | — |
+| Baseline | Connected idle | 140.06 mA | 546.23 mW | 311.69 mA | [2026-10-15 capture](ppk-20261015T124049.png) |
 | DFS + BLE sleep | Advertising | — | — | — | — |
 | DFS + BLE sleep | Connected idle | — | — | — | — |
 | Above + light sleep | Advertising | — | — | — | — |
@@ -61,6 +62,9 @@ the 3.9 V supply setting and measured average current.
 
 Power reduction = 100 × (baseline − new average power) / baseline.
 Production battery-life conclusions require a later comparison on S12 hardware.
+
+Connected idle averaged 0.46 mA (0.33%) above advertising in these captures;
+average consumption was effectively unchanged. Connection parameters were not recorded.
 
 ## Activity Log
 
@@ -73,3 +77,5 @@ Production battery-life conclusions require a later comparison on S12 hardware.
   and 8.38 C charge. Research notes and captures moved into `.research/`.
 - 2026-10-15: Track code, research notes, and captures in Git; use separate
   commits for subsequent experiments.
+- 2026-10-15: Connected-idle baseline at 3.9 V for one minute: 140.06 mA average,
+  311.69 mA maximum, and 8.40 C charge. Firmware unchanged from `bdca1e6`.
