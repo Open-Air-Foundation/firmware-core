@@ -5,13 +5,17 @@ this branch is not intended for merge. ESP32-C5, ESP-IDF v5.5.4.
 
 ## Status
 
-2026-10-15: Automatic light sleep with CPU power-down disabled prepared;
-Go firmware build passed; hardware measurements pending.
+2026-10-16: Last tested checkpoint: automatic light sleep enabled, CPU power-down
+disabled. Double tap works with the case fitted; BLE connects then immediately
+disconnects. Disabling runtime light sleep restored BLE connection and communication.
+Untested BLE-disconnect diagnostics removed; the cause remains unresolved.
 Baseline source: `03b78b48aaffd8541147be214a44e74609900e27` plus the
 temporary SCD4x disable committed with this log.
 Current firmware: BLE modem sleep and startup DFS enabled; maximum 240 MHz,
-minimum detected main-crystal frequency. Hardware initialization enables automatic
-light sleep at runtime. CPU and peripheral power-down remain disabled.
+minimum 48 MHz (confirmed in boot log). Runtime automatic light sleep starts after
+the first completed measurement; tickless idle, wake callbacks, and PM profiling
+remain enabled, including after BLE disconnects.
+CPU and peripheral power-down remain disabled.
 
 ## Test Configuration
 
@@ -22,7 +26,9 @@ light sleep at runtime. CPU and peripheral power-down remain disabled.
 - Wi-Fi off. Keep Stationary Wi-Fi power-saving policy unchanged.
 - BLE advertising first; connected-idle measured separately.
 - Screen locked, device stationary, no user interaction or transfers.
-- Other sensors and logging unchanged; USB disconnected during capture.
+- Keep the case fitted consistently for subsequent functional and power tests.
+- **USB data connected, cable VCC disconnected, in every test so far.**
+- Other sensors unchanged; revised light-sleep firmware adds PM diagnostics.
 - No external 32.768 kHz crystal; retain the main crystal for BLE sleep timing.
 
 ## Measurement Procedure
@@ -53,6 +59,23 @@ Verify BLE discovery, connection, READ/WRITE, button/shake response, and sensor
 updates on hardware.
 Update relevant VHUB coverage. Flashing and captures are user-operated.
 
+## Light-Sleep Checkpoint
+
+- First measurement enables sleep after startup and warmup. GPIO wake covers
+  both buttons, touch INT, and motion INT; normal edge interrupts resume on wake.
+- `CONFIG_PM_PROFILING=y` adds cumulative lock statistics, successful sleep count,
+  and rejected sleep count every 60 seconds, checked after measurements.
+  `CONFIG_PM_LIGHT_SLEEP_CALLBACKS=y` enables the GPIO transitions around sleep.
+- Check repeated cold boots, buttons, touch, shake, BLE READ/WRITE, and sensor
+  updates first. Then repeat the stable one-minute advertising capture at 3.9 V.
+- USB logs can still disappear during light sleep. Read diagnostics through UART0
+  at 115200 if needed; USB reconnect is not guaranteed to recover the console.
+  Leave `CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=n`: enabling it prevents automatic
+  sleep while the host is connected. See [Espressif USB sleep notes](https://docs.espressif.com/projects/esp-idf/en/v5.5.4/esp32c5/api-guides/usb-serial-jtag-console.html#sleep-mode-considerations).
+- Compare counter changes between dumps; mode percentages show PM mode occupancy,
+  not exact physical sleep residency. Profiling and dumps add overhead; disable
+  profiling for the final consumption comparison after diagnosing sleep behavior.
+
 ## Results
 
 Compare each stage with the previous stage to isolate its additional saving,
@@ -67,8 +90,9 @@ Power is calculated from the 3.9 V supply setting and measured average current.
 | BLE modem sleep only | Connected idle | 116.41 mA | 454.00 mW | 308.56 mA | [2026-10-15 capture](ppk-20261015T125919.png) |
 | BLE modem sleep + DFS | Advertising | 111.84 mA | 436.18 mW | 312.47 mA | [2026-10-15 capture](ppk-20261015T143253.png) |
 | BLE modem sleep + DFS | Connected idle | 109.97 mA | 428.88 mW | 303.86 mA | [2026-10-15 capture](ppk-20261015T143554.png) |
-| Above + light sleep, CPU power-down off | Advertising | — | — | — | — |
-| Above + light sleep, CPU power-down off | Connected idle | — | — | — | — |
+| Above + light sleep, CPU power-down off (initial trial) | Advertising | ~113 mA | ~441 mW | — | [Startup log](result.log) |
+| Above + light sleep, revised wake handling + profiling | Advertising | 100.26 mA | 391.01 mW | 321.88 mA | [2026-10-15 capture](ppk-20261015T154620.png) |
+| Above + light sleep, revised wake handling + profiling | Connected idle | Unavailable: disconnects immediately | — | — | — |
 | Above + CPU power-down | Advertising | — | — | — | — |
 | Above + CPU power-down | Connected idle | — | — | — | — |
 
@@ -126,3 +150,28 @@ connection; the cause of this small difference has not been established.
   Idle threshold remains three ticks (30 ms at 100 Hz).
   Go firmware build passed; host tests skipped as agreed. After flashing, expect
   a PM configuration log with `Light sleep: ENABLED` during hardware initialization.
+
+- 2026-10-15: Initial light-sleep trial: ~113 mA advertising, sluggish response,
+  repeated power cycles, and USB log loss. [Log](result.log) contains USB
+  disconnects but no captured panic. USB data was connected in every test,
+  with cable VCC disconnected.
+- 2026-10-15: Deferred automatic sleep until the first completed measurement;
+  added GPIO wake callbacks and PM profiling. Revised one-minute advertising
+  capture: 100.26 mA average, 321.88 mA peak, 6.02 C. Reduction versus DFS:
+  11.58 mA (10.35%); versus baseline: 28.18%. User observed peaks during display
+  refresh and menu navigation. BLE connected then immediately disconnected.
+- 2026-10-16: Runtime light-sleep-off control restored BLE communication.
+  PM dump at ~74.5 seconds since boot: 48 MHz 76%, 80 MHz 14%, 240 MHz 9%;
+  cumulative figures include startup. Initial touch concerns were due to
+  comparing with/without the case; double tap works in the control build.
+- 2026-10-16: Re-enabled runtime light sleep, retaining other settings.
+  With the case fitted, double tap works; BLE still immediately disconnects.
+  The separate DFS reference build was not needed.
+- 2026-10-16: Removed the untested BLE-disconnect diagnostics, including the
+  proposed sleep-disable response and reason retention. Returned firmware to
+  the last tested checkpoint; retained PM profiling and GPIO wake handling.
+  Go build, formatting, and Markdown lint passed; host tests skipped as agreed.
+- Next experiment: user enables `PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP` through
+  menuconfig, keeping peripheral power-down and other settings unchanged.
+  Configuration edits remain user-operated. Compare advertising against
+  100.26 mA with the same case/supply setup; BLE disconnect is a known issue.

@@ -1,0 +1,279 @@
+I (551) heap_init: At 4082BB20 len 00030A80 (194 KiB): RAM
+I (556) heap_init: At 4085C5A0 len 00002F58 (11 KiB): RAM
+I (562) heap_init: At 50001714 len 000028D4 (10 KiB): RTCRAM
+I (568) spi_flash: detected chip: generic
+I (571) spi_flash: flash io: dio
+W (574) spi_flash: CPU frequency is set to 240MHz. esp_flash_write_encrypted() will automatically limit CPU frequency to 80MHz during execution.
+I (604) main_task: Started on CPU0
+I (604) main_task: Calling app_main()
+I (704) app: [HEAP] boot:run-entry free=193832 min=193832 largest=172032
+I (814) board: I2C bus ready
+I (914) board: board variant: V1 (BQ27427 @ 0x55 ACK)
+I (1014) BQ25629: BQ25628 found, Part Info: 0x12
+I (1014) BQ25629: Configuring battery temperature profile
+I (1014) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)
+I (1024) BQ25629: BQ25629 initialized successfully
+I (1024) BQ25629: Watchdog timeout set to DISABLED
+I (1024) BQ25629: Disabling HIZ mode (required for OTG boost)
+I (1034) BQ25629: HIZ mode disabled
+I (1044) BQ25629: Enabling temperature sensor (TS) check
+I (1044) BQ25629: TS check enabled
+I (1054) BQ25629: Setting VOTG voltage to 5100 mV
+I (1054) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0
+I (1054) BQ25629: VOTG voltage set to 5100 mV
+I (1064) BQ25629: Disabling bypass OTG mode (direct battery→PMID)
+I (1064) BQ25629: Bypass OTG mode disabled
+I (1074) BQ25629Bms: pre-OTG ADC: vbat=0mV vsys=0mV vpmid=0mV vbus=0mV ibat=0mA
+I (1374) BQ25629Bms: post-OTG verify: EN_OTG=1 vpmid=5026mV vbat=3898mV
+I (1374) BQ25629Bms: BQ25629Bms initialized (PMID armed; chip handles buck↔boost autonomously)
+I (1384) app: reset_reason=1 wake_cause=0 rtc_state: mode=0 behavior=1 lock=0 gps=1 tracking=0 session=0 warm=0
+I (1384) app: Serial number: d0cf13e847e8
+I (1394) board: SPI bus ready
+I (1504) go_display: EPD driver init done
+I (1504) pm: Frequency switching config: CPU_MAX: 240, APB_MAX: 80, APB_MIN: 48, Light sleep: ENABLED
+I (1504) BQ27427: BQ27427 found at 0x55 (DEVICE_TYPE=0x0427)
+I (1524) board: BQ27427 applying cell config
+I (2024) BQ27427: cell config verified (DC=2000 DE=7400 TermV=3000 SleepI=50)
+I (2024) board: BQ27427 boot: soc=61% v=3897mV i=-41mA t=30.5C
+I (2074) PowerService: set_pm_power: ON
+I (2074) Settings: ** settings | meas_int=10 | gps_mode=1 op_mode=0 | auto_lock=10 | fahrenheit=false feet=false usaqi=false | led: back=0 touch=0 | buzzer=off | disable_cloud=false config_control=2 co2_abc_days=7 tvoc_learning_offset=12 nox_learning_offset=12 static_ip=dhcp onboarding_done=true **
+I (2084) Settings: ** corrections | pm_alg=0 pm_scale=1.000000 pm_intercept=0.000000 temp_alg=0 temp_scale=1.000000 temp_intercept=0.000000 hum_alg=0 hum_scale=1.000000 hum_intercept=0.000000 **
+I (2104) LP5036: initialised at I2C 0x33
+I (2104) LedcBuzzer: init ok (pin 8, freq 2700 Hz)
+I (2114) DPS368: DPS368 found at address 0x77
+I (2114) DPS368: DPS368 Product ID: 0x10
+I (2174) DPS368: Calibration: c0=218 c1=-289
+I (2174) DPS368: Calibration: c00=82485 c10=-56081 c01=-3504
+I (2174) DPS368: Calibration: c11=1342 c20=-11604 c21=144 c30=-1782
+I (2174) DPS368: DPS368 initialized successfully
+W (2184) S12: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND
+W (2284) S12: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND
+W (2384) S12: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND
+E (2484) S12: S12 not found at address 0x68
+W (2484) board: CO2 sensor: S12 not detected
+I (2484) SCD4x: SCD4x found at address 0x62
+W (3544) SCD4x: Power research: SCD4x disabled (stop result=0)
+W (3544) board: CO2 sensor: SCD4x not detected
+W (3544) STCC4: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND
+W (3644) STCC4: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND
+W (3744) STCC4: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND
+E (3844) STCC4: STCC4 not found at address 0x64
+W (3844) board: CO2 sensor: STCC4 not detected
+E (3844) board: CO2 sensor init failed (all candidates)
+--- Error: device reports readiness to read but returned no data (device disconnected or multiple access on port?)
+--- Waiting for the device to reconnect..........................................
+I (706) app: [HEAP] boot:run-entry free=193832 min=193832 largest=172032
+I (816) board: I2C bus ready
+I (916) board: board variant: V1 (BQ27427 @ 0x55 ACK)
+I (1016) BQ25629: BQ25628 found, Part Info: 0x12
+I (1016) BQ25629: Configuring battery temperature profile
+I (1016) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)
+I (1026) BQ25629: BQ25629 initialized successfully
+I (1026) BQ25629: Watchdog timeout set to DISABLED
+I (1026) BQ25629: Disabling HIZ mode (required for OTG boost)
+I (1036) BQ25629: HIZ mode disabled
+I (1046) BQ25629: Enabling temperature sensor (TS) check
+I (1046) BQ25629: TS check enabled
+I (1056) BQ25629: Setting VOTG voltage to 5100 mV
+I (1056) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0
+I (1056) BQ25629: VOTG voltage set to 5100 mV
+I (1066) BQ25629: Disabling bypass OTG mode (direct battery→PMID)
+I (1066) BQ25629: Bypass OTG mode disabled
+I (1076) BQ25629Bms: pre-OTG ADC: vbat=0mV vsys=0mV vpmid=0mV vbus=0mV ibat=0mA
+I (1376) BQ25629Bms: post-OTG verify: EN_OTG=1 vpmid=5022mV vbat=3898mV
+I (1376) BQ25629Bms: BQ25629Bms initialized (PMID armed; chip handles buck↔boost autonomously)
+I (1386) app: reset_reason=1 wake_cause=0 rtc_state: mode=0 behavior=1 lock=0 gps=1 tracking=0 session=0 warm=0
+I (1386) app: Serial number: d0cf13e847e8
+I (1396) board: SPI bus ready
+I (1506) go_display: EPD driver init done
+I (1506) pm: Frequency switching config: CPU_MAX: 240, APB_MAX: 80, APB_MIN: 48, Light sleep: ENABLED
+I (1506) BQ27427: BQ27427 found at 0x55 (DEVICE_TYPE=0x0427)
+I (1526) board: BQ27427 applying cell config
+I (2486) BQ27427: cell config verified (DC=2000 DE=7400 TermV=3000 SleepI=50)
+I (2486) board: BQ27427 boot: soc=60% v=3898mV i=-43mA t=30.6C
+I (2536) PowerService: set_pm_power: ON
+I (2536) Settings: ** settings | meas_int=10 | gps_mode=1 op_mode=0 | auto_lock=10 | fahrenheit=false feet=false usaqi=false | led: back=0 touch=0 | buzzer=off | disable_cloud=false config_control=2 co2_abc_days=7 tvoc_learning_offset=12 nox_learning_offset=12 static_ip=dhcp onboarding_done=true **
+I (2546) Settings: ** corrections | pm_alg=0 pm_scale=1.000000 pm_intercept=0.000000 temp_alg=0 temp_scale=1.000000 temp_intercept=0.000000 hum_alg=0 hum_scale=1.000000 hum_intercept=0.000000 **
+I (2566) LP5036: initialised at I2C 0x33
+I (2566) LedcBuzzer: init ok (pin 8, freq 2700 Hz)
+I (2576) DPS368: DPS368 found at address 0x77
+I (2576) DPS368: DPS368 Product ID: 0x10
+I (2636) DPS368: Calibration: c0=218 c1=-289
+I (2636) DPS368: Calibration: c00=82485 c10=-56081 c01=-3504
+I (2636) DPS368: Calibration: c11=1342 c20=-11604 c21=144 c30=-1782
+I (2636) DPS368: DPS368 initialized successfully
+W (2646) S12: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND
+W (2746) S12: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND
+W (2846) S12: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND
+E (2946) S12: S12 not found at address 0x68
+W (2946) board: CO2 sensor: S12 not detected
+I (2946) SCD4x: SCD4x found at address 0x62
+W (4006) SCD4x: Power research: SCD4x disabled (stop result=0)
+I (6846) SHT40: SHT40 serial number: 0x15F5CC3E
+I (6846) SHT40: SHT40 reset successful
+I (6856) SHT40: SHT40 initialized successfully
+I (7846) SGP41: SGP41 found at address 0x59
+I (7846) SGP41: SGP41 initialized successfully
+I (7876) board: PMID ready: vpmid=5026 mV (waited 0 ms)
+W (9956) GpsDriver: mon_ver: poll timeout
+I (10016) GpsDriver: cfg_navsat: requested=0x00004037 active=0x00004025
+W (10016) GpsDriver: cfg_navsat: active mask differs from requested
+I (10076) Orchestrator: init: wake_cause=0 display_painted=1 measurement_done=0 lock=0
+I (10076) Orchestrator: measurement requested: scheduled
+I (10096) PowerService: poll_bms: perc=62.0% src=FG vbat=3.9V vbus=0.7V critical=0 | charge=NotCharging pwr=OTG full_chg_paused=0 | treg=0 vsys=0 iindpm=0 vindpm=1 safety_tmr=0 wd=0
+I (10096) PowerService: poll_bms: ibus=0mA ibat=-124mA vsys=3894mV vpmid=5033mV ts=56.2% tdie=28°C bms_ntc=31°C
+I (10106) PowerService: poll_bms: FG soc=62% v=3905mV i=-91mA p=-355mW rem=1172mAh fcc=1914mAh t=30.4C 0x01C8[CHG|OCVTAKEN|BAT_DET] therm_chg_off=0
+I (10126) Orchestrator: [HEAP] ble.init:pre free=124740 min=124740 largest=110592
+I (10126) BLE_INIT: Using main XTAL as clock source
+I (10136) BLE_INIT: ble controller commit:[bc223ab]
+W (10136) BLE_INIT: BLE modem sleep is enabled
+I (10146) BLE_INIT: Modem BLE MAC retention initialization
+W (10146) BLE_INIT: Enable light sleep, the wake up source is BLE timer
+I (10156) BLE_INIT: Bluetooth MAC: d0:cf:13:e8:47:ea
+I (10156) phy_init: phy_version 108,cdfe9643,Dec  2 2025,11:38:11
+I (10196) phy: libbtbb version: 980c3ee, Dec  2 2025, 11:38:24
+I (10196) sleep_clock: System Power, Clock and Reset sleep retention initialization
+I (10196) sleep_clock: Modem Power, Clock and Reset sleep retention initialization
+I (10216) BLE: stack init + GATT registered (advertising deferred)
+I (10216) PortableProv: [HEAP] portable-prov.attach:enter free=91864 min=91864 largest=77824
+I (10216) Provisioning: start_attached(): transport=ble-attached ble='AirGradient' model='P-1PSG'
+I (10226) BleProv: BLE setup_on_server (attached): model='P-1PSG' serial='d0cf13e847e8' fw='0.0.0-g1538e74-dirty'
+I (10236) BleProv: BLE provisioning attached to existing server (no init/advertising)
+I (10246) Provisioning: state: 0 -> 1
+I (10246) Provisioning: attached provisioning started transport=ble-attached (radio off)
+I (10256) PortableProv: attached (provisioning service registered, radio off)
+I (10266) PortableProv: [HEAP] portable-prov.attach:exit free=87612 min=87612 largest=73728
+I (10276) OtaBle: OTA GATT registered (Control/Data/Status)
+I (10276) BLE: initialized, advertising as 'AirGradient Go 47e8'
+I (10286) Orchestrator: [HEAP] ble.init:post free=83712 min=83712 largest=69632
+I (10286) app: [HEAP] boot:interactive:before-run free=83748 min=83712 largest=69632
+I (10296) Orchestrator: run: entering main event loop
+I (10306) Orchestrator: provisioning event=0 transport=3
+--- Error: device reports readiness to read but returned no data (device disconnected or multiple access on port?)
+--- Waiting for the device to reconnect..........
+I (916) board: board variant: V1 (BQ27427 @ 0x55 ACK)
+I (1016) BQ25629: BQ25628 found, Part Info: 0x12
+I (1016) BQ25629: Configuring battery temperature profile
+I (1016) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)
+I (1026) BQ25629: BQ25629 initialized successfully
+I (1026) BQ25629: Watchdog timeout set to DISABLED
+I (1026) BQ25629: Disabling HIZ mode (required for OTG boost)
+I (1036) BQ25629: HIZ mode disabled
+I (1046) BQ25629: Enabling temperature sensor (TS) check
+I (1046) BQ25629: TS check enabled
+I (1056) BQ25629: Setting VOTG voltage to 5100 mV
+I (1056) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0
+I (1056) BQ25629: VOTG voltage set to 5100 mV
+I (1066) BQ25629: Disabling bypass OTG mode (direct battery→PMID)
+I (1066) BQ25629: Bypass OTG mode disabled
+I (1076) BQ25629Bms: pre-OTG ADC: vbat=0mV vsys=0mV vpmid=0mV vbus=0mV ibat=0mA
+--- Error: device reports readiness to read but returned no data (device disconnected or multiple access on port?)
+--- Waiting for the device to reconnect.
+I (442) esp_image: segment 4: paddr=001f75ac vaddr=40820000 size=048d0h ( 18640) load
+I (447) esp_image: segment 5: paddr=001fbe84 vaddr=50001000 size=00084h (   132) load
+I (448) esp_image: segment 6: paddr=001fbf10 vaddr=50001088 size=0068ch (  1676) load
+I (461) boot: Loaded app from partition at offset 0x20000
+I (461) boot: Disabling RNG early entropy source...
+I (475) MSPI Timing: Enter flash timing tuning
+I (476) cpu_start: Unicore app
+I (496) cpu_start: GPIO 12 and 11 are used as console UART I/O pins
+I (497) cpu_start: Pro cpu start user code
+I (497) cpu_start: cpu freq: 240000000 Hz
+I (499) app_init: Application information:
+I (502) app_init: Project name:     airgradient-go
+I (507) app_init: App version:      0.0.0-g1538e74-dirty
+I (512) app_init: Compile time:     Oct 15 2026 22:55:02
+I (517) app_init: ELF file SHA256:  bef4e3515...
+I (521) app_init: ESP-IDF:          v5.5.4
+I (525) efuse_init: Min chip rev:     v1.0
+I (529) efuse_init: Max chip rev:     v1.99
+I (533) efuse_init: Chip rev:         v1.0
+I (537) heap_init: Initializing. RAM available for dynamic allocation:
+I (543) heap_init: At 4082BB20 len 00030A80 (194 KiB): RAM
+I (548) heap_init: At 4085C5A0 len 00002F58 (11 KiB): RAM
+I (553) heap_init: At 50001714 len 000028D4 (10 KiB): RTCRAM
+I (559) spi_flash: detected chip: generic
+I (562) spi_flash: flash io: dio
+W (565) spi_flash: CPU frequency is set to 240MHz. esp_flash_write_encrypted() will automatically limit CPU frequency to 80MHz during execution.
+I (596) main_task: Started on CPU0
+I (596) main_task: Calling app_main()
+I (696) app: [HEAP] boot:run-entry free=193832 min=193832 largest=172032
+I (806) board: I2C bus ready
+I (906) board: board variant: V1 (BQ27427 @ 0x55 ACK)
+I (1006) BQ25629: BQ25628 found, Part Info: 0x12
+I (1006) BQ25629: Configuring battery temperature profile
+I (1006) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)
+I (1016) BQ25629: BQ25629 initialized successfully
+I (1016) BQ25629: Watchdog timeout set to DISABLED
+I (1016) BQ25629: Disabling HIZ mode (required for OTG boost)
+I (1026) BQ25629: HIZ mode disabled
+I (1036) BQ25629: Enabling temperature sensor (TS) check
+I (1036) BQ25629: TS check enabled
+I (1046) BQ25629: Setting VOTG voltage to 5100 mV
+I (1046) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0
+I (1046) BQ25629: VOTG voltage set to 5100 mV
+I (1056) BQ25629: Disabling bypass OTG mode (direct battery→PMID)
+I (1056) BQ25629: Bypass OTG mode disabled
+I (1066) BQ25629Bms: pre-OTG ADC: vbat=0mV vsys=0mV vpmid=0mV vbus=0mV ibat=0mA
+I (1366) BQ25629Bms: post-OTG verify: EN_OTG=1 vpmid=5026mV vbat=3898mV
+I (1366) BQ25629Bms: BQ25629Bms initialized (PMID armed; chip handles buck↔boost autonomously)
+I (1376) app: reset_reason=1 wake_cause=0 rtc_state: mode=0 behavior=1 lock=0 gps=1 tracking=0 session=0 warm=0
+I (1376) app: Serial number: d0cf13e847e8
+I (1386) board: SPI bus ready
+I (1496) go_display: EPD driver init done
+I (1496) pm: Frequency switching config: CPU_MAX: 240, APB_MAX: 80, APB_MIN: 48, Light sleep: ENABLED
+I (1496) BQ27427: BQ27427 found at 0x55 (DEVICE_TYPE=0x0427)
+I (1516) board: BQ27427 applying cell config
+I (1956) BQ27427: cell config verified (DC=2000 DE=7400 TermV=3000 SleepI=50)
+I (1956) board: BQ27427 boot: soc=61% v=3899mV i=-42mA t=30.2C
+I (2006) PowerService: set_pm_power: ON
+I (2006) Settings: ** settings | meas_int=10 | gps_mode=1 op_mode=0 | auto_lock=10 | fahrenheit=false feet=false usaqi=false | led: back=0 touch=0 | buzzer=off | disable_cloud=false config_control=2 co2_abc_days=7 tvoc_learning_offset=12 nox_learning_offset=12 static_ip=dhcp onboarding_done=true **
+I (2016) Settings: ** corrections | pm_alg=0 pm_scale=1.000000 pm_intercept=0.000000 temp_alg=0 temp_scale=1.000000 temp_intercept=0.000000 hum_alg=0 hum_scale=1.000000 hum_intercept=0.000000 **
+I (2036) LP5036: initialised at I2C 0x33
+I (2036) LedcBuzzer: init ok (pin 8, freq 2700 Hz)
+I (2046) DPS368: DPS368 found at address 0x77
+I (2046) DPS368: DPS368 Product ID: 0x10
+I (2106) DPS368: Calibration: c0=218 c1=-289
+I (2106) DPS368: Calibration: c00=82485 c10=-56081 c01=-3504
+I (2106) DPS368: Calibration: c11=1342 c20=-11604 c21=144 c30=-1782
+I (2106) DPS368: DPS368 initialized successfully
+W (2116) S12: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND
+W (2216) S12: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND
+W (2316) S12: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND
+E (2416) S12: S12 not found at address 0x68
+W (2416) board: CO2 sensor: S12 not detected
+I (2416) SCD4x: SCD4x found at address 0x62
+W (3476) SCD4x: Power research: SCD4x disabled (stop result=0)
+W (3476) board: CO2 sensor: SCD4x not detected
+W (3476) STCC4: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND
+W (3576) STCC4: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND
+W (3676) STCC4: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND
+E (3776) STCC4: STCC4 not found at address 0x64
+W (3776) board: CO2 sensor: STCC4 not detected
+E (3776) board: CO2 sensor init failed (all candidates)
+I (3776) SHT40: SHT40 found at address 0x44
+I (3806) SHT40: SHT40 serial number: 0x15F5CC3E
+I (3806) SHT40: SHT40 reset successful
+I (3816) SHT40: SHT40 initialized successfully
+I (3816) SGP41: SGP41 found at address 0x59
+I (3816) SGP41: SGP41 initialized successfully
+I (3816) board: PMID ready: vpmid=5033 mV (waited 0 ms)
+I (3936) SPS30: SPS30 firmware v2.3
+I (5366) phy: libbtbb version: 980c3ee, Dec  2 2025, 11:38:24
+I (5366) sleep_clock: System Power, Clock and Reset sleep retention initialization
+I (5366) sleep_clock: Modem Power, Clock and Reset sleep retention initialization
+I (5386) BLE: stack init + GATT registered (advertising deferred)
+I (5386) PortableProv: [HEAP] portable-prov.attach:enter free=91864 min=91864 largest=77824
+I (5386) Provisioning: start_attached(): transport=ble-attached ble='AirGradient' model='P-1PSG'
+I (5396) BleProv: BLE setup_on_server (attached): model='P-1PSG' serial='d0cf13e847e8' fw='0.0.0-g1538e74-dirty'
+I (5406) BleProv: BLE provisioning attached to existing server (no init/advertising)
+I (5416) Provisioning: state: 0 -> 1
+I (5416) Provisioning: attached provisioning started transport=ble-attached (radio off)
+I (5426) PortableProv: attached (provisioning service registered, radio off)
+I (5426) PortableProv: [HEAP] portable-prov.attach:exit free=87612 min=87612 largest=73728
+I (5436) OtaBle: OTA GATT registered (Control/Data/Status)
+I (5446) BLE: initialized, advertising as 'AirGradient Go 47e8'
+I (5446) Orchestrator: [HEAP] ble.init:post free=83712 min=83712 largest=69632
+I (5456) app: [HEAP] boot:interactive:before-run free=83748 min=83712 largest=69632
+I (5466) Orchestrator: run: entering main event loop
+I (5466) Orchestrator: provisioning event=0 transport=3

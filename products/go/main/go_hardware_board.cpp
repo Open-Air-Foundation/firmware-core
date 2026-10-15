@@ -19,6 +19,7 @@
 #include <driver/spi_master.h>
 #include <esp_app_desc.h>
 #include <esp_pm.h>
+#include <esp_sleep.h>
 #include <esp_system.h>
 #include <nvs_flash.h>
 
@@ -62,6 +63,42 @@
 #include "services/wifi_manager.h"
 
 static constexpr const char *TAG = "board";
+
+#if CONFIG_PM_ENABLE && CONFIG_FREERTOS_USE_TICKLESS_IDLE && CONFIG_PM_LIGHT_SLEEP_CALLBACKS
+namespace {
+constexpr uint64_t POWER_RESEARCH_DUMP_INTERVAL_MS = 60000;
+
+struct ResearchWakePin {
+  gpio_num_t pin;
+  gpio_int_type_t wake_level;
+  gpio_int_type_t awake_edge;
+};
+
+constexpr ResearchWakePin RESEARCH_WAKE_PINS[] = {
+    {PIN_BUTTON_POWER, GPIO_INTR_LOW_LEVEL, GPIO_INTR_ANYEDGE},
+    {PIN_BUTTON_BOOT, GPIO_INTR_LOW_LEVEL, GPIO_INTR_ANYEDGE},
+    {PIN_CAP_INT, GPIO_INTR_LOW_LEVEL, GPIO_INTR_NEGEDGE},
+    {PIN_ACCEL_INT, GPIO_INTR_HIGH_LEVEL, GPIO_INTR_POSEDGE},
+};
+
+// The idle task calls these with interrupts masked. gpio_wakeup_enable() also
+// changes the normal interrupt type; restore edges before tasks/ISRs resume.
+esp_err_t research_sleep_enter(int64_t, void *) {
+  for (const auto &input : RESEARCH_WAKE_PINS) {
+    ESP_ERROR_CHECK(gpio_wakeup_enable(input.pin, input.wake_level));
+  }
+  return ESP_OK;
+}
+
+esp_err_t research_sleep_exit(int64_t, void *) {
+  for (const auto &input : RESEARCH_WAKE_PINS) {
+    ESP_ERROR_CHECK(gpio_wakeup_disable(input.pin));
+    ESP_ERROR_CHECK(gpio_set_intr_type(input.pin, input.awake_edge));
+  }
+  return ESP_OK;
+}
+} // namespace
+#endif
 
 // ---------------------------------------------------------------------------
 // Fuel-gauge cell configuration — validated on hardware against AGo's
@@ -337,14 +374,30 @@ void GoHardwareBoard::init_core() {
   init_nvs();
   init_buses();
   init_spi();
+}
 
-#if CONFIG_PM_ENABLE && CONFIG_FREERTOS_USE_TICKLESS_IDLE
-  // Power research: enable automatic light sleep with the existing DFS limits.
-  esp_pm_config_t pm_config{};
-  ESP_ERROR_CHECK(esp_pm_get_configuration(&pm_config));
-  if (!pm_config.light_sleep_enable) {
+void GoHardwareBoard::poll_power_research() {
+#if CONFIG_PM_ENABLE && CONFIG_FREERTOS_USE_TICKLESS_IDLE && CONFIG_PM_LIGHT_SLEEP_CALLBACKS
+  const uint64_t now = RTOS::get_time_ms();
+  if (!_power_research_started) {
+    // First completed measurement follows sensor warmup and service startup.
+    esp_pm_sleep_cbs_register_config_t callbacks{};
+    callbacks.enter_cb = research_sleep_enter;
+    callbacks.exit_cb = research_sleep_exit;
+    ESP_ERROR_CHECK(esp_pm_light_sleep_register_cbs(&callbacks));
+    ESP_ERROR_CHECK(esp_sleep_enable_gpio_wakeup());
+
+    esp_pm_config_t pm_config{};
+    ESP_ERROR_CHECK(esp_pm_get_configuration(&pm_config));
+    AG_LOGI(TAG, "Power research: first measurement complete; enabling automatic light sleep");
     pm_config.light_sleep_enable = true;
     ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
+    _power_research_started = true;
+    _power_research_last_dump_ms = now;
+  } else if (now - _power_research_last_dump_ms >= POWER_RESEARCH_DUMP_INTERVAL_MS) {
+    _power_research_last_dump_ms = now;
+    AG_LOGI(TAG, "Power research: cumulative PM locks and sleep counters (UART0 if USB drops)");
+    ESP_ERROR_CHECK(esp_pm_dump_locks(stdout));
   }
 #endif
 }

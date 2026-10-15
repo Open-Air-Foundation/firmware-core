@@ -126,6 +126,9 @@ struct GoBoard {
 
   virtual void init_core() = 0;
 
+  // Temporary research: called after each completed measurement, once startup is over.
+  virtual void poll_power_research() {}
+
   // -----------------------------------------------------------------
   // Lazy service accessors
   //

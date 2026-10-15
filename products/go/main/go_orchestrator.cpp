@@ -1140,6 +1140,8 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
   } else {
     request_background_display_update();
   }
+
+  _svc.board.poll_power_research();
 }
 
 void Orchestrator::sleep_pm_if_idle() {

@@ -31,6 +31,7 @@ public:
   bool init_bms() override;
   void init_wifi_subsystem() override;
   void init_core() override;
+  void poll_power_research() override;
 
   // --- Lazy service accessors ---
   ConfigStore &config_store() override;
@@ -81,6 +82,8 @@ private:
   bool _fuel_gauge_init_attempted = false;
   bool _power_ready = false;
   bool _wifi_inited = false;
+  bool _power_research_started = false;
+  uint64_t _power_research_last_dump_ms = 0;
 
   // Cold-boot PMID gate — bounded wait + re-kick for SPS30 probe
   void _ensure_pmid_ready();
