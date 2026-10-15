@@ -23,6 +23,8 @@ SCD4x::SCD4x(i2c_master_bus_handle_t i2c_bus, uint8_t address)
 bool SCD4x::init() { return init(false); }
 
 bool SCD4x::init(bool resume_periodic_measurement) {
+  // Temporary power research: never resume an already-running measurement.
+  resume_periodic_measurement = false;
   _measuring = false;
 
   // Probe I2C bus to verify device exists (with retry for boot timing).
@@ -77,6 +79,10 @@ bool SCD4x::init(bool resume_periodic_measurement) {
   }
   // stop_periodic_measurement requires >500 ms before any further command.
   RTOS::delay_ms(STOP_PERIODIC_DELAY_MS);
+
+  // Temporary power research: leave the sensor stopped and exclude it from polling.
+  ESP_LOGW(TAG, "Power research: SCD4x disabled (stop result=%d)", err);
+  return false;
 
   err = scd4x_reinit();
   if (err != 0) {
