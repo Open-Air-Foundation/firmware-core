@@ -1866,7 +1866,7 @@ CONFIG_FATFS_VFS_FSTAT_BLKSIZE=0
 # CONFIG_FATFS_IMMEDIATE_FSYNC is not set
 # CONFIG_FATFS_USE_LABEL is not set
 CONFIG_FATFS_LINK_LOCK=y
-# CONFIG_FATFS_USE_DYN_BUFFERS is not set
+CONFIG_FATFS_USE_DYN_BUFFERS=y
 
 #
 # File system free space calculation behavior
@@ -2536,6 +2536,14 @@ CONFIG_WL_SECTOR_SIZE=4096
 #
 # CONFIG_AG_CLIENT_CELLULAR_SUPPORT is not set
 # end of AirGradient Client
+
+#
+# AirGradient Common
+#
+# CONFIG_AG_DEVICE_MODEL_ONE_OPEN_AIR is not set
+# CONFIG_AG_DEVICE_MODEL_MAX is not set
+CONFIG_AG_DEVICE_MODEL_GO=y
+# end of AirGradient Common
 
 #
 # AirGradient HTTP Server

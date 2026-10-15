@@ -5,11 +5,11 @@ this branch is not intended for merge. ESP32-C5, ESP-IDF v5.5.4.
 
 ## Status
 
-2026-10-15: Advertising and connected-idle baselines captured;
-BLE modem sleep only is next; experiment firmware is not prepared yet.
+2026-10-15: BLE modem sleep advertising captured over 10 seconds; full-minute
+advertising and connected-idle results pending.
 Baseline source: `03b78b48aaffd8541147be214a44e74609900e27` plus the
 temporary SCD4x disable committed with this log.
-Current firmware: 240 MHz CPU, ESP-IDF PM and BLE modem sleep disabled.
+Current firmware: 240 MHz CPU, ESP-IDF PM disabled, BLE modem sleep enabled.
 
 ## Test Configuration
 
@@ -58,7 +58,7 @@ Power is calculated from the 3.9 V supply setting and measured average current.
 |---|---|---|---|---|---|
 | Baseline | Advertising | 139.60 mA | 544.44 mW | 350.19 mA | [2026-10-15 capture](ppk-20261015T081240.png) |
 | Baseline | Connected idle | 140.06 mA | 546.23 mW | 311.69 mA | [2026-10-15 capture](ppk-20261015T124049.png) |
-| BLE modem sleep only | Advertising | — | — | — | — |
+| BLE modem sleep only | Advertising (10 s, provisional) | 117.90 mA | 459.81 mW | 349.40 mA | [2026-10-15 capture](ppk-20261015T125711.png) |
 | BLE modem sleep only | Connected idle | — | — | — | — |
 | BLE modem sleep + DFS | Advertising | — | — | — | — |
 | BLE modem sleep + DFS | Connected idle | — | — | — | — |
@@ -70,6 +70,9 @@ Production battery-life conclusions require a later comparison on S12 hardware.
 
 Connected idle averaged 0.46 mA (0.33%) above advertising in these captures;
 average consumption was effectively unchanged. Connection parameters were not recorded.
+
+BLE modem sleep advertising averaged 21.70 mA (15.54%) below baseline in the
+displayed 10-second window. Repeat with full-minute statistics for comparison.
 
 ## Activity Log
 
@@ -85,3 +88,6 @@ average consumption was effectively unchanged. Connection parameters were not re
 - 2026-10-15: Connected-idle baseline at 3.9 V for one minute: 140.06 mA average,
   311.69 mA maximum, and 8.40 C charge. Firmware unchanged from `bdca1e6`.
 - 2026-10-15: Split BLE modem sleep and DFS into separate measurement stages.
+- 2026-10-15: User enabled `CONFIG_BT_LE_SLEEP_ENABLE` and tested advertising.
+  CPU remains 240 MHz, PM disabled, BLE clock main XTAL. The displayed window
+  reports 117.90 mA average, 349.40 mA maximum, and 1.18 C over 10 seconds.
