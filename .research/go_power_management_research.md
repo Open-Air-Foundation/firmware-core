@@ -5,11 +5,11 @@ this branch is not intended for merge. ESP32-C5, ESP-IDF v5.5.4.
 
 ## Status
 
-2026-10-16: With custom GPIO sleep callbacks disabled, BLE stays connected for
-one minute. Advertising average is 97.33 mA; Connected idle is 96.79 mA. Automatic light
-sleep and CPU power-down remain enabled. The previous `0x208` timeout is no longer
-reproduced in this run, implicating our callbacks; the exact mechanism is unknown.
-User retested all touch events: working with callbacks disabled.
+2026-10-17: CPU power-down disabled through menuconfig; saved and build-generated
+configuration agree. Advertising is 97.78 mA; Connected idle is 96.45 mA.
+Previously, with CPU power-down enabled and custom GPIO
+callbacks disabled: advertising 97.33 mA, Connected idle 96.79 mA, BLE and all touch
+events working. The callback-related `0x208` mechanism remains unknown.
 Baseline source: `03b78b48aaffd8541147be214a44e74609900e27` plus the
 temporary SCD4x disable committed with this log.
 Current firmware: BLE modem sleep and startup DFS enabled; maximum 240 MHz,
@@ -17,9 +17,9 @@ minimum 48 MHz (confirmed in boot log). Runtime automatic light sleep starts aft
 the first completed measurement; tickless idle and PM profiling remain enabled,
 including after BLE disconnects. Custom GPIO sleep callbacks are disabled;
 ESP-IDF Bluetooth wake handling remains unchanged.
-CPU power-down is enabled; peripheral power-down remains disabled.
+CPU power-down and peripheral power-down are disabled.
 
-Advertising and Connected idle captures are complete for this configuration.
+Both captures are complete. No clear CPU power-down saving demonstrated.
 
 ## Test Configuration
 
@@ -136,6 +136,8 @@ These are research directions, not implemented changes or product decisions.
 Compare each stage with the previous stage to isolate its additional saving,
 and with the baseline for total saving. Match BLE state in both comparisons.
 Power is calculated from the 3.9 V supply setting and measured average current.
+Only working configurations are included. Failed trials remain in the activity
+log. Both light-sleep stages use disabled custom GPIO callbacks and PM profiling.
 
 | Configuration | BLE State | Average Current | Average Power | Peak Current | Trace |
 |---|---|---|---|---|---|
@@ -145,13 +147,10 @@ Power is calculated from the 3.9 V supply setting and measured average current.
 | BLE modem sleep only | Connected idle | 116.41 mA | 454.00 mW | 308.56 mA | [2026-10-15 capture](ppk-20261015T125919.png) |
 | BLE modem sleep + DFS | Advertising | 111.84 mA | 436.18 mW | 312.47 mA | [2026-10-15 capture](ppk-20261015T143253.png) |
 | BLE modem sleep + DFS | Connected idle | 109.97 mA | 428.88 mW | 303.86 mA | [2026-10-15 capture](ppk-20261015T143554.png) |
-| Above + light sleep, CPU power-down off (initial trial) | Advertising | ~113 mA | ~441 mW | — | [Startup log](result.log) |
-| Above + light sleep, revised wake handling + profiling | Advertising | 100.26 mA | 391.01 mW | 321.88 mA | [2026-10-15 capture](ppk-20261015T154620.png) |
-| Above + light sleep, revised wake handling + profiling | Connected idle | Unavailable: disconnects immediately | — | — | — |
-| Above + CPU power-down | Advertising | 100.99 mA | 393.86 mW | 313.26 mA | [CPU power-down capture](ppk-20261015T170750.png) |
-| Above + CPU power-down | Connected idle | Unavailable: cannot connect | — | — | — |
-| Above + custom GPIO callbacks disabled | Advertising | 97.33 mA | 379.59 mW | 385.75 mA | [Callback isolation capture](ppk-20261015T175032.png) |
-| Above + custom GPIO callbacks disabled | Connected idle | 96.79 mA | 377.48 mW | 307.78 mA | [Callback isolation capture](ppk-20261015T173552.png) |
+| BLE modem sleep + DFS + light sleep; CPU power-down off | Advertising | 97.78 mA | 381.34 mW | 352.56 mA | [Light-sleep capture](ppk-20261017T072729.png) |
+| BLE modem sleep + DFS + light sleep; CPU power-down off | Connected idle | 96.45 mA | 376.16 mW | 300.73 mA | [Light-sleep capture](ppk-20261017T073107.png) |
+| BLE modem sleep + DFS + light sleep; CPU power-down on | Advertising | 97.33 mA | 379.59 mW | 385.75 mA | [CPU power-down capture](ppk-20261015T175032.png) |
+| BLE modem sleep + DFS + light sleep; CPU power-down on | Connected idle | 96.79 mA | 377.48 mW | 307.78 mA | [CPU power-down capture](ppk-20261015T173552.png) |
 
 Power reduction = 100 × (baseline − new average power) / baseline.
 Production battery-life conclusions require a later comparison on S12 hardware.
@@ -171,17 +170,13 @@ and 21.48%, respectively. DFS screenshots also show 10-second viewing windows.
 Connected idle with DFS is 1.87 mA below advertising. Go stops advertising on
 connection; the cause of this small difference has not been established.
 
-CPU power-down displayed average is 0.73 mA (0.73%) above the preceding trial.
-This screenshot shows a 10-second viewing window; the preceding 100.26 mA value
-covers a one-minute window. These observations do not establish a power saving
-or a repeatable increase. BLE connection still fails with CPU power-down enabled.
+The working light-sleep configurations reduce average consumption by about 30%
+from baseline. Their one-minute captures show 10-second viewing windows.
 
-With custom GPIO callbacks disabled, advertising is 97.33 mA and Connected idle
-is 96.79 mA: a 0.54 mA difference. Advertising is 3.66 mA (3.62%) below the prior
-100.99 mA advertising capture with callbacks enabled. Total reductions from the
-matching baselines are 30.28% and 30.89%, respectively. Both one-minute captures
-show 10-second viewing windows. BLE and all touch events work in the user tests;
-the exact callback failure mechanism remains unknown.
+With callbacks disabled, CPU power-down off gives advertising 97.78 mA versus
+97.33 mA on: 0.45 mA (0.46%) higher. Connected idle gives 96.45 mA versus 96.79 mA
+on: 0.34 mA (0.35%) lower. These small, opposite-direction differences do not
+demonstrate a repeatable CPU power-down saving.
 
 ## Activity Log
 
@@ -226,7 +221,7 @@ the exact callback failure mechanism remains unknown.
   with cable VCC disconnected.
 - 2026-10-15: Deferred automatic sleep until the first completed measurement;
   added GPIO wake callbacks and PM profiling. Revised one-minute advertising
-  capture: 100.26 mA average, 321.88 mA peak, 6.02 C. Reduction versus DFS:
+  [capture](ppk-20261015T154620.png): 100.26 mA average, 321.88 mA peak, 6.02 C. Reduction versus DFS:
   11.58 mA (10.35%); versus baseline: 28.18%. User observed peaks during display
   refresh and menu navigation. BLE connected then immediately disconnected.
 - 2026-10-16: Runtime light-sleep-off control restored BLE communication.
@@ -250,7 +245,7 @@ the exact callback failure mechanism remains unknown.
   Peripheral power-down remains off; BLE sleep, DFS, tickless idle, PM profiling,
   and GPIO wake callbacks remain unchanged. Go build and Markdown lint passed;
   hardware test pending. No manual config edits or commit by the agent.
-- 2026-10-16: User supplied CPU power-down capture: displayed average 100.99 mA,
+- 2026-10-16: User supplied CPU power-down [capture](ppk-20261015T170750.png): displayed average 100.99 mA,
   peak 313.26 mA, charge 1.01 C in the 10-second viewing window. Recording uses
   the agreed one-minute procedure; window duration is not recording duration.
   User reports BLE still cannot connect. No firmware/configuration changes made
@@ -281,3 +276,13 @@ the exact callback failure mechanism remains unknown.
 - 2026-10-16: Completed advertising capture with callbacks disabled and settings
   unchanged: 97.33 mA average, 385.75 mA peak, 379.59 mW at 3.9 V. Trace:
   [Advertising capture](ppk-20261015T175032.png). No firmware/config changes.
+- 2026-10-17: User supplied CPU power-down off capture: 97.78 mA average,
+  352.56 mA peak. User confirmed advertising. Verified sdkconfig
+  changes only CPU power-down and its legacy alias; generated config also has
+  CPU power-down disabled, and firmware binary is newer than config. Automatic
+  light sleep, tickless idle, DFS, BLE modem sleep, and main-XTAL selection remain
+  enabled; custom GPIO callbacks remain disabled. Flashed image not independently
+  verified. No agent firmware/config edits or build; Connected idle pending.
+- 2026-10-17: Connected idle with CPU power-down off: 96.45 mA average,
+  300.73 mA peak, 376.16 mW at 3.9 V. Both BLE states now measured; no clear
+  CPU power-down benefit in these captures. No firmware/config changes.
