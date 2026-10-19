@@ -137,6 +137,24 @@ bool BQ25629Bms::_apply_pmid_config() {
 // BmsDevice -- telemetry
 // ---------------------------------------------------------------------------
 
+bool BQ25629Bms::set_adc_enabled(bool enabled) {
+  static constexpr uint8_t ADC_ENABLE_MASK = 1u << 7;
+  const esp_err_t err = _charger.enable_adc(enabled, true);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "set_adc_enabled(%d) failed: %s", enabled, esp_err_to_name(err));
+    return false;
+  }
+
+  uint8_t adc_control = 0;
+  if (_charger.read_register(drivers::BQ25629_REG::ADC_CONTROL, adc_control) != ESP_OK ||
+      ((adc_control & ADC_ENABLE_MASK) != 0) != enabled) {
+    ESP_LOGE(TAG, "ADC enable readback failed (requested=%d)", enabled);
+    return false;
+  }
+  ESP_LOGI(TAG, "ADC_EN=%d (verified)", enabled);
+  return true;
+}
+
 bool BQ25629Bms::read_telemetry(BmsTelemetry &out) {
   out = BmsTelemetry{}; // Reset all fields to invalid sentinels.
 

@@ -69,10 +69,9 @@ void GpsService::stop() {
 }
 
 void GpsService::stop_and_idle_gnss() {
-  AG_LOGI(TAG, "stop_and_idle_gnss: stopping task and GNSS receiver");
+  AG_LOGI(TAG, "stop_and_idle_gnss: baseline test, stopping task only");
   if (!_running && _task_handle == nullptr) {
-    // Task already stopped — use one-shot path to ensure module receives
-    // GNSS stop even when no task was running.
+    // Preserve the one-shot UART setup for the baseline measurement.
     idle_gnss();
     return;
   }
@@ -82,16 +81,27 @@ void GpsService::stop_and_idle_gnss() {
     _done_sem.destroy();
     _task_handle = nullptr;
   }
-  // Serial link is still open — send GNSS stop before closing.
-  _driver.gnss_stop();
+  // Temporary power baseline: omit GNSS stop and leave the receiver running.
   _driver.end();
-  AG_LOGI(TAG, "GNSS receiver stopped");
+  AG_LOGI(TAG, "GPS UART closed; no GNSS stop or sleep command sent");
 }
 
 void GpsService::idle_gnss() {
-  AG_LOGI(TAG, "idle_gnss: sending GNSS stop (no task)");
+  AG_LOGI(TAG, "idle_gnss: baseline test, skipping GNSS stop (no task)");
   _driver.begin(_config.baud_rate);
-  _driver.gnss_stop();
+  // Temporary power baseline: omit GNSS stop and leave the receiver running.
+  _driver.end();
+}
+
+void GpsService::sleep_gnss_for_power_test(uint32_t duration_ms) {
+  // Keep the baseline task shutdown / UART setup, with GNSS stop disabled.
+  stop_and_idle_gnss();
+  // Reopen only the host UART; do not reconfigure the receiver again.
+  if (!_driver.begin_hot_resume(_config.baud_rate)) {
+    AG_LOGE(TAG, "GPS sleep test: failed to reopen UART");
+    return;
+  }
+  _driver.gnss_sleep_for_power_test(duration_ms);
   _driver.end();
 }
 
@@ -241,7 +251,7 @@ void GpsService::sync_system_clock(const GpsTimestamp &ts) {
 
 GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms,
                       const volatile bool &abort) {
-  if (!driver.begin_hot_resume(baud_rate)) {
+  if (!driver.begin_after_sleep(baud_rate)) {
     AG_LOGE(TAG, "hot-resume: failed to open GPS UART");
     return {};
   }
@@ -272,5 +282,5 @@ GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms,
     AG_LOGW(TAG, "hot-resume: no valid position (sentence=%d aborted=%d)", received_sentence,
             static_cast<bool>(abort));
   }
-  return data;
+  return acquired_position ? data : GpsData{};
 }

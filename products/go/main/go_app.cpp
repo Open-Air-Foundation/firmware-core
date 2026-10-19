@@ -67,9 +67,9 @@ static constexpr const char *TAG = "app";
 // domain; keep in sync with the Cloud service host.
 static constexpr const char *OTA_HTTP_DOMAIN = "hw.airgradient.com";
 
-// The GPS receiver remains powered and tracking through Offline deep sleep.
-// Allow several NMEA epochs after reconnecting the UART on timer wake.
+// Preserve the existing bounded GPS acquisition window on timer wake.
 static constexpr uint32_t GPS_FAST_PATH_READ_TIMEOUT_MS = 3000;
+static constexpr uint32_t FAST_PATH_WARM_SENSOR_SETTLE_MS = 200;
 
 /// A transient BMS communication failure gets one same-boot retry.
 static constexpr uint8_t BMS_INIT_MAX_ATTEMPTS = 2;
@@ -356,6 +356,8 @@ void GoApp::run_fast_path(const RtcAppState &state) {
 
     _board.display().stop();
     _board.display().deep_sleep();
+
+    _board.power().reset_ext_watchdog();
     _board.ulp_start();
     log_heap(TAG, "boot:fast-path:before-sleep");
     _board.power().enter_sleep(result.sleep_duration_ms);
@@ -407,71 +409,89 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
 
   SensorManager &sm = _board.sensors(state.has_flag(RtcAppFlag::SensorsWarm));
 
-  bool promote = false;
+  bool promote = button_pressed;
+  bool light_sleep_button_wake = false;
+  bool pm_slept = false;
+  const uint32_t warmup_ms = state.has_flag(RtcAppFlag::SensorsWarm)
+                                 ? FAST_PATH_WARM_SENSOR_SETTLE_MS
+                                 : CONFIG_SENSOR_WARMUP_DURATION_MS;
+  const uint64_t warmup_deadline_ms = RTOS::get_time_ms() + warmup_ms;
+  AG_LOGI(TAG, "fast-path: PM warmup %lu ms; no discarded reads",
+          static_cast<unsigned long>(warmup_ms));
 
-  // --- Warmup (interruptible) ---
-  if (state.has_flag(RtcAppFlag::SensorsWarm)) {
-    AG_LOGI(TAG, "fast-path: sensors warm — skipping warmup");
-    RTOS::delay_ms(200);
-  } else {
-    const int warmup_iters = CONFIG_SENSOR_WARMUP_DURATION_MS / CONFIG_SENSOR_WARMUP_INTERVAL_MS;
-    AG_LOGI(TAG, "fast-path: warmup %d iterations (%d ms interval)", warmup_iters,
-            CONFIG_SENSOR_WARMUP_INTERVAL_MS);
-    for (int i = 0; i < warmup_iters && !promote; i++) {
-      AG_LOGI(TAG, "fast-path: warmup iteration %d/%d", i + 1, warmup_iters);
-      uint64_t start = RTOS::get_time_ms();
-      sm.warmup_step();
-
-      if (button_pressed) {
-        promote = true;
-        break;
+  // --- One-shot GPS, overlapping PM warmup ---
+  GpsData gps{};
+  const bool gps_active = is_gps_active_at_boot(settings, state);
+  if (!promote) {
+    auto *gps_driver = _board.new_gps_driver();
+    if (gps_driver != nullptr) {
+      if (tracking_session_active(state.tracking_state) && gps_active) {
+        gps = gps_read_once(*gps_driver, GPS_BAUD, GPS_FAST_PATH_READ_TIMEOUT_MS, button_pressed);
+        AG_LOGI(TAG, "fast-path: gps fix_type=%d sat=%d lat=%.6f lon=%.6f alt=%.1f hdop=%.1f",
+                static_cast<int>(gps.fix.fix_type), gps.fix.satellite_count, gps.position.latitude,
+                gps.position.longitude, gps.altitude_m, gps.fix.hdop);
       }
-
-      uint64_t elapsed = RTOS::get_time_ms() - start;
-      if (elapsed < CONFIG_SENSOR_WARMUP_INTERVAL_MS) {
-        RTOS::delay_ms(static_cast<uint32_t>(CONFIG_SENSOR_WARMUP_INTERVAL_MS - elapsed));
+      promote = button_pressed;
+      const uint32_t awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
+      const auto decision = _board.power().decide_sleep(settings, LockState::Locked,
+                                                        OperatingMode::Offline, awake_ms);
+      if (!promote && decision.type == PowerService::SleepType::Deep) {
+        // CFG-SLEEP resets the receiver baud. Restore it before sending the
+        // next sleep command, without the full cold-init configuration polls.
+        if (gps_driver->begin_after_sleep(GPS_BAUD)) {
+          gps_driver->gnss_sleep_for_power_test(decision.duration_ms);
+        } else {
+          AG_LOGE(TAG, "fast-path: GPS UART initialization failed; sleep not requested");
+        }
+        gps_driver->end();
       }
-      if (button_pressed) {
-        promote = true;
-        break;
-      }
+      delete gps_driver;
+    } else {
+      AG_LOGE(TAG, "fast-path: GPS driver unavailable; sleep not requested");
     }
   }
+
+  // GPS polling runs with the MCU awake while the PM fan warms up.
+  // Only the remaining PM wait can suspend the UART clock safely.
+  while (!promote && RTOS::get_time_ms() < warmup_deadline_ms) {
+    const uint64_t now_ms = RTOS::get_time_ms();
+    if (now_ms >= warmup_deadline_ms) {
+      break;
+    }
+    const uint32_t remaining_ms = static_cast<uint32_t>(warmup_deadline_ms - now_ms);
+    _board.power().reset_ext_watchdog();
+    AG_LOGI(TAG, "fast-path: light sleep for remaining PM warmup (%lu ms)",
+            static_cast<unsigned long>(remaining_ms));
+    light_sleep_button_wake = _board.power().enter_light_sleep(remaining_ms);
+    promote = light_sleep_button_wake || button_pressed;
+  }
+  _board.power().reset_ext_watchdog();
+  promote = promote || button_pressed;
 
   // --- One-shot measurement ---
   MeasuresAGo ago{};
   bool has_measures = false;
   if (!promote) {
     Measures measures = sm.start_measures(1, SensorGroup::All);
-    // UX placeholder: fast path never configures the gas-index algorithm
-    // (no SensorProducer), so index fields stay at invalid sentinels.
-    // Overwrite with raw ticks so the display and stored route points
-    // still show a value during Offline fast-path cycles.
-    measures.tvoc_nox.tvoc_index = measures.tvoc_nox.tvoc_raw;
-    measures.tvoc_nox.nox_index = measures.tvoc_nox.nox_raw;
     ago = measures_to_ago(measures);
     has_measures = true;
+
+    // Stop the fan before storage/display work when a long sleep is due.
+    PowerService &pwr = _board.power();
+    const uint32_t awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
+    const auto decision =
+        pwr.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, awake_ms);
+    if (!button_pressed && decision.type == PowerService::SleepType::Deep &&
+        !pwr.should_hold_pm_sensor(decision.duration_ms)) {
+      sm.pm_sleep();
+      pm_slept = true;
+    }
     AG_LOGI(TAG,
             "fast-path: temp=%.1f hum=%.1f pm25=%.1f co2=%d tvoc=%d nox=%d "
             "tvoc_raw=%d nox_raw=%d pres=%.1f",
             ago.temp_hum_a.temperature, ago.temp_hum_a.humidity, ago.pm_a.pm_25, ago.co2.co2,
             ago.tvoc_nox.tvoc_index, ago.tvoc_nox.nox_index, ago.tvoc_nox.tvoc_raw,
             ago.tvoc_nox.nox_raw, ago.pressure.pressure);
-    if (button_pressed) {
-      promote = true;
-    }
-  }
-
-  // --- One-shot GPS ---
-  GpsData gps{};
-  const bool gps_active = is_gps_active_at_boot(settings, state);
-
-  if (!promote && tracking_session_active(state.tracking_state) && gps_active) {
-    auto *gps_driver = _board.new_gps_driver();
-    gps = gps_read_once(*gps_driver, GPS_BAUD, GPS_FAST_PATH_READ_TIMEOUT_MS, button_pressed);
-    AG_LOGI(TAG, "fast-path: gps fix_type=%d sat=%d lat=%.6f lon=%.6f alt=%.1f hdop=%.1f",
-            static_cast<int>(gps.fix.fix_type), gps.fix.satellite_count, gps.position.latitude,
-            gps.position.longitude, gps.altitude_m, gps.fix.hdop);
     if (button_pressed) {
       promote = true;
     }
@@ -525,6 +545,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   }
 
   // --- Display + sleep decision ---
+  promote = promote || button_pressed;
   if (!promote) {
     PowerService &pwr = _board.power();
     if (!power_polled) {
@@ -555,9 +576,9 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     uint32_t awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
     auto decision = pwr.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, awake_ms);
 
-    if (decision.type == PowerService::SleepType::Deep) {
-      const bool warm = pwr.should_hold_pm_sensor(decision.duration_ms);
-      if (!warm) {
+    if (!button_pressed && decision.type == PowerService::SleepType::Deep) {
+      const bool warm = !pm_slept && pwr.should_hold_pm_sensor(decision.duration_ms);
+      if (!warm && !pm_slept) {
         // Long sleep: stop the PM fan for the sleep window. Next boot's
         // init() wakes the sensor and re-warms (sensors_warm=false).
         sm.pm_sleep();
@@ -582,7 +603,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   // value is returned in FastPathResult::measures.  The caller
   // (run_fast_path) sets fast_path_measures to point into the result
   // struct, which lives on the caller's non-returning stack.
-  const bool button_caused = button_pressed;
+  const bool button_caused = button_pressed || light_sleep_button_wake;
 
   BootHandoff handoff{};
   handoff.measurement_completed = has_measures;

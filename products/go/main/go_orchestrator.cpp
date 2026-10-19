@@ -3449,15 +3449,10 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   _svc.ble_service.deinit();
   _svc.sensor_producer.stop(/*sleep_pm=*/!hold_pm_sensor);
 
-  // Active GPS: stop task only — leave TAU1113 tracking for hot-start.
-  // Inactive GPS: stop task and send GNSS stop before sleep.
-  if (is_gps_active()) {
-    _svc.gps_service.stop();
-  } else {
-    _svc.gps_service.stop_and_idle_gnss();
-  }
+  // Timed sleep lets the receiver wake for the next fast-path acquisition.
+  _svc.gps_service.sleep_gnss_for_power_test(sleep_duration_ms);
 
-  _svc.input_service.stop();
+  _svc.input_service.stop(/*sleep_touch=*/true);
   _svc.display_service.stop();
 
   // Put SSD1680 into deep sleep mode 1 after stopping the worker task.

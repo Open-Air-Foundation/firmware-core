@@ -45,6 +45,14 @@ bool SGP41::init() {
   return true;
 }
 
+bool SGP41::turn_heater_off() {
+  if (_dev_handle == nullptr || !_sendCommand(CMD_HEATER_OFF)) {
+    return false;
+  }
+  RTOS::delay_ms(HEATER_OFF_DELAY_MS);
+  return true;
+}
+
 bool SGP41::read(TVOCNOxData &out) {
   // Initialize to invalid sentinels
   out.tvoc_index = MeasuresInvalid::TVOC;

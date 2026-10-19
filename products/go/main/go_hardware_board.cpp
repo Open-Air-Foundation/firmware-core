@@ -440,7 +440,13 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
     }
 
     if (sgp41->init()) {
-      s->tvoc_nox = sgp41;
+      // Temporary power experiment: stop the heater and exclude SGP41 from
+      // conditioning and measurement so neither can turn it back on.
+      if (sgp41->turn_heater_off()) {
+        AG_LOGW(TAG, "Power research: SGP41 heater off; conditioning and measurement disabled");
+      } else {
+        AG_LOGE(TAG, "Power research: SGP41 heater-off failed; current baseline unconfirmed");
+      }
     } else {
       AG_LOGE(TAG, "SGP41 init failed");
     }

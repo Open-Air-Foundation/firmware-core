@@ -56,6 +56,9 @@ public:
    */
   virtual int write(const uint8_t *data, int len);
 
+  /// Wait until all transmitted bits have left the port. Unsupported by default.
+  virtual bool wait_tx_done(uint32_t timeout_ms) { return false; }
+
   /**
    * Read a single byte.
    *

@@ -41,6 +41,9 @@ public:
   bool init() override;
   bool read(TVOCNOxData &out) override;
 
+  /// Turn both hotplates off and stop measurement, leaving the sensor idle.
+  bool turn_heater_off();
+
   /**
    * @brief Run single conditioning cycle
    * @note Each call takes 50ms

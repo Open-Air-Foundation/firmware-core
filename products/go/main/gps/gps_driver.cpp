@@ -310,13 +310,22 @@ GpsDriver::GpsDriver(AirgradientSerial &serial) : _serial(serial), _buffer_pos(0
 GpsDriver::~GpsDriver() {}
 
 bool GpsDriver::begin(int baud_rate) {
+  if (!begin_after_sleep(baud_rate)) {
+    return false;
+  }
+  _poll_mon_ver();
+  _send_cfg_ephsave();
+  _send_cfg_navsat();
+  return true;
+}
+
+bool GpsDriver::begin_after_sleep(int baud_rate) {
   _data = GpsData{};
+  _buffer_pos = 0;
   if (baud_rate != MODULE_DEFAULT_BAUD) {
-    // The TAU1113 defaults to 9600 baud on power-on.  Open at the module's
-    // default rate, send the binary command to switch to 115200, then
-    // re-initialise the UART at the target rate.  If the module is already
-    // at 115200 (stayed powered during deep sleep) the 9600-baud bytes
-    // arrive as garbage and are silently ignored.
+    // TAU1113 resets to 9600 baud after CFG-SLEEP as well as power-on.
+    // Restore 115200 before acquisition or another sleep command. If it is
+    // already at 115200, the 9600-baud command is ignored.
     if (!_serial.begin(MODULE_DEFAULT_BAUD)) {
       return false;
     }
@@ -324,13 +333,7 @@ bool GpsDriver::begin(int baud_rate) {
     RTOS::delay_ms(BAUD_SWITCH_DELAY_MS);
     _serial.end();
   }
-  if (!_serial.begin(baud_rate)) {
-    return false;
-  }
-  _poll_mon_ver();
-  _send_cfg_ephsave();
-  _send_cfg_navsat();
-  return true;
+  return _serial.begin(baud_rate);
 }
 
 bool GpsDriver::begin_hot_resume(int baud_rate) {
@@ -514,6 +517,36 @@ void GpsDriver::gnss_stop() {
   if (!send_cfg_with_ack(_serial, CASIC_GROUP_CFG, CASIC_SUB_GNSS_CONTROL, payload, sizeof(payload),
                          "gnss_stop")) {
     AG_LOGW(TAG, "gnss_stop: module did not acknowledge after retry");
+  }
+}
+
+void GpsDriver::gnss_sleep_for_power_test(uint32_t duration_ms) {
+  if (duration_ms == 0) {
+    return;
+  }
+  // Same CFG-SLEEP layout as the measured five-minute experiment: action=1.
+  uint8_t command[] = {
+      0xF1, 0xD9, 0x06, 0x41, 0x05, 0x00, 0, 0, 0, 0, 0x01, 0, 0,
+  };
+  constexpr uint32_t TX_TIMEOUT_MS = 100;
+  for (size_t i = 0; i < sizeof(duration_ms); ++i) {
+    command[6 + i] = static_cast<uint8_t>(duration_ms >> (8 * i));
+  }
+  casic_checksum(&command[2], 9, command[11], command[12]);
+
+  drain_serial_rx(_serial);
+  _buffer_pos = 0;
+  AG_LOGI(TAG, "CFG-SLEEP: requesting deep sleep for %lu ms",
+          static_cast<unsigned long>(duration_ms));
+  constexpr int COMMAND_SIZE = static_cast<int>(sizeof(command));
+  if (_serial.write(command, COMMAND_SIZE) != COMMAND_SIZE) {
+    AG_LOGE(TAG, "CFG-SLEEP: incomplete write");
+    return;
+  }
+  // Drain the hardware TX FIFO before closing UART or suspending its clock.
+  // Transmission completion does not confirm that the receiver is asleep.
+  if (!_serial.wait_tx_done(TX_TIMEOUT_MS)) {
+    AG_LOGE(TAG, "CFG-SLEEP: TX did not complete; sleep unconfirmed");
   }
 }
 

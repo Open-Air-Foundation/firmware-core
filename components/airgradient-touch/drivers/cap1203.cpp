@@ -84,6 +84,14 @@ bool CAP1203::init() {
     return false;
   }
 
+  // Interactive entry (including fast-path promotion) must explicitly clear
+  // DSLEEP: I2C communication alone only wakes the interface temporarily.
+  if (!set_sleep(false)) {
+    ESP_LOGE(TAG, "failed to enable active sensing");
+    _rm_device();
+    return false;
+  }
+
   // Clear any pending interrupt so the INT line starts deasserted (HIGH).
   // Without this, a stale touch event from before init could leave INT LOW,
   // preventing the first falling-edge ISR from ever firing.
@@ -117,6 +125,31 @@ bool CAP1203::read(TouchData &out) {
 
 bool CAP1203::calibrate(uint8_t channel_mask) {
   return _write_reg(REG_CALIBRATION_ACTIVATE, channel_mask);
+}
+
+bool CAP1203::set_sleep(bool asleep) {
+  uint8_t main_ctrl = 0;
+  if (!_read_reg(REG_MAIN_CONTROL, main_ctrl)) {
+    return false;
+  }
+
+  main_ctrl &= static_cast<uint8_t>(~(MAIN_CONTROL_STBY | MAIN_CONTROL_DSLEEP | MAIN_CONTROL_INT));
+  if (asleep) {
+    main_ctrl |= MAIN_CONTROL_DSLEEP;
+  }
+  if (!_write_reg(REG_MAIN_CONTROL, main_ctrl)) {
+    return false;
+  }
+
+  uint8_t readback = 0;
+  if (!_read_reg(REG_MAIN_CONTROL, readback) ||
+      (readback & (MAIN_CONTROL_STBY | MAIN_CONTROL_DSLEEP)) !=
+          (asleep ? MAIN_CONTROL_DSLEEP : 0)) {
+    return false;
+  }
+
+  ESP_LOGI(TAG, "%s", asleep ? "deep sleep enabled" : "active sensing enabled");
+  return true;
 }
 
 bool CAP1203::clear_interrupt() {

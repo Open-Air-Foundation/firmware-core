@@ -60,6 +60,9 @@ public:
   /// running (e.g. boot with GPS inactive).
   void idle_gnss();
 
+  /// Temporary timed GPS sleep experiment immediately before ESP sleep.
+  void sleep_gnss_for_power_test(uint32_t duration_ms = 300000);
+
   /// Return the most recent parsed fix (thread-safe copy).
   GpsData get_latest_fix() const;
 
@@ -98,17 +101,17 @@ private:
 /// timeout_ms expires, or abort becomes true. For use in the fast-path
 /// timer-wake boot path only — does not require a running RTOS task.
 ///
-/// The receiver must have remained powered and tracking through deep sleep.
-/// The function reconnects directly at @p baud_rate without reconfiguring or
-/// restarting the receiver, then waits for a valid fix with valid coordinates.
+/// The receiver must be awake. This restores its baud after CFG-SLEEP,
+/// then waits for a valid fix with valid coordinates. It does not wake a
+/// sleeping receiver.
 ///
-/// @param driver     GPS driver; begin_hot_resume() / end() are called internally.
+/// @param driver     GPS driver; begin_after_sleep() / end() are called internally.
 /// @param baud_rate  Active receiver baud rate.
 /// @param timeout_ms Maximum time to wait for a valid position, in milliseconds.
 /// @param abort      When true, the polling loop exits early. Intended for
 ///                   ISR-driven abort flags (volatile bool set by ISR).
 ///                   Default: a static false constant (no abort support).
-/// @return           Latest GpsData; validate both fix and position before use.
+/// @return           Valid fix/position, or invalid sentinels on timeout/abort.
 inline const volatile bool gps_no_abort = false;
 
 GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms,

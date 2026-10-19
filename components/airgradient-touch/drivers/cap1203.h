@@ -79,6 +79,8 @@ public:
   // Call this from the interrupt handler or after processing a touch event.
   bool clear_interrupt() override;
 
+  bool set_sleep(bool asleep) override;
+
 private:
   bool _read_reg(uint8_t reg, uint8_t &out);
   bool _write_reg(uint8_t reg, uint8_t val);
@@ -106,6 +108,10 @@ private:
   static constexpr uint8_t REG_PRODUCT_ID = 0xFD;
   static constexpr uint8_t REG_MANUFACTURER_ID = 0xFE;
   static constexpr uint8_t REG_REVISION = 0xFF;
+
+  static constexpr uint8_t MAIN_CONTROL_STBY = 1u << 5;
+  static constexpr uint8_t MAIN_CONTROL_DSLEEP = 1u << 4;
+  static constexpr uint8_t MAIN_CONTROL_INT = 1u << 0;
 
   // Expected identity values
   static constexpr uint8_t EXPECTED_PRODUCT_ID = 0x6D;

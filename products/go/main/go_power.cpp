@@ -708,6 +708,12 @@ void PowerService::enter_sleep(uint32_t sleep_duration_ms) {
     AG_LOGI(TAG, "enter_sleep: holding PM power GPIO %d for warm wake", _config.pin_pm_power);
   }
 
+  // Temporary power experiment: turn off telemetry conversions after all reads.
+  // Both interactive and fast-path boots re-enable ADC during BMS init.
+  if (_bms == nullptr || !_bms->set_adc_enabled(false)) {
+    AG_LOGE(TAG, "ADC sleep disable failed; current baseline unconfirmed");
+  }
+
   AG_LOGI(TAG, "enter_sleep: entering deep sleep for %" PRIu32 " ms", sleep_duration_ms);
   configure_wake_sources(sleep_duration_ms);
   esp_deep_sleep_start();

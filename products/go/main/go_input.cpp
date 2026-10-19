@@ -84,7 +84,7 @@ bool InputService::start() {
   return true;
 }
 
-void InputService::stop() {
+void InputService::stop(bool sleep_touch) {
   _running = false;
 
   // Post a dummy event to unblock queue_receive so the task can observe
@@ -114,6 +114,12 @@ void InputService::stop() {
   if (_raw_queue != nullptr) {
     RTOS::queue_delete(_raw_queue);
     _raw_queue = nullptr;
+  }
+
+  // No task or ISR may access touch after this point. Fast-path wakes leave
+  // it asleep; interactive entry calls init() to restore active sensing.
+  if (sleep_touch && !_touch.set_sleep(true)) {
+    AG_LOGE(TAG, "CAP1203 sleep failed; current baseline unconfirmed");
   }
 }
 

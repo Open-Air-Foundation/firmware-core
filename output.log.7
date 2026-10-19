@@ -1,0 +1,897 @@
+Executing action: monitor
+Running idf_monitor in directory /home/bles/Work/airgradient/dev/fwcore/airgradient-firmware/products/go
+Executing "/home/bles/.espressif/python_env/idf5.5_py3.13_env/bin/python /home/bles/Tools/esp/esp-idf/tools/idf_monitor.py -p /dev/ttyACM2 -b 115200 --toolchain-prefix riscv32-esp-elf- --target esp32c5 --revision 100 --decode-panic backtrace /home/bles/Work/airgradient/dev/fwcore/airgradient-firmware/products/go/build/airgradient-go.elf /home/bles/Work/airgradient/dev/fwcore/airgradient-firmware/products/go/build/bootloader/bootloader.elf /home/bles/Work/airgradient/dev/fwcore/airgradient-firmware/products/go/build/esp-idf/main/ulp_wdt/ulp_wdt.elf -m '/home/bles/.espressif/python_env/idf5.5_py3.13_env/bin/python' '/home/bles/Tools/esp/esp-idf/tools/idf.py' '-C' 'products/go'"...
+[0;32mI (431) esp_image: segment 3: paddr=001e5800 vaddr=4080e630 sizeI (509) cpu_start: GPIO 12 and 11 are used as console UART I/O pins[0m
+[0;32mI (509) cpu_start: Pro cpu start user code[0m
+[0;32mI (510) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (511) app_init: Application information:[0m
+[0;32mI (515) app_init: Project name:     airgradient-go[0m
+[0;32mI (520) app_init: App version:      1.1.2-gbeade60[0m
+[0;32mI (524) app_init: Compile time:     Oct 18 2026 23:49:06[0m
+[0;32mI (529) app_init: ELF file SHA256:  f7249c4a8...[0m
+[0;32mI (534) app_init: ESP-IDF:          v5.5.4[0m
+[0;32mI (537) efuse_init: Min chip rev:     v1.0[0m
+[0;32mI (541) efuse_init: Max chip rev:     v1.99 [0m
+[0;32mI (545) efuse_init: Chip rev:         v1.0[0m
+[0;32mI (549) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (555) heap_init: At 4082BD30 len 00030870 (194 KiB): RAM[0m
+[0;32mI (560) heap_init: At 4085C5A0 len 00002F58 (11 KiB): RAM[0m
+[0;32mI (566) heap_init: At 50001714 len 000028D4 (10 KiB): RTCRAM[0m
+[0;32mI (572) spi_flash: detected chip: generic[0m
+[0;32mI (575) spi_flash: flash io: dio[0m
+[0;33mW (578) spi_flash: CPU frequency is set to 240MHz. esp_flash_write_encrypted() will automatically limit CPU frequency to 80MHz during execution.[0m
+[0;32mI (609) main_task: Started on CPU0[0m
+[0;32mI (609) main_task: Calling app_main()[0m
+[0;32mI (709) app: [HEAP] boot:run-entry free=193304 min=193304 largest=163840[0m
+[0;32mI (819) board: I2C bus ready[0m
+[0;32mI (919) board: board variant: V1 (BQ27427 @ 0x55 ACK)[0m
+[0;32mI (1019) BQ25629: BQ25628 found, Part Info: 0x12[0m
+[0;32mI (1019) BQ25629: Configuring battery temperature profile[0m
+[0;32mI (1019) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)[0m
+[0;32mI (1029) BQ25629: BQ25629 initialized successfully[0m
+[0;32mI (1029) BQ25629: Watchdog timeout set to DISABLED[0m
+[0;32mI (1029) BQ25629: Disabling HIZ mode (required for OTG boost)[0m
+[0;32mI (1039) BQ25629: HIZ mode disabled[0m
+[0;32mI (1049) BQ25629: Enabling temperature sensor (TS) check[0m
+[0;32mI (1049) BQ25629: TS check enabled[0m
+[0;32mI (1059) BQ25629: Setting VOTG voltage to 5100 mV[0m
+[0;32mI (1059) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0[0m
+[0;32mI (1059) BQ25629: VOTG voltage set to 5100 mV[0m
+[0;32mI (1069) BQ25629: Disabling bypass OTG mode (direct battery→PMID)[0m
+[0;32mI (1069) BQ25629: Bypass OTG mode disabled[0m
+[0;32mI (1079) BQ25629Bms: pre-OTG ADC: vbat=0mV vsys=0mV vpmid=0mV vbus=0mV ibat=0mA[0m
+[0;32mI (442) esp_image: segment 4: paddr=001f73c4 vaddr=40820200 size=048e8h ( 18664) load[0m
+[0;32mI (446) esp_image: segment 5: paddr=001fbcb4 vaddr=50001000 size=00084h (   132) load[0m
+[0;32mI (447) esp_image: segment 6: paddr=001fbd40 vaddr=50001088 size=0068ch (  1676) load[0m
+[0;32mI (461) boot: Loaded app from partition at offset 0x20000[0m
+[0;32mI (461) boot: Disabling RNG early entropy source...[0m
+[0;32mI (474) MSPI Timing: Enter flash timing tuning[0m
+[0;32mI (475) cpu_start: Unicore app[0m
+[0;32mI (496) cpu_start: GPIO 12 and 11 are used as console UART I/O pins[0m
+[0;32mI (496) cpu_start: Pro cpu start user code[0m
+[0;32mI (496) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (498) app_init: Application information:[0m
+[0;32mI (502) app_init: Project name:     airgradient-go[0m
+[0;32mI (506) app_init: App version:      1.1.2-gbeade60[0m
+[0;32mI (511) app_init: Compile time:     Oct 18 2026 23:49:06[0m
+[0;32mI (516) app_init: ELF file SHA256:  f7249c4a8...[0m
+[0;32mI (520) app_init: ESP-IDF:          v5.5.4[0m
+[0;32mI (524) efuse_init: Min chip rev:     v1.0[0m
+[0;32mI (528) efuse_init: Max chip rev:     v1.99 [0m
+[0;32mI (532) efuse_init: Chip rev:         v1.0[0m
+[0;32mI (536) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (542) heap_init: At 4082BD30 len 00030870 (194 KiB): RAM[0m
+[0;32mI (547) heap_init: At 4085C5A0 len 00002F58 (11 KiB): RAM[0m
+[0;32mI (552) heap_init: At 50001714 len 000028D4 (10 KiB): RTCRAM[0m
+[0;32mI (558) spi_flash: detected chip: generic[0m
+[0;32mI (561) spi_flash: flash io: dio[0m
+[0;33mW (564) spi_flash: CPU frequency is set to 240MHz. esp_flash_write_encrypted() will automatically limit CPU frequency to 80MHz during execution.[0m
+[0;32mI (595) main_task: Started on CPU0[0m
+[0;32mI (595) main_task: Calling app_main()[0m
+[0;32mI (695) app: [HEAP] boot:run-entry free=193304 min=193304 largest=163840[0m
+[0;32mI (805) board: I2C bus ready[0m
+[0;32mI (905) board: board variant: V1 (BQ27427 @ 0x55 ACK)[0m
+[0;32mI (1005) BQ25629: BQ25628 found, Part Info: 0x12[0m
+[0;32mI (1005) BQ25629: Configuring battery temperature profile[0m
+[0;32mI (1005) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)[0m
+[0;32mI (1015) BQ25629: BQ25629 initialized successfully[0m
+[0;32mI (1015) BQ25629: Watchdog timeout set to DISABLED[0m
+[0;32mI (1015) BQ25629: Disabling HIZ mode (required for OTG boost)[0m
+[0;32mI (1025) BQ25629: HIZ mode disabled[0m
+[0;32mI (1035) BQ25629: Enabling temperature sensor (TS) check[0m
+[0;32mI (1035) BQ25629: TS check enabled[0m
+[0;32mI (1045) BQ25629: Setting VOTG voltage to 5100 mV[0m
+[0;32mI (1045) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0[0m
+[0;32mI (1045) BQ25629: VOTG voltage set to 5100 mV[0m
+[0;32mI (1055) BQ25629: Disabling bypass OTG mode (direct battery→PMID)[0m
+[0;32mI (1055) BQ25629: Bypass OTG mode disabled[0m
+[0;32mI (1065) BQ25629Bms: pre-OTG ADC: vbat=0mV vsys=0mV vpmid=0mV vbus=0mV ibat=0mA[0m
+[0;32mI (446) esp_image: segment 5: paddr=001fbcb4 vaddr=50001000 size=00084h (   132) load[0m
+[0;32mI (447) esp_image: segment 6: paddr=001fbd40 vaddr=50001088 size=0068ch (  1676) load[0m
+[0;32mI (461) boot: Loaded app from partition at offset 0x20000[0m
+[0;32mI (461) boot: Disabling RNG early entropy source...[0m
+[0;32mI (474) MSPI Timing: Enter flash timing tuning[0m
+[0;32mI (475) cpu_start: Unicore app[0m
+[0;32mI (496) cpu_start: GPIO 12 and 11 are used as console UART I/O pins[0m
+[0;32mI (496) cpu_start: Pro cpu start user code[0m
+[0;32mI (496) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (498) app_init: Application information:[0m
+[0;32mI (502) app_init: Project name:     airgradient-go[0m
+[0;32mI (506) app_init: App version:      1.1.2-gbeade60[0m
+[0;32mI (511) app_init: Compile time:     Oct 18 2026 23:49:06[0m
+[0;32mI (516) app_init: ELF file SHA256:  f7249c4a8...[0m
+[0;32mI (520) app_init: ESP-IDF:          v5.5.4[0m
+[0;32mI (524) efuse_init: Min chip rev:     v1.0[0m
+[0;32mI (528) efuse_init: Max chip rev:     v1.99 [0m
+[0;32mI (532) efuse_init: Chip rev:         v1.0[0m
+[0;32mI (536) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (542) heap_init: At 4082BD30 len 00030870 (194 KiB): RAM[0m
+[0;32mI (547) heap_init: At 4085C5A0 len 00002F58 (11 KiB): RAM[0m
+[0;32mI (552) heap_init: At 50001714 len 000028D4 (10 KiB): RTCRAM[0m
+[0;32mI (558) spi_flash: detected chip: generic[0m
+[0;32mI (561) spi_flash: flash io: dio[0m
+[0;33mW (564) spi_flash: CPU frequency is set to 240MHz. esp_flash_write_encrypted() will automatically limit CPU frequency to 80MHz during execution.[0m
+[0;32mI (595) main_task: Started on CPU0[0m
+[0;32mI (595) main_task: Calling app_main()[0m
+[0;32mI (815) board: I2C bus ready[0m
+[0;32mI (915) board: board variant: V1 (BQ27427 @ 0x55 ACK)[0m
+[0;32mI (1015) BQ25629: BQ25628 found, Part Info: 0x12[0m
+[0;32mI (1015) BQ25629: Configuring battery temperature profile[0m
+[0;32mI (1015) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)[0m
+[0;32mI (1025) BQ25629: BQ25629 initialized successfully[0m
+[0;32mI (1025) BQ25629: Watchdog timeout set to DISABLED[0m
+[0;32mI (1025) BQ25629: Disabling HIZ mode (required for OTG boost)[0m
+[0;32mI (1035) BQ25629: HIZ mode disabled[0m
+[0;32mI (1045) BQ25629: Enabling temperature sensor (TS) check[0m
+[0;32mI (1045) BQ25629: TS check enabled[0m
+[0;32mI (1055) BQ25629: Setting VOTG voltage to 5100 mV[0m
+[0;32mI (1055) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0[0m
+[0;32mI (1055) BQ25629: VOTG voltage set to 5100 mV[0m
+[0;32mI (1065) BQ25629: Disabling bypass OTG mode (direct battery→PMID)[0m
+[0;32mI (1065) BQ25629: Bypass OTG mode disabled[0m
+[0;32mI (1075) BQ25629Bms: pre-OTG ADC: vbat=0mV vsys=0mV vpmid=0mV vbus=0mV ibat=0mA[0m
+[0;32mI (1375) BQ25629Bms: post-OTG verify: EN_OTG=1 vpmid=5026mV vbat=3900mV[0m
+[0;32mI (1375) BQ25629Bms: BQ25629Bms initialized (PMID armed; chip handles buck↔boost autonomously)[0m
+[0;32mI (1385) app: reset_reason=1 wake_cause=0 rtc_state: mode=0 behavior=1 lock=0 gps=1 tracking=0 session=0 warm=0[0m
+[0;32mI (1385) app: Serial number: d0cf13e847e8[0m
+[0;32mI (1395) board: SPI bus ready[0m
+[0;32mI (1505) go_display: EPD driver init done[0m
+[0;32mI (1505) BQ27427: BQ27427 found at 0x55 (DEVICE_TYPE=0x0427)[0m
+[0;32mI (1525) board: BQ27427 applying cell config[0m
+[0;32mI (2645) BQ27427: cell config verified (DC=2000 DE=7400 TermV=3000 SleepI=50)[0m
+[0;32mI (2645) board: BQ27427 boot: soc=61% v=3899mV i=-43mA t=26.9C[0m
+[0;32mI (2695) PowerService: set_pm_power: ON[0m
+[0;32mI (2695) Settings: ** settings | meas_int=300 | gps_mode=1 op_mode=2 | auto_lock=10 | fahrenheit=false feet=false usaqi=false | led: back=0 touch=0 | buzzer=off | wifi_power_save=off disable_cloud=false config_control=2 co2_abc_days=7 tvoc_learning_offset=12 nox_learning_offset=12 static_ip=dhcp onboarding_done=true **[0m
+[0;32mI (2715) Settings: ** corrections | pm_alg=0 pm_scale=1.000000 pm_intercept=0.000000 temp_alg=0 temp_scale=1.000000 temp_intercept=0.000000 hum_alg=0 hum_scale=1.000000 hum_intercept=0.000000 **[0m
+[0;32mI (2725) LP5036: initialised at I2C 0x33[0m
+[0;32mI (2735) LedcBuzzer: init ok (pin 8, freq 2700 Hz)[0m
+[0;32mI (2735) DPS368: DPS368 found at address 0x77[0m
+[0;32mI (2745) DPS368: DPS368 Product ID: 0x10[0m
+[0;32mI (2795) DPS368: Calibration: c0=218 c1=-289[0m
+[0;32mI (2795) DPS368: Calibration: c00=82485 c10=-56081 c01=-3504[0m
+[0;32mI (2795) DPS368: Calibration: c11=1342 c20=-11604 c21=144 c30=-1782[0m
+[0;32mI (2795) DPS368: DPS368 initialized successfully[0m
+[0;33mW (2805) S12: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (2905) S12: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3005) S12: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (3105) S12: S12 not found at address 0x68[0m
+[0;33mW (3105) board: CO2 sensor: S12 not detected[0m
+[0;32mI (3105) SCD4x: SCD4x found at address 0x62[0m
+[0;33mW (4165) SCD4x: Power research: SCD4x disabled (stop result=0)[0m
+[0;33mW (4165) board: CO2 sensor: SCD4x not detected[0m
+[0;33mW (4165) STCC4: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (4265) STCC4: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (4365) STCC4: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (4465) STCC4: STCC4 not found at address 0x64[0m
+[0;33mW (4465) board: CO2 sensor: STCC4 not detected[0m
+[1;31mE (4465) board: CO2 sensor init failed (all candidates)[0m
+[0;32mI (4465) SHT40: SHT40 found at address 0x44[0m
+[0;32mI (4495) SHT40: SHT40 serial number: 0x15F5CC3E[0m
+[0;32mI (4495) SHT40: SHT40 reset successful[0m
+[0;32mI (4505) SHT40: SHT40 initialized successfully[0m
+[0;32mI (4505) SGP41: SGP41 found at address 0x59[0m
+[0;32mI (4505) SGP41: SGP41 initialized successfully[0m
+[0;33mW (4505) board: Power research: SGP41 heater off; conditioning and measurement disabled[0m
+[0;32mI (4515) board: PMID ready: vpmid=5033 mV (waited 0 ms)[0m
+[0;32mI (4635) SPS30: SPS30 firmware v2.3[0m
+[0;32mI (4635) SPS30: SPS30 serial: 21F322A8EF2C8BB5[0m
+[0;32mI (4635) SPS30: SPS30 status register: 0x00100000[0m
+[0;32mI (4635) SPS30: SPS30 initialized (skip_reset=0)[0m
+[0;32mI (4635) CAP1203: product=0x6D manufacturer=0x5D revision=0x01[0m
+[0;32mI (4645) CAP1203: active sensing enabled[0m
+[0;32mI (4645) CAP1203: initialised at 0x28[0m
+[0;32mI (4685) SpiNandStorage: mounted at /nand[0m
+[0;32mI (4685) StorageService: init: NAND mounted at /nand[0m
+[0;32mI (4685) app: Serial number: d0cf13e847e8[0m
+[0;32mI (4685) AgClient: Initialised for WiFi, sn=d0cf13e847e8[0m
+[0;33mW (4695) SensorProducer: boot CO2 ABC period (7 days) not applied: result=1[0m
+[0;32mI (4695) SensorProducer: warming up sensors before first measurement[0m
+[0;32mI (4705) SensorManager: warmup: 10 iterations (1000 ms interval)[0m
+[0;32mI (4705) SensorManager: warmup: iteration 1/10[0m
+[0;32mI (4715) GpsService: idle_gnss: baseline test, skipping GNSS stop (no task)[0m
+[0;32mI (4715) AGUART: Success initialize UART[0m
+[0;32mI (4775) AGUART: Success initialize UART[0m
+[0;32mI (4795) GpsDriver: module: sw=3.m6l.05b29ce8 hw=HD8120.9935bec0b[0m
+[0;32mI (4855) GpsDriver: cfg_navsat: requested=0x00004037 active=0x00004025[0m
+[0;33mW (4855) GpsDriver: cfg_navsat: active mask differs from requested[0m
+[0;32mI (4895) Orchestrator: init: wake_cause=0 display_painted=1 measurement_done=0 lock=0[0m
+[0;32mI (4905) Orchestrator: measurement requested: scheduled[0m
+[0;32mI (4915) PowerService: poll_bms: perc=61.0% src=FG vbat=3.9V vbus=0.6V critical=0 | charge=NotCharging pwr=OTG full_chg_paused=0 | treg=0 vsys=0 iindpm=0 vindpm=1 safety_tmr=0 wd=0[0m
+[0;32mI (4915) PowerService: poll_bms: ibus=0mA ibat=-148mA vsys=3888mV vpmid=5033mV ts=58.6% tdie=25°C bms_ntc=28°C[0m
+[0;32mI (4925) PowerService: poll_bms: FG soc=61% v=3899mV i=-41mA p=-160mW rem=1147mAh fcc=1908mAh t=26.9C 0x01C9[CHG|OCVTAKEN|BAT_DET|DSG] therm_chg_off=0[0m
+[0;32mI (4945) app: [HEAP] boot:interactive:before-run free=124340 min=124340 largest=110592[0m
+[0;32mI (4945) Orchestrator: run: entering main event loop[0m
+[0;32mI (5435) LIS2DH12: configured: 100 Hz range=4 mg/count=2 high-pass=1 INT1=0x2A[0m
+[0;32mI (5455) AccelService: sensor: 100 Hz +/- 4 g high-pass=1; IRQ=640 mg / 20 ms axes=0x7 latched=1[0m
+[0;32mI (5455) AccelService: interrupt-burst: GPIO3; Y peak=400 release=150 mg, 6 peaks, 50..400 ms[0m
+[0;32mI (5465) AccelService: window=1600 cooldown=1000 burst=5000 ms max; waiting for IRQ, XYZ idle[0m
+[0;32mI (5725) SensorManager: warmup: iteration 2/10[0m
+[0;32mI (6725) SensorManager: warmup: iteration 3/10[0m
+[0;32mI (7715) SensorManager: warmup: iteration 4/10[0m
+[0;32mI (8705) SensorManager: warmup: iteration 5/10[0m
+[0;32mI (9695) SensorManager: warmup: iteration 6/10[0m
+[0;32mI (10685) SensorManager: warmup: iteration 7/10[0m
+[0;32mI (11695) SensorManager: warmup: iteration 8/10[0m
+[0;32mI (12695) SensorManager: warmup: iteration 9/10[0m
+[0;32mI (13685) SensorManager: warmup: iteration 10/10[0m
+[0;32mI (14675) SensorProducer: warmup complete[0m
+[0;32mI (15605) Orchestrator: Measurement corrections: temp 28.06 -> 28.06, humidity 67.08 -> 67.08, pm25 19.7 -> 19.7[0m
+[0;32mI (15605) Orchestrator: MeasuresAGo:[0m
+temperature: 28.06
+humidity: 67.08
+pm_01: 18.6
+pm_25: 19.7
+pm_10: 19.8
+pm_05_pc: 13146
+pm_01_pc: 14778
+pm_25_pc: 14829
+pm_10_pc: 14834
+co2: -1
+tvoc_index: -1
+tvoc_raw: -1
+nox_index: -1
+nox_raw: -1
+battery_voltage: 3.88
+charging_voltage: 0.55
+pressure: 1011.0
+altitude: 18.4
+[0;32mI (15635) Orchestrator: display update done[0m
+[0;32mI (15635) Orchestrator: prepare_for_sleep[0m
+[0;32mI (15645) Orchestrator: [HEAP] sleep.prepare:enter free=124452 min=124164 largest=110592[0m
+[0;32mI (18015) SPS30: sleep[0m
+[0;32mI (18025) GpsService: stop_and_idle_gnss: baseline test, stopping task only[0m
+[0;32mI (18025) GpsService: idle_gnss: baseline test, skipping GNSS stop (no task)[0m
+[0;32mI (18025) AGUART: Success initialize UART[0m
+[0;32mI (18075) AGUART: Success initialize UART[0m
+[0;32mI (18095) GpsDriver: module: sw=3.m6l.05b29ce8 hw=HD8120.9935bec0b[0m
+[0;32mI (18155) GpsDriver: cfg_navsat: requested=0x00004037 active=0x00004025[0m
+[0;33mW (18155) GpsDriver: cfg_navsat: active mask differs from requested[0m
+[0;32mI (18155) AGUART: Success initialize UART[0m
+[0;32mI (18155) GpsDriver: CFG-SLEEP TX: F1 D9 06 41 05 00 E0 93 04 00 01 C4 1A (300000 ms)[0m
+[0;32mI (19185) GpsDriver: CFG-SLEEP settle (1000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (21185) GpsDriver: CFG-SLEEP after-settle (2000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (21185) GpsDriver: CFG-SLEEP: UART silent; verify sleep with current measurement[0m
+[0;32mI (21185) CAP1203: deep sleep enabled[0m
+[0;32mI (21355) Orchestrator: [HEAP] sleep.prepare:before-sleep free=141460 min=124164 largest=110592[0m
+[0;32mI (21355) Orchestrator: entering deep sleep (289303 ms)[0m
+[0;32mI (21355) BQ25629Bms: ADC_EN=0 (verified)[0m
+[0;32mI (21355) PowerService: enter_sleep: entering deep sleep for 289303 ms[0m
+[0;32mI (1033) board: SPI bus ready[0m
+[0;32mI (1033) BQ27427: BQ27427 found at 0x55 (DEVICE_TYPE=0x0427)[0m
+[0;32mI (1053) board: BQ27427 cell config already correct — preserved[0m
+[0;32mI (1053) board: BQ27427 boot: soc=61% v=3921mV i=0mA t=26.9C[0m
+[0;32mI (1053) BQ25629: BQ25628 found, Part Info: 0x12[0m
+[0;32mI (1053) BQ25629: Configuring battery temperature profile[0m
+[0;32mI (1063) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)[0m
+[0;32mI (1073) BQ25629: BQ25629 initialized successfully[0m
+[0;32mI (1073) BQ25629: Watchdog timeout set to DISABLED[0m
+[0;32mI (1083) BQ25629: Disabling HIZ mode (required for OTG boost)[0m
+[0;32mI (1083) BQ25629: HIZ mode disabled[0m
+[0;32mI (1093) BQ25629: Enabling temperature sensor (TS) check[0m
+[0;32mI (1093) BQ25629: TS check enabled[0m
+[0;32mI (1103) BQ25629: Setting VOTG voltage to 5100 mV[0m
+[0;32mI (1103) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0[0m
+[0;32mI (1103) BQ25629: VOTG voltage set to 5100 mV[0m
+[0;32mI (1123) BQ25629: Disabling bypass OTG mode (direct battery→PMID)[0m
+[0;32mI (1123) BQ25629: Bypass OTG mode disabled[0m
+[0;32mI (1133) BQ25629Bms: pre-OTG ADC: vbat=3920mV vsys=3918mV vpmid=5026mV vbus=551mV ibat=-16mA[0m
+[0;32mI (1433) BQ25629Bms: post-OTG verify: EN_OTG=1 vpmid=5026mV vbat=3900mV[0m
+[0;32mI (1433) BQ25629Bms: BQ25629Bms initialized (PMID armed; chip handles buck↔boost autonomously)[0m
+[0;32mI (1483) PowerService: set_pm_power: ON[0m
+[0;32mI (1483) Settings: ** settings | meas_int=300 | gps_mode=1 op_mode=2 | auto_lock=10 | fahrenheit=false feet=false usaqi=false | led: back=0 touch=0 | buzzer=off | wifi_power_save=off disable_cloud=false config_control=2 co2_abc_days=7 tvoc_learning_offset=12 nox_learning_offset=12 static_ip=dhcp onboarding_done=true **[0m
+[0;32mI (1503) Settings: ** corrections | pm_alg=0 pm_scale=1.000000 pm_intercept=0.000000 temp_alg=0 temp_scale=1.000000 temp_intercept=0.000000 hum_alg=0 hum_scale=1.000000 hum_intercept=0.000000 **[0m
+[0;32mI (1513) DPS368: DPS368 found at address 0x77[0m
+[0;32mI (1523) DPS368: DPS368 Product ID: 0x10[0m
+[0;32mI (1573) DPS368: Calibration: c0=218 c1=-289[0m
+[0;32mI (1573) DPS368: Calibration: c00=82485 c10=-56081 c01=-3504[0m
+[0;32mI (1573) DPS368: Calibration: c11=1342 c20=-11604 c21=144 c30=-1782[0m
+[0;32mI (1573) DPS368: DPS368 initialized successfully[0m
+[0;33mW (1583) S12: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1683) S12: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1783) S12: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (1883) S12: S12 not found at address 0x68[0m
+[0;33mW (1883) board: CO2 sensor: S12 not detected[0m
+[0;32mI (1883) SCD4x: SCD4x found at address 0x62[0m
+[0;33mW (2943) SCD4x: Power research: SCD4x disabled (stop result=0)[0m
+[0;33mW (2943) board: CO2 sensor: SCD4x not detected[0m
+[0;33mW (2943) STCC4: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3043) STCC4: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3143) STCC4: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (3243) STCC4: STCC4 not found at address 0x64[0m
+[0;33mW (3243) board: CO2 sensor: STCC4 not detected[0m
+[1;31mE (3243) board: CO2 sensor init failed (all candidates)[0m
+[0;32mI (3243) SHT40: SHT40 found at address 0x44[0m
+[0;32mI (3273) SHT40: SHT40 serial number: 0x15F5CC3E[0m
+[0;32mI (3273) SHT40: SHT40 reset successful[0m
+[0;32mI (3283) SHT40: SHT40 initialized successfully[0m
+[0;32mI (3283) SGP41: SGP41 found at address 0x59[0m
+[0;32mI (3283) SGP41: SGP41 initialized successfully[0m
+[0;33mW (3283) board: Power research: SGP41 heater off; conditioning and measurement disabled[0m
+[0;32mI (3293) board: PMID ready: vpmid=5033 mV (waited 0 ms)[0m
+[0;32mI (3413) SPS30: SPS30 firmware v2.3[0m
+[0;32mI (3413) SPS30: SPS30 serial: 21F322A8EF2C8BB5[0m
+[0;32mI (3413) SPS30: SPS30 status register: 0x00100000[0m
+[0;32mI (3413) SPS30: SPS30 initialized (skip_reset=0)[0m
+[0;32mI (3413) app: fast-path: warmup 10 iterations (1000 ms interval)[0m
+[0;32mI (3423) app: fast-path: warmup iteration 1/10[0m
+[0;32mI (4433) app: fast-path: warmup iteration 2/10[0m
+[0;32mI (5443) app: fast-path: warmup iteration 3/10[0m
+[0;32mI (6453) app: fast-path: warmup iteration 4/10[0m
+[0;32mI (7463) app: fast-path: warmup iteration 5/10[0m
+[0;32mI (8473) app: fast-path: warmup iteration 6/10[0m
+[0;32mI (9473) app: fast-path: warmup iteration 7/10[0m
+[0;32mI (10463) app: fast-path: warmup iteration 8/10[0m
+[0;32mI (11453) app: fast-path: warmup iteration 9/10[0m
+[0;32mI (12463) app: fast-path: warmup iteration 10/10[0m
+[0;32mI (14393) app: fast-path: temp=28.4 hum=66.7 pm25=25.5 co2=-1 tvoc=-1 nox=-1 tvoc_raw=-1 nox_raw=-1 pres=1011.0[0m
+[0;32mI (14423) SpiNandStorage: mounted at /nand[0m
+[0;32mI (14433) StorageService: init: NAND mounted at /nand[0m
+[0;32mI (14443) PowerService: poll_bms: perc=61.0% src=FG vbat=3.9V vbus=0.6V critical=0 | charge=NotCharging pwr=OTG full_chg_paused=0 | treg=0 vsys=0 iindpm=0 vindpm=1 safety_tmr=0 wd=0[0m
+[0;32mI (14443) PowerService: poll_bms: ibus=0mA ibat=-116mA vsys=3896mV vpmid=5033mV ts=58.4% tdie=26°C bms_ntc=28°C[0m
+[0;32mI (14453) PowerService: poll_bms: FG soc=61% v=3903mV i=-41mA p=-160mW rem=1155mAh fcc=1908mAh t=27.2C 0x0148[CHG|BAT_DET] therm_chg_off=0[0m
+[0;32mI (14583) go_display: EPD driver init done[0m
+[0;32mI (16963) SPS30: sleep[0m
+[0;32mI (17133) AGUART: Success initialize UART[0m
+[0;32mI (17183) AGUART: Success initialize UART[0m
+[0;32mI (17203) GpsDriver: module: sw=3.m6l.05b29ce8 hw=HD8120.9935bec0b[0m
+[0;32mI (17263) GpsDriver: cfg_navsat: requested=0x00004037 active=0x00004025[0m
+[0;33mW (17263) GpsDriver: cfg_navsat: active mask differs from requested[0m
+[0;32mI (17263) app: fast-path: requesting GPS sleep for five minutes[0m
+[0;32mI (17263) GpsDriver: CFG-SLEEP TX: F1 D9 06 41 05 00 E0 93 04 00 01 C4 1A (300000 ms)[0m
+[0;32mI (18293) GpsDriver: CFG-SLEEP settle (1000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20293) GpsDriver: CFG-SLEEP after-settle (2000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20293) GpsDriver: CFG-SLEEP: UART silent; verify sleep with current measurement[0m
+[0;32mI (20293) app: [HEAP] boot:fast-path:before-sleep free=162252 min=157624 largest=147456[0m
+[0;32mI (20303) BQ25629Bms: ADC_EN=0 (verified)[0m
+[0;32mI (20303) PowerService: enter_sleep: entering deep sleep for 283820 ms[0m
+[0;32mI (693) app: [HEAP] boot:run-entry free=193304 min=193304 largest=163840[0m
+[0;32mI (703) app: reset_reason=8 wake_cause=1 rtc_state: mode=2 behavior=1 lock=0 gps=1 tracking=0 session=0 warm=0[0m
+[0;32mI (703) app: run_fast_path: entering fast-path boot (sensors_warm=0)[0m
+[0;32mI (703) app: [HEAP] boot:fast-path:enter free=191516 min=191188 largest=163840[0m
+[0;32mI (833) board: I2C bus ready[0m
+[0;32mI (933) board: board variant: V1 (BQ27427 @ 0x55 ACK)[0m
+[0;32mI (1033) board: SPI bus ready[0m
+[0;32mI (1033) BQ27427: BQ27427 found at 0x55 (DEVICE_TYPE=0x0427)[0m
+[0;32mI (1053) board: BQ27427 cell config already correct — preserved[0m
+[0;32mI (1053) board: BQ27427 boot: soc=61% v=3922mV i=0mA t=27.1C[0m
+[0;32mI (1053) BQ25629: BQ25628 found, Part Info: 0x12[0m
+[0;32mI (1053) BQ25629: Configuring battery temperature profile[0m
+[0;32mI (1063) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)[0m
+[0;32mI (1073) BQ25629: BQ25629 initialized successfully[0m
+[0;32mI (1073) BQ25629: Watchdog timeout set to DISABLED[0m
+[0;32mI (1083) BQ25629: Disabling HIZ mode (required for OTG boost)[0m
+[0;32mI (1083) BQ25629: HIZ mode disabled[0m
+[0;32mI (1093) BQ25629: Enabling temperature sensor (TS) check[0m
+[0;32mI (1093) BQ25629: TS check enabled[0m
+[0;32mI (1103) BQ25629: Setting VOTG voltage to 5100 mV[0m
+[0;32mI (1103) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0[0m
+[0;32mI (1103) BQ25629: VOTG voltage set to 5100 mV[0m
+[0;32mI (1123) BQ25629: Disabling bypass OTG mode (direct battery→PMID)[0m
+[0;32mI (1123) BQ25629: Bypass OTG mode disabled[0m
+[0;32mI (1133) BQ25629Bms: pre-OTG ADC: vbat=3920mV vsys=3920mV vpmid=5026mV vbus=551mV ibat=-16mA[0m
+[0;32mI (1433) BQ25629Bms: post-OTG verify: EN_OTG=1 vpmid=5026mV vbat=3898mV[0m
+[0;32mI (1433) BQ25629Bms: BQ25629Bms initialized (PMID armed; chip handles buck↔boost autonomously)[0m
+[0;32mI (1483) PowerService: set_pm_power: ON[0m
+[0;32mI (1483) Settings: ** settings | meas_int=300 | gps_mode=1 op_mode=2 | auto_lock=10 | fahrenheit=false feet=false usaqi=false | led: back=0 touch=0 | buzzer=off | wifi_power_save=off disable_cloud=false config_control=2 co2_abc_days=7 tvoc_learning_offset=12 nox_learning_offset=12 static_ip=dhcp onboarding_done=true **[0m
+[0;32mI (1503) Settings: ** corrections | pm_alg=0 pm_scale=1.000000 pm_intercept=0.000000 temp_alg=0 temp_scale=1.000000 temp_intercept=0.000000 hum_alg=0 hum_scale=1.000000 hum_intercept=0.000000 **[0m
+[0;32mI (1513) DPS368: DPS368 found at address 0x77[0m
+[0;32mI (1523) DPS368: DPS368 Product ID: 0x10[0m
+[0;32mI (1573) DPS368: Calibration: c0=218 c1=-289[0m
+[0;32mI (1573) DPS368: Calibration: c00=82485 c10=-56081 c01=-3504[0m
+[0;32mI (1573) DPS368: Calibration: c11=1342 c20=-11604 c21=144 c30=-1782[0m
+[0;32mI (1573) DPS368: DPS368 initialized successfully[0m
+[0;33mW (1583) S12: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1683) S12: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1783) S12: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (1883) S12: S12 not found at address 0x68[0m
+[0;33mW (1883) board: CO2 sensor: S12 not detected[0m
+[0;32mI (1883) SCD4x: SCD4x found at address 0x62[0m
+[0;33mW (2943) SCD4x: Power research: SCD4x disabled (stop result=0)[0m
+[0;33mW (2943) board: CO2 sensor: SCD4x not detected[0m
+[0;33mW (2943) STCC4: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3043) STCC4: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3143) STCC4: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (3243) STCC4: STCC4 not found at address 0x64[0m
+[0;33mW (3243) board: CO2 sensor: STCC4 not detected[0m
+[1;31mE (3243) board: CO2 sensor init failed (all candidates)[0m
+[0;32mI (3243) SHT40: SHT40 found at address 0x44[0m
+[0;32mI (3273) SHT40: SHT40 serial number: 0x15F5CC3E[0m
+[0;32mI (3273) SHT40: SHT40 reset successful[0m
+[0;32mI (3283) SHT40: SHT40 initialized successfully[0m
+[0;32mI (3283) SGP41: SGP41 found at address 0x59[0m
+[0;32mI (3283) SGP41: SGP41 initialized successfully[0m
+[0;33mW (3283) board: Power research: SGP41 heater off; conditioning and measurement disabled[0m
+[0;32mI (3293) board: PMID ready: vpmid=5033 mV (waited 0 ms)[0m
+[0;32mI (3413) SPS30: SPS30 firmware v2.3[0m
+[0;32mI (3413) SPS30: SPS30 serial: 21F322A8EF2C8BB5[0m
+[0;32mI (3413) SPS30: SPS30 status register: 0x00100000[0m
+[0;32mI (3413) SPS30: SPS30 initialized (skip_reset=0)[0m
+[0;32mI (3413) app: fast-path: warmup 10 iterations (1000 ms interval)[0m
+[0;32mI (3423) app: fast-path: warmup iteration 1/10[0m
+[0;32mI (4433) app: fast-path: warmup iteration 2/10[0m
+[0;32mI (5443) app: fast-path: warmup iteration 3/10[0m
+[0;32mI (6453) app: fast-path: warmup iteration 4/10[0m
+[0;32mI (7463) app: fast-path: warmup iteration 5/10[0m
+[0;32mI (8473) app: fast-path: warmup iteration 6/10[0m
+[0;32mI (9473) app: fast-path: warmup iteration 7/10[0m
+[0;32mI (10463) app: fast-path: warmup iteration 8/10[0m
+[0;32mI (11453) app: fast-path: warmup iteration 9/10[0m
+[0;32mI (12443) app: fast-path: warmup iteration 10/10[0m
+[0;32mI (14363) app: fast-path: temp=28.6 hum=67.1 pm25=28.5 co2=-1 tvoc=-1 nox=-1 tvoc_raw=-1 nox_raw=-1 pres=1011.0[0m
+[0;32mI (14393) SpiNandStorage: mounted at /nand[0m
+[0;32mI (14403) StorageService: init: NAND mounted at /nand[0m
+[0;32mI (14413) PowerService: poll_bms: perc=61.0% src=FG vbat=3.9V vbus=0.6V critical=0 | charge=NotCharging pwr=OTG full_chg_paused=0 | treg=0 vsys=0 iindpm=0 vindpm=1 safety_tmr=0 wd=0[0m
+[0;32mI (14413) PowerService: poll_bms: ibus=0mA ibat=-116mA vsys=3896mV vpmid=5026mV ts=58.3% tdie=26°C bms_ntc=28°C[0m
+[0;32mI (14423) PowerService: poll_bms: FG soc=61% v=3903mV i=-121mA p=-472mW rem=1154mAh fcc=1908mAh t=27.4C 0x0149[CHG|BAT_DET|DSG] therm_chg_off=0[0m
+[0;32mI (14553) go_display: EPD driver init done[0m
+[0;32mI (16933) SPS30: sleep[0m
+[0;32mI (17103) AGUART: Success initialize UART[0m
+[0;32mI (17153) AGUART: Success initialize UART[0m
+[0;32mI (17173) GpsDriver: module: sw=3.m6l.05b29ce8 hw=HD8120.9935bec0b[0m
+[0;32mI (17233) GpsDriver: cfg_navsat: requested=0x00004037 active=0x00004025[0m
+[0;33mW (17233) GpsDriver: cfg_navsat: active mask differs from requested[0m
+[0;32mI (17233) app: fast-path: requesting GPS sleep for five minutes[0m
+[0;32mI (17233) GpsDriver: CFG-SLEEP TX: F1 D9 06 41 05 00 E0 93 04 00 01 C4 1A (300000 ms)[0m
+[0;32mI (18263) GpsDriver: CFG-SLEEP settle (1000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20263) GpsDriver: CFG-SLEEP after-settle (2000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20263) GpsDriver: CFG-SLEEP: UART silent; verify sleep with current measurement[0m
+[0;32mI (20263) app: [HEAP] boot:fast-path:before-sleep free=162252 min=157624 largest=147456[0m
+[0;32mI (20273) BQ25629Bms: ADC_EN=0 (verified)[0m
+[0;32mI (20273) PowerService: enter_sleep: entering deep sleep for 283850 ms[0m
+[0;32mI (693) app: [HEAP] boot:run-entry free=193304 min=193304 largest=163840[0m
+[0;32mI (703) app: reset_reason=8 wake_cause=1 rtc_state: mode=2 behavior=1 lock=0 gps=1 tracking=0 session=0 warm=0[0m
+[0;32mI (703) app: run_fast_path: entering fast-path boot (sensors_warm=0)[0m
+[0;32mI (703) app: [HEAP] boot:fast-path:enter free=191516 min=191188 largest=163840[0m
+[0;32mI (833) board: I2C bus ready[0m
+[0;32mI (933) board: board variant: V1 (BQ27427 @ 0x55 ACK)[0m
+[0;32mI (1033) board: SPI bus ready[0m
+[0;32mI (1033) BQ27427: BQ27427 found at 0x55 (DEVICE_TYPE=0x0427)[0m
+[0;32mI (1053) board: BQ27427 cell config already correct — preserved[0m
+[0;32mI (1053) board: BQ27427 boot: soc=61% v=3921mV i=0mA t=27.2C[0m
+[0;32mI (1053) BQ25629: BQ25628 found, Part Info: 0x12[0m
+[0;32mI (1053) BQ25629: Configuring battery temperature profile[0m
+[0;32mI (1063) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)[0m
+[0;32mI (1073) BQ25629: BQ25629 initialized successfully[0m
+[0;32mI (1073) BQ25629: Watchdog timeout set to DISABLED[0m
+[0;32mI (1083) BQ25629: Disabling HIZ mode (required for OTG boost)[0m
+[0;32mI (1083) BQ25629: HIZ mode disabled[0m
+[0;32mI (1093) BQ25629: Enabling temperature sensor (TS) check[0m
+[0;32mI (1093) BQ25629: TS check enabled[0m
+[0;32mI (1103) BQ25629: Setting VOTG voltage to 5100 mV[0m
+[0;32mI (1103) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0[0m
+[0;32mI (1103) BQ25629: VOTG voltage set to 5100 mV[0m
+[0;32mI (1123) BQ25629: Disabling bypass OTG mode (direct battery→PMID)[0m
+[0;32mI (1123) BQ25629: Bypass OTG mode disabled[0m
+[0;32mI (1133) BQ25629Bms: pre-OTG ADC: vbat=3920mV vsys=3920mV vpmid=5033mV vbus=555mV ibat=-16mA[0m
+[0;32mI (1433) BQ25629Bms: post-OTG verify: EN_OTG=1 vpmid=5026mV vbat=3898mV[0m
+[0;32mI (1433) BQ25629Bms: BQ25629Bms initialized (PMID armed; chip handles buck↔boost autonomously)[0m
+[0;32mI (1483) PowerService: set_pm_power: ON[0m
+[0;32mI (1483) Settings: ** settings | meas_int=300 | gps_mode=1 op_mode=2 | auto_lock=10 | fahrenheit=false feet=false usaqi=false | led: back=0 touch=0 | buzzer=off | wifi_power_save=off disable_cloud=false config_control=2 co2_abc_days=7 tvoc_learning_offset=12 nox_learning_offset=12 static_ip=dhcp onboarding_done=true **[0m
+[0;32mI (1503) Settings: ** corrections | pm_alg=0 pm_scale=1.000000 pm_intercept=0.000000 temp_alg=0 temp_scale=1.000000 temp_intercept=0.000000 hum_alg=0 hum_scale=1.000000 hum_intercept=0.000000 **[0m
+[0;32mI (1513) DPS368: DPS368 found at address 0x77[0m
+[0;32mI (1523) DPS368: DPS368 Product ID: 0x10[0m
+[0;32mI (1573) DPS368: Calibration: c0=218 c1=-289[0m
+[0;32mI (1573) DPS368: Calibration: c00=82485 c10=-56081 c01=-3504[0m
+[0;32mI (1573) DPS368: Calibration: c11=1342 c20=-11604 c21=144 c30=-1782[0m
+[0;32mI (1573) DPS368: DPS368 initialized successfully[0m
+[0;33mW (1583) S12: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1683) S12: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1783) S12: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (1883) S12: S12 not found at address 0x68[0m
+[0;33mW (1883) board: CO2 sensor: S12 not detected[0m
+[0;32mI (1883) SCD4x: SCD4x found at address 0x62[0m
+[0;33mW (2943) SCD4x: Power research: SCD4x disabled (stop result=0)[0m
+[0;33mW (2943) board: CO2 sensor: SCD4x not detected[0m
+[0;33mW (2943) STCC4: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3043) STCC4: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3143) STCC4: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (3243) STCC4: STCC4 not found at address 0x64[0m
+[0;33mW (3243) board: CO2 sensor: STCC4 not detected[0m
+[1;31mE (3243) board: CO2 sensor init failed (all candidates)[0m
+[0;32mI (3243) SHT40: SHT40 found at address 0x44[0m
+[0;32mI (3273) SHT40: SHT40 serial number: 0x15F5CC3E[0m
+[0;32mI (3273) SHT40: SHT40 reset successful[0m
+[0;32mI (3283) SHT40: SHT40 initialized successfully[0m
+[0;32mI (3283) SGP41: SGP41 found at address 0x59[0m
+[0;32mI (3283) SGP41: SGP41 initialized successfully[0m
+[0;33mW (3283) board: Power research: SGP41 heater off; conditioning and measurement disabled[0m
+[0;32mI (3293) board: PMID ready: vpmid=5026 mV (waited 0 ms)[0m
+[0;32mI (3413) SPS30: SPS30 firmware v2.3[0m
+[0;32mI (3413) SPS30: SPS30 serial: 21F322A8EF2C8BB5[0m
+[0;32mI (3413) SPS30: SPS30 status register: 0x00100000[0m
+[0;32mI (3413) SPS30: SPS30 initialized (skip_reset=0)[0m
+[0;32mI (3413) app: fast-path: warmup 10 iterations (1000 ms interval)[0m
+[0;32mI (3423) app: fast-path: warmup iteration 1/10[0m
+[0;32mI (4433) app: fast-path: warmup iteration 2/10[0m
+[0;32mI (5443) app: fast-path: warmup iteration 3/10[0m
+[0;32mI (6453) app: fast-path: warmup iteration 4/10[0m
+[0;32mI (7463) app: fast-path: warmup iteration 5/10[0m
+[0;32mI (8473) app: fast-path: warmup iteration 6/10[0m
+[0;32mI (9473) app: fast-path: warmup iteration 7/10[0m
+[0;32mI (10463) app: fast-path: warmup iteration 8/10[0m
+[0;32mI (11453) app: fast-path: warmup iteration 9/10[0m
+[0;32mI (12443) app: fast-path: warmup iteration 10/10[0m
+[0;32mI (14383) app: fast-path: temp=28.5 hum=68.4 pm25=19.9 co2=-1 tvoc=-1 nox=-1 tvoc_raw=-1 nox_raw=-1 pres=1010.9[0m
+[0;32mI (14413) SpiNandStorage: mounted at /nand[0m
+[0;32mI (14423) StorageService: init: NAND mounted at /nand[0m
+[0;32mI (14433) PowerService: poll_bms: perc=61.0% src=FG vbat=3.9V vbus=0.6V critical=0 | charge=NotCharging pwr=OTG full_chg_paused=0 | treg=0 vsys=0 iindpm=0 vindpm=1 safety_tmr=0 wd=0[0m
+[0;32mI (14433) PowerService: poll_bms: ibus=0mA ibat=-116mA vsys=3896mV vpmid=5033mV ts=58.3% tdie=26°C bms_ntc=28°C[0m
+[0;32mI (14443) PowerService: poll_bms: FG soc=61% v=3903mV i=-121mA p=-472mW rem=1153mAh fcc=1908mAh t=27.6C 0x0149[CHG|BAT_DET|DSG] therm_chg_off=0[0m
+[0;32mI (14573) go_display: EPD driver init done[0m
+[0;32mI (16953) SPS30: sleep[0m
+[0;32mI (17123) AGUART: Success initialize UART[0m
+[0;32mI (17173) AGUART: Success initialize UART[0m
+[0;32mI (17193) GpsDriver: module: sw=3.m6l.05b29ce8 hw=HD8120.9935bec0b[0m
+[0;32mI (17253) GpsDriver: cfg_navsat: requested=0x00004037 active=0x00004025[0m
+[0;33mW (17253) GpsDriver: cfg_navsat: active mask differs from requested[0m
+[0;32mI (17253) app: fast-path: requesting GPS sleep for five minutes[0m
+[0;32mI (17253) GpsDriver: CFG-SLEEP TX: F1 D9 06 41 05 00 E0 93 04 00 01 C4 1A (300000 ms)[0m
+[0;32mI (18283) GpsDriver: CFG-SLEEP settle (1000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20283) GpsDriver: CFG-SLEEP after-settle (2000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20283) GpsDriver: CFG-SLEEP: UART silent; verify sleep with current measurement[0m
+[0;32mI (20283) app: [HEAP] boot:fast-path:before-sleep free=162252 min=157624 largest=147456[0m
+[0;32mI (20293) BQ25629Bms: ADC_EN=0 (verified)[0m
+[0;32mI (20293) PowerService: enter_sleep: entering deep sleep for 283830 ms[0m
+[0;32mI (833) board: I2C bus ready[0m
+[0;32mI (933) board: board variant: V1 (BQ27427 @ 0x55 ACK)[0m
+[0;32mI (1033) board: SPI bus ready[0m
+[0;32mI (1033) BQ27427: BQ27427 found at 0x55 (DEVICE_TYPE=0x0427)[0m
+[0;32mI (1053) board: BQ27427 cell config already correct — preserved[0m
+[0;32mI (1053) board: BQ27427 boot: soc=61% v=3922mV i=0mA t=27.2C[0m
+[0;32mI (1053) BQ25629: BQ25628 found, Part Info: 0x12[0m
+[0;32mI (1053) BQ25629: Configuring battery temperature profile[0m
+[0;32mI (1063) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)[0m
+[0;32mI (1073) BQ25629: BQ25629 initialized successfully[0m
+[0;32mI (1073) BQ25629: Watchdog timeout set to DISABLED[0m
+[0;32mI (1083) BQ25629: Disabling HIZ mode (required for OTG boost)[0m
+[0;32mI (1083) BQ25629: HIZ mode disabled[0m
+[0;32mI (1093) BQ25629: Enabling temperature sensor (TS) check[0m
+[0;32mI (1093) BQ25629: TS check enabled[0m
+[0;32mI (1103) BQ25629: Setting VOTG voltage to 5100 mV[0m
+[0;32mI (1103) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0[0m
+[0;32mI (1103) BQ25629: VOTG voltage set to 5100 mV[0m
+[0;32mI (1123) BQ25629: Disabling bypass OTG mode (direct battery→PMID)[0m
+[0;32mI (1123) BQ25629: Bypass OTG mode disabled[0m
+[0;32mI (1133) BQ25629Bms: pre-OTG ADC: vbat=3920mV vsys=3920mV vpmid=5053mV vbus=559mV ibat=-16mA[0m
+[0;32mI (1433) BQ25629Bms: post-OTG verify: EN_OTG=1 vpmid=5033mV vbat=3898mV[0m
+[0;32mI (1433) BQ25629Bms: BQ25629Bms initialized (PMID armed; chip handles buck↔boost autonomously)[0m
+[0;32mI (1483) PowerService: set_pm_power: ON[0m
+[0;32mI (1483) Settings: ** settings | meas_int=300 | gps_mode=1 op_mode=2 | auto_lock=10 | fahrenheit=false feet=false usaqi=false | led: back=0 touch=0 | buzzer=off | wifi_power_save=off disable_cloud=false config_control=2 co2_abc_days=7 tvoc_learning_offset=12 nox_learning_offset=12 static_ip=dhcp onboarding_done=true **[0m
+[0;32mI (1503) Settings: ** corrections | pm_alg=0 pm_scale=1.000000 pm_intercept=0.000000 temp_alg=0 temp_scale=1.000000 temp_intercept=0.000000 hum_alg=0 hum_scale=1.000000 hum_intercept=0.000000 **[0m
+[0;32mI (1513) DPS368: DPS368 found at address 0x77[0m
+[0;32mI (1523) DPS368: DPS368 Product ID: 0x10[0m
+[0;32mI (1573) DPS368: Calibration: c0=218 c1=-289[0m
+[0;32mI (1573) DPS368: Calibration: c00=82485 c10=-56081 c01=-3504[0m
+[0;32mI (1573) DPS368: Calibration: c11=1342 c20=-11604 c21=144 c30=-1782[0m
+[0;32mI (1573) DPS368: DPS368 initialized successfully[0m
+[0;33mW (1583) S12: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1683) S12: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1783) S12: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (1883) S12: S12 not found at address 0x68[0m
+[0;33mW (1883) board: CO2 sensor: S12 not detected[0m
+[0;32mI (1883) SCD4x: SCD4x found at address 0x62[0m
+[0;33mW (2943) SCD4x: Power research: SCD4x disabled (stop result=0)[0m
+[0;33mW (2943) board: CO2 sensor: SCD4x not detected[0m
+[0;33mW (2943) STCC4: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3043) STCC4: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3143) STCC4: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (3243) STCC4: STCC4 not found at address 0x64[0m
+[0;33mW (3243) board: CO2 sensor: STCC4 not detected[0m
+[1;31mE (3243) board: CO2 sensor init failed (all candidates)[0m
+[0;32mI (3243) SHT40: SHT40 found at address 0x44[0m
+[0;32mI (3273) SHT40: SHT40 serial number: 0x15F5CC3E[0m
+[0;32mI (3273) SHT40: SHT40 reset successful[0m
+[0;32mI (3283) SHT40: SHT40 initialized successfully[0m
+[0;32mI (3283) SGP41: SGP41 found at address 0x59[0m
+[0;32mI (3283) SGP41: SGP41 initialized successfully[0m
+[0;33mW (3283) board: Power research: SGP41 heater off; conditioning and measurement disabled[0m
+[0;32mI (3293) board: PMID ready: vpmid=5026 mV (waited 0 ms)[0m
+[0;32mI (3413) SPS30: SPS30 firmware v2.3[0m
+[0;32mI (3413) SPS30: SPS30 serial: 21F322A8EF2C8BB5[0m
+[0;32mI (3413) SPS30: SPS30 status register: 0x00100000[0m
+[0;32mI (3413) SPS30: SPS30 initialized (skip_reset=0)[0m
+[0;32mI (3413) app: fast-path: warmup 10 iterations (1000 ms interval)[0m
+[0;32mI (3423) app: fast-path: warmup iteration 1/10[0m
+[0;32mI (4433) app: fast-path: warmup iteration 2/10[0m
+[0;32mI (5443) app: fast-path: warmup iteration 3/10[0m
+[0;32mI (6453) app: fast-path: warmup iteration 4/10[0m
+[0;32mI (7463) app: fast-path: warmup iteration 5/10[0m
+[0;32mI (8473) app: fast-path: warmup iteration 6/10[0m
+[0;32mI (9473) app: fast-path: warmup iteration 7/10[0m
+[0;32mI (10463) app: fast-path: warmup iteration 8/10[0m
+[0;32mI (11453) app: fast-path: warmup iteration 9/10[0m
+[0;32mI (12443) app: fast-path: warmup iteration 10/10[0m
+[0;32mI (14383) app: fast-path: temp=28.7 hum=69.5 pm25=18.0 co2=-1 tvoc=-1 nox=-1 tvoc_raw=-1 nox_raw=-1 pres=1010.9[0m
+[0;32mI (14413) SpiNandStorage: mounted at /nand[0m
+[0;32mI (14423) StorageService: init: NAND mounted at /nand[0m
+[0;32mI (14433) PowerService: poll_bms: perc=61.0% src=FG vbat=3.9V vbus=0.6V critical=0 | charge=NotCharging pwr=OTG full_chg_paused=0 | treg=0 vsys=0 iindpm=0 vindpm=1 safety_tmr=0 wd=0[0m
+[0;32mI (14433) PowerService: poll_bms: ibus=0mA ibat=-116mA vsys=3896mV vpmid=5026mV ts=58.2% tdie=26°C bms_ntc=28°C[0m
+[0;32mI (14443) PowerService: poll_bms: FG soc=61% v=3904mV i=-121mA p=-472mW rem=1152mAh fcc=1908mAh t=27.7C 0x0149[CHG|BAT_DET|DSG] therm_chg_off=0[0m
+[0;32mI (14573) go_display: EPD driver init done[0m
+[0;32mI (16953) SPS30: sleep[0m
+[0;32mI (17123) AGUART: Success initialize UART[0m
+[0;32mI (17173) AGUART: Success initialize UART[0m
+[0;32mI (17193) GpsDriver: module: sw=3.m6l.05b29ce8 hw=HD8120.9935bec0b[0m
+[0;32mI (17253) GpsDriver: cfg_navsat: requested=0x00004037 active=0x00004025[0m
+[0;33mW (17253) GpsDriver: cfg_navsat: active mask differs from requested[0m
+[0;32mI (17253) app: fast-path: requesting GPS sleep for five minutes[0m
+[0;32mI (17253) GpsDriver: CFG-SLEEP TX: F1 D9 06 41 05 00 E0 93 04 00 01 C4 1A (300000 ms)[0m
+[0;32mI (18283) GpsDriver: CFG-SLEEP settle (1000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20283) GpsDriver: CFG-SLEEP after-settle (2000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20283) GpsDriver: CFG-SLEEP: UART silent; verify sleep with current measurement[0m
+[0;32mI (20283) app: [HEAP] boot:fast-path:before-sleep free=162188 min=157624 largest=147456[0m
+[0;32mI (20293) BQ25629Bms: ADC_EN=0 (verified)[0m
+[0;32mI (20293) PowerService: enter_sleep: entering deep sleep for 283830 ms[0m
+[0;32mI (933) board: board variant: V1 (BQ27427 @ 0x55 ACK)[0m
+[0;32mI (1033) board: SPI bus ready[0m
+[0;32mI (1033) BQ27427: BQ27427 found at 0x55 (DEVICE_TYPE=0x0427)[0m
+[0;32mI (1053) board: BQ27427 cell config already correct — preserved[0m
+[0;32mI (1053) board: BQ27427 boot: soc=61% v=3921mV i=0mA t=27.4C[0m
+[0;32mI (1053) BQ25629: BQ25628 found, Part Info: 0x12[0m
+[0;32mI (1053) BQ25629: Configuring battery temperature profile[0m
+[0;32mI (1063) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)[0m
+[0;32mI (1073) BQ25629: BQ25629 initialized successfully[0m
+[0;32mI (1073) BQ25629: Watchdog timeout set to DISABLED[0m
+[0;32mI (1083) BQ25629: Disabling HIZ mode (required for OTG boost)[0m
+[0;32mI (1083) BQ25629: HIZ mode disabled[0m
+[0;32mI (1093) BQ25629: Enabling temperature sensor (TS) check[0m
+[0;32mI (1093) BQ25629: TS check enabled[0m
+[0;32mI (1103) BQ25629: Setting VOTG voltage to 5100 mV[0m
+[0;32mI (1103) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0[0m
+[0;32mI (1103) BQ25629: VOTG voltage set to 5100 mV[0m
+[0;32mI (1123) BQ25629: Disabling bypass OTG mode (direct battery→PMID)[0m
+[0;32mI (1123) BQ25629: Bypass OTG mode disabled[0m
+[0;32mI (1133) BQ25629Bms: pre-OTG ADC: vbat=3920mV vsys=3920mV vpmid=5026mV vbus=567mV ibat=-16mA[0m
+[0;32mI (1433) BQ25629Bms: post-OTG verify: EN_OTG=1 vpmid=5026mV vbat=3896mV[0m
+[0;32mI (1433) BQ25629Bms: BQ25629Bms initialized (PMID armed; chip handles buck↔boost autonomously)[0m
+[0;32mI (1483) PowerService: set_pm_power: ON[0m
+[0;32mI (1483) Settings: ** settings | meas_int=300 | gps_mode=1 op_mode=2 | auto_lock=10 | fahrenheit=false feet=false usaqi=false | led: back=0 touch=0 | buzzer=off | wifi_power_save=off disable_cloud=false config_control=2 co2_abc_days=7 tvoc_learning_offset=12 nox_learning_offset=12 static_ip=dhcp onboarding_done=true **[0m
+[0;32mI (1503) Settings: ** corrections | pm_alg=0 pm_scale=1.000000 pm_intercept=0.000000 temp_alg=0 temp_scale=1.000000 temp_intercept=0.000000 hum_alg=0 hum_scale=1.000000 hum_intercept=0.000000 **[0m
+[0;32mI (1513) DPS368: DPS368 found at address 0x77[0m
+[0;32mI (1523) DPS368: DPS368 Product ID: 0x10[0m
+[0;32mI (1573) DPS368: Calibration: c0=218 c1=-289[0m
+[0;32mI (1573) DPS368: Calibration: c00=82485 c10=-56081 c01=-3504[0m
+[0;32mI (1573) DPS368: Calibration: c11=1342 c20=-11604 c21=144 c30=-1782[0m
+[0;32mI (1573) DPS368: DPS368 initialized successfully[0m
+[0;33mW (1583) S12: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1683) S12: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1783) S12: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (1883) S12: S12 not found at address 0x68[0m
+[0;33mW (1883) board: CO2 sensor: S12 not detected[0m
+[0;32mI (1883) SCD4x: SCD4x found at address 0x62[0m
+[0;33mW (2943) SCD4x: Power research: SCD4x disabled (stop result=0)[0m
+[0;33mW (2943) board: CO2 sensor: SCD4x not detected[0m
+[0;33mW (2943) STCC4: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3043) STCC4: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3143) STCC4: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (3243) STCC4: STCC4 not found at address 0x64[0m
+[0;33mW (3243) board: CO2 sensor: STCC4 not detected[0m
+[1;31mE (3243) board: CO2 sensor init failed (all candidates)[0m
+[0;32mI (3243) SHT40: SHT40 found at address 0x44[0m
+[0;32mI (3273) SHT40: SHT40 serial number: 0x15F5CC3E[0m
+[0;32mI (3273) SHT40: SHT40 reset successful[0m
+[0;32mI (3283) SHT40: SHT40 initialized successfully[0m
+[0;32mI (3283) SGP41: SGP41 found at address 0x59[0m
+[0;32mI (3283) SGP41: SGP41 initialized successfully[0m
+[0;33mW (3283) board: Power research: SGP41 heater off; conditioning and measurement disabled[0m
+[0;32mI (3293) board: PMID ready: vpmid=5026 mV (waited 0 ms)[0m
+[0;32mI (3413) SPS30: SPS30 firmware v2.3[0m
+[0;32mI (3413) SPS30: SPS30 serial: 21F322A8EF2C8BB5[0m
+[0;32mI (3413) SPS30: SPS30 status register: 0x00100000[0m
+[0;32mI (3413) SPS30: SPS30 initialized (skip_reset=0)[0m
+[0;32mI (3413) app: fast-path: warmup 10 iterations (1000 ms interval)[0m
+[0;32mI (3423) app: fast-path: warmup iteration 1/10[0m
+[0;32mI (4433) app: fast-path: warmup iteration 2/10[0m
+[0;32mI (5443) app: fast-path: warmup iteration 3/10[0m
+[0;32mI (6453) app: fast-path: warmup iteration 4/10[0m
+[0;32mI (7463) app: fast-path: warmup iteration 5/10[0m
+[0;32mI (8473) app: fast-path: warmup iteration 6/10[0m
+[0;32mI (9473) app: fast-path: warmup iteration 7/10[0m
+[0;32mI (10463) app: fast-path: warmup iteration 8/10[0m
+[0;32mI (11453) app: fast-path: warmup iteration 9/10[0m
+[0;32mI (12443) app: fast-path: warmup iteration 10/10[0m
+[0;32mI (14363) app: fast-path: temp=28.9 hum=69.1 pm25=23.2 co2=-1 tvoc=-1 nox=-1 tvoc_raw=-1 nox_raw=-1 pres=1010.9[0m
+[0;32mI (14393) SpiNandStorage: mounted at /nand[0m
+[0;32mI (14403) StorageService: init: NAND mounted at /nand[0m
+[0;32mI (14413) PowerService: poll_bms: perc=61.0% src=FG vbat=3.9V vbus=0.6V critical=0 | charge=NotCharging pwr=OTG full_chg_paused=0 | treg=0 vsys=0 iindpm=0 vindpm=1 safety_tmr=0 wd=0[0m
+[0;32mI (14413) PowerService: poll_bms: ibus=0mA ibat=-116mA vsys=3896mV vpmid=5026mV ts=58.0% tdie=26°C bms_ntc=29°C[0m
+[0;32mI (14423) PowerService: poll_bms: FG soc=61% v=3903mV i=-121mA p=-472mW rem=1151mAh fcc=1908mAh t=27.8C 0x0149[CHG|BAT_DET|DSG] therm_chg_off=0[0m
+[0;32mI (14553) go_display: EPD driver init done[0m
+[0;32mI (16933) SPS30: sleep[0m
+[0;32mI (17103) AGUART: Success initialize UART[0m
+[0;32mI (17153) AGUART: Success initialize UART[0m
+[0;32mI (17173) GpsDriver: module: sw=3.m6l.05b29ce8 hw=HD8120.9935bec0b[0m
+[0;32mI (17233) GpsDriver: cfg_navsat: requested=0x00004037 active=0x00004025[0m
+[0;33mW (17233) GpsDriver: cfg_navsat: active mask differs from requested[0m
+[0;32mI (17233) app: fast-path: requesting GPS sleep for five minutes[0m
+[0;32mI (17233) GpsDriver: CFG-SLEEP TX: F1 D9 06 41 05 00 E0 93 04 00 01 C4 1A (300000 ms)[0m
+[0;32mI (18263) GpsDriver: CFG-SLEEP settle (1000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20263) GpsDriver: CFG-SLEEP after-settle (2000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20263) GpsDriver: CFG-SLEEP: UART silent; verify sleep with current measurement[0m
+[0;32mI (20263) app: [HEAP] boot:fast-path:before-sleep free=162188 min=157624 largest=147456[0m
+[0;32mI (20273) BQ25629Bms: ADC_EN=0 (verified)[0m
+[0;32mI (20273) PowerService: enter_sleep: entering deep sleep for 283850 ms[0m
+[0;32mI (833) board: I2C bus ready[0m
+[0;32mI (933) board: board variant: V1 (BQ27427 @ 0x55 ACK)[0m
+[0;32mI (1033) board: SPI bus ready[0m
+[0;32mI (1033) BQ27427: BQ27427 found at 0x55 (DEVICE_TYPE=0x0427)[0m
+[0;32mI (1053) board: BQ27427 cell config already correct — preserved[0m
+[0;32mI (1053) board: BQ27427 boot: soc=61% v=3922mV i=0mA t=27.5C[0m
+[0;32mI (1053) BQ25629: BQ25628 found, Part Info: 0x12[0m
+[0;32mI (1053) BQ25629: Configuring battery temperature profile[0m
+[0;32mI (1063) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)[0m
+[0;32mI (1073) BQ25629: BQ25629 initialized successfully[0m
+[0;32mI (1073) BQ25629: Watchdog timeout set to DISABLED[0m
+[0;32mI (1083) BQ25629: Disabling HIZ mode (required for OTG boost)[0m
+[0;32mI (1083) BQ25629: HIZ mode disabled[0m
+[0;32mI (1093) BQ25629: Enabling temperature sensor (TS) check[0m
+[0;32mI (1093) BQ25629: TS check enabled[0m
+[0;32mI (1103) BQ25629: Setting VOTG voltage to 5100 mV[0m
+[0;32mI (1103) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0[0m
+[0;32mI (1103) BQ25629: VOTG voltage set to 5100 mV[0m
+[0;32mI (1123) BQ25629: Disabling bypass OTG mode (direct battery→PMID)[0m
+[0;32mI (1123) BQ25629: Bypass OTG mode disabled[0m
+[0;32mI (1133) BQ25629Bms: pre-OTG ADC: vbat=3920mV vsys=3920mV vpmid=5041mV vbus=571mV ibat=-16mA[0m
+[0;32mI (1433) BQ25629Bms: post-OTG verify: EN_OTG=1 vpmid=5026mV vbat=3898mV[0m
+[0;32mI (1433) BQ25629Bms: BQ25629Bms initialized (PMID armed; chip handles buck↔boost autonomously)[0m
+[0;32mI (1483) PowerService: set_pm_power: ON[0m
+[0;32mI (1483) Settings: ** settings | meas_int=300 | gps_mode=1 op_mode=2 | auto_lock=10 | fahrenheit=false feet=false usaqi=false | led: back=0 touch=0 | buzzer=off | wifi_power_save=off disable_cloud=false config_control=2 co2_abc_days=7 tvoc_learning_offset=12 nox_learning_offset=12 static_ip=dhcp onboarding_done=true **[0m
+[0;32mI (1503) Settings: ** corrections | pm_alg=0 pm_scale=1.000000 pm_intercept=0.000000 temp_alg=0 temp_scale=1.000000 temp_intercept=0.000000 hum_alg=0 hum_scale=1.000000 hum_intercept=0.000000 **[0m
+[0;32mI (1513) DPS368: DPS368 found at address 0x77[0m
+[0;32mI (1523) DPS368: DPS368 Product ID: 0x10[0m
+[0;32mI (1573) DPS368: Calibration: c0=218 c1=-289[0m
+[0;32mI (1573) DPS368: Calibration: c00=82485 c10=-56081 c01=-3504[0m
+[0;32mI (1573) DPS368: Calibration: c11=1342 c20=-11604 c21=144 c30=-1782[0m
+[0;32mI (1573) DPS368: DPS368 initialized successfully[0m
+[0;33mW (1583) S12: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1683) S12: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1783) S12: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (1883) S12: S12 not found at address 0x68[0m
+[0;33mW (1883) board: CO2 sensor: S12 not detected[0m
+[0;32mI (1883) SCD4x: SCD4x found at address 0x62[0m
+[0;33mW (2943) SCD4x: Power research: SCD4x disabled (stop result=0)[0m
+[0;33mW (2943) board: CO2 sensor: SCD4x not detected[0m
+[0;33mW (2943) STCC4: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3043) STCC4: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3143) STCC4: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (3243) STCC4: STCC4 not found at address 0x64[0m
+[0;33mW (3243) board: CO2 sensor: STCC4 not detected[0m
+[1;31mE (3243) board: CO2 sensor init failed (all candidates)[0m
+[0;32mI (3243) SHT40: SHT40 found at address 0x44[0m
+[0;32mI (3273) SHT40: SHT40 serial number: 0x15F5CC3E[0m
+[0;32mI (3273) SHT40: SHT40 reset successful[0m
+[0;32mI (3283) SHT40: SHT40 initialized successfully[0m
+[0;32mI (3283) SGP41: SGP41 found at address 0x59[0m
+[0;32mI (3283) SGP41: SGP41 initialized successfully[0m
+[0;33mW (3283) board: Power research: SGP41 heater off; conditioning and measurement disabled[0m
+[0;32mI (3293) board: PMID ready: vpmid=5026 mV (waited 0 ms)[0m
+[0;32mI (3413) SPS30: SPS30 firmware v2.3[0m
+[0;32mI (3413) SPS30: SPS30 serial: 21F322A8EF2C8BB5[0m
+[0;32mI (3413) SPS30: SPS30 status register: 0x00100000[0m
+[0;32mI (3413) SPS30: SPS30 initialized (skip_reset=0)[0m
+[0;32mI (3413) app: fast-path: warmup 10 iterations (1000 ms interval)[0m
+[0;32mI (3423) app: fast-path: warmup iteration 1/10[0m
+[0;32mI (4433) app: fast-path: warmup iteration 2/10[0m
+[0;32mI (5443) app: fast-path: warmup iteration 3/10[0m
+[0;32mI (6453) app: fast-path: warmup iteration 4/10[0m
+[0;32mI (7463) app: fast-path: warmup iteration 5/10[0m
+[0;32mI (8473) app: fast-path: warmup iteration 6/10[0m
+[0;32mI (9473) app: fast-path: warmup iteration 7/10[0m
+[0;32mI (10463) app: fast-path: warmup iteration 8/10[0m
+[0;32mI (11453) app: fast-path: warmup iteration 9/10[0m
+[0;32mI (12443) app: fast-path: warmup iteration 10/10[0m
+[0;32mI (14363) app: fast-path: temp=28.7 hum=70.5 pm25=22.6 co2=-1 tvoc=-1 nox=-1 tvoc_raw=-1 nox_raw=-1 pres=1010.8[0m
+[0;32mI (14393) SpiNandStorage: mounted at /nand[0m
+[0;32mI (14403) StorageService: init: NAND mounted at /nand[0m
+[0;32mI (14413) PowerService: poll_bms: perc=61.0% src=FG vbat=3.9V vbus=0.6V critical=0 | charge=NotCharging pwr=OTG full_chg_paused=0 | treg=0 vsys=0 iindpm=0 vindpm=1 safety_tmr=0 wd=0[0m
+[0;32mI (14413) PowerService: poll_bms: ibus=0mA ibat=-116mA vsys=3896mV vpmid=5026mV ts=58.1% tdie=26°C bms_ntc=29°C[0m
+[0;32mI (14423) PowerService: poll_bms: FG soc=61% v=3903mV i=-121mA p=-472mW rem=1150mAh fcc=1908mAh t=27.9C 0x0149[CHG|BAT_DET|DSG] therm_chg_off=0[0m
+[0;32mI (14553) go_display: EPD driver init done[0m
+[0;32mI (16933) SPS30: sleep[0m
+[0;32mI (17103) AGUART: Success initialize UART[0m
+[0;32mI (17153) AGUART: Success initialize UART[0m
+[0;32mI (17173) GpsDriver: module: sw=3.m6l.05b29ce8 hw=HD8120.9935bec0b[0m
+[0;32mI (17233) GpsDriver: cfg_navsat: requested=0x00004037 active=0x00004025[0m
+[0;33mW (17233) GpsDriver: cfg_navsat: active mask differs from requested[0m
+[0;32mI (17233) app: fast-path: requesting GPS sleep for five minutes[0m
+[0;32mI (17233) GpsDriver: CFG-SLEEP TX: F1 D9 06 41 05 00 E0 93 04 00 01 C4 1A (300000 ms)[0m
+[0;32mI (18263) GpsDriver: CFG-SLEEP settle (1000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20263) GpsDriver: CFG-SLEEP after-settle (2000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20263) GpsDriver: CFG-SLEEP: UART silent; verify sleep with current measurement[0m
+[0;32mI (20263) app: [HEAP] boot:fast-path:before-sleep free=162252 min=157624 largest=147456[0m
+[0;32mI (20273) BQ25629Bms: ADC_EN=0 (verified)[0m
+[0;32mI (20273) PowerService: enter_sleep: entering deep sleep for 283850 ms[0m
+[0;32mI (683) app: [HEAP] boot:run-entry free=193304 min=193304 largest=163840[0m
+[0;32mI (693) app: reset_reason=8 wake_cause=1 rtc_state: mode=2 behavior=1 lock=0 gps=1 tracking=0 session=0 warm=0[0m
+[0;32mI (693) app: run_fast_path: entering fast-path boot (sensors_warm=0)[0m
+[0;32mI (693) app: [HEAP] boot:fast-path:enter free=191516 min=191188 largest=163840[0m
+[0;32mI (823) board: I2C bus ready[0m
+[0;32mI (923) board: board variant: V1 (BQ27427 @ 0x55 ACK)[0m
+[0;32mI (1023) board: SPI bus ready[0m
+[0;32mI (1023) BQ27427: BQ27427 found at 0x55 (DEVICE_TYPE=0x0427)[0m
+[0;32mI (1043) board: BQ27427 cell config already correct — preserved[0m
+[0;32mI (1043) board: BQ27427 boot: soc=61% v=3922mV i=0mA t=27.6C[0m
+[0;32mI (1043) BQ25629: BQ25628 found, Part Info: 0x12[0m
+[0;32mI (1043) BQ25629: Configuring battery temperature profile[0m
+[0;32mI (1053) BQ25629: Battery temperature profile configured (charge 0-45°C, OTG -10-60°C)[0m
+[0;32mI (1063) BQ25629: BQ25629 initialized successfully[0m
+[0;32mI (1063) BQ25629: Watchdog timeout set to DISABLED[0m
+[0;32mI (1073) BQ25629: Disabling HIZ mode (required for OTG boost)[0m
+[0;32mI (1073) BQ25629: HIZ mode disabled[0m
+[0;32mI (1083) BQ25629: Enabling temperature sensor (TS) check[0m
+[0;32mI (1083) BQ25629: TS check enabled[0m
+[0;32mI (1093) BQ25629: Setting VOTG voltage to 5100 mV[0m
+[0;32mI (1093) BQ25629: VOTG code: 0x3F, reg_value: 0x0FC0[0m
+[0;32mI (1093) BQ25629: VOTG voltage set to 5100 mV[0m
+[0;32mI (1113) BQ25629: Disabling bypass OTG mode (direct battery→PMID)[0m
+[0;32mI (1113) BQ25629: Bypass OTG mode disabled[0m
+[0;32mI (1123) BQ25629Bms: pre-OTG ADC: vbat=3920mV vsys=3920mV vpmid=5026mV vbus=571mV ibat=-16mA[0m
+[0;32mI (1423) BQ25629Bms: post-OTG verify: EN_OTG=1 vpmid=5033mV vbat=3900mV[0m
+[0;32mI (1423) BQ25629Bms: BQ25629Bms initialized (PMID armed; chip handles buck↔boost autonomously)[0m
+[0;32mI (1473) PowerService: set_pm_power: ON[0m
+[0;32mI (1473) Settings: ** settings | meas_int=300 | gps_mode=1 op_mode=2 | auto_lock=10 | fahrenheit=false feet=false usaqi=false | led: back=0 touch=0 | buzzer=off | wifi_power_save=off disable_cloud=false config_control=2 co2_abc_days=7 tvoc_learning_offset=12 nox_learning_offset=12 static_ip=dhcp onboarding_done=true **[0m
+[0;32mI (1493) Settings: ** corrections | pm_alg=0 pm_scale=1.000000 pm_intercept=0.000000 temp_alg=0 temp_scale=1.000000 temp_intercept=0.000000 hum_alg=0 hum_scale=1.000000 hum_intercept=0.000000 **[0m
+[0;32mI (1503) DPS368: DPS368 found at address 0x77[0m
+[0;32mI (1513) DPS368: DPS368 Product ID: 0x10[0m
+[0;32mI (1563) DPS368: Calibration: c0=218 c1=-289[0m
+[0;32mI (1563) DPS368: Calibration: c00=82485 c10=-56081 c01=-3504[0m
+[0;32mI (1563) DPS368: Calibration: c11=1342 c20=-11604 c21=144 c30=-1782[0m
+[0;32mI (1563) DPS368: DPS368 initialized successfully[0m
+[0;33mW (1573) S12: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1673) S12: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (1773) S12: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (1873) S12: S12 not found at address 0x68[0m
+[0;33mW (1873) board: CO2 sensor: S12 not detected[0m
+[0;32mI (1873) SCD4x: SCD4x found at address 0x62[0m
+[0;33mW (2933) SCD4x: Power research: SCD4x disabled (stop result=0)[0m
+[0;33mW (2933) board: CO2 sensor: SCD4x not detected[0m
+[0;33mW (2933) STCC4: Probe attempt 1/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3033) STCC4: Probe attempt 2/3 failed: ESP_ERR_NOT_FOUND[0m
+[0;33mW (3133) STCC4: Probe attempt 3/3 failed: ESP_ERR_NOT_FOUND[0m
+[1;31mE (3233) STCC4: STCC4 not found at address 0x64[0m
+[0;33mW (3233) board: CO2 sensor: STCC4 not detected[0m
+[1;31mE (3233) board: CO2 sensor init failed (all candidates)[0m
+[0;32mI (3233) SHT40: SHT40 found at address 0x44[0m
+[0;32mI (3263) SHT40: SHT40 serial number: 0x15F5CC3E[0m
+[0;32mI (3263) SHT40: SHT40 reset successful[0m
+[0;32mI (3273) SHT40: SHT40 initialized successfully[0m
+[0;32mI (3273) SGP41: SGP41 found at address 0x59[0m
+[0;32mI (3273) SGP41: SGP41 initialized successfully[0m
+[0;33mW (3273) board: Power research: SGP41 heater off; conditioning and measurement disabled[0m
+[0;32mI (3283) board: PMID ready: vpmid=5037 mV (waited 0 ms)[0m
+[0;32mI (3403) SPS30: SPS30 firmware v2.3[0m
+[0;32mI (3403) SPS30: SPS30 serial: 21F322A8EF2C8BB5[0m
+[0;32mI (3403) SPS30: SPS30 status register: 0x00100000[0m
+[0;32mI (3403) SPS30: SPS30 initialized (skip_reset=0)[0m
+[0;32mI (3403) app: fast-path: warmup 10 iterations (1000 ms interval)[0m
+[0;32mI (3413) app: fast-path: warmup iteration 1/10[0m
+[0;32mI (4423) app: fast-path: warmup iteration 2/10[0m
+[0;32mI (5433) app: fast-path: warmup iteration 3/10[0m
+[0;32mI (6443) app: fast-path: warmup iteration 4/10[0m
+[0;32mI (7453) app: fast-path: warmup iteration 5/10[0m
+[0;32mI (8463) app: fast-path: warmup iteration 6/10[0m
+[0;32mI (9463) app: fast-path: warmup iteration 7/10[0m
+[0;32mI (10453) app: fast-path: warmup iteration 8/10[0m
+[0;32mI (11443) app: fast-path: warmup iteration 9/10[0m
+[0;32mI (12433) app: fast-path: warmup iteration 10/10[0m
+[0;32mI (14373) app: fast-path: temp=28.7 hum=71.1 pm25=22.8 co2=-1 tvoc=-1 nox=-1 tvoc_raw=-1 nox_raw=-1 pres=1010.8[0m
+[0;32mI (14403) SpiNandStorage: mounted at /nand[0m
+[0;32mI (14413) StorageService: init: NAND mounted at /nand[0m
+[0;32mI (14423) PowerService: poll_bms: perc=61.0% src=FG vbat=3.9V vbus=0.6V critical=0 | charge=NotCharging pwr=OTG full_chg_paused=0 | treg=0 vsys=0 iindpm=0 vindpm=1 safety_tmr=0 wd=0[0m
+[0;32mI (14423) PowerService: poll_bms: ibus=0mA ibat=-116mA vsys=3896mV vpmid=5033mV ts=58.1% tdie=26°C bms_ntc=29°C[0m
+[0;32mI (14433) PowerService: poll_bms: FG soc=61% v=3903mV i=-121mA p=-472mW rem=1150mAh fcc=1908mAh t=27.9C 0x0149[CHG|BAT_DET|DSG] therm_chg_off=0[0m
+[0;32mI (14563) go_display: EPD driver init done[0m
+[0;32mI (16943) SPS30: sleep[0m
+[0;32mI (17113) AGUART: Success initialize UART[0m
+[0;32mI (17163) AGUART: Success initialize UART[0m
+[0;32mI (17183) GpsDriver: module: sw=3.m6l.05b29ce8 hw=HD8120.9935bec0b[0m
+[0;32mI (17243) GpsDriver: cfg_navsat: requested=0x00004037 active=0x00004025[0m
+[0;33mW (17243) GpsDriver: cfg_navsat: active mask differs from requested[0m
+[0;32mI (17243) app: fast-path: requesting GPS sleep for five minutes[0m
+[0;32mI (17243) GpsDriver: CFG-SLEEP TX: F1 D9 06 41 05 00 E0 93 04 00 01 C4 1A (300000 ms)[0m
+[0;32mI (18273) GpsDriver: CFG-SLEEP settle (1000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20273) GpsDriver: CFG-SLEEP after-settle (2000 ms): RX bytes=0, NMEA frames=0[0m
+[0;32mI (20273) GpsDriver: CFG-SLEEP: UART silent; verify sleep with current measurement[0m
+[0;32mI (20273) app: [HEAP] boot:fast-path:before-sleep free=162252 min=157624 largest=147456[0m
+[0;32mI (20283) BQ25629Bms: ADC_EN=0 (verified)[0m
+[0;32mI (20283) PowerService: enter_sleep: entering deep sleep for 283830 ms[0m

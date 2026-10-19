@@ -122,6 +122,10 @@ int AirgradientUART::read() {
   return b;
 }
 
+bool AirgradientUART::wait_tx_done(uint32_t timeout_ms) {
+  return isInitialized && uart_wait_tx_done(_port_num, pdMS_TO_TICKS(timeout_ms)) == ESP_OK;
+}
+
 int AirgradientUART::read(uint8_t *buf, int len) {
   if (!isInitialized || buf == nullptr || len <= 0) {
     return 0;

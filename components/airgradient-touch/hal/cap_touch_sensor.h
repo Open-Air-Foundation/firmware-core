@@ -67,6 +67,10 @@ public:
   // Driver-specific implementations (e.g. CAP1203) override this method.
   // Default: no-op, returns true.
   virtual bool clear_interrupt() { return true; }
+
+  // Enables/disables deep sleep. Sensing is disabled while asleep.
+  // Returns false if unsupported or if communication failed.
+  virtual bool set_sleep(bool) { return false; }
 };
 
 #endif // CAP_TOUCH_SENSOR_H

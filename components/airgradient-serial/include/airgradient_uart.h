@@ -65,6 +65,8 @@ public:
    */
   int write(const uint8_t *data, int len) override;
 
+  bool wait_tx_done(uint32_t timeout_ms) override;
+
   /**
    * Read single byte from UART.
    *

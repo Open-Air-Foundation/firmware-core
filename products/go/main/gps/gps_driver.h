@@ -49,9 +49,12 @@ public:
   /// garbage and silently ignored, so the sequence is safe in both cases.
   bool begin(int baud_rate);
 
-  /// Reconnect to a receiver that remained powered and tracking while the MCU
-  /// was in deep sleep. Opens the UART directly at the active baud rate and
-  /// skips receiver configuration so live NMEA output is not drained.
+  /// Restore the UART baud after CFG-SLEEP resets it to 9600. The receiver
+  /// must already be awake. Skips version, ephemeris and constellation polls.
+  bool begin_after_sleep(int baud_rate);
+
+  /// Reopen only the host UART at a known active baud rate. Use only when
+  /// the receiver has not slept since its baud was configured.
   bool begin_hot_resume(int baud_rate);
 
   void end();
@@ -73,6 +76,10 @@ public:
 
   /// Send TAU1113 CFG-GNSS stop. Requires the serial link to be open.
   void gnss_stop();
+
+  /// Temporary power test: request timed deep sleep and drain TX.
+  /// Requires an open UART. No GNSS stop or wake command is sent.
+  void gnss_sleep_for_power_test(uint32_t duration_ms = 300000);
 
   /// Get the latest GPS data snapshot.
   GpsData get_data() const;

@@ -60,8 +60,8 @@ public:
   /// Returns true if the task was created successfully.
   bool start();
 
-  /// Stop the task and unregister ISR handlers.
-  void stop();
+  /// Stop the task and unregister ISR handlers; optionally sleep the touch chip.
+  void stop(bool sleep_touch = false);
 
   /// Suppress all input event posting. Thread-safe: called from the
   /// orchestrator task while the InputService task is running.
