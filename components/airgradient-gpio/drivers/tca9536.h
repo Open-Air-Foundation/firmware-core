@@ -12,7 +12,7 @@
 
 #include "driver/i2c_master.h"
 
-// TI TCA9536 four-port I2C GPIO expander, output control only.
+// TI TCA9536 four-port I2C GPIO expander.
 // The caller owns the initialised bus; this driver owns its device handle.
 // Calls are blocking, not ISR-safe, and must be serialised by the caller.
 // Use one driver instance per device.
@@ -43,6 +43,12 @@ public:
   // A failed multi-register operation may have partially taken effect;
   // retrying reads the hardware state again rather than using cached values.
   bool configure_output(uint8_t pin, bool initial_level);
+
+  // Release a pin to input mode, preserving the global pull-up setting.
+  bool configure_input(uint8_t pin);
+
+  // One shared setting affects all four pins. Disable for floating inputs.
+  bool set_pullups_enabled(bool enabled);
 
   // Set an existing GPIO output high or low. Rejects inputs and P3 in INT mode.
   // Both output methods return false before init(), for invalid pins, or on I2C errors.

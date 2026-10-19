@@ -179,6 +179,8 @@ void GoApp::run() {
     run_factory_learning_path(load_rtc_app_state()); // never returns
   }
 
+  _board.run_gps_sleep_test(); // Temporary bench loop; does not return on hardware.
+
   WakeCause cause = PowerService::get_wake_cause();
   RtcAppState state = load_rtc_app_state();
   BmsStatus charging_status{};

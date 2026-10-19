@@ -39,8 +39,11 @@
 #include "accel/lis2dh12.h"
 #include "gps/gps_driver.h"
 #include "native_gpio.h"
+#include "tca9536.h"
 #include "nvs_config_store.h"
 #include "rtos.h"
+#include "scd4x_i2c.h"
+#include "sensirion_i2c_hal_esp_idf.h"
 #include "services/payload_cache.h"
 #include "services/sensor_manager.h"
 #include "spi_nand_storage.h"
@@ -660,6 +663,219 @@ std::string GoHardwareBoard::serial_number() { return build_serial_number(); }
 const char *GoHardwareBoard::firmware_version() { return esp_app_get_description()->version; }
 
 const gpio::Hal &GoHardwareBoard::gpio_hal() { return gpio::native::hal; }
+
+void GoHardwareBoard::run_gps_sleep_test() {
+  static constexpr const char *TEST_TAG = "GpsSleepTest";
+  constexpr uint8_t PRTRG_PORT = 0;
+  constexpr uint32_t AWAKE_MS = 60000;
+  constexpr uint32_t WAKE_ATTEMPT_AFTER_MS = 60000;
+  constexpr uint32_t RECEIVER_SLEEP_MS = 120000;
+  constexpr uint32_t SLEEP_SETTLE_MS = 1000;
+  constexpr uint32_t PRTRG_I2C_SPEED_HZ = 100000;
+  constexpr uint32_t WAKE_LOW_HOLD_MS = 30000;
+  constexpr uint32_t WAKE_SETTLE_MS = 100;
+  constexpr int DEFAULT_RECEIVER_BAUD = 9600;
+  constexpr uint32_t BAUD_PROBE_MS = 5000;
+  constexpr uint32_t POLL_MS = 20;
+  constexpr uint32_t WATCHDOG_MS = 1000;
+  constexpr uint8_t CFG_GROUP = 0x06;
+  constexpr uint8_t CFG_SLEEP = 0x41;
+  constexpr uint8_t DEEP_SLEEP_ACTION = 0x01;
+  static_assert(WAKE_ATTEMPT_AFTER_MS + WAKE_LOW_HOLD_MS + WAKE_SETTLE_MS + 2 * BAUD_PROBE_MS <
+                    RECEIVER_SLEEP_MS,
+                "Observe PRTRG wake before the receiver sleep timer can expire");
+
+  release_gpio_holds();
+  ulp_stop();
+  const auto &gpio = gpio::native::hal;
+  const auto halt = [&]() {
+    AG_LOGE(TEST_TAG, "TEST HALTED: inspect the failure above; normal app will not start");
+    for (;;) {
+      ext_watchdog_reset(gpio, PIN_EXT_WDT);
+      RTOS::delay_ms(WATCHDOG_MS);
+    }
+  };
+  if (!ext_watchdog_init(gpio, PIN_EXT_WDT)) {
+    AG_LOGE(TEST_TAG, "watchdog GPIO initialization failed");
+    halt();
+  }
+  ext_watchdog_reset(gpio, PIN_EXT_WDT);
+  init_buses();
+  // Keep other loads stable. No sensor, display, radio or GPS service is started.
+  if (!gpio.set_level(PIN_PM_POWER, !pm_power_on_level(_variant))) {
+    AG_LOGE(TEST_TAG, "failed to turn PM power off");
+    halt();
+  }
+
+  // Bench-only: periodic CO2 measurement may survive an ESP reset. Stop it
+  // without calling SCD4x::init(), which would start measurement again.
+  sensirion_i2c_hal_set_bus_handle(_i2c_bus);
+  scd4x_init(I2C_ADDR_SCD4X);
+  const int16_t scd4x_stop_error = scd4x_stop_periodic_measurement();
+  // The vendor stop function includes the required 500 ms settling delay.
+  if (scd4x_stop_error != 0) {
+    AG_LOGE(TEST_TAG, "failed to stop SCD4x periodic measurement (err=%d)", scd4x_stop_error);
+    halt();
+  }
+  AG_LOGI(TEST_TAG, "SCD4x periodic measurement stopped for GPS current test");
+
+  TCA9536::Config expander_config;
+  expander_config.scl_speed_hz = PRTRG_I2C_SPEED_HZ;
+  TCA9536 expander(_i2c_bus, expander_config);
+  if (!expander.init() || !expander.set_pullups_enabled(true) ||
+      !expander.configure_input(PRTRG_PORT)) {
+    AG_LOGE(TEST_TAG, "expander initialization / PRTRG release failed");
+    halt();
+  }
+  // Bench trial: enable the shared pull-ups; P1-P3 are unconnected on Go.
+  // Input mode releases P0's output driver while its pull-up biases PRTRG high.
+  AG_LOGI(TEST_TAG, "PRTRG configured as INPUT with expander pull-up; measure HIGH at GPS pin");
+  const auto wake = [&](uint32_t low_hold_ms) {
+    if (!expander.configure_output(PRTRG_PORT, false)) {
+      expander.configure_input(PRTRG_PORT); // Release after a partial I2C failure.
+      return false;
+    }
+    const uint64_t low_started_ms = RTOS::get_time_ms();
+    AG_LOGI(TEST_TAG, "PRTRG configured OUTPUT LOW, holding %lu ms; measure LOW at GPS pin",
+            static_cast<unsigned long>(low_hold_ms));
+    // Long bench hold for voltage measurement; service the external watchdog.
+    // UART is observed after release, so this does not timestamp wake during LOW.
+    while (RTOS::get_time_ms() - low_started_ms < low_hold_ms) {
+      ext_watchdog_reset(gpio, PIN_EXT_WDT);
+      RTOS::delay_ms(WATCHDOG_MS);
+    }
+    if (!expander.configure_input(PRTRG_PORT)) {
+      expander.configure_input(PRTRG_PORT);
+      return false;
+    }
+    AG_LOGI(TEST_TAG, "PRTRG released to INPUT with expander pull-up; measure HIGH at GPS pin");
+    RTOS::delay_ms(WAKE_SETTLE_MS);
+    return true;
+  };
+  AirgradientUART serial(UART_PORT_GPS, PIN_GPS_RX, PIN_GPS_TX);
+  GpsDriver gps(serial);
+  if (!gps.begin(GPS_BAUD)) {
+    AG_LOGE(TEST_TAG, "GPS UART initialization failed");
+    halt();
+  }
+  gps.gnss_start(); // Initial navigation setup only; never used as a wake trigger.
+
+  // CFG-SLEEP: little-endian U4 period followed by U1 action = deep sleep.
+  uint8_t sleep_command[] = {
+      0xF1,
+      0xD9,
+      CFG_GROUP,
+      CFG_SLEEP,
+      5,
+      0,
+      static_cast<uint8_t>(RECEIVER_SLEEP_MS),
+      static_cast<uint8_t>(RECEIVER_SLEEP_MS >> 8),
+      static_cast<uint8_t>(RECEIVER_SLEEP_MS >> 16),
+      static_cast<uint8_t>(RECEIVER_SLEEP_MS >> 24),
+      DEEP_SLEEP_ACTION,
+      0,
+      0,
+  };
+  constexpr size_t CHECKSUM_OFFSET = sizeof(sleep_command) - 2;
+  for (size_t i = 2; i < CHECKSUM_OFFSET; ++i) {
+    sleep_command[CHECKSUM_OFFSET] += sleep_command[i];
+    sleep_command[CHECKSUM_OFFSET + 1] += sleep_command[CHECKSUM_OFFSET];
+  }
+
+  uint64_t last_watchdog_ms = RTOS::get_time_ms();
+  uint64_t sleep_sent_ms = 0;
+  int listening_baud = GPS_BAUD;
+  const auto listen_at = [&](int baud) {
+    gps.end();
+    // Reopen only the host UART. No baud-change or start command goes to GPS.
+    if (!gps.begin_hot_resume(baud)) {
+      AG_LOGE(TEST_TAG, "failed to reopen UART at %d baud", baud);
+      halt();
+    }
+    listening_baud = baud;
+    AG_LOGI(TEST_TAG, "listening at %d baud (no GPS command sent)", baud);
+  };
+  const auto observe = [&](uint32_t duration_ms) {
+    uint32_t nmea_batches = 0;
+    const uint64_t start_ms = RTOS::get_time_ms();
+    while (RTOS::get_time_ms() - start_ms < duration_ms) {
+      if (gps.read()) {
+        if (nmea_batches == 0 && sleep_sent_ms != 0) {
+          AG_LOGI(TEST_TAG, "first NMEA at %d baud, %llu ms after CFG-SLEEP", listening_baud,
+                  static_cast<unsigned long long>(RTOS::get_time_ms() - sleep_sent_ms));
+        }
+        ++nmea_batches;
+      }
+      if (RTOS::get_time_ms() - last_watchdog_ms >= WATCHDOG_MS) {
+        ext_watchdog_reset(gpio, PIN_EXT_WDT);
+        last_watchdog_ms = RTOS::get_time_ms();
+      }
+      RTOS::delay_ms(POLL_MS);
+    }
+    return nmea_batches;
+  };
+
+  const auto observe_until = [&](uint64_t deadline_ms, bool probe_baud) {
+    uint32_t nmea_batches = 0;
+    for (;;) {
+      const uint64_t now_ms = RTOS::get_time_ms();
+      if (now_ms >= deadline_ms) {
+        break;
+      }
+      const uint64_t remaining_ms = deadline_ms - now_ms;
+      const uint32_t window_ms =
+          remaining_ms < BAUD_PROBE_MS ? static_cast<uint32_t>(remaining_ms) : BAUD_PROBE_MS;
+      nmea_batches += observe(window_ms);
+      if (probe_baud && nmea_batches == 0 && RTOS::get_time_ms() < deadline_ms) {
+        listen_at(listening_baud == GPS_BAUD ? DEFAULT_RECEIVER_BAUD : GPS_BAUD);
+      }
+    }
+    return nmea_batches;
+  };
+
+  AG_LOGI(TEST_TAG, "ESP stays awake; initial UART baud=%d; silent windows also try %d", GPS_BAUD,
+          DEFAULT_RECEIVER_BAUD);
+  for (uint32_t cycle = 1;; ++cycle) {
+    AG_LOGI(TEST_TAG, "cycle %lu: AWAKE window, %lu ms", static_cast<unsigned long>(cycle),
+            static_cast<unsigned long>(AWAKE_MS));
+    const uint32_t awake_nmea = observe_until(RTOS::get_time_ms() + AWAKE_MS, true);
+    AG_LOGI(TEST_TAG, "AWAKE: %lu NMEA batches", static_cast<unsigned long>(awake_nmea));
+    if (awake_nmea == 0) {
+      AG_LOGE(TEST_TAG, "no NMEA during one-minute awake window at either baud rate");
+      halt();
+    }
+
+    AG_LOGI(TEST_TAG, "CFG-SLEEP action=1, timer=%lu ms",
+            static_cast<unsigned long>(RECEIVER_SLEEP_MS));
+    constexpr int COMMAND_SIZE = static_cast<int>(sizeof(sleep_command));
+    sleep_sent_ms = RTOS::get_time_ms();
+    if (serial.write(sleep_command, COMMAND_SIZE) != COMMAND_SIZE) {
+      AG_LOGE(TEST_TAG, "incomplete CFG-SLEEP write");
+      halt();
+    }
+    observe(SLEEP_SETTLE_MS); // Drain ACK / trailing NMEA before the measurement window.
+    AG_LOGI(TEST_TAG, "cycle %lu: SLEEP; PRTRG attempt at %lu ms after CFG-SLEEP",
+            static_cast<unsigned long>(cycle), static_cast<unsigned long>(WAKE_ATTEMPT_AFTER_MS));
+    const uint32_t sleep_nmea = observe_until(sleep_sent_ms + WAKE_ATTEMPT_AFTER_MS, false);
+    AG_LOGI(TEST_TAG, "SLEEP window: %lu NMEA batches (silence alone does not prove sleep)",
+            static_cast<unsigned long>(sleep_nmea));
+    if (sleep_nmea != 0) {
+      AG_LOGE(TEST_TAG, "NMEA continued during sleep window; check command acceptance/current");
+      halt();
+    }
+    if (!wake(WAKE_LOW_HOLD_MS)) {
+      AG_LOGE(TEST_TAG, "PRTRG wake pulse failed");
+      halt();
+    }
+    // Always finish the original two-minute sleep period, even if PRTRG wakes
+    // the receiver early. Then begin the next one-minute awake window.
+    AG_LOGI(TEST_TAG, "observing until %lu ms CFG-SLEEP timer expires",
+            static_cast<unsigned long>(RECEIVER_SLEEP_MS));
+    const uint32_t wake_nmea = observe_until(sleep_sent_ms + RECEIVER_SLEEP_MS, true);
+    AG_LOGI(TEST_TAG, "sleep timer elapsed; post-release NMEA batches=%lu; repeating",
+            static_cast<unsigned long>(wake_nmea));
+  }
+}
 
 // ===========================================================================
 // Hardware operations

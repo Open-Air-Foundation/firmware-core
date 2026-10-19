@@ -51,6 +51,7 @@ idf_component_register(
               libnmea-esp32
               airgradient-payload-cache
               airgradient-sensors
+              embedded-i2c-scd4x
               airgradient-touch
               json
                esp_driver_gpio

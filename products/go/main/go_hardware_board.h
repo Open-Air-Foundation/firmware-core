@@ -68,6 +68,7 @@ public:
   void remove_button_isr(int pin) override;
   bool start_pm_fan() override;
   void stop_pm_fan() override;
+  void run_gps_sleep_test() override;
 
 private:
   // Board variant (detected in init_buses, fail-safe default: Prototype)

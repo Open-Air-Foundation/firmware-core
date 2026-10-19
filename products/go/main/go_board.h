@@ -206,6 +206,9 @@ struct GoBoard {
   /// Stop SPS30 measurement. Cutting EN_PM also stops the fan.
   virtual void stop_pm_fan() {}
 
+  // Temporary bench test. Hardware implementation takes over boot; test boards skip it.
+  virtual void run_gps_sleep_test() {}
+
   // -----------------------------------------------------------------
   // Button ISR management
   //

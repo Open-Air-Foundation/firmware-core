@@ -18,6 +18,7 @@ constexpr uint8_t REG_CONFIGURATION = 0x03;
 constexpr uint8_t REG_SPECIAL_FUNCTION = 0x50;
 constexpr uint8_t PIN_INTERRUPT = 3;
 constexpr uint8_t P3_AS_INTERRUPT = 0x80;
+constexpr uint8_t PULLUPS_DISABLED = 0x40;
 constexpr uint32_t MAX_SCL_SPEED_HZ = 1000000;
 } // namespace
 
@@ -73,6 +74,20 @@ bool TCA9536::configure_output(uint8_t pin, bool initial_level) {
 
   // Select P3's GPIO function only after its latch and direction are ready.
   return pin != PIN_INTERRUPT || _update_reg(REG_SPECIAL_FUNCTION, P3_AS_INTERRUPT, 0);
+}
+
+bool TCA9536::configure_input(uint8_t pin) {
+  if (!_initialised || pin >= PIN_COUNT) {
+    return false;
+  }
+  const uint8_t mask = static_cast<uint8_t>(1U << pin);
+  return _update_reg(REG_CONFIGURATION, mask, mask) &&
+         (pin != PIN_INTERRUPT || _update_reg(REG_SPECIAL_FUNCTION, P3_AS_INTERRUPT, 0));
+}
+
+bool TCA9536::set_pullups_enabled(bool enabled) {
+  return _initialised &&
+         _update_reg(REG_SPECIAL_FUNCTION, PULLUPS_DISABLED, enabled ? 0 : PULLUPS_DISABLED);
 }
 
 bool TCA9536::write(uint8_t pin, bool level) {
