@@ -56,6 +56,6 @@ The next timing opportunity is overlapping PM warmup with the approximately **1.
 
 ## Evidence
 
-Wake captures: [baseline](../../../wakeuptime.png) and [optimized](../../../wakeuptime3.png). Firmware log: [optimized](../../../output.log.9).
+Wake captures: [baseline](wakeuptime.png) and [optimized](wakeuptime3.png). Firmware log: [optimized](output.log.9).
 
 Calculations use power = voltage × current, and energy = power × duration / 3600. Percentages use unrounded capture values.
