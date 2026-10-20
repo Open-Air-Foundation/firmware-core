@@ -1044,6 +1044,45 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
   _raw_measures.temp_hum_a = data.temp_hum_a;
   _raw_measures.tvoc_nox = data.tvoc_nox;
   _raw_measures.pressure = data.pressure;
+  // Compensate board-heat leakage into the SHT before user corrections and
+  // payload caching, so every consumer fed from this path sees the corrected
+  // value. The deep-sleep fast path (go_app.cpp) does not run this hook: its
+  // route points and the measures it hands over at promotion are raw.
+  // Falls back to the uncompensated reading when the DPS temperature is
+  // invalid, when the boot-time NTC check rejected the DPS, or while the
+  // board is not yet warmer than the tab (cold boot).
+  if (_raw_measures.temp_hum_a.is_temp_valid() && _raw_measures.pressure.is_temp_valid()) {
+    const float raw_temp = _raw_measures.temp_hum_a.temperature;
+    const float raw_hum = _raw_measures.temp_hum_a.humidity;
+    const float board_temp = _raw_measures.pressure.temperature;
+    // Pick the ALPHA band from a provisional estimate made with the NORMAL
+    // coefficient: the estimate is only used to classify cold/normal/hot, so
+    // a band-sized error in it cannot flip more than the hysteresis absorbs.
+    const float provisional =
+        thermal_comp::correct_temperature(raw_temp, board_temp, thermal_comp::ALPHA_NORMAL);
+    const float alpha = thermal_comp::alpha_for_band(_alpha_band.update(provisional));
+    const BmsTelemetry &bms = _latest_power.telemetry;
+    if (_dps_check.state() == thermal_comp::DpsCheck::State::Pending &&
+        bms.is_battery_temperature_precise_valid()) {
+      const float ntc_temp = bms.battery_temperature_precise_c;
+      if (_dps_check.update(ntc_temp, board_temp) == thermal_comp::DpsCheck::State::Ok) {
+        AG_LOGI(TAG, "DPS check: ntc=%.2f dps=%.2f ok", static_cast<double>(ntc_temp),
+                static_cast<double>(board_temp));
+      } else {
+        AG_LOGW(TAG,
+                "DPS check: ntc=%.2f dps=%.2f rejected - SHT compensation disabled until reboot",
+                static_cast<double>(ntc_temp), static_cast<double>(board_temp));
+      }
+    }
+    if (thermal_comp::board_heats_tab(raw_temp, board_temp) && !_dps_check.rejected()) {
+      const float corrected_temp = thermal_comp::correct_temperature(raw_temp, board_temp, alpha);
+      _raw_measures.temp_hum_a.temperature = corrected_temp;
+      if (_raw_measures.temp_hum_a.is_hum_valid()) {
+        _raw_measures.temp_hum_a.humidity =
+            thermal_comp::correct_humidity(raw_hum, raw_temp, corrected_temp);
+      }
+    }
+  }
   _raw_measures.power.battery_voltage = _latest_power.battery_voltage;
   _raw_measures.power.charging_voltage = _latest_power.charging_voltage;
   _raw_measures.power.battery_percentage = _latest_power.battery_percentage;
@@ -1127,7 +1166,8 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
   }
 
   // Update BLE measures characteristic (always for READ; notifies when connected)
-  // BLE transports raw measurements; clients decide whether and how to apply
+  // BLE transports measurements before user corrections (board-heat
+  // compensation already applied); clients decide whether and how to apply
   // the correction settings from Config.
   _svc.ble_service.notify_measures(_raw_measures, _latest_gps, time(nullptr));
 
