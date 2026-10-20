@@ -106,7 +106,8 @@ struct BmsTelemetry {
   float ts_percent = BmsInvalid::PERCENT;                    ///< Thermistor ADC reading (%)
   int16_t die_temperature_c = BmsInvalid::TEMPERATURE_C;     ///< IC die temperature (°C)
   int16_t battery_temperature_c = BmsInvalid::TEMPERATURE_C; ///< Battery NTC temperature (°C)
-  float battery_temperature_precise_c = BmsInvalid::NTC_TEMP_C; ///< Battery NTC temperature (°C, unrounded)
+  float battery_temperature_precise_c =
+      BmsInvalid::NTC_TEMP_C; ///< Battery NTC temperature (°C, unrounded)
 
   // --- Validation helpers ---
   bool is_battery_voltage_valid() const { return battery_voltage >= BmsRange::MIN_VALID_VOLT; }
