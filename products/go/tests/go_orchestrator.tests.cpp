@@ -4926,19 +4926,21 @@ TEST_CASE("BLE config set: correction updates derived view without notifying raw
   CHECK(test_spy::ble_notify_config_called);
 }
 
-TEST_CASE("on_sensor_data: SHT temperature is compensated from the DPS die temperature",
+TEST_CASE("on_sensor_data: SHT temperature is compensated from the battery NTC",
           "[Orchestrator][thermal]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
+  PowerSnapshot power{};
+  power.telemetry.battery_temperature_precise_c = 35.0f;
+  A::set_latest_power(orch, power);
+
   MeasuresAGo raw{};
   raw.temp_hum_a.temperature = 30.0f;
   raw.temp_hum_a.humidity = 50.0f;
-  raw.pressure.temperature = 35.0f;
   A::on_sensor_data(orch, raw);
 
-  const float expected_t =
-      thermal_comp::correct_temperature(30.0f, 35.0f, thermal_comp::ALPHA_NORMAL);
+  const float expected_t = thermal_comp::correct_temperature(30.0f, 35.0f);
   const float expected_rh = thermal_comp::correct_humidity(50.0f, 30.0f, expected_t);
   CHECK(expected_t < 26.0f);
   CHECK_THAT(A::corrected_measures(orch).temp_hum_a.temperature,
@@ -4949,22 +4951,25 @@ TEST_CASE("on_sensor_data: SHT temperature is compensated from the DPS die tempe
              Catch::Matchers::WithinAbs(expected_t, 0.01f));
 }
 
-TEST_CASE("on_sensor_data: a hot ambient estimate selects the HOT alpha band",
+TEST_CASE("on_sensor_data: the DPS temperature does not feed the compensation",
           "[Orchestrator][thermal]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
+  PowerSnapshot power{};
+  power.telemetry.battery_temperature_precise_c = 35.0f;
+  A::set_latest_power(orch, power);
+
   MeasuresAGo raw{};
-  raw.temp_hum_a.temperature = 45.0f;
-  raw.pressure.temperature = 50.0f;
+  raw.temp_hum_a.temperature = 30.0f;
+  raw.pressure.temperature = 27.6f; // unit 1164: DPS ~7 degC low
   A::on_sensor_data(orch, raw);
 
   CHECK_THAT(A::corrected_measures(orch).temp_hum_a.temperature,
-             Catch::Matchers::WithinAbs(
-                 thermal_comp::correct_temperature(45.0f, 50.0f, thermal_comp::ALPHA_HOT), 0.01f));
+             Catch::Matchers::WithinAbs(thermal_comp::correct_temperature(30.0f, 35.0f), 0.01f));
 }
 
-TEST_CASE("on_sensor_data: SHT reading passes through when the DPS temperature is invalid",
+TEST_CASE("on_sensor_data: SHT reading passes through when the battery NTC is invalid",
           "[Orchestrator][thermal]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -4972,6 +4977,7 @@ TEST_CASE("on_sensor_data: SHT reading passes through when the DPS temperature i
   MeasuresAGo raw{};
   raw.temp_hum_a.temperature = 30.0f;
   raw.temp_hum_a.humidity = 50.0f;
+  raw.pressure.temperature = 35.0f;
   A::on_sensor_data(orch, raw);
 
   CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 30.0f);
@@ -4983,56 +4989,17 @@ TEST_CASE("on_sensor_data: SHT reading passes through while the board is cooler 
   TestFixture f;
   auto orch = f.make_orchestrator();
 
+  PowerSnapshot power{};
+  power.telemetry.battery_temperature_precise_c = 28.0f;
+  A::set_latest_power(orch, power);
+
   MeasuresAGo raw{};
   raw.temp_hum_a.temperature = 30.0f;
   raw.temp_hum_a.humidity = 50.0f;
-  raw.pressure.temperature = 28.0f;
   A::on_sensor_data(orch, raw);
 
   CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 30.0f);
   CHECK(A::corrected_measures(orch).temp_hum_a.humidity == 50.0f);
-}
-
-TEST_CASE("on_sensor_data: a DPS rejected against the NTC disables compensation until reboot",
-          "[Orchestrator][thermal]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-
-  PowerSnapshot power{};
-  power.telemetry.battery_temperature_precise_c = 35.0f + thermal_comp::DPS_NTC_MAX_DIFF_C + 1.0f;
-  A::set_latest_power(orch, power);
-
-  MeasuresAGo raw{};
-  raw.temp_hum_a.temperature = 30.0f;
-  raw.pressure.temperature = 35.0f;
-  A::on_sensor_data(orch, raw);
-  CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 30.0f);
-
-  // A later agreeing pair does not revive compensation: the verdict latches.
-  power.telemetry.battery_temperature_precise_c = 35.0f;
-  A::set_latest_power(orch, power);
-  A::on_sensor_data(orch, raw);
-  CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 30.0f);
-}
-
-TEST_CASE("on_sensor_data: a DPS that agrees with the NTC keeps compensation on",
-          "[Orchestrator][thermal]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-
-  PowerSnapshot power{};
-  power.telemetry.battery_temperature_precise_c = 35.5f;
-  A::set_latest_power(orch, power);
-
-  MeasuresAGo raw{};
-  raw.temp_hum_a.temperature = 30.0f;
-  raw.pressure.temperature = 35.0f;
-  A::on_sensor_data(orch, raw);
-
-  CHECK_THAT(
-      A::corrected_measures(orch).temp_hum_a.temperature,
-      Catch::Matchers::WithinAbs(
-          thermal_comp::correct_temperature(30.0f, 35.0f, thermal_comp::ALPHA_NORMAL), 0.01f));
 }
 
 TEST_CASE("BLE config set: rejected when unknown config key present",

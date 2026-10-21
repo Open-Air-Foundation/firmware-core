@@ -30,7 +30,6 @@
 #include "go_sensor_producer.h"
 #include "go_settings.h"
 #include "go_storage.h"
-#include "go_thermal_comp.h"
 #include "go_types.h"
 #include "go_ui.h"
 #include "go_ulp.h"
@@ -119,8 +118,6 @@ private:
   MeasuresAGo _corrected_measures{}; ///< Derived user-facing measurement view
   GpsData _latest_gps{};
   PowerSnapshot _latest_power{};
-  thermal_comp::BandSelector _alpha_band{}; ///< Sticky cold/normal/hot ALPHA band
-  thermal_comp::DpsCheck _dps_check{};      ///< Boot-time NTC-vs-DPS plausibility verdict
 
   // --- Timer tracking (millisecond timestamps) ---
   uint32_t _last_measurement_ms = 0;

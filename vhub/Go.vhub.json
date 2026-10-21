@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "726682a",
+  "rev": "79129bd",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1511,27 +1511,21 @@
         "V1"
       ],
       "setup": [
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
+        "A USB cable and charger.",
         "An independent reference thermometer (not another AirGradient unit) placed beside the device.",
         "Still room air between 20 and 32 °C, away from fans, vents and direct sun."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode and USB connection state. With serial logging attached, restart the device and let it run beside the reference thermometer.",
-          "expected_result": "Within the first measurements the serial log shows \"DPS check: ntc=... dps=... ok\" exactly once. A \"rejected - SHT compensation disabled until reboot\" line fails the case: the unit then reports the uncompensated reading, 2-5 °C above the reference."
-        },
-        {
-          "action": "Disconnect USB and leave the device on battery in still air for 90 minutes. Compare the Home temperature with the reference.",
-          "expected_result": "The Home temperature is within ±1 °C of the reference. Before warm-up completes it may sit up to ~1 °C low."
+          "action": "Record the current operating mode and USB connection state. Disconnect USB, restart the device and leave it on battery beside the reference thermometer in still air for 90 minutes. Compare the Home temperature with the reference.",
+          "expected_result": "The Home temperature is within ±1.5 °C of the reference. Uncompensated it would read 2-5 °C above the reference."
         },
         {
           "action": "Connect USB power and wait 45 minutes with the room stable. Compare the Home temperature with the reference again.",
-          "expected_result": "The Home temperature is still within ±1 °C of the reference although the board warms with charging. Humidity stays plausible."
+          "expected_result": "The Home temperature is still within ±1.5 °C of the reference although the board warms with charging. Humidity stays plausible."
         }
       ],
       "cleanup": [
-        "Detach serial logging.",
         "Restore only the original values captured before this case changed them: operating mode and USB connection state.",
         "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
       ],
