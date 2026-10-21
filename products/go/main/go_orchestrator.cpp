@@ -1052,17 +1052,26 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
   // Falls back to the uncompensated reading when the battery NTC is invalid
   // or while the board is not yet warmer than the tab (cold boot).
   const BmsTelemetry &bms = _latest_power.telemetry;
-  if (_raw_measures.temp_hum_a.is_temp_valid() && bms.is_battery_temperature_precise_valid()) {
+  if (_raw_measures.temp_hum_a.is_temp_valid()) {
     const float raw_temp = _raw_measures.temp_hum_a.temperature;
     const float raw_hum = _raw_measures.temp_hum_a.humidity;
     const float board_temp = bms.battery_temperature_precise_c;
-    if (thermal_comp::board_heats_tab(raw_temp, board_temp)) {
+    if (!bms.is_battery_temperature_precise_valid()) {
+      AG_LOGI(TAG, "SHT comp: raw=%.2f ntc=invalid -> raw", static_cast<double>(raw_temp));
+    } else if (!thermal_comp::board_heats_tab(raw_temp, board_temp)) {
+      AG_LOGI(TAG, "SHT comp: raw=%.2f ntc=%.2f -> raw (board cooler)",
+              static_cast<double>(raw_temp), static_cast<double>(board_temp));
+    } else {
       const float corrected_temp = thermal_comp::correct_temperature(raw_temp, board_temp);
       _raw_measures.temp_hum_a.temperature = corrected_temp;
       if (_raw_measures.temp_hum_a.is_hum_valid()) {
         _raw_measures.temp_hum_a.humidity =
             thermal_comp::correct_humidity(raw_hum, raw_temp, corrected_temp);
       }
+      AG_LOGI(TAG, "SHT comp: raw=%.2f ntc=%.2f -> %.2f (rh %.2f -> %.2f)",
+              static_cast<double>(raw_temp), static_cast<double>(board_temp),
+              static_cast<double>(corrected_temp), static_cast<double>(raw_hum),
+              static_cast<double>(_raw_measures.temp_hum_a.humidity));
     }
   }
   _raw_measures.power.battery_voltage = _latest_power.battery_voltage;
