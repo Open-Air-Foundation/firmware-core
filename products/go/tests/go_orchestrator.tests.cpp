@@ -474,6 +474,7 @@ public:
   bool set_security(AgBleIoCapability, uint8_t) override { return true; }
   bool delete_all_bonds() override { return true; }
   AgBleGattService *add_service(const char *) override { return nullptr; }
+  bool set_advertising_interval(uint32_t) override { return true; }
   bool set_advertising_name(const char *) override { return true; }
   bool add_advertised_service_uuid(const char *) override { return true; }
   bool set_manufacturer_data(const uint8_t *, size_t) override { return true; }
@@ -512,6 +513,12 @@ static const gpio::Hal test_gpio_hal = {
 
 class SerialCommandServiceTestAccess {
 public:
+  static SerialCommandResult receive_result(SerialCommandService &service) {
+    SerialCommandResult result{};
+    REQUIRE(RTOS::queue_receive(service._result_queue, &result, 0));
+    return result;
+  }
+
   static bool is_receiving(const SerialCommandService &service) {
     return service._receiving.load();
   }
@@ -3834,6 +3841,120 @@ TEST_CASE("factory_reset clears onboarding_done", "[Orchestrator][onboarding][fa
   CHECK_FALSE(A::settings(orch).onboarding_done);
 }
 
+TEST_CASE("serial PM SLR selects and persists factory calibration",
+          "[Orchestrator][serial_command][correction]") {
+  TestFixture f;
+  SECTION("from none") {}
+  SECTION("from EPA") { f.settings.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::Epa2021; }
+  SECTION("from custom with identical coefficients") {
+    f.settings.corrections.pm25 = {Pm25CorrectionAlgorithm::CustomViaPm25Raw, 2.0f, 1.0f, true};
+  }
+  SECTION("from factory calibration") {
+    f.settings.corrections.pm25 = {Pm25CorrectionAlgorithm::FactoryCalibration, 1.0f, 0.0f, true};
+  }
+  auto orch = f.make_orchestrator();
+  REQUIRE(f.serial_command.start());
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(
+      f.mock_config,
+      set_int(trompeloeil::_, static_cast<int>(Pm25CorrectionAlgorithm::FactoryCalibration)))
+      .WITH(std::strcmp(_1, "mc_pa") == 0)
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  MeasuresAGo raw{};
+  raw.pm_a.pm_25 = 10.0f;
+  raw.temp_hum_a.humidity = 50.0f;
+  A::on_sensor_data(orch, raw);
+
+  Event event{};
+  event.type = EventType::SerialCommandRequest;
+  event.serial_command_request.kind = SerialCommandKind::SetPmSlr;
+  event.serial_command_request.pm25_correction = {Pm25CorrectionAlgorithm::FactoryCalibration, 2.0f,
+                                                  1.0f, false};
+  A::dispatch(orch, event);
+
+  const auto result = SerialCommandServiceTestAccess::receive_result(f.serial_command);
+  REQUIRE(result.kind == SerialCommandResultKind::SlrPm);
+  CHECK(result.pm25_correction.algorithm == Pm25CorrectionAlgorithm::FactoryCalibration);
+  CHECK(result.pm25_correction.scaling_factor == 2.0f);
+  CHECK(result.pm25_correction.intercept == 1.0f);
+  CHECK_FALSE(result.pm25_correction.use_epa2021);
+  CHECK(A::settings(orch).corrections.pm25.algorithm ==
+        Pm25CorrectionAlgorithm::FactoryCalibration);
+  CHECK(A::settings(orch).corrections.pm25.scaling_factor == 2.0f);
+  CHECK(A::settings(orch).corrections.pm25.intercept == 1.0f);
+  CHECK_FALSE(A::settings(orch).corrections.pm25.use_epa2021);
+  CHECK(A::raw_measures(orch).pm_a.pm_25 == 10.0f);
+  CHECK(A::corrected_measures(orch).pm_a.pm_25 == 21.0f);
+}
+
+TEST_CASE("serial PM SLR reads custom and factory coefficients",
+          "[Orchestrator][serial_command][correction]") {
+  for (auto algorithm :
+       {Pm25CorrectionAlgorithm::None, Pm25CorrectionAlgorithm::Epa2021,
+        Pm25CorrectionAlgorithm::CustomViaPm25Raw, Pm25CorrectionAlgorithm::FactoryCalibration}) {
+    CAPTURE(static_cast<int>(algorithm));
+    TestFixture f;
+    f.settings.corrections.pm25 = {algorithm, 1.2f, -0.4f, false};
+    auto orch = f.make_orchestrator();
+    REQUIRE(f.serial_command.start());
+    FORBID_CALL(f.mock_config, commit());
+
+    Event event{};
+    event.type = EventType::SerialCommandRequest;
+    event.serial_command_request.kind = SerialCommandKind::GetPmSlr;
+    A::dispatch(orch, event);
+
+    const auto result = SerialCommandServiceTestAccess::receive_result(f.serial_command);
+    if (algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw ||
+        algorithm == Pm25CorrectionAlgorithm::FactoryCalibration) {
+      REQUIRE(result.kind == SerialCommandResultKind::SlrPm);
+      CHECK(result.pm25_correction.algorithm == algorithm);
+      CHECK(result.pm25_correction.scaling_factor == 1.2f);
+      CHECK(result.pm25_correction.intercept == -0.4f);
+    } else {
+      CHECK(result.kind == SerialCommandResultKind::SlrNotSet);
+    }
+  }
+}
+
+TEST_CASE("serial PM SLR save failure retains the active correction",
+          "[Orchestrator][serial_command][correction]") {
+  TestFixture f;
+  f.settings.corrections.pm25 = {Pm25CorrectionAlgorithm::CustomViaPm25Raw, 1.0f, 0.0f, false};
+  auto orch = f.make_orchestrator();
+  REQUIRE(f.serial_command.start());
+
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+
+  MeasuresAGo raw{};
+  raw.pm_a.pm_25 = 10.0f;
+  A::on_sensor_data(orch, raw);
+
+  Event event{};
+  event.type = EventType::SerialCommandRequest;
+  event.serial_command_request.kind = SerialCommandKind::SetPmSlr;
+  event.serial_command_request.pm25_correction = {Pm25CorrectionAlgorithm::FactoryCalibration, 2.0f,
+                                                  1.0f, false};
+  A::dispatch(orch, event);
+
+  const auto result = SerialCommandServiceTestAccess::receive_result(f.serial_command);
+  CHECK(result.kind == SerialCommandResultKind::OperationFailed);
+  CHECK(A::settings(orch).corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  CHECK(A::settings(orch).corrections.pm25.scaling_factor == 1.0f);
+  CHECK(A::settings(orch).corrections.pm25.intercept == 0.0f);
+  CHECK(A::corrected_measures(orch).pm_a.pm_25 == 10.0f);
+}
+
 TEST_CASE("serial factory reset before onboarding preserves corrections without manufacturing mode",
           "[Orchestrator][onboarding][serial_command][factory_reset]") {
   TestFixture f;
@@ -5268,6 +5389,9 @@ TEST_CASE("dispatch: routes SensorDataReady to on_sensor_data", "[Orchestrator][
 
 TEST_CASE("dispatch: cloud applies shared config fields and ignores policy fields",
           "[Orchestrator][dispatch][config][correction]") {
+  auto pm_algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  SECTION("custom PM") {}
+  SECTION("factory PM") { pm_algorithm = Pm25CorrectionAlgorithm::FactoryCalibration; }
   TestFixture f;
   auto orch = f.make_orchestrator();
 
@@ -5311,7 +5435,7 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   evt.fetch_config.update.back_led_brightness = LedBrightness::Mid;
   evt.fetch_config.update.touch_led_intensity = TouchLedIntensity::Bright;
   evt.fetch_config.update.buzzer_enabled = true;
-  evt.fetch_config.update.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  evt.fetch_config.update.corrections.pm25.algorithm = pm_algorithm;
   evt.fetch_config.update.corrections.pm25.scaling_factor = 2.0f;
   evt.fetch_config.update.corrections.pm25.intercept = 1.0f;
   evt.fetch_config.update.corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
@@ -5323,8 +5447,7 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
 
   A::dispatch(orch, evt);
 
-  REQUIRE(A::settings(orch).corrections.pm25.algorithm ==
-          Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  REQUIRE(A::settings(orch).corrections.pm25.algorithm == pm_algorithm);
   CHECK(A::settings(orch).pm_use_usaqi);
   CHECK(A::settings(orch).use_fahrenheit);
   CHECK_FALSE(A::settings(orch).disable_cloud);
@@ -5573,6 +5696,9 @@ TEST_CASE("dispatch: an in-flight cloud result is rejected after control becomes
 
 TEST_CASE("dispatch: cloud commit failure retains settings corrected view and runtime gates",
           "[Orchestrator][dispatch][cloud][failure]") {
+  auto pm_algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  SECTION("custom PM") {}
+  SECTION("factory PM") { pm_algorithm = Pm25CorrectionAlgorithm::FactoryCalibration; }
   TestFixture f;
   auto orch = f.make_orchestrator();
 
@@ -5591,7 +5717,7 @@ TEST_CASE("dispatch: cloud commit failure retains settings corrected view and ru
   evt.type = EventType::FetchConfigResult;
   evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
   evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::Pm25Correction);
-  evt.fetch_config.update.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  evt.fetch_config.update.corrections.pm25.algorithm = pm_algorithm;
   evt.fetch_config.update.corrections.pm25.scaling_factor = 2.0f;
   evt.fetch_config.update.corrections.pm25.intercept = 1.0f;
 
@@ -6054,7 +6180,7 @@ TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
   enter_hardware_test(f, orch);
   REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
 
-  open_ui_row(f, orch, "Fuel Gauge Learning");
+  open_ui_row(f, orch, "Battery Calibration");
   REQUIRE(f.ui_manager.current_screen() == Screen::Confirm);
 
   // Navigate to Yes (index 4): 3 downs from Back (1).

@@ -135,6 +135,9 @@ flowchart TD
     Settings -- Back --> MainMenu
     Settings --> Operations
     Settings --> DisplayTouch["Display & Touch"]
+    Settings --> PowerSaving["Power Saving"]
+    PowerSaving -- Back --> Settings
+    PowerSaving --> Choice
     Operations -- Back --> Settings
     DisplayTouch -- Back --> Settings
     Operations --> Choice["SettingsChoice"]
@@ -148,7 +151,7 @@ flowchart TD
     HardwareTest -- Back --> Settings
     HardwareTest -- Play Melody --> Melody["SettingsChoice: Chime / Tetris"]
     Melody -- Play or Back --> HardwareTest
-    HardwareTest -- Fuel Gauge Learning --> Confirm
+    HardwareTest -- Battery Calibration --> Confirm
     Settings --> About["Existing About Device page"]
     About -- Back --> Settings
     Settings -- Setup Guide --> GettingStarted
@@ -177,15 +180,16 @@ rows follow this order:
 | Menu | Content Rows |
 |---|---|
 | Tracking | Status, Pause Tracking or Resume Tracking, Stop Tracking |
-| Settings | Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide, About Device |
+| Settings | Operations, Display & Touch, Power Saving, Hardware Test, Clear Data, Setup Guide, About Device |
 | Operations | Measurement Interval, CO2 Calibration, GPS Mode, Buzzer |
 | Display & Touch | Temperature Unit, Altitude Unit, PM Display, Auto Lock, AQI LED, Touch LED |
-| Hardware Test | Peripheral Test, GPS Test, Accelerometer Test, Fuel Gauge Learning, Play Melody |
+| Power Saving | Wi-Fi Power Saving |
+| Hardware Test | Peripheral Test, GPS Test, Accelerometer Test, Battery Calibration, Play Melody |
 
 Settings and its groups fit on one page. Opening Settings selects Operations;
 Operations selects Measurement Interval, Display & Touch selects Temperature
-Unit, and Hardware Test selects Peripheral Test. Reopening these menus resets
-the cursor to that first content row, skipping Exit and Back.
+Unit, Power Saving selects Wi-Fi Power Saving, and Hardware Test selects
+Peripheral Test. Reopening these menus selects the first content row.
 Choice screens select the active value; applying an ordinary setting returns
 to its owning group on the source row. Back and double-press restore that
 same parent selection without applying a change. Play Melody also returns to
@@ -194,7 +198,7 @@ behavior; the Hardware Test menu and live diagnostic screens suppress
 inactivity auto-lock.
 
 About Device retains its existing rendering and identity fields. Back returns
-to Settings on About Device. Setup Guide is Settings row 6 and reopens
+to Settings on About Device. Setup Guide is Settings row 7 and reopens
 `Screen::GettingStarted` through `show_getting_started(false)`. It has a single
 Back action, which restores the Setup Guide row without changing
 `onboarding_done`. The boot-gate entry uses `show_getting_started(true)` and
@@ -285,11 +289,11 @@ returns to `Provisioning`, TouchEnter on `Yes` emits
 `ConfirmSwitchProvisioningTransport` or `ConfirmCancelProvisioning`
 depending on the stored kind.
 
-The Confirm screen is shared by CO2 Calibration, Clear Data, and Fuel Gauge
-Learning. `_confirm_source_setting` holds a typed action identity and
+The Confirm screen is shared by CO2 Calibration, Clear Data, and Battery
+Calibration. `_confirm_source_setting` holds a typed action identity and
 `_confirm_parent` records the owning menu. Back and No restore that menu's
 cursor; Yes returns Home and emits the action for the orchestrator to execute.
-The initial selection remains Back. Fuel Gauge Learning follows its existing
+The initial selection remains Back. Battery Calibration follows its existing
 factory-state write and reboot path.
 
 ## Navigation Patterns
@@ -300,7 +304,7 @@ factory-state write and reboot path.
 | MainMenu | Circular (4 rows, all always enabled) | Yes | N/A |
 | TrackingMenu | Circular (5 rows) | Yes | None |
 | TrackingStatus | Circular (3 selectable rows, 6 informational rows) | Yes | None; Session/GPS view switch |
-| Settings / Operations / DisplayTouch / HardwareTest | Circular | Yes | None; at most 9 rows including Exit/Back |
+| Settings / Operations / DisplayTouch / PowerSaving / HardwareTest | Circular | Yes | None; at most 9 rows including Exit/Back |
 | SettingsChoice | Circular | Yes | Sliding window (8 items) |
 | TagList | Circular | Yes | Page-based (8 items) |
 | About | Circular | Yes | N/A (2 items) |
@@ -325,7 +329,7 @@ pairs so display ordering cannot change persisted mode identities.
 
 | Setting ID | Label | Options |
 |---|---|---|
-| Setup Guide | `Setup Guide` (Settings row 6) | Action row — opens `Screen::GettingStarted` |
+| Setup Guide | `Setup Guide` (Settings row 7) | Action row — opens `Screen::GettingStarted` |
 | Temperature Unit | `Temperature Unit: C / F` | C, F |
 | Altitude Unit | `Altitude Unit: m / ft` | m, ft |
 | PM Display | `PM Display: ug/m3 / USAQI` | ug/m3, USAQI |
@@ -338,6 +342,7 @@ pairs so display ordering cannot change persisted mode identities.
 | CO2 Calibration | Action row | Opens confirm dialog |
 | Clear Data | Action row | Opens confirm dialog |
 | Buzzer | `Buzzer: Off / On` | Off, On |
+| Wi-Fi Power Saving | `Wi-Fi Power Saving` | Disable, Enable; default Disable |
 | Play Melody | Hardware Test action row | Chime, Tetris |
 
 The orchestrator calls `sync_settings(const GoSettings &)` after loading or
@@ -347,7 +352,7 @@ uses its compact label. A different valid value, such as 17 seconds, renders as
 Selecting a fixed choice replaces the custom value and removes the custom row.
 
 `apply_to_settings()` maps the internal state back to `GoSettings`, including
-the exact interval, `use_feet`, and the two LED fields
+the exact interval, `use_feet`, `wifi_power_save_enabled`, and the two LED fields
 (`back_led_brightness`, `touch_led_intensity`). Changing
 an unrelated UI setting therefore preserves an active custom interval.
 

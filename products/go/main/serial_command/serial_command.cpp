@@ -280,7 +280,7 @@ void SerialCommandService::_handle_line(const char *line, size_t line_size) {
     SerialCommandRequest request{};
     if (token_equals(tokens[1], "PM")) {
       request.kind = SerialCommandKind::SetPmSlr;
-      request.pm25_correction.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+      request.pm25_correction.algorithm = Pm25CorrectionAlgorithm::FactoryCalibration;
       request.pm25_correction.scaling_factor = scaling_factor;
       request.pm25_correction.intercept = intercept;
     } else if (token_equals(tokens[1], "TEMP")) {

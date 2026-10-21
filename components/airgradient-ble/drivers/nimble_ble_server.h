@@ -83,6 +83,7 @@ public:
   bool set_advertising_name(const char *name) override;
   bool add_advertised_service_uuid(const char *uuid) override;
   bool set_manufacturer_data(const uint8_t *data, size_t len) override;
+  bool set_advertising_interval(uint32_t interval_us) override;
   bool start_advertising() override;
   bool stop_advertising() override;
   bool request_conn_params(uint16_t min_interval_ms, uint16_t max_interval_ms, uint16_t latency,

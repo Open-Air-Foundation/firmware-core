@@ -54,7 +54,7 @@ result.
   satellite count, HDOP, latitude/longitude, and UTC time.
 - **Accelerometer test:** add a LIS2DH12 driver and a live X/Y/Z readout with an
   automatic identity + sanity pass/fail.
-- **FG learning:** expose it as a Settings action that arms the run and reboots
+- **Battery Calibration:** expose it as a Settings action that arms the run and reboots
   into the **existing `FgLearningRunner` boot path unchanged**, behind a strong
   confirmation dialog.
 - Keep `UIManager` hardware-free; all side effects live in the orchestrator.
@@ -88,7 +88,7 @@ enters a live test screen or fires an action.
 | Peripheral Test | actuator + AQ sweep flow | guided then auto |
 | GPS Test | live GPS status screen | live view |
 | Accelerometer Test | live accelerometer readout | live view + auto pass/fail |
-| FG Learning | confirm → arm → reboot | destructive action |
+| Battery Calibration | confirm → arm → reboot | destructive action |
 | Back | parent (Settings) | navigation |
 
 The submenu follows the established `UIManager` menu pattern: a
@@ -97,14 +97,14 @@ The submenu follows the established `UIManager` menu pattern: a
 side effects.
 
 ```text
-Settings -> Hardware Test -> { Peripheral Test, GPS Test, Accel Test, FG Learning }
+Settings -> Hardware Test -> { Peripheral Test, GPS Test, Accel Test, Battery Calibration }
 ```
 
 ### Ownership Model
 
 The peripheral, GPS, and accelerometer tests run **inside the normal app**,
 driven by the orchestrator, reusing already-initialized services (display, LED,
-buzzer, sensor producer, GPS). Only the FG learning row leaves the app: it
+buzzer, sensor producer, GPS). Only the Battery Calibration row leaves the app: it
 writes factory state and reboots into the existing separate runner.
 
 ```mermaid
@@ -113,7 +113,7 @@ flowchart TD
     HT --> PT[Peripheral Test: in-app orchestrator flow]
     HT --> GT[GPS Test: in-app live screen]
     HT --> AT[Accel Test: in-app live screen]
-    HT --> FG[FG Learning: arm factory state + reboot]
+    HT --> FG[Battery Calibration: arm factory state + reboot]
     FG --> Runner[Existing FgLearningRunner boot path]
 ```
 
@@ -210,10 +210,10 @@ its address added to `board_config.h`. If the accelerometer is only populated on
 some board variants, the driver is variant-gated the same way the LED and buzzer
 services already are.
 
-### FG Learning Arm
+### Battery Calibration Arm
 
-The FG Learning row is a **destructive action** guarded by a strong confirmation
-dialog that warns it is a multi-hour, ship-mode routine. On confirm, the
+The Battery Calibration row is a **destructive action** guarded by a strong confirmation
+dialog asking "Start Battery Calibration?". On confirm, the
 orchestrator writes `FactorySettings{ fg_learning_stage = Charge, cycle = 1,
 itpor_losses = 0 }` and reboots. On the next boot, `GoApp::run()` sees a non-Idle
 stage and routes into the **existing `FgLearningRunner` unchanged**. This reuses
@@ -288,7 +288,7 @@ Each step is small enough to land as a focused commit.
    attaching to the shared I2C bus (variant-gated if needed).
 7. **Accelerometer test.** Add the live X/Y/Z screen with identity + sanity
    pass/fail and buzzer cue.
-8. **FG learning arm.** Add the FG Learning row, a strong confirm dialog, and
+8. **Battery calibration arm.** Add the Battery Calibration row, a strong confirm dialog, and
    the orchestrator handler that writes factory state and reboots into the
    existing runner.
 9. **Docs.** Add a service doc under `products/go/docs/` describing the shipped
@@ -318,7 +318,7 @@ Hardware-in-the-loop / manual verification:
 - GPS: confirm TTFF counts up and freezes on fix, with a plausible position.
 - Accelerometer: confirm live X/Y/Z tracks orientation and the test passes at
   rest.
-- FG learning: confirm the Settings action arms factory state and reboots into
+- Battery Calibration: confirm the Settings action arms factory state and reboots into
   the existing learning runner.
 
 Verification commands:
@@ -340,7 +340,7 @@ ctest --test-dir tests/build --output-on-failure
   `0x19`), whether the part is populated on all board variants or V1-only, and
   whether an INT line is routed to a GPIO are all TBD. These must be confirmed
   before the driver lands.
-- **FG learning visibility.** It is currently visible to all users, mitigated by
+- **Battery Calibration visibility.** It is currently visible to all users, mitigated by
   a strong confirm dialog. Revisit if it should instead be gated behind
   manufacturing mode.
 - **e-paper refresh cadence.** The live GPS and accelerometer screens assume

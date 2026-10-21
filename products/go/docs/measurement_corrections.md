@@ -14,7 +14,7 @@ measurement transports retain raw sensor values.
 | [`go_config_types.h`](../main/go_config_types.h) | Shared `GoConfigUpdate`, field mask, source identity, and source-control policy |
 | [`go_cloud.cpp`](../main/go_cloud.cpp) | AirGradient cloud wire parsing into `GoConfigUpdate` |
 | [`go_local_api.cpp`](../main/go_local_api.cpp) | Local API mapping, semantic validation, and translation into `GoConfigUpdate` |
-| [`serial_command.cpp`](../main/serial_command/serial_command.cpp) | Manufacturing USB command parser and typed custom-correction request bridge |
+| [`serial_command.cpp`](../main/serial_command/serial_command.cpp) | Manufacturing USB command parser and typed correction requests |
 | [`go_settings.cpp`](../main/go_settings.cpp) | Grouped correction persistence and boot-time loading |
 | [`go_orchestrator.cpp`](../main/go_orchestrator.cpp) | Persist-before-activate updates and raw/corrected consumer routing |
 | [`go_app.cpp`](../main/go_app.cpp) | Offline timer-wake fast-path correction |
@@ -24,7 +24,7 @@ measurement transports retain raw sensor values.
 | Dependency | Source | Usage |
 |---|---|---|
 | `MeasuresAGo` | `airgradient-common` ([`measures_types.h`](../../../components/airgradient-common/include/measures_types.h)) | Raw input, corrected copy, field validators, ranges, and invalid sentinels |
-| `ConfigStore` | `airgradient-config` | Persistent algorithm, coefficient, and PM EPA-flag storage |
+| `ConfigStore` | `airgradient-config` | Persistent algorithm and coefficient storage |
 | `GoSettings` | product ([`go_settings.h`](../main/go_settings.h)) | Complete active and persisted correction set |
 | `CloudService` | product ([`go_cloud.cpp`](../main/go_cloud.cpp)) | Parses cloud correction fields after a successful complete fetch |
 | `LocalServer` | `airgradient-local-server` ([`local_config.h`](../../../components/airgradient-local-server/types/local_config.h)) | Local Config JSON types and strict nested-field parsing |
@@ -35,8 +35,8 @@ measurement transports retain raw sensor values.
 | API | Purpose |
 |---|---|
 | `MeasurementCorrections` | Complete PM2.5, temperature, and humidity correction configuration |
-| `is_pm25_correction_valid()` | Accept only a supported PM2.5 enum and finite coefficients |
-| `is_linear_correction_valid()` | Accept only a supported linear enum and finite coefficients |
+| `is_pm25_correction_valid()` | Validate the PM2.5 algorithm enum |
+| `is_linear_correction_valid()` | Validate the linear algorithm enum |
 | `are_measurement_corrections_valid()` | Validate the complete correction set before persistence or activation |
 | `measurement_corrections_equal()` | Detect whether the corrected presentation must be recomputed |
 | `apply_measurement_corrections()` | Copy a raw `MeasuresAGo` and replace only corrected PM2.5, temperature, and humidity fields |
@@ -61,14 +61,16 @@ Algorithm and property names are case-sensitive.
 | PM2.5 | `none` | Preserve valid raw PM2.5 |
 | PM2.5 | `epa_2021` | Apply the EPA 2021 piecewise correction using raw averaged PM2.5 and raw averaged humidity |
 | PM2.5 | `custom_via_pm25_raw` | Apply a linear scale and intercept to raw PM2.5 |
+| PM2.5 | `factory_calibration` | Same linear transform; selected through Cloud or USB Serial |
 | Temperature | `none` | Preserve valid raw temperature |
 | Temperature | `custom` | Apply `scaling factor * raw + intercept` in Celsius |
 | Humidity | `none` | Preserve valid raw relative humidity |
 | Humidity | `custom` | Apply `scaling factor * raw + intercept` |
 
-The PM custom transform preserves an exact raw zero instead of adding the
-intercept and clamps negative finite results to zero. Temperature conversion to
-Fahrenheit and all presentation rounding happen after correction.
+Both linear PM algorithms preserve an exact raw zero and clamp negative results
+to zero. Go ignores `useEpa2021` for both. The shared component still supports
+an optional EPA stage after either linear algorithm. Temperature conversion to
+Fahrenheit and presentation rounding happen after correction.
 
 For the EPA transform, let `p` be PM2.5 and `h` be raw relative humidity clamped
 to its valid range. The implemented piecewise equations are:
@@ -94,7 +96,7 @@ p >= 260:
   2.966 + 0.69p + 8.84e-4p²
 ```
 
-The final finite result is floored at zero. The source of truth remains
+The final result is floored at zero. The source of truth remains
 [`measurement_corrections.cpp`](../../../components/airgradient-common/measurement_corrections.cpp).
 Tests exercise the boundary inputs and PM custom zero behavior; exact expected
 EPA values are not asserted at every boundary.
@@ -109,7 +111,7 @@ use different measure and PM scaling-factor names.
 | PM2.5 entry | `corrections.pm25` | `corrections.pm02` |
 | Temperature entry | `corrections.temperature` | `corrections.atmp` |
 | Humidity entry | `corrections.humidity` | `corrections.rhum` |
-| PM custom scaling factor | `slr.scalingFactor` | `slr.scalingFactorViaPm25` |
+| PM linear scaling factor | `slr.scalingFactor` | `slr.scalingFactorViaPm25` |
 | Linear custom scaling factor | `slr.scalingFactor` | `slr.scalingFactor` |
 | Shared fields | `correctionAlgorithm`, `slr.intercept` | `correctionAlgorithm`, `slr.intercept` |
 
@@ -131,11 +133,21 @@ Local API algorithm shapes are:
 
 The cloud parser tolerates unrelated root, correction-entry, and SLR fields,
 but the supported values retain strict types and required names. Cloud PM2.5
-custom input requires `scalingFactorViaPm25`; `scalingFactor` is not an alias.
-Cloud custom inputs require all parameters, while `none` and `epa_2021` ignore
-`slr`. Go ignores `useEpa2021` when it is present. A malformed cloud measure
+custom and factory inputs require `scalingFactorViaPm25`; `scalingFactor` is not
+an alias. Linear inputs require both coefficients, while `none` and `epa_2021`
+ignore `slr`. Go ignores `useEpa2021` when it is present. A malformed cloud measure
 leaves only that measure's update bit clear, so valid siblings remain
 applicable.
+
+Local API reads expose factory calibration as `custom_via_pm25_raw`; BLE reads
+and notifications use the same custom algorithm (ID `2`). Coefficients are
+unchanged, and reads preserve the stored factory algorithm. Neither interface
+accepts factory calibration writes. Writing the returned PM group back selects
+custom, so omit that group when changing unrelated settings.
+
+USB Serial `SET_SLR PM` selects factory calibration; `GET_SLR PM` returns
+coefficients for either linear algorithm without an algorithm name. See
+[Serial Command Service](serial_command_service.md#settings-operations).
 
 See the local component
 [`config_json.tests.cpp`](../../../components/airgradient-local-server/tests/config_json.tests.cpp),
@@ -168,7 +180,7 @@ BLE Measures notification because that transport remains raw.
 
 Corrections load from `GoSettings` in every operating mode. Each measure loads
 as a group: a missing or invalid algorithm, or an incomplete or non-finite
-custom group, falls back independently to `none`. The other correction groups
+custom or factory group, falls back independently to `none`. The other groups
 remain usable. See [`go_settings.tests.cpp`](../tests/go_settings.tests.cpp) and
 the orchestrator's
 [`go_orchestrator.tests.cpp`](../tests/go_orchestrator.tests.cpp) for grouped
@@ -178,15 +190,14 @@ loading, commit failure, recomputation, and routing coverage.
 
 The transform starts with a copy of the raw `MeasuresAGo`; PM1, PM10, CO2,
 TVOC, NOx, pressure, power, and all other fields remain unchanged. Before any
-math, each target uses its field-specific validator and an explicit finite
-check. Invalid or non-finite raw values become that field's existing invalid
-sentinel in the corrected copy.
+math, each target uses its field-specific validator. Invalid raw values become
+that field's existing invalid sentinel in the corrected copy.
 
-Temperature and humidity results must be finite and remain in their
-field-specific valid ranges. Out-of-range results become invalid sentinels
-rather than being clamped. PM2.5 results must be finite and are clamped only at
-zero. When an EPA stage needs humidity and raw humidity is invalid, PM2.5 falls
-back to the original valid raw PM2.5 instead of exposing a partial correction.
+Temperature and humidity results outside their valid ranges become invalid
+sentinels. PM2.5 results are floored at zero without a separate finite or
+overflow check. Interfaces and persisted loading validate finite coefficients.
+EPA correction with invalid raw humidity falls back to the original valid
+raw PM2.5.
 
 ### Consumer Ownership
 
@@ -241,11 +252,9 @@ for raw handoff and RTC snapshot isolation.
 - A local correction entry with unknown nested fields is rejected. The cloud
   parser ignores unrelated fields but never treats a wrong required name as an
   alias.
-- Invalid or incomplete persisted custom groups fall back to `none` per
+- Invalid or incomplete persisted custom or factory groups fall back to `none` per
   measure, without disabling valid sibling groups.
-- A non-finite correction intermediate or output becomes the field's invalid
-  sentinel. Temperature and humidity are not clamped into range.
-- EPA correction with invalid raw humidity retains valid raw PM2.5. Custom PM
-  with optional EPA also discards its partial linear result in this case.
+- Temperature and humidity are not clamped into range.
+- EPA correction with invalid raw humidity retains valid raw PM2.5.
 - A settings write or commit failure retains the previous in-memory settings
   and corrected presentation.

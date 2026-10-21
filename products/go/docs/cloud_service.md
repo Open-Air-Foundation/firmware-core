@@ -183,14 +183,15 @@ Sensor and correction fields are:
 | `abcDays` | Integer `-1` or 1 .. 200 | `co2_abc_days`; `-1` disables automatic background calibration |
 | `tvocLearningOffset` | Integer 1 .. 1000 | `tvoc_learning_offset` |
 | `noxLearningOffset` | Integer 1 .. 1000 | `nox_learning_offset` |
-| `corrections.pm02` | `none`, `epa_2021`, `custom_via_pm25_raw` | PM2.5 correction |
+| `corrections.pm02` | `none`, `epa_2021`, `custom_via_pm25_raw`, `factory_calibration` | PM2.5 correction |
 | `corrections.atmp` | `none`, `custom` | Temperature correction |
 | `corrections.rhum` | `none`, `custom` | Humidity correction |
 
 Each valid scalar or correction sets its own update-mask bit. A malformed field
 does not prevent valid siblings from being delivered. Missing fields retain the
-active setting, and custom coefficients must be finite JSON numbers with exact
-property names. Go ignores `useEpa2021` in custom PM2.5 corrections.
+active setting, and linear coefficients must be finite JSON numbers with exact
+property names. Both linear PM2.5 algorithms require `slr.scalingFactorViaPm25`
+and `slr.intercept`; Go ignores `useEpa2021` for both.
 
 Cloud FETCH does not own connectivity or writer authority. The parser ignores
 `cloudConnection`/`disableCloudConnection` and `configurationControl`, and the

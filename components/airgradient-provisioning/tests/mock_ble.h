@@ -168,6 +168,7 @@ public:
     return raw;
   }
 
+  bool set_advertising_interval(uint32_t) override { return true; }
   bool set_advertising_name(const char *name) override {
     last_adv_name = name != nullptr ? name : "";
     return true;

@@ -8,6 +8,7 @@
 #include "go_settings.h"
 
 #include <cstddef>
+#include <limits>
 #include <map>
 #include <string>
 #include <type_traits>
@@ -128,7 +129,7 @@ private:
   std::size_t _write_attempt_count = 0;
 };
 
-static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 30;
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 31;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -429,6 +430,10 @@ TEST_CASE("measurement corrections round-trip and ignore the retired PM EPA flag
   FakeConfigStore store;
   GoSettings original;
   original.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  SECTION("custom PM") {}
+  SECTION("factory PM") {
+    original.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::FactoryCalibration;
+  }
   original.corrections.pm25.scaling_factor = 1.08f;
   original.corrections.pm25.intercept = -0.2f;
   original.corrections.pm25.use_epa2021 = true;
@@ -473,6 +478,37 @@ TEST_CASE("incomplete custom correction falls back independently", "[settings][c
   REQUIRE(loaded.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::Epa2021);
   REQUIRE(loaded.corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
   REQUIRE(loaded.corrections.humidity.algorithm == LinearCorrectionAlgorithm::Custom);
+}
+
+TEST_CASE("incomplete or invalid factory PM calibration falls back independently",
+          "[settings][correction]") {
+  FakeConfigStore store;
+  REQUIRE(store.set_int("mc_pa", static_cast<int>(Pm25CorrectionAlgorithm::FactoryCalibration)) ==
+          ConfigStoreResult::OK);
+  REQUIRE(store.set_int("mc_ha", static_cast<int>(LinearCorrectionAlgorithm::Custom)) ==
+          ConfigStoreResult::OK);
+  REQUIRE(store.set_float("mc_hs", 1.0f) == ConfigStoreResult::OK);
+  REQUIRE(store.set_float("mc_hi", 2.0f) == ConfigStoreResult::OK);
+
+  SECTION("missing scale") { REQUIRE(store.set_float("mc_pi", 0.0f) == ConfigStoreResult::OK); }
+  SECTION("missing intercept") { REQUIRE(store.set_float("mc_ps", 1.0f) == ConfigStoreResult::OK); }
+  SECTION("non-finite scale") {
+    REQUIRE(store.set_float("mc_ps", std::numeric_limits<float>::infinity()) ==
+            ConfigStoreResult::OK);
+    REQUIRE(store.set_float("mc_pi", 0.0f) == ConfigStoreResult::OK);
+  }
+  SECTION("non-finite intercept") {
+    REQUIRE(store.set_float("mc_ps", 1.0f) == ConfigStoreResult::OK);
+    REQUIRE(store.set_float("mc_pi", std::numeric_limits<float>::quiet_NaN()) ==
+            ConfigStoreResult::OK);
+  }
+
+  const GoSettings loaded = load_go_settings(store);
+  CHECK(loaded.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::None);
+  CHECK(loaded.corrections.pm25.scaling_factor == 1.0f);
+  CHECK(loaded.corrections.pm25.intercept == 0.0f);
+  CHECK(loaded.corrections.humidity.algorithm == LinearCorrectionAlgorithm::Custom);
+  CHECK(loaded.corrections.humidity.intercept == 2.0f);
 }
 
 TEST_CASE("round-trip preserves disable_cloud and static_ip", "[settings][stationary]") {

@@ -250,7 +250,10 @@ bool parse_pm25_correction(const cJSON *entry, Pm25Correction &out) {
     out.algorithm = Pm25CorrectionAlgorithm::Epa2021;
     return true;
   }
-  if (std::strcmp(algorithm->valuestring, "custom_via_pm25_raw") != 0) {
+  const bool is_factory_calibration =
+      std::strcmp(algorithm->valuestring, "factory_calibration") == 0;
+  const bool is_custom_pm25_raw = std::strcmp(algorithm->valuestring, "custom_via_pm25_raw") == 0;
+  if (!is_factory_calibration && !is_custom_pm25_raw) {
     AG_LOGW(TAG, "correction %s rejected: unsupported algorithm '%s'", JSON_PM25,
             algorithm->valuestring);
     return false;
@@ -263,7 +266,8 @@ bool parse_pm25_correction(const cJSON *entry, Pm25Correction &out) {
   }
 
   Pm25Correction parsed{};
-  parsed.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+  parsed.algorithm = is_factory_calibration ? Pm25CorrectionAlgorithm::FactoryCalibration
+                                            : Pm25CorrectionAlgorithm::CustomViaPm25Raw;
   const cJSON *intercept = cJSON_GetObjectItemCaseSensitive(slr, JSON_INTERCEPT);
   const cJSON *scaling_factor = cJSON_GetObjectItemCaseSensitive(slr, JSON_SCALING_FACTOR_VIA_PM25);
   if (!parse_float(intercept, parsed.intercept) ||

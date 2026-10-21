@@ -418,6 +418,72 @@ TEST_CASE("Go local API emits canonical disabled and EPA correction shapes") {
   CHECK_FALSE(config.corrections->humidity->slr.has_value());
 }
 
+TEST_CASE("Go local API reports factory PM calibration as custom PM") {
+  Fixture fixture;
+  GoSettings settings{};
+  settings.configuration_control = ConfigurationControl::Cloud;
+  settings.corrections.pm25 = {Pm25CorrectionAlgorithm::FactoryCalibration, 1.25f, -0.5f, false};
+  fixture.service->publish_config_snapshot(settings);
+
+  const LocalServerConfig config = fixture.service->get_config();
+  REQUIRE(config.corrections.has_value());
+  REQUIRE(config.corrections->pm25.has_value());
+  const CorrectionEntry &pm25 = *config.corrections->pm25;
+  CHECK(pm25.algorithm == "custom_via_pm25_raw");
+  REQUIRE(pm25.slr.has_value());
+  REQUIRE(pm25.slr->scaling_factor.has_value());
+  REQUIRE(pm25.slr->intercept.has_value());
+  CHECK(*pm25.slr->scaling_factor == 1.25f);
+  CHECK(*pm25.slr->intercept == -0.5f);
+  CHECK_FALSE(pm25.slr->use_epa2021.has_value());
+}
+
+TEST_CASE("Go local API accepts custom updates while factory calibration is active") {
+  Fixture fixture;
+  GoSettings settings{};
+  settings.corrections.pm25 = {Pm25CorrectionAlgorithm::FactoryCalibration, 1.25f, -0.5f, false};
+  fixture.service->publish_config_snapshot(settings);
+  fixture.service->set_access(ConfigAccess::ReadWrite);
+
+  SECTION("factory calibration PUT is rejected") {
+    CorrectionEntry entry = custom_pm25(-0.2, 1.08);
+    entry.algorithm = "factory_calibration";
+    const LocalServerConfig partial = correction_config(entry, std::nullopt, std::nullopt);
+    require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
+                   ConfigFieldId::CorrectionsPm25);
+    CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
+    const LocalServerConfig active = fixture.service->get_config();
+    CHECK(active.corrections->pm25->algorithm == "custom_via_pm25_raw");
+    CHECK(*active.corrections->pm25->slr->scaling_factor == 1.25f);
+    CHECK(*active.corrections->pm25->slr->intercept == -0.5f);
+  }
+  SECTION("temperature-only update does not replace factory PM calibration") {
+    const LocalServerConfig partial =
+        correction_config(std::nullopt, custom_linear(-0.5, 1.0), std::nullopt);
+    require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+    const LocalApiRequest request = fixture.receive_request();
+    CHECK(request.config.update_mask == field_mask(GoConfigField::TemperatureCorrection));
+  }
+  SECTION("existing custom correction can replace factory calibration") {
+    const LocalServerConfig partial =
+        correction_config(custom_pm25(-0.2, 1.08), std::nullopt, std::nullopt);
+    require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+    const LocalApiRequest request = fixture.receive_request();
+    CHECK(request.config.update_mask == field_mask(GoConfigField::Pm25Correction));
+    CHECK(request.config.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+  }
+  SECTION("writing back the reported PM correction selects custom") {
+    const LocalServerConfig active = fixture.service->get_config();
+    const LocalServerConfig partial =
+        correction_config(active.corrections->pm25, std::nullopt, std::nullopt);
+    require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+    const LocalApiRequest request = fixture.receive_request();
+    CHECK(request.config.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+    CHECK(request.config.corrections.pm25.scaling_factor == 1.25f);
+    CHECK(request.config.corrections.pm25.intercept == -0.5f);
+  }
+}
+
 TEST_CASE("Go local API translates one atomic supported update") {
   Fixture fixture;
   fixture.service->set_access(ConfigAccess::ReadWrite);

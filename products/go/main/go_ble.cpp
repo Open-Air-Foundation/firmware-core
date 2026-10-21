@@ -2,7 +2,7 @@
  * AirGradient Go — BLE Service implementation
  *
  * GATT setup, CBOR encoding/decoding, NimBLE callbacks, and binary
- * history streaming. BLE registration is excluded under TEST_HOST; the
+ * history streaming. GATT registration is excluded under TEST_HOST; advertising,
  * encoding and event handlers use the abstract BLE server interface.
  *
  * AirGradient
@@ -51,6 +51,9 @@ static constexpr const char *HISTORY_CHAR_UUID = "d1c0c0a4-6b48-4b2a-9b1d-59f9f2
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
+
+// Shorter advertising interval to address Android app connection failures.
+static constexpr float ADVERTISING_INTERVAL_MS = 500.0f;
 
 // Advertised name ("AirGradient Go <last4hex>") is computed by the shared
 // compute_ble_adv_name() helper (go_ble.h) into BleService::_adv_name.
@@ -115,6 +118,7 @@ uint64_t pm25_correction_algorithm_to_wire(Pm25CorrectionAlgorithm algorithm) {
   case Pm25CorrectionAlgorithm::Epa2021:
     return 1;
   case Pm25CorrectionAlgorithm::CustomViaPm25Raw:
+  case Pm25CorrectionAlgorithm::FactoryCalibration:
     return 2;
   }
   return 0;
@@ -621,7 +625,13 @@ bool BleService::init_stack_and_register(const char *serial) {
   return true;
 }
 
+#endif // TEST_HOST
+
 bool BleService::start_advertising() {
+  if (_initialized) {
+    return true;
+  }
+
   // --- Advertising ---
   if (!_server->set_advertising_name(_adv_name)) {
     AG_LOGE(TAG, "set_advertising_name failed");
@@ -631,6 +641,12 @@ bool BleService::start_advertising() {
 
   if (!_server->add_advertised_service_uuid(SERVICE_UUID)) {
     AG_LOGE(TAG, "add_advertised_service_uuid failed");
+    _server->deinit();
+    return false;
+  }
+
+  if (!_server->set_advertising_interval(static_cast<uint32_t>(ADVERTISING_INTERVAL_MS * 1000))) {
+    AG_LOGE(TAG, "set_advertising_interval failed");
     _server->deinit();
     return false;
   }
@@ -645,8 +661,6 @@ bool BleService::start_advertising() {
   AG_LOGI(TAG, "initialized, advertising as '%s'", _adv_name);
   return true;
 }
-
-#endif // TEST_HOST
 
 void BleService::deinit() {
   if (!_initialized) {

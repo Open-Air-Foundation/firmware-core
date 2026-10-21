@@ -108,14 +108,15 @@ serial source.
 ### Settings Operations
 
 The parser carries `Pm25Correction` or `LinearCorrection` in the typed request.
-The orchestrator copies its complete settings, selects the requested custom
-algorithm, validates the merged candidate, and uses
+The orchestrator copies its complete settings, applies the typed correction,
+validates the merged candidate, and uses
 `activate_settings_candidate()` for persistence and runtime activation. No
 serial-specific preferences or direct NVS writes exist.
 
-For PM, `SET_SLR` selects `CustomViaPm25Raw` and preserves `use_epa2021` when
-the current PM correction is already custom; otherwise it initializes that flag
-to `false`. Temperature and humidity select the linear `Custom` algorithm.
+For PM, `SET_SLR` selects `FactoryCalibration` (`factory_calibration`) with
+`use_epa2021=false`. `GET_SLR PM` accepts factory and custom PM corrections;
+its response contains only the coefficients, with no algorithm name.
+Temperature and humidity select the linear `Custom` algorithm.
 
 ## Edge Cases / Errors
 

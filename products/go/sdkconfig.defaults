@@ -3,6 +3,10 @@
 # AirGradient device model.
 CONFIG_AG_DEVICE_MODEL_GO=y
 
+# Enable power management and dynamic frequency scaling at startup.
+CONFIG_PM_ENABLE=y
+CONFIG_PM_DFS_INIT_AUTO=y
+
 # PayloadCache: store MeasuresAGo (temp/hum, PM, CO2, TVOC/NOx, power) rather
 # than the full Measures struct. Go does not use the secondary sensor channels
 # (temp_hum_b, pm_b, electrode) in its chart cache.
@@ -51,3 +55,7 @@ CONFIG_SGP41_INDEX_SAMPLING_INTERVAL_10S=y
 # runs alongside the Portable BLE data service during attached provisioning.
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=10
+
+
+# Allows the BLE controller to turn off its PHY between radio events
+CONFIG_BT_LE_SLEEP_ENABLE=y

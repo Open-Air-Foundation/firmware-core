@@ -28,11 +28,14 @@ static constexpr const char *TAG = "WifiService";
 // transient missed sweep at bring-up.
 static constexpr uint8_t STATIONARY_MAX_RETRY_COUNT = 3;
 
-static void disable_stationary_power_save(WifiManager &wifi) {
-  const WifiStatus status = wifi.set_power_save(WifiPowerSave::None);
+static void apply_stationary_power_save(WifiManager &wifi, bool enabled) {
+  const WifiPowerSave mode = enabled ? WifiPowerSave::MaxModem : WifiPowerSave::None;
+  const WifiStatus status = wifi.set_power_save(mode);
   if (status != WifiStatus::Ok) {
-    AG_LOGW(TAG, "failed to disable Stationary Wi-Fi power save: %u",
-            static_cast<unsigned>(status));
+    AG_LOGW(TAG, "failed to set Stationary Wi-Fi power save %s: %u",
+            enabled ? "enabled" : "disabled", static_cast<unsigned>(status));
+  } else {
+    AG_LOGI(TAG, "Stationary Wi-Fi power save: %s", enabled ? "MAX_MODEM" : "NONE");
   }
 }
 
@@ -67,6 +70,13 @@ WifiService::~WifiService() {
 
 bool WifiService::has_saved_networks() const { return _wifi.has_saved_networks(); }
 
+void WifiService::set_power_save_enabled(bool enabled) {
+  _power_save_enabled = enabled;
+  if (!_provisioning_active && _wifi.get_mode() == WifiMode::Sta) {
+    apply_stationary_power_save(_wifi, _power_save_enabled);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Connection attempts
 // ---------------------------------------------------------------------------
@@ -91,7 +101,7 @@ void WifiService::_connect_saved_internal(const WifiStaticIpConfig *static_ip,
   }
 
   _wifi.set_mode(WifiMode::Sta);
-  disable_stationary_power_save(_wifi);
+  apply_stationary_power_save(_wifi, _power_save_enabled);
 
   WifiStaConfig sta{}; // empty ssid = auto-connect from saved networks
   sta.max_retry_count = STATIONARY_MAX_RETRY_COUNT;
@@ -138,7 +148,7 @@ void WifiService::_connect_fallback_internal(bool reset_online_latches, bool arm
   }
   _wifi.clear_static_ip();
   _wifi.set_mode(WifiMode::Sta);
-  disable_stationary_power_save(_wifi);
+  apply_stationary_power_save(_wifi, _power_save_enabled);
 
   WifiStaConfig sta{};
   std::strncpy(sta.ssid, _cfg.fallback_ssid, sizeof(sta.ssid) - 1);
@@ -242,6 +252,9 @@ void WifiService::stop_provisioning(bool stop_http_server) {
   // ProvisioningManager::stop() cleared the WifiManager callback slots;
   // restore ours so post-online disconnects and shutdown work.
   _install_wifi_callbacks();
+  if (_online.load()) {
+    apply_stationary_power_save(_wifi, _power_save_enabled);
+  }
   log_heap(TAG, "wifi.stop_provisioning:exit");
 }
 
@@ -309,6 +322,8 @@ void WifiService::stop_local_endpoint() {
 }
 
 bool WifiService::_start_provisioning_internal(ProvisioningTransport transport) {
+  // Keep onboarding responsive without changing the saved preference.
+  apply_stationary_power_save(_wifi, false);
   ProvisioningConfig config{};
   if (_cfg.ap_ssid != nullptr) {
     std::strncpy(config.ap.ssid, _cfg.ap_ssid, sizeof(config.ap.ssid) - 1);

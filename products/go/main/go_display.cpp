@@ -695,9 +695,10 @@ bool is_list_screen(Screen screen) {
   return screen == Screen::TrackingMenu || screen == Screen::TrackingStatus ||
          screen == Screen::Settings || screen == Screen::Operations ||
          screen == Screen::DisplayTouch || screen == Screen::SettingsChoice ||
-         screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About ||
-         screen == Screen::HardwareTest || screen == Screen::PeripheralTest ||
-         screen == Screen::GpsTest || screen == Screen::AccelTest;
+         screen == Screen::PowerSaving || screen == Screen::TagList || screen == Screen::Confirm ||
+         screen == Screen::About || screen == Screen::HardwareTest ||
+         screen == Screen::PeripheralTest || screen == Screen::GpsTest ||
+         screen == Screen::AccelTest;
 }
 
 // Any reason-specific shutdown screen.
@@ -1517,6 +1518,7 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::Settings:
   case Screen::Operations:
   case Screen::DisplayTouch:
+  case Screen::PowerSaving:
   case Screen::SettingsChoice:
   case Screen::TagList:
   case Screen::Confirm:

@@ -15,6 +15,8 @@
 
 namespace {
 
+constexpr uint32_t ADVERTISING_INTERVAL_UNIT_US = 625;
+
 // Maps AgBleProperty flags to the corresponding NIMBLE_PROPERTY bitmask.
 // NIMBLE_PROPERTY is an unscoped enum; its enumerators are in global scope.
 uint32_t to_nimble_properties(uint16_t props) {
@@ -313,6 +315,23 @@ bool NimbleBleServer::set_manufacturer_data(const uint8_t *data, size_t len) {
   }
 
   return advertising->setManufacturerData(data, len);
+}
+
+bool NimbleBleServer::set_advertising_interval(uint32_t interval_us) {
+  if (_server == nullptr || interval_us < BLE_HCI_ADV_ITVL_MIN * ADVERTISING_INTERVAL_UNIT_US ||
+      interval_us > BLE_HCI_ADV_ITVL_MAX * ADVERTISING_INTERVAL_UNIT_US ||
+      interval_us % ADVERTISING_INTERVAL_UNIT_US != 0) {
+    return false;
+  }
+
+  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+  if (advertising == nullptr || advertising->isAdvertising()) {
+    return false;
+  }
+
+  advertising->setAdvertisingInterval(
+      static_cast<uint16_t>(interval_us / ADVERTISING_INTERVAL_UNIT_US));
+  return true;
 }
 
 bool NimbleBleServer::start_advertising() {

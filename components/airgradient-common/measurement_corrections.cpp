@@ -5,7 +5,6 @@
 #include "measurement_corrections.h"
 
 #include <algorithm>
-#include <cmath>
 
 namespace {
 
@@ -25,13 +24,12 @@ constexpr float PM25_HIGH_INTERPOLATION_OFFSET = 1.5f;
 constexpr float PM25_VERY_HIGH_INTERPOLATION_SCALE = 0.02f;
 constexpr float PM25_VERY_HIGH_INTERPOLATION_OFFSET = 4.2f;
 
-bool is_finite(float value) { return std::isfinite(value); }
-
 bool is_pm25_algorithm_valid(Pm25CorrectionAlgorithm algorithm) {
   switch (algorithm) {
   case Pm25CorrectionAlgorithm::None:
   case Pm25CorrectionAlgorithm::Epa2021:
   case Pm25CorrectionAlgorithm::CustomViaPm25Raw:
+  case Pm25CorrectionAlgorithm::FactoryCalibration:
     return true;
   }
   return false;
@@ -44,18 +42,6 @@ bool is_linear_algorithm_valid(LinearCorrectionAlgorithm algorithm) {
     return true;
   }
   return false;
-}
-
-bool is_raw_temperature_valid(const TempHumData &data) {
-  return data.is_temp_valid() && is_finite(data.temperature);
-}
-
-bool is_raw_humidity_valid(const TempHumData &data) {
-  return data.is_hum_valid() && is_finite(data.humidity);
-}
-
-bool is_raw_pm25_valid(const PMData &data) {
-  return data.is_pm_25_valid() && is_finite(data.pm_25);
 }
 
 float epa_2021_pm25(float pm25, float humidity) {
@@ -91,33 +77,22 @@ float epa_2021_pm25(float pm25, float humidity) {
   return EPA_HIGH_INTERCEPT + EPA_VERY_HIGH_SLOPE * pm25 + EPA_QUADRATIC_COEFFICIENT * pm25 * pm25;
 }
 
-float correct_linear_value(float raw, const LinearCorrection &correction, float invalid) {
-  if (!is_finite(raw) || !is_finite(correction.scaling_factor) ||
-      !is_finite(correction.intercept)) {
-    return invalid;
-  }
-
+float correct_linear_value(float raw, const LinearCorrection &correction) {
   if (correction.algorithm == LinearCorrectionAlgorithm::None) {
     return raw;
   }
 
-  const float corrected = correction.scaling_factor * raw + correction.intercept;
-  if (!is_finite(corrected)) {
-    return invalid;
-  }
-  return corrected;
+  return correction.scaling_factor * raw + correction.intercept;
 }
 
 } // namespace
 
 bool is_pm25_correction_valid(const Pm25Correction &correction) {
-  return is_pm25_algorithm_valid(correction.algorithm) && is_finite(correction.scaling_factor) &&
-         is_finite(correction.intercept);
+  return is_pm25_algorithm_valid(correction.algorithm);
 }
 
 bool is_linear_correction_valid(const LinearCorrection &correction) {
-  return is_linear_algorithm_valid(correction.algorithm) && is_finite(correction.scaling_factor) &&
-         is_finite(correction.intercept);
+  return is_linear_algorithm_valid(correction.algorithm);
 }
 
 bool are_measurement_corrections_valid(const MeasurementCorrections &corrections) {
@@ -143,29 +118,29 @@ MeasuresAGo apply_measurement_corrections(const MeasuresAGo &raw,
                                           const MeasurementCorrections &corrections) {
   MeasuresAGo corrected = raw;
 
-  if (!is_raw_temperature_valid(raw.temp_hum_a)) {
+  if (!raw.temp_hum_a.is_temp_valid()) {
     corrected.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
   } else {
-    const float value = correct_linear_value(raw.temp_hum_a.temperature, corrections.temperature,
-                                             MeasuresInvalid::TEMPERATURE);
-    corrected.temp_hum_a.temperature = is_finite(value) && value >= MeasuresRange::MIN_VALID_TEMP &&
-                                               value <= MeasuresRange::MAX_VALID_TEMP
-                                           ? value
-                                           : MeasuresInvalid::TEMPERATURE;
+    const float value = correct_linear_value(raw.temp_hum_a.temperature, corrections.temperature);
+    if (value >= MeasuresRange::MIN_VALID_TEMP && value <= MeasuresRange::MAX_VALID_TEMP) {
+      corrected.temp_hum_a.temperature = value;
+    } else {
+      corrected.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
+    }
   }
 
-  if (!is_raw_humidity_valid(raw.temp_hum_a)) {
+  if (!raw.temp_hum_a.is_hum_valid()) {
     corrected.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
   } else {
-    const float value = correct_linear_value(raw.temp_hum_a.humidity, corrections.humidity,
-                                             MeasuresInvalid::HUMIDITY);
-    corrected.temp_hum_a.humidity = is_finite(value) && value >= MeasuresRange::MIN_VALID_HUM &&
-                                            value <= MeasuresRange::MAX_VALID_HUM
-                                        ? value
-                                        : MeasuresInvalid::HUMIDITY;
+    const float value = correct_linear_value(raw.temp_hum_a.humidity, corrections.humidity);
+    if (value >= MeasuresRange::MIN_VALID_HUM && value <= MeasuresRange::MAX_VALID_HUM) {
+      corrected.temp_hum_a.humidity = value;
+    } else {
+      corrected.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
+    }
   }
 
-  if (!is_raw_pm25_valid(raw.pm_a)) {
+  if (!raw.pm_a.is_pm_25_valid()) {
     corrected.pm_a.pm_25 = MeasuresInvalid::PM;
     return corrected;
   }
@@ -173,24 +148,21 @@ MeasuresAGo apply_measurement_corrections(const MeasuresAGo &raw,
   const Pm25Correction &pm25 = corrections.pm25;
   float corrected_pm25 = raw.pm_a.pm_25;
   if (pm25.algorithm == Pm25CorrectionAlgorithm::Epa2021) {
-    if (is_raw_humidity_valid(raw.temp_hum_a)) {
+    if (raw.temp_hum_a.is_hum_valid()) {
       corrected_pm25 = epa_2021_pm25(raw.pm_a.pm_25, raw.temp_hum_a.humidity);
     }
-  } else if (pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw) {
+  } else if (pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw ||
+             pm25.algorithm == Pm25CorrectionAlgorithm::FactoryCalibration) {
     float linear_pm25 = 0.0f;
     if (raw.pm_a.pm_25 != 0.0f) {
       linear_pm25 = pm25.scaling_factor * raw.pm_a.pm_25 + pm25.intercept;
     }
 
-    if (!is_finite(linear_pm25)) {
-      corrected.pm_a.pm_25 = MeasuresInvalid::PM;
-      return corrected;
-    }
     linear_pm25 = std::max(0.0f, linear_pm25);
 
     corrected_pm25 = linear_pm25;
     if (pm25.use_epa2021) {
-      if (!is_raw_humidity_valid(raw.temp_hum_a)) {
+      if (!raw.temp_hum_a.is_hum_valid()) {
         corrected_pm25 = raw.pm_a.pm_25;
       } else {
         corrected_pm25 = epa_2021_pm25(linear_pm25, raw.temp_hum_a.humidity);
@@ -198,10 +170,6 @@ MeasuresAGo apply_measurement_corrections(const MeasuresAGo &raw,
     }
   }
 
-  if (!is_finite(corrected_pm25)) {
-    corrected.pm_a.pm_25 = MeasuresInvalid::PM;
-  } else {
-    corrected.pm_a.pm_25 = std::max(0.0f, corrected_pm25);
-  }
+  corrected.pm_a.pm_25 = std::max(0.0f, corrected_pm25);
   return corrected;
 }

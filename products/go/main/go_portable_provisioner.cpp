@@ -209,6 +209,12 @@ bool PortableWifiProvisioner::_ensure_wifi_ready() {
     AG_LOGE(TAG, "set_mode(Sta) failed");
     return false;
   }
+  // The shared radio may retain Stationary's power-saving preference.
+  const WifiStatus status = _wifi.set_power_save(WifiPowerSave::None);
+  if (status != WifiStatus::Ok) {
+    AG_LOGW(TAG, "failed to disable provisioning Wi-Fi power save: %u",
+            static_cast<unsigned>(status));
+  }
   _radio_active.store(true);
   return true;
 }

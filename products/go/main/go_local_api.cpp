@@ -68,7 +68,8 @@ CorrectionEntry make_pm25_correction(const Pm25Correction &correction) {
   case Pm25CorrectionAlgorithm::Epa2021:
     entry.algorithm = CORRECTION_EPA_2021;
     break;
-  case Pm25CorrectionAlgorithm::CustomViaPm25Raw: {
+  case Pm25CorrectionAlgorithm::CustomViaPm25Raw:
+  case Pm25CorrectionAlgorithm::FactoryCalibration: {
     entry.algorithm = CORRECTION_CUSTOM_PM25;
     SlrParams slr{};
     slr.intercept = correction.intercept;

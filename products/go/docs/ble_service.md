@@ -92,6 +92,11 @@ The new 19-character name fits comfortably in the 29-byte scan response budget.
 Advertising is single-connection: `on_connect()` calls `stop_advertising()`,
 `on_disconnect()` calls `start_advertising()`.
 
+Portable mode uses a fixed **500 ms** advertising interval, configured via
+`AgBleServer::set_advertising_interval()` and retained across reconnects.
+Attached provisioning shares this interval; Stationary standalone provisioning
+uses the stack defaults.
+
 ---
 
 ## Security
@@ -426,6 +431,10 @@ coefficients, but the encoder emits active coefficients verbatim. The decoder
 requires finite coefficients but does not enforce identity values for `none`;
 nonidentity values are ignored by correction math, remain visible until
 persisted settings are reloaded, and are canonicalized on reload.
+
+Factory PM calibration is exposed as `custom_via_pm25_raw` (ID `2`) in reads
+and notifications, with unchanged coefficients and clear flags. Schema version
+1 has no writable factory algorithm; writing that PM group back selects custom.
 
 | Algorithm | PM2.5 | Temperature / Humidity |
 |---|---|---|

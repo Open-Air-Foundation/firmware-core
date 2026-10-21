@@ -261,8 +261,9 @@ apply those settings locally or use their own correction policy.
 
 Temperature and humidity custom correction is `scale * raw + intercept`. PM
 custom preserves exact raw zero; otherwise it computes
-`max(0, scale * raw + intercept)` and can then apply EPA using raw humidity. If
-EPA requires invalid humidity, PM2.5 falls back to raw. See
+`max(0, scale * raw + intercept)` without an EPA stage on Go. The separate
+`epa_2021` algorithm uses raw humidity and falls back to raw PM2.5 when humidity
+is invalid. See
 [Measurement Corrections](docs/measurement_corrections.md) for exact EPA
 equations, field-validity behavior, and consumer ownership.
 
@@ -567,6 +568,10 @@ clear and ignores it on `custom_via_pm25_raw` writes.
 Canonical `none` uses scale `1.0`, intercept `0.0`, and clear flags. The current
 decoder accepts other finite coefficients for `none`; correction math ignores
 them and persisted loading canonicalizes them.
+
+Factory PM calibration appears as custom (ID `2`) in reads and notifications,
+with unchanged coefficients. Writing this group back selects custom; omit
+`pm25_corr` when changing unrelated settings to preserve factory calibration.
 
 #### GPS Mode Values
 

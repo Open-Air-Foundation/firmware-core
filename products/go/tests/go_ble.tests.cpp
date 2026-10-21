@@ -76,7 +76,10 @@ public:
 class MockBleServer : public AgBleServer {
 public:
   bool init(const char * /*device_name*/) override { return true; }
-  void deinit() override {}
+  void deinit() override {
+    deinit_count++;
+    advertising_interval_us = 0;
+  }
   bool set_security(AgBleIoCapability /*io_cap*/, uint8_t /*auth_flags*/) override { return true; }
   bool delete_all_bonds() override {
     delete_all_bonds_count++;
@@ -87,9 +90,19 @@ public:
   bool add_advertised_service_uuid(const char * /*uuid*/) override { return true; }
   bool set_manufacturer_data(const uint8_t * /*data*/, size_t /*len*/) override { return true; }
 
+  bool set_advertising_interval(uint32_t interval_us) override {
+    set_advertising_interval_count++;
+    if (!set_advertising_interval_result) {
+      return false;
+    }
+    advertising_interval_us = interval_us;
+    return true;
+  }
+
   bool start_advertising() override {
     start_advertising_count++;
-    return true;
+    started_intervals_us.push_back(advertising_interval_us);
+    return start_advertising_result;
   }
 
   bool stop_advertising() override {
@@ -104,6 +117,12 @@ public:
   bool is_peer_authenticated() const override { return peer_authenticated; }
 
   // --- Test inspection ---
+  uint32_t advertising_interval_us = 0;
+  std::vector<uint32_t> started_intervals_us;
+  int set_advertising_interval_count = 0;
+  int deinit_count = 0;
+  bool set_advertising_interval_result = true;
+  bool start_advertising_result = true;
   int start_advertising_count = 0;
   int stop_advertising_count = 0;
   int delete_all_bonds_count = 0;
@@ -111,6 +130,12 @@ public:
   bool peer_authenticated = false;
 
   void reset() {
+    advertising_interval_us = 0;
+    started_intervals_us.clear();
+    set_advertising_interval_count = 0;
+    deinit_count = 0;
+    set_advertising_interval_result = true;
+    start_advertising_result = true;
     start_advertising_count = 0;
     stop_advertising_count = 0;
     delete_all_bonds_count = 0;
@@ -922,6 +947,49 @@ TEST_CASE("BLE: encode_config clears the retired PM25 EPA flag") {
   const size_t len = BleServiceTestAccess::encode_config(svc, buf, sizeof(buf), settings);
   REQUIRE(len > 0);
   CHECK(pm25_correction_flags(buf, len) == 0);
+}
+
+TEST_CASE("BLE: factory PM calibration is reported as custom in config and notifications") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  GoSettings settings{};
+  settings.corrections.pm25 = {Pm25CorrectionAlgorithm::FactoryCalibration, 1.25f, -0.5f, false};
+
+  uint8_t buf[512];
+  size_t len = 0;
+  SECTION("full config") {
+    len = BleServiceTestAccess::encode_config(svc, buf, sizeof(buf), settings);
+  }
+  SECTION("config notification") {
+    const GoSettings previous{};
+    len = BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), previous, settings);
+  }
+  REQUIRE(len > 0);
+
+  CborParser parser;
+  CborValue root;
+  REQUIRE(cbor_parser_init(buf, len, 0, &parser, &root) == CborNoError);
+  CborValue correction;
+  REQUIRE(cbor_value_map_find_value(&root, "pm25_corr", &correction) == CborNoError);
+  REQUIRE(cbor_value_is_map(&correction));
+  CborValue array;
+  REQUIRE(cbor_value_map_find_value(&correction, "v", &array) == CborNoError);
+  REQUIRE(cbor_value_is_array(&array));
+  CborValue values;
+  REQUIRE(cbor_value_enter_container(&array, &values) == CborNoError);
+  uint64_t algorithm = 0;
+  REQUIRE(cbor_value_get_uint64(&values, &algorithm) == CborNoError);
+  CHECK(algorithm == 2);
+  REQUIRE(cbor_value_advance(&values) == CborNoError);
+  float scale = 0.0f;
+  REQUIRE(cbor_value_get_float(&values, &scale) == CborNoError);
+  CHECK(scale == 1.25f);
+  REQUIRE(cbor_value_advance(&values) == CborNoError);
+  float intercept = 0.0f;
+  REQUIRE(cbor_value_get_float(&values, &intercept) == CborNoError);
+  CHECK(intercept == -0.5f);
+  CHECK(pm25_correction_flags(buf, len) == 0);
+  CHECK(settings.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::FactoryCalibration);
 }
 
 // ---------------------------------------------------------------------------
@@ -2340,6 +2408,61 @@ TEST_CASE("BLE: notify_command_result is no-op when not connected") {
 // ---------------------------------------------------------------------------
 // Connection lifecycle
 // ---------------------------------------------------------------------------
+
+TEST_CASE("BLE: advertising uses the Go interval before first start and after reconnect") {
+  constexpr uint32_t expected_interval_us = 500000;
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  MockBleServer server;
+  BleService svc(nullptr, storage, server);
+
+  REQUIRE(svc.start_advertising());
+  CHECK(svc.is_initialized());
+  REQUIRE(server.started_intervals_us.size() == 1);
+  CHECK(server.started_intervals_us[0] == expected_interval_us);
+
+  // Repeated setup must not configure an interval while advertising is active.
+  REQUIRE(svc.start_advertising());
+  CHECK(server.set_advertising_interval_count == 1);
+  CHECK(server.start_advertising_count == 1);
+
+  BleServiceTestAccess::on_connect(svc, 1);
+  BleServiceTestAccess::on_disconnect(svc, 1, 0);
+  REQUIRE(server.started_intervals_us.size() == 2);
+  CHECK(server.started_intervals_us[1] == expected_interval_us);
+  CHECK(server.set_advertising_interval_count == 1);
+
+  svc.deinit();
+  CHECK_FALSE(svc.is_initialized());
+  CHECK(server.advertising_interval_us == 0);
+  REQUIRE(svc.start_advertising());
+  CHECK(server.set_advertising_interval_count == 2);
+  CHECK(server.started_intervals_us.back() == expected_interval_us);
+}
+
+TEST_CASE("BLE: interval configuration failure tears down without starting advertising") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  MockBleServer server;
+  BleService svc(nullptr, storage, server);
+  server.set_advertising_interval_result = false;
+
+  CHECK_FALSE(svc.start_advertising());
+  CHECK_FALSE(svc.is_initialized());
+  CHECK(server.start_advertising_count == 0);
+  CHECK(server.deinit_count == 1);
+}
+
+TEST_CASE("BLE: advertising start failure tears down after interval configuration") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  MockBleServer server;
+  BleService svc(nullptr, storage, server);
+  server.start_advertising_result = false;
+
+  CHECK_FALSE(svc.start_advertising());
+  CHECK_FALSE(svc.is_initialized());
+  CHECK(server.set_advertising_interval_count == 1);
+  CHECK(server.start_advertising_count == 1);
+  CHECK(server.deinit_count == 1);
+}
 
 TEST_CASE("BLE: on_connect sets connected and stops advertising") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);

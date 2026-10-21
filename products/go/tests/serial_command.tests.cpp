@@ -142,9 +142,10 @@ TEST_CASE("serial command maps every correction target and factory reset", "[ser
   Event event = fixture.receive_event();
   CHECK(event.serial_command_request.kind == SerialCommandKind::SetPmSlr);
   CHECK(event.serial_command_request.pm25_correction.algorithm ==
-        Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+        Pm25CorrectionAlgorithm::FactoryCalibration);
   CHECK(event.serial_command_request.pm25_correction.scaling_factor == 1.2f);
   CHECK(event.serial_command_request.pm25_correction.intercept == 0.4f);
+  CHECK_FALSE(event.serial_command_request.pm25_correction.use_epa2021);
   fixture.complete_operation_failed();
 
   fixture.channel.append_input("#AG SET_SLR HUM 0.9 2\n");
@@ -217,6 +218,22 @@ TEST_CASE("serial command reports failed event admission", "[serial_command]") {
   fixture.poll();
 
   CHECK(fixture.channel.responses == std::vector<std::string>{"\n#AG ERROR OPERATION_FAILED\n"});
+}
+
+TEST_CASE("serial command keeps the factory PM SLR response format", "[serial_command]") {
+  SerialCommandFixture fixture;
+  fixture.channel.append_input("#AG GET_SLR PM\n");
+  fixture.poll();
+  REQUIRE(fixture.receive_event().serial_command_request.kind == SerialCommandKind::GetPmSlr);
+
+  SerialCommandResult result{};
+  result.kind = SerialCommandResultKind::SlrPm;
+  result.pm25_correction = {Pm25CorrectionAlgorithm::FactoryCalibration, 1.2f, -0.4f, false};
+  fixture.service->complete(result);
+  fixture.poll();
+
+  REQUIRE(fixture.channel.responses.size() == 1);
+  CHECK(fixture.channel.responses[0] == "\n#AG OK SLR PM 1.200000 -0.400000\n");
 }
 
 TEST_CASE("serial command stops receiving until restarted", "[serial_command]") {

@@ -422,6 +422,67 @@ TEST_CASE("FETCH ignores the retired Go custom PM EPA flag", "[CloudService][fet
   CHECK_FALSE(payload.update.corrections.pm25.use_epa2021);
 }
 
+TEST_CASE("FETCH parses factory PM calibration without an EPA stage",
+          "[CloudService][fetch][correction]") {
+  CloudFixture f;
+  const char body[] =
+      R"({"corrections":{"pm02":{"correctionAlgorithm":"factory_calibration","slr":{"intercept":-0.2,"scalingFactorViaPm25":1.08,"useEpa2021":true}}}})";
+  cloud_spy::fetch_body_to_write = body;
+  cloud_spy::fetch_bytes_to_write = std::strlen(body);
+
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 999'999'999);
+  A::set_fetch_due(f.cloud, 0);
+  A::run_once(f.cloud, 1000);
+
+  const FetchConfigEventPayload &payload = f.mock_rtos.last_event.fetch_config;
+  REQUIRE(payload.result == static_cast<uint8_t>(AgClientResult::Ok));
+  REQUIRE(payload.update.update_mask == static_cast<uint32_t>(GoConfigField::Pm25Correction));
+  CHECK(payload.update.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::FactoryCalibration);
+  CHECK(payload.update.corrections.pm25.scaling_factor == 1.08f);
+  CHECK(payload.update.corrections.pm25.intercept == -0.2f);
+  CHECK_FALSE(payload.update.corrections.pm25.use_epa2021);
+}
+
+TEST_CASE("FETCH rejects malformed factory PM calibration independently",
+          "[CloudService][fetch][correction]") {
+  for (
+      const char *entry : {
+          R"({"correctionAlgorithm":"factory_calibration"})",
+          R"({"correctionAlgorithm":"factory_calibration","slr":null})",
+          R"({"correctionAlgorithm":"factory_calibration","slr":{}})",
+          R"({"correctionAlgorithm":"factory_calibration","slr":{"intercept":0}})",
+          R"({"correctionAlgorithm":"factory_calibration","slr":{"scalingFactorViaPm25":1}})",
+          R"({"correctionAlgorithm":"factory_calibration","slr":{"intercept":0,"scalingFactor":1}})",
+          R"({"correctionAlgorithm":"factory_calibration","slr":{"intercept":"0","scalingFactorViaPm25":1}})",
+          R"({"correctionAlgorithm":"factory_calibration","slr":{"intercept":0,"scalingFactorViaPm25":true}})",
+          R"({"correctionAlgorithm":"factory_calibration","slr":{"intercept":1e100,"scalingFactorViaPm25":1}})",
+          R"({"correctionAlgorithm":"factory_calibration","slr":{"intercept":0,"scalingFactorViaPm25":1e999}})",
+          R"({"correctionAlgorithm":"Factory_Calibration","slr":{"intercept":0,"scalingFactorViaPm25":1}})",
+      }) {
+    CAPTURE(entry);
+    CloudFixture f;
+    const std::string body =
+        std::string(R"({"corrections":{"pm02":)") + entry +
+        R"(,"atmp":{"correctionAlgorithm":"custom","slr":{"intercept":2,"scalingFactor":1}}}})";
+    cloud_spy::fetch_body_to_write = body.c_str();
+    cloud_spy::fetch_bytes_to_write = body.size();
+
+    A::set_armed(f.cloud, true);
+    A::set_was_armed(f.cloud, true);
+    A::set_post_due(f.cloud, 999'999'999);
+    A::set_fetch_due(f.cloud, 0);
+    A::run_once(f.cloud, 1000);
+
+    const FetchConfigEventPayload &payload = f.mock_rtos.last_event.fetch_config;
+    REQUIRE(payload.result == static_cast<uint8_t>(AgClientResult::Ok));
+    REQUIRE(payload.update.update_mask ==
+            static_cast<uint32_t>(GoConfigField::TemperatureCorrection));
+    CHECK(payload.update.corrections.temperature.intercept == 2.0f);
+  }
+}
+
 TEST_CASE("FETCH rejects one malformed correction but keeps valid siblings",
           "[CloudService][fetch][correction]") {
   CloudFixture f;

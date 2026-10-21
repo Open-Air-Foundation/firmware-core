@@ -42,6 +42,7 @@ reads.
 |---|---|---|
 | `WifiService(event_queue, deps, cfg)` | — | Construct with the central event queue, borrowed Wi-Fi/BLE/HTTP/local-server dependencies, and product config. Installs Wi-Fi callbacks initially and the provisioning event callback once for the service lifetime. |
 | `has_saved_networks()` | `bool` | True when at least one network is saved. Delegates to `WifiManager`. |
+| `set_power_save_enabled(enabled)` | `void` | Retain the preference and apply it immediately in STA mode outside provisioning, without disconnecting. |
 | `connect_with_saved_credentials(static_ip)` | `void` | Restore Wi-Fi callbacks, arm the initial-connect deadline, and call `WifiManager::connect` with an empty SSID. One saved network connects directly with normal retry/backoff; multiple networks are scanned, ranked by RSSI, and tried with single-attempt failover. Applies `static_ip` when non-null, clears it otherwise. Resets the online latches (fresh bring-up). Posts a synthetic `WifiDisconnected` when the manager returns `NotFound`. |
 | `schedule_reconnect(static_ip)` | `void` | Arm the runtime reconnect timer `reconnect_delay_ms` from now. Preserves `has_been_online()` and arms no connect window. `tick()` reuses the credential source explicitly selected at entry: saved networks in normal mode, transient factory Wi-Fi in manufacturing. |
 | `try_default_fallback_credentials()` | `void` | Manufacturing-only, single-shot STA connect to the factory AP (`airgradient` / `cleanair`). The explicit SSID makes the connect transient, so nothing is written to the saved-networks store. Bounded by the fallback window even when the driver rejects the attempt immediately. |
@@ -285,12 +286,22 @@ The local profile advertises `_airgradient._tcp` on `http_port` with hostname
 `fw_ver`, and `api=1`. The profile uses `WifiMdnsLifecycle::StaIpAuto`, while
 `ensure_local_mdns()` explicitly starts it for the current got-IP transition.
 
-Before either saved-network or factory-fallback STA connection, `WifiService`
-sets `WifiPowerSave::None`. ESP-IDF otherwise defaults to minimum modem power
-saving, which can make multicast delivery unreliable after cached mDNS address
-records expire. Stationary mode is wall-powered, so it prioritizes continuous
-local discovery over modem-sleep savings. A failure to apply the policy is
-logged but does not abort the connection attempt.
+Before either saved-network or factory-fallback STA connection, including
+runtime retries, `WifiService` applies the saved Wi-Fi Power Saving preference:
+
+| Setting | Shared Mode | ESP-IDF Mode |
+|---|---|---|
+| Disable (default) | `WifiPowerSave::None` | `WIFI_PS_NONE` |
+| Enable | `WifiPowerSave::MaxModem` | `WIFI_PS_MAX_MODEM` |
+
+Changes apply live in normal Stationary operation without disconnecting; other
+modes retain the preference for the next Stationary entry. Provisioning uses
+`None`, then successful Stationary handoff restores the preference. Driver
+failures are logged without aborting connectivity; the next connection attempt
+reapplies the preference. The listen interval remains at the driver default.
+
+Disable preserves the previous policy for reliable local discovery. Enable
+may increase latency or reduce mDNS and direct-IP reachability on some networks.
 
 `start_provisioning()` first tears the local endpoint down so provisioning owns
 its transport routes exclusively. Transport switches call provisioning stop

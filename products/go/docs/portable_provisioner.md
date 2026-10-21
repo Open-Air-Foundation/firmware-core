@@ -49,6 +49,9 @@ void tick(uint32_t now_ms);     // drop the radio on idle timeout
 The manager state (`WaitingForCredentials` → `Connecting` → `Connected`) is
 orthogonal to the radio state, which is product-driven and request-bounded.
 
+Radio acquisition selects `WifiPowerSave::None` without changing the saved
+Stationary preference. Failure is logged without aborting provisioning.
+
 ```mermaid
 stateDiagram-v2
     [*] --> RadioOff

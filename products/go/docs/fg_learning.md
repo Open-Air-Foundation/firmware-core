@@ -412,7 +412,7 @@ dashboard as `FAIL: <reason>` under the banner, and written to the journal
 
 ### Arming
 
-Start a run from **Settings → Hardware Test → Fuel Gauge Learning**, then choose
+Start a run from **Settings → Hardware Test → Battery Calibration**, then choose
 **Yes** on the confirmation screen. This is the only entry point for a new run;
 it is available after onboarding as well. Confirmation saves
 `FactorySettings{Charge, cycle 1, losses 0}` and reboots.

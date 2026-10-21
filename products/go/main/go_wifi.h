@@ -83,6 +83,9 @@ public:
 
   bool has_saved_networks() const;
 
+  /// Retain the preference and apply it live in STA mode outside provisioning.
+  void set_power_save_enabled(bool enabled);
+
   // --- Connection attempts (STA only; no SoftAP, no provisioning) ---
 
   /// Auto-connect from the saved networks (best-RSSI scan + single-attempt
@@ -192,6 +195,7 @@ private:
   HttpServer &_http;
   LocalServer &_local_server;
   Config _cfg;
+  bool _power_save_enabled = false;
 
   static constexpr uint8_t LOCAL_MDNS_TXT_COUNT = 5;
   const char *_mdns_txt_keys[LOCAL_MDNS_TXT_COUNT] = {"vendor", "model", "serialno", "fw_ver",

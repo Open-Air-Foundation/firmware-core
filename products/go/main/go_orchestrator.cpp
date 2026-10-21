@@ -938,10 +938,6 @@ void Orchestrator::handle_serial_command(const SerialCommandRequest &request) {
   case SerialCommandKind::SetPmSlr: {
     GoSettings candidate = _settings;
     candidate.corrections.pm25 = request.pm25_correction;
-    candidate.corrections.pm25.use_epa2021 =
-        _settings.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw
-            ? _settings.corrections.pm25.use_epa2021
-            : false;
     if (!is_go_settings_valid(candidate)) {
       result.kind = SerialCommandResultKind::InvalidArgument;
     } else if (activate_settings_candidate(candidate)) {
@@ -976,7 +972,8 @@ void Orchestrator::handle_serial_command(const SerialCommandRequest &request) {
   }
 
   case SerialCommandKind::GetPmSlr:
-    if (_settings.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw) {
+    if (_settings.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw ||
+        _settings.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::FactoryCalibration) {
       result.kind = SerialCommandResultKind::SlrPm;
       result.pm25_correction = _settings.corrections.pm25;
     } else {
@@ -2227,6 +2224,10 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
   if (previous_settings.disable_cloud != _settings.disable_cloud) {
     _svc.cloud.set_disable_cloud(_settings.disable_cloud);
   }
+  if (!mode_changing && _mode == OperatingMode::Stationary &&
+      previous_settings.wifi_power_save_enabled != _settings.wifi_power_save_enabled) {
+    _svc.wifi.set_power_save_enabled(_settings.wifi_power_save_enabled);
+  }
   if (previous_settings.configuration_control != _settings.configuration_control) {
     _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
                                         ConfigurationControl::Local);
@@ -2705,6 +2706,7 @@ void Orchestrator::enter_stationary() {
   // Idempotent — cheap no-op on warm Stationary re-entry. Portable-only
   // boots never reach this line.
   _svc.board.init_wifi_subsystem();
+  _svc.wifi.set_power_save_enabled(_settings.wifi_power_save_enabled);
   log_heap(TAG, "wifi.enter-stationary:after-init");
 
   // Silent unlock + snackbar clear.  Required so a cold-boot Locked

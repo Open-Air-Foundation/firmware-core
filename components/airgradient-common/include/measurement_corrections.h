@@ -13,6 +13,7 @@ enum class Pm25CorrectionAlgorithm : uint8_t {
   None,
   Epa2021,
   CustomViaPm25Raw,
+  FactoryCalibration,
 };
 
 enum class LinearCorrectionAlgorithm : uint8_t {

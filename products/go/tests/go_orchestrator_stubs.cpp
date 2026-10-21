@@ -1037,6 +1037,8 @@ WifiService::~WifiService() = default;
 
 bool WifiService::has_saved_networks() const { return test_spy::wifi_has_saved_networks; }
 
+void WifiService::set_power_save_enabled(bool enabled) { _power_save_enabled = enabled; }
+
 void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *static_ip) {
   test_spy::wifi_connect_saved_called = true;
   if (static_ip != nullptr) {

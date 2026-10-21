@@ -14,7 +14,7 @@ This component owns:
 
 - BLE stack initialisation and teardown
 - GATT service and characteristic registration
-- BLE advertising control (local name, advertised service UUIDs,
+- BLE advertising control (interval, local name, advertised service UUIDs,
   manufacturer-specific data)
 - connect / disconnect event delivery via callbacks
 - per-characteristic write event delivery via callbacks
@@ -116,6 +116,24 @@ characteristics with the NimBLE GATT database; it must be called before
 `start_advertising()` starts the underlying `NimBLEServer` first.
 
 For a production wiring, see `products/go/main/go_ble.cpp`.
+
+### Advertising Interval
+
+`set_advertising_interval(uint32_t interval_us)` configures both the minimum
+and maximum legacy advertising interval. Microseconds preserve fractional
+millisecond choices such as 1,022.5 ms (`1022500` microseconds).
+
+Call it after `init()` and before starting advertising. To change it later,
+stop advertising, set the interval, then start again. The driver rejects
+calls while advertising, values outside 20,000 through 10,240,000 microseconds,
+and values that are not exact multiples of 625 microseconds. Rejection leaves
+the previous interval unchanged.
+
+The interval survives advertising stop/start, including after disconnects,
+until stack teardown. Each fresh stack uses NimBLE's defaults unless its
+owner sets an interval. The component does not choose a product policy or
+change transmit power. The controller still adds the normal random advertising
+delay.
 
 ## Security
 

@@ -174,6 +174,11 @@ Go accepts `none`, `epa_2021`, and `custom_via_pm25_raw` for PM2.5. Temperature
 and humidity accept `none` and `custom`. Custom entries require finite
 `intercept` and `scalingFactor` values. Go omits the shared `useEpa2021` field
 from GET responses and ignores it when supplied in a PM2.5 PUT.
+
+GET reports factory PM calibration as `custom_via_pm25_raw` with unchanged
+coefficients. PUT does not accept `factory_calibration`; writing the returned
+PM group back selects custom. Omit it when changing unrelated settings.
+
 Partial correction objects preserve omitted active siblings. Other known v1
 catalog fields are omitted from GET and return `404 not_found` on PUT when
 endpoint and source policy otherwise permit the request.

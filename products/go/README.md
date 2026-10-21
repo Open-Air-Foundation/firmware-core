@@ -205,7 +205,7 @@ partition table, and merged factory-flash binary.
 - [`docs/fg_learning.md`](docs/fg_learning.md) — factory fuel-gauge learning
   boot path (`FgLearningRunner` / `FgLearningController` split, dashboard)
 - [`docs/hardware_test.md`](docs/hardware_test.md) — on-device Hardware Test
-  surface (Peripheral, GPS, Accelerometer, FG Learning arm)
+  surface (Peripheral, GPS, Accelerometer, Battery Calibration arm)
 - [`docs/bq27742_capability.md`](docs/bq27742_capability.md) — BQ27742-G1
   gauge and protector reference for board rev 2.0 (I²C timing, data-flash
   map, protector checksum, status registers)

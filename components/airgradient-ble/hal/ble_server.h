@@ -77,7 +77,7 @@ public:
 //   start() -> [set_passkey_display_callback()] -> [set_auth_complete_callback()]
 //   -> [set_connect_callback()] -> [set_disconnect_callback()] ->
 //   [set_advertising_name()] -> [add_advertised_service_uuid()] ->
-//   [set_manufacturer_data()] -> start_advertising()
+//   [set_manufacturer_data()] -> [set_advertising_interval()] -> start_advertising()
 //
 // ISR-safe: no
 // Thread-safe: no
@@ -127,6 +127,14 @@ public:
   // the payload bytes. Must be called after init() and before
   // start_advertising(). Returns false if the data could not be set.
   virtual bool set_manufacturer_data(const uint8_t *data, size_t len) = 0;
+
+  // Sets a fixed legacy advertising interval in microseconds. Valid values
+  // are 20,000..10,240,000 inclusive, in exact 625 us steps. Must be called
+  // after init() while advertising is stopped. Retained across advertising
+  // stop/start until deinit(); callers that omit it use the stack default.
+  // Returns false for invalid values, an uninitialised server, or active
+  // advertising, without changing the previous interval.
+  virtual bool set_advertising_interval(uint32_t interval_us) = 0;
 
   // Starts the GATT server and begins advertising. Should be called after all
   // services and characteristics have been added and started.

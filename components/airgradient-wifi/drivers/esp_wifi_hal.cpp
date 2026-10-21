@@ -561,6 +561,13 @@ void EspWifiHal::_handle_ip_event(int32_t id, void *data) {
     auto *evt = static_cast<ip_event_got_ip_t *>(data);
     const uint32_t ip = (evt != nullptr) ? evt->ip_info.ip.addr : 0;
     _snapshot.ip = ip;
+    wifi_ps_type_t power_save = WIFI_PS_NONE;
+    const esp_err_t err = esp_wifi_get_ps(&power_save);
+    if (err == ESP_OK) {
+      ESP_LOGI(TAG, "Wi-Fi power save after got IP: %d", static_cast<int>(power_save));
+    } else {
+      ESP_LOGW(TAG, "failed to read Wi-Fi power save: %d", err);
+    }
     if (_on_got_ip) {
       _on_got_ip(ip);
     }

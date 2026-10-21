@@ -154,7 +154,7 @@ public:
   /// start_advertising(). Returns false on failure.
   bool init_stack_and_register(const char *serial);
 
-  /// Phase 3: set the advertised name + service UUID and start advertising.
+  /// Phase 3: set the name, service UUID and interval, then start advertising.
   /// Marks the service initialized. Returns false if advertising fails.
   bool start_advertising();
 

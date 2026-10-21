@@ -177,6 +177,7 @@ public:
   bool set_security(AgBleIoCapability, uint8_t) override { return true; }
   bool delete_all_bonds() override { return true; }
   AgBleGattService *add_service(const char *) override { return nullptr; }
+  bool set_advertising_interval(uint32_t) override { return true; }
   bool set_advertising_name(const char *) override { return true; }
   bool add_advertised_service_uuid(const char *) override { return true; }
   bool set_manufacturer_data(const uint8_t *, size_t) override { return true; }

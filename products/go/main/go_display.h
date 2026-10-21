@@ -50,6 +50,7 @@ enum class Screen : uint8_t {
   ShutdownCharging,  ///< USB-powered cold boot; application remains off
   ShutdownCharged,   ///< Charging-only mode; charger reports charge complete
   TrackingStatus,    ///< Read-only current-session and GPS details
+  PowerSaving,       ///< Power-saving settings submenu
 };
 
 enum class Metric : uint8_t {
