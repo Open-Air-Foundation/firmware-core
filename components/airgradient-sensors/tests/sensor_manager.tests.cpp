@@ -1164,9 +1164,10 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pressure = &mock_pressure_local;
     SensorManager xsensor_manager(xsensors);
 
-    // Pressure sensor supports temp/hum
-    REQUIRE_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
-    REQUIRE_CALL(mock_pressure_local, temp_hum_data())
+    // Pressure sensor supports temp/hum — consulted by both the temp/hum
+    // fallback resolution and the pressure-temperature accumulation.
+    ALLOW_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
+    ALLOW_CALL(mock_pressure_local, temp_hum_data())
         .RETURN(TempHumData{23.5f, MeasuresInvalid::HUMIDITY});
 
     // Pressure sensor provides pressure data
@@ -1174,9 +1175,10 @@ TEST_CASE("Averaging", "[SensorManager]") {
 
     auto result = xsensor_manager.start_measures(1);
 
-    // Verify pressure data
+    // Verify pressure data, including the die temperature now carried along
     REQUIRE_THAT(result.pressure.pressure, WithinAbs(1013.25f, 0.001f));
     REQUIRE_THAT(result.pressure.altitude, WithinAbs(110.0f, 0.001f));
+    REQUIRE_THAT(result.pressure.temperature, WithinAbs(23.5f, 0.001f));
 
     // Verify temp_hum_a comes from pressure sensor (no dedicated sensor)
     REQUIRE_THAT(result.temp_hum_a.temperature, WithinAbs(23.5f, 0.001f));
@@ -1204,14 +1206,19 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pressure = &mock_pressure_local;
     SensorManager xsensor_manager(xsensors);
 
-    // Pressure sensor supports temp/hum
-    REQUIRE_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
+    // Pressure sensor supports temp/hum. Each iteration reads the die
+    // temperature twice: once for the temp/hum fallback and once for the
+    // pressure-temperature accumulation.
+    ALLOW_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
     REQUIRE_CALL(mock_pressure_local, temp_hum_data())
-        .RETURN(TempHumData{20.0f, MeasuresInvalid::HUMIDITY});
+        .RETURN(TempHumData{20.0f, MeasuresInvalid::HUMIDITY})
+        .TIMES(2);
     REQUIRE_CALL(mock_pressure_local, temp_hum_data())
-        .RETURN(TempHumData{22.0f, MeasuresInvalid::HUMIDITY});
+        .RETURN(TempHumData{22.0f, MeasuresInvalid::HUMIDITY})
+        .TIMES(2);
     REQUIRE_CALL(mock_pressure_local, temp_hum_data())
-        .RETURN(TempHumData{24.0f, MeasuresInvalid::HUMIDITY});
+        .RETURN(TempHumData{24.0f, MeasuresInvalid::HUMIDITY})
+        .TIMES(2);
 
     // Pressure readings
     EXPECT_READ(mock_pressure_local, (PressureData{1010.0f, 100.0f}), true);
@@ -1245,8 +1252,9 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pressure = &mock_pressure_local;
     SensorManager xsensor_manager(xsensors);
 
-    // Pressure sensor does NOT support temp/hum
-    REQUIRE_CALL(mock_pressure_local, supports_temp_hum()).RETURN(false);
+    // Pressure sensor does NOT support temp/hum (probed by both the fallback
+    // resolver and the pressure-temperature accumulation)
+    ALLOW_CALL(mock_pressure_local, supports_temp_hum()).RETURN(false);
 
     // Pressure sensor provides pressure data only
     EXPECT_READ(mock_pressure_local, (PressureData{1013.25f, 110.0f}), true);
@@ -1280,13 +1288,15 @@ TEST_CASE("Averaging", "[SensorManager]") {
     xsensors.pressure = &mock_pressure_local;
     SensorManager xsensor_manager(xsensors);
 
-    // Pressure sensor supports temp/hum, but should be ignored
+    // Pressure sensor supports temp/hum, but must not feed temp_hum_a; its
+    // die temperature is still accumulated into the pressure measures.
     ALLOW_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
+    ALLOW_CALL(mock_pressure_local, temp_hum_data())
+        .RETURN(TempHumData{30.0f, MeasuresInvalid::HUMIDITY});
 
     // Dedicated sensor provides data
     EXPECT_READ(mock_tempHum_local, (TempHumData{25.0f, 55.0f}), true);
 
-    // Pressure sensor provides pressure data (temp_hum_data() should NOT be called)
     EXPECT_READ(mock_pressure_local, (PressureData{1013.25f, 110.0f}), true);
 
     auto result = xsensor_manager.start_measures(1);
@@ -1322,8 +1332,11 @@ TEST_CASE("Averaging", "[SensorManager]") {
 
     FORBID_CALL(mock_co2_local, supports_temp_hum());
     FORBID_CALL(mock_co2_local, temp_hum_data());
-    FORBID_CALL(mock_pressure_local, supports_temp_hum());
-    FORBID_CALL(mock_pressure_local, temp_hum_data());
+    // The pressure-temperature accumulation reads the die temperature even
+    // when the fallback resolver never reaches PRESSURE.
+    ALLOW_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
+    ALLOW_CALL(mock_pressure_local, temp_hum_data())
+        .RETURN(TempHumData{30.0f, MeasuresInvalid::HUMIDITY});
 
     EXPECT_READ(mock_tempHum_local, (TempHumData{24.5f, 56.0f}), true);
     EXPECT_READ(mock_co2_local, (CO2Data{460}), true);
@@ -1362,8 +1375,11 @@ TEST_CASE("Averaging", "[SensorManager]") {
     ALLOW_CALL(mock_pm_a_local, supports_temp_hum()).RETURN(true);
     ALLOW_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
 
-    // Only CO2 temp_hum_data should be called (PM_A and PRESSURE should NOT be called)
+    // Only CO2 feeds temp_hum_a; the pressure die temperature is still read
+    // for the pressure measures.
     REQUIRE_CALL(mock_co2_local, temp_hum_data()).RETURN(TempHumData{22.0f, 55.0f});
+    ALLOW_CALL(mock_pressure_local, temp_hum_data())
+        .RETURN(TempHumData{30.0f, MeasuresInvalid::HUMIDITY});
 
     EXPECT_READ(mock_co2_local, (CO2Data{450}), true);
     EXPECT_READ(mock_pm_a_local,
@@ -1410,7 +1426,7 @@ TEST_CASE("Averaging", "[SensorManager]") {
     SensorManager xsensor_manager(xsensors);
 
     // Both support temp/hum, but PRESSURE should win (custom priority)
-    REQUIRE_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
+    ALLOW_CALL(mock_pressure_local, supports_temp_hum()).RETURN(true);
     // CO2 supports_temp_hum should NOT be called (resolver stops at PRESSURE)
     ALLOW_CALL(mock_co2_local, supports_temp_hum()).RETURN(true);
 
@@ -1419,9 +1435,12 @@ TEST_CASE("Averaging", "[SensorManager]") {
         .IN_SEQUENCE(seq)
         .LR_SIDE_EFFECT(_1 = PressureData{1015.0f, 105.0f})
         .RETURN(true);
+    // Read twice after the pressure read: once for the temp/hum fallback and
+    // once for the pressure-temperature accumulation.
     REQUIRE_CALL(mock_pressure_local, temp_hum_data())
         .IN_SEQUENCE(seq)
-        .RETURN(TempHumData{24.0f, MeasuresInvalid::HUMIDITY});
+        .RETURN(TempHumData{24.0f, MeasuresInvalid::HUMIDITY})
+        .TIMES(2);
 
     auto result = xsensor_manager.start_measures(1);
 

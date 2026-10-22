@@ -3,7 +3,11 @@
 Measurement corrections derive a user-facing PM2.5, temperature, and humidity
 view from authoritative raw AirGradient Go measurements. Corrections are
 validated and persisted as device settings, while cloud, storage, and BLE
-measurement transports retain raw sensor values.
+measurement transports carry the sensor values before user corrections.
+Temperature and humidity on those transports are already compensated for
+enclosure board heat (see `products/go/main/go_thermal_comp.h`); the raw SHT
+reading passes through only while the battery NTC is invalid or the board is
+cooler than the SHT tab. The deep-sleep fast path stores raw readings.
 
 ## Files
 

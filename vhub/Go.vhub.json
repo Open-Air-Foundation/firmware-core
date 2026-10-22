@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "c30bfb9",
+  "rev": "79129bd",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1499,6 +1499,38 @@
       "references": [
         "products/go/docs/sensor_producer.md",
         "products/go/docs/power_management.md"
+      ]
+    },
+    {
+      "id": "go.sensing.thermal-compensation",
+      "title": "Displayed temperature is compensated for board heat",
+      "objective": "Verify the Home temperature tracks room air instead of the board-heated SHT reading, on battery and on USB power.",
+      "category": "Measurements",
+      "sub_category": "Temperature & humidity",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "A USB cable and charger.",
+        "An independent reference thermometer (not another AirGradient unit) placed beside the device.",
+        "Still room air between 20 and 32 °C, away from fans, vents and direct sun."
+      ],
+      "steps": [
+        {
+          "action": "Record the current operating mode and USB connection state. Disconnect USB, restart the device and leave it on battery beside the reference thermometer in still air for 90 minutes. Compare the Home temperature with the reference.",
+          "expected_result": "The Home temperature is within ±1.5 °C of the reference. Uncompensated it would read 2-5 °C above the reference."
+        },
+        {
+          "action": "Connect USB power and wait 45 minutes with the room stable. Compare the Home temperature with the reference again.",
+          "expected_result": "The Home temperature is still within ±1.5 °C of the reference although the board warms with charging. Humidity stays plausible."
+        }
+      ],
+      "cleanup": [
+        "Restore only the original values captured before this case changed them: operating mode and USB connection state.",
+        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+      ],
+      "references": [
+        "products/go/docs/measurement_corrections.md"
       ]
     },
     {

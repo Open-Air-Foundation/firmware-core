@@ -207,7 +207,7 @@ Measures SensorManager::start_measures(int iterations, SensorGroup groups) {
   PMData sum_pm_b = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   TVOCNOxData sum_voc_nox = {0, 0, 0, 0};
   O3No2Data sum_o3no2 = {0, 0, 0, 0, 0};
-  PressureData sum_pressure = {0, 0};
+  PressureData sum_pressure = {0, 0, 0};
 
   // Initialize single flattened counter struct
   AverageMeasuresCounters counters;
@@ -631,6 +631,13 @@ void SensorManager::_accumulate_pressure(PressureData &sum, AverageMeasuresCount
 
   PressureData data;
   if (_sensors.pressure->read(data)) {
+    if (_sensors.pressure->supports_temp_hum()) {
+      const auto &die = _sensors.pressure->temp_hum_data();
+      if (die.is_temp_valid()) {
+        sum.temperature += die.temperature;
+        counters.pressure_temp++;
+      }
+    }
     if (data.is_pressure_valid()) {
       sum.pressure += data.pressure;
       counters.pressure++;
@@ -647,7 +654,9 @@ PressureData SensorManager::_calculate_pressure_average(const PressureData &sum,
   return {.pressure = (counters.pressure > 0) ? sum.pressure / counters.pressure
                                               : MeasuresInvalid::PRESSURE,
           .altitude = (counters.altitude > 0) ? sum.altitude / counters.altitude
-                                              : MeasuresInvalid::ALTITUDE};
+                                              : MeasuresInvalid::ALTITUDE,
+          .temperature = (counters.pressure_temp > 0) ? sum.temperature / counters.pressure_temp
+                                                      : MeasuresInvalid::TEMPERATURE};
 }
 
 TempHumSource SensorManager::_resolve_temp_hum_a_source() {
