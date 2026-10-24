@@ -43,4 +43,37 @@ using Payload = std::array<uint8_t, PAYLOAD_SIZE>;
 // their wire sentinel. The caller supplies battery in power.battery_percentage.
 Payload encode(const MeasuresAGo &measures);
 
+// Why an Offline fast-path wake did or did not broadcast. The console stops
+// printing soon after GPS init on these wakes, so the report is kept in RTC
+// memory and printed early on the next boot instead.
+enum class WakeOutcome : uint8_t {
+  Advertised,
+  SkippedButton,
+  SkippedSleepTooShort,
+  SkippedShipMode,
+  SkippedPromotion, // storage failure promoted before the display refresh
+  SetupFailed,
+  StopFailed,
+};
+
+enum class SetupStep : uint8_t { None, Init, Payload, Interval, Start };
+
+struct WakeReport {
+  uint32_t sequence = 0; // counts stored reports since the last power-on reset
+  WakeOutcome outcome = WakeOutcome::SkippedPromotion;
+  SetupStep failed_step = SetupStep::None;
+  uint32_t advertising_started_ms = 0; // since boot; 0 when not advertised
+  uint32_t advertising_duration_ms = 0;
+  uint32_t awake_ms = 0; // when the sleep decision was made
+  bool has_payload = false;
+  Payload payload{};
+};
+
+// Stores the report for the next boot and assigns its sequence number.
+void store_wake_report(WakeReport report);
+// Returns the stored report once, then clears it.
+bool take_wake_report(WakeReport &out);
+// Writes a single-line description, e.g. "seq=3 outcome=advertised ...".
+void format_wake_report(const WakeReport &report, char *buffer, size_t size);
+
 } // namespace GoBleAdvertisement

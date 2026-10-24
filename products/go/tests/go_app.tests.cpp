@@ -1375,12 +1375,23 @@ TEST_CASE("fast path BLE: window follows display duration and all overhead reach
 
   CHECK(result.outcome == GoAppTestAccess::Outcome::Sleep);
   CHECK(observed_display);
+  const uint32_t advertising_ms = display_ms;
   CHECK(board.ble.started_ms == 75);
-  CHECK(board.ble.stopped_ms - board.ble.started_ms == display_ms);
-  CHECK(clock.now == display_ms + 100);
+  CHECK(board.ble.stopped_ms - board.ble.started_ms == advertising_ms);
+  CHECK(clock.now == advertising_ms + 100);
   CHECK(test_spy::last_sleep_awake_ms == clock.now);
   CHECK(test_spy::light_sleep_count == 0);
   CHECK_FALSE(board.ble.initialized);
+
+  GoBleAdvertisement::WakeReport report{};
+  REQUIRE(GoBleAdvertisement::take_wake_report(report));
+  CHECK(report.outcome == GoBleAdvertisement::WakeOutcome::Advertised);
+  CHECK(report.advertising_started_ms == 75);
+  CHECK(report.advertising_duration_ms == advertising_ms);
+  CHECK(report.awake_ms == clock.now);
+  CHECK(report.has_payload);
+  CHECK(std::vector<uint8_t>(report.payload.begin(), report.payload.end()) == board.ble.payload);
+  CHECK_FALSE(GoBleAdvertisement::take_wake_report(report));
 }
 
 TEST_CASE("fast path BLE: known promotion and shutdown paths skip broadcasting") {
@@ -1390,38 +1401,73 @@ TEST_CASE("fast path BLE: known promotion and shutdown paths skip broadcasting")
   GoAppTestAccess access(app);
   RtcAppState state{};
   volatile bool button = false;
-  SECTION("button already latched") { button = true; }
+  using GoBleAdvertisement::WakeOutcome;
+  WakeOutcome expected = WakeOutcome::Advertised;
+  SECTION("button already latched") {
+    button = true;
+    expected = WakeOutcome::SkippedButton;
+  }
   SECTION("sleep already too short") {
     test_spy::sleep_decision_to_return = {PowerService::SleepType::None, 0};
+    expected = WakeOutcome::SkippedSleepTooShort;
   }
   SECTION("route storage failure") {
     state.tracking_state = TrackingState::Recording;
     state.tracking_session_id = 12345;
     test_spy::resume_route_result = false;
+    expected = WakeOutcome::SkippedPromotion;
   }
   SECTION("over-temperature") {
     test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverTemperature;
+    expected = WakeOutcome::SkippedShipMode;
   }
   SECTION("under-temperature") {
     test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::UnderTemperature;
+    expected = WakeOutcome::SkippedShipMode;
   }
   SECTION("over-discharge") {
     test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverDischarge;
+    expected = WakeOutcome::SkippedShipMode;
   }
   access.execute_fast_path(state, button);
   CHECK(board.call_index("ble_server") == -1);
   CHECK(board.ble.calls.empty());
   CHECK(test_spy::cache_backed_up);
+
+  GoBleAdvertisement::WakeReport report{};
+  REQUIRE(GoBleAdvertisement::take_wake_report(report));
+  CHECK(report.outcome == expected);
+  CHECK(report.advertising_started_ms == 0);
+  CHECK_FALSE(report.has_payload);
 }
 
 TEST_CASE("fast path BLE: setup and stop failures preserve display storage and sleep") {
   test_spy::reset();
   MockBoard board;
-  SECTION("initialization") { board.ble.fail_at = "init"; }
-  SECTION("payload") { board.ble.fail_at = "payload"; }
-  SECTION("interval") { board.ble.fail_at = "interval"; }
-  SECTION("start") { board.ble.fail_at = "start"; }
-  SECTION("stop") { board.ble.fail_at = "stop"; }
+  using GoBleAdvertisement::SetupStep;
+  using GoBleAdvertisement::WakeOutcome;
+  WakeOutcome expected_outcome = WakeOutcome::SetupFailed;
+  SetupStep expected_step = SetupStep::None;
+  SECTION("initialization") {
+    board.ble.fail_at = "init";
+    expected_step = SetupStep::Init;
+  }
+  SECTION("payload") {
+    board.ble.fail_at = "payload";
+    expected_step = SetupStep::Payload;
+  }
+  SECTION("interval") {
+    board.ble.fail_at = "interval";
+    expected_step = SetupStep::Interval;
+  }
+  SECTION("start") {
+    board.ble.fail_at = "start";
+    expected_step = SetupStep::Start;
+  }
+  SECTION("stop") {
+    board.ble.fail_at = "stop";
+    expected_outcome = WakeOutcome::StopFailed;
+  }
   GoApp app(board);
   GoAppTestAccess access(app);
   volatile bool button = false;
@@ -1436,6 +1482,11 @@ TEST_CASE("fast path BLE: setup and stop failures preserve display storage and s
   CHECK(board.ble.calls.back() == "deinit");
   CHECK_FALSE(board.ble.active);
   CHECK_FALSE(board.ble.initialized);
+
+  GoBleAdvertisement::WakeReport report{};
+  REQUIRE(GoBleAdvertisement::take_wake_report(report));
+  CHECK(report.outcome == expected_outcome);
+  CHECK(report.failed_step == expected_step);
 }
 
 TEST_CASE("fast path BLE: promotion after display always releases BLE") {

@@ -181,6 +181,17 @@ static int expected_gps_baud_at_boot(WakeCause cause, const GoSettings &settings
   return GpsDriver::MODULE_DEFAULT_BAUD;
 }
 
+// Printed early in boot because Offline wakes stop logging soon after GPS init.
+static void log_previous_offline_wake_report() {
+  GoBleAdvertisement::WakeReport report{};
+  if (!GoBleAdvertisement::take_wake_report(report)) {
+    return;
+  }
+  char text[192];
+  GoBleAdvertisement::format_wake_report(report, text, sizeof(text));
+  AG_LOGI(TAG, "previous offline wake: %s", text);
+}
+
 // ===========================================================================
 // GoApp::run() — boot path selection
 // ===========================================================================
@@ -215,6 +226,7 @@ void GoApp::run() {
           static_cast<int>(state.lock_state), state.has_flag(RtcAppFlag::GpsEnabled),
           static_cast<int>(state.tracking_state), state.tracking_session_id,
           state.has_flag(RtcAppFlag::SensorsWarm));
+  log_previous_offline_wake_report();
 
   BootPath path = select_boot_path(cause, state, charging_only_eligible);
   const char *boot_message = nullptr;
@@ -639,6 +651,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   // --- Display + sleep decision ---
   PowerService::SleepDecision decision{};
   bool warm = false;
+  GoBleAdvertisement::WakeReport wake_report{};
   if (!promote) {
     PowerService &pwr = _board.power();
     if (!power_polled) {
@@ -654,6 +667,8 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
                           ? Screen::ShutdownTemperatureLow
                           : Screen::ShutdownTemperature;
       disp.init(values);
+      wake_report.outcome = GoBleAdvertisement::WakeOutcome::SkippedShipMode;
+      GoBleAdvertisement::store_wake_report(wake_report);
       return {
           .outcome = FastPathResult::Outcome::Shutdown,
           .handoff = {},
@@ -668,20 +683,41 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     // Broadcast raw measurements, matching Portable BLE, while the
     // synchronous display refresh runs.
     AgBleServer *broadcast = nullptr;
-    if (!button_pressed && preliminary_sleep.type == PowerService::SleepType::Deep &&
-        power_snapshot.ship_mode_request == ShipModeRequest::None) {
+    using GoBleAdvertisement::SetupStep;
+    using GoBleAdvertisement::WakeOutcome;
+    if (button_pressed) {
+      wake_report.outcome = WakeOutcome::SkippedButton;
+    } else if (preliminary_sleep.type != PowerService::SleepType::Deep) {
+      wake_report.outcome = WakeOutcome::SkippedSleepTooShort;
+    } else if (power_snapshot.ship_mode_request != ShipModeRequest::None) {
+      wake_report.outcome = WakeOutcome::SkippedShipMode;
+    } else {
       MeasuresAGo advertised = ago;
       advertised.power.battery_percentage = power_snapshot.battery_percentage;
       const auto payload = GoBleAdvertisement::encode(advertised);
+      wake_report.payload = payload;
+      wake_report.has_payload = true;
       broadcast = &_board.ble_server();
-      if (!broadcast->init("") ||
-          !broadcast->set_service_broadcast(GoBleAdvertisement::SERVICE_UUID, payload.data(),
-                                            payload.size()) ||
-          !broadcast->set_advertising_interval(FAST_PATH_BLE_ADVERTISING_INTERVAL_US) ||
-          !broadcast->start_advertising()) {
+      SetupStep failed_step = SetupStep::None;
+      if (!broadcast->init("")) {
+        failed_step = SetupStep::Init;
+      } else if (!broadcast->set_service_broadcast(GoBleAdvertisement::SERVICE_UUID, payload.data(),
+                                                   payload.size())) {
+        failed_step = SetupStep::Payload;
+      } else if (!broadcast->set_advertising_interval(FAST_PATH_BLE_ADVERTISING_INTERVAL_US)) {
+        failed_step = SetupStep::Interval;
+      } else if (!broadcast->start_advertising()) {
+        failed_step = SetupStep::Start;
+      }
+      if (failed_step != SetupStep::None) {
         AG_LOGW(TAG, "fast-path: BLE broadcast setup failed");
+        wake_report.outcome = WakeOutcome::SetupFailed;
+        wake_report.failed_step = failed_step;
         broadcast->deinit();
         broadcast = nullptr;
+      } else {
+        wake_report.outcome = WakeOutcome::Advertised;
+        wake_report.advertising_started_ms = static_cast<uint32_t>(RTOS::get_time_ms());
       }
     }
 
@@ -689,13 +725,18 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     display_painted = true;
 
     if (broadcast != nullptr) {
-      if (!broadcast->stop_advertising()) {
+      const bool stopped = broadcast->stop_advertising();
+      wake_report.advertising_duration_ms =
+          static_cast<uint32_t>(RTOS::get_time_ms()) - wake_report.advertising_started_ms;
+      if (!stopped) {
         AG_LOGW(TAG, "fast-path: BLE broadcast stop failed");
+        wake_report.outcome = WakeOutcome::StopFailed;
       }
       broadcast->deinit();
     }
 
     uint32_t awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
+    wake_report.awake_ms = awake_ms;
     decision = pwr.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, awake_ms);
 
     if (decision.type == PowerService::SleepType::Deep) {
@@ -709,6 +750,8 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
       }
     }
   }
+
+  GoBleAdvertisement::store_wake_report(wake_report);
 
   // Observe the latched button once, after acquisition, storage, and display.
   const bool button_caused = button_pressed;

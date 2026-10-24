@@ -110,6 +110,12 @@ about 3 seconds), with no additional wait. The display's 10 ms BUSY-poll delays
 allow NimBLE to run. BLE stops and deinitializes before the final sleep decision,
 which includes BLE setup and teardown time.
 
+Each fast-path wake stores a broadcast report in RTC memory (outcome, skip or
+setup-failure reason, advertising start and duration, awake time, payload).
+The next boot prints it as `previous offline wake: ...` right after the
+`reset_reason=...` line, because the console stops showing output soon after
+GPS initialization on these wakes.
+
 Broadcasting is skipped when promotion is already required, a button press is
 latched, or a shutdown request is pending. Setup failures release BLE and allow
 display and sleep handling to continue. These public advertisements require no

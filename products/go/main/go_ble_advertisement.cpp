@@ -9,7 +9,20 @@
 
 #include "go_ble_advertisement.h"
 
+#include <cinttypes>
 #include <cmath>
+#include <cstdio>
+
+// RTC_DATA_ATTR keeps the wake report across deep sleep; host tests define it away.
+#if !defined(TEST_HOST) && defined(__has_include)
+#if __has_include("esp_attr.h")
+#include "esp_attr.h"
+#endif
+#endif
+
+#ifndef RTC_DATA_ATTR
+#define RTC_DATA_ATTR
+#endif
 
 namespace GoBleAdvertisement {
 namespace {
@@ -68,6 +81,83 @@ Payload encode(const MeasuresAGo &m) {
       encode_scaled(m.power.battery_percentage, m.power.is_battery_percentage_valid(),
                     WHOLE_UNIT_SCALE, 0, INVALID_U8 - 1, INVALID_U8));
   return payload;
+}
+
+namespace {
+
+RTC_DATA_ATTR WakeReport s_wake_report;
+RTC_DATA_ATTR bool s_wake_report_valid = false;
+RTC_DATA_ATTR uint32_t s_wake_report_sequence = 0;
+
+const char *outcome_name(WakeOutcome outcome) {
+  switch (outcome) {
+  case WakeOutcome::Advertised:
+    return "advertised";
+  case WakeOutcome::SkippedButton:
+    return "skipped-button";
+  case WakeOutcome::SkippedSleepTooShort:
+    return "skipped-sleep-too-short";
+  case WakeOutcome::SkippedShipMode:
+    return "skipped-ship-mode";
+  case WakeOutcome::SkippedPromotion:
+    return "skipped-promotion";
+  case WakeOutcome::SetupFailed:
+    return "setup-failed";
+  case WakeOutcome::StopFailed:
+    return "stop-failed";
+  }
+  return "unknown";
+}
+
+const char *step_name(SetupStep step) {
+  switch (step) {
+  case SetupStep::None:
+    return "none";
+  case SetupStep::Init:
+    return "init";
+  case SetupStep::Payload:
+    return "payload";
+  case SetupStep::Interval:
+    return "interval";
+  case SetupStep::Start:
+    return "start";
+  }
+  return "unknown";
+}
+
+} // namespace
+
+void store_wake_report(WakeReport report) {
+  report.sequence = ++s_wake_report_sequence;
+  s_wake_report = report;
+  s_wake_report_valid = true;
+}
+
+bool take_wake_report(WakeReport &out) {
+  if (!s_wake_report_valid) {
+    return false;
+  }
+  out = s_wake_report;
+  s_wake_report_valid = false;
+  return true;
+}
+
+void format_wake_report(const WakeReport &report, char *buffer, size_t size) {
+  if (buffer == nullptr || size == 0) {
+    return;
+  }
+  char payload[PAYLOAD_SIZE * 2 + 1] = "none";
+  if (report.has_payload) {
+    for (size_t i = 0; i < PAYLOAD_SIZE; ++i) {
+      std::snprintf(payload + i * 2, 3, "%02x", report.payload[i]);
+    }
+  }
+  std::snprintf(buffer, size,
+                "seq=%" PRIu32 " outcome=%s failed_step=%s adv_start_ms=%" PRIu32
+                " adv_duration_ms=%" PRIu32 " awake_ms=%" PRIu32 " payload=%s",
+                report.sequence, outcome_name(report.outcome), step_name(report.failed_step),
+                report.advertising_started_ms, report.advertising_duration_ms, report.awake_ms,
+                payload);
 }
 
 } // namespace GoBleAdvertisement

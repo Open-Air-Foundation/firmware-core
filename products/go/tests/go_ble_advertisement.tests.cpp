@@ -8,6 +8,7 @@
 #include <catch2/generators/catch_generators.hpp>
 
 #include <limits>
+#include <string>
 
 using GoBleAdvertisement::encode;
 using GoBleAdvertisement::Payload;
@@ -112,4 +113,45 @@ TEST_CASE("BLE advertisement: one failed field preserves the remaining readings"
   const Payload expected{0x01, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x90,
                          0x01, 0xFF, 0xFF, 0x00, 0x00, 0xFF};
   REQUIRE(encode(m) == expected);
+}
+
+TEST_CASE("BLE advertisement: wake report is delivered once with a rising sequence",
+          "[ble][advertisement]") {
+  using GoBleAdvertisement::WakeOutcome;
+  using GoBleAdvertisement::WakeReport;
+  WakeReport discard{};
+  GoBleAdvertisement::take_wake_report(discard);
+
+  WakeReport first{};
+  first.outcome = WakeOutcome::SkippedButton;
+  GoBleAdvertisement::store_wake_report(first);
+  WakeReport second{};
+  second.outcome = WakeOutcome::Advertised;
+  GoBleAdvertisement::store_wake_report(second);
+
+  WakeReport out{};
+  REQUIRE(GoBleAdvertisement::take_wake_report(out));
+  CHECK(out.outcome == WakeOutcome::Advertised);
+  CHECK(out.sequence > 0);
+  CHECK_FALSE(GoBleAdvertisement::take_wake_report(out));
+
+  GoBleAdvertisement::store_wake_report(second);
+  WakeReport next{};
+  REQUIRE(GoBleAdvertisement::take_wake_report(next));
+  CHECK(next.sequence == out.sequence + 1);
+}
+
+TEST_CASE("BLE advertisement: wake report formats as one line", "[ble][advertisement]") {
+  GoBleAdvertisement::WakeReport report{};
+  report.sequence = 7;
+  report.outcome = GoBleAdvertisement::WakeOutcome::SetupFailed;
+  report.failed_step = GoBleAdvertisement::SetupStep::Start;
+  report.awake_ms = 14250;
+  report.has_payload = true;
+  report.payload = encode(MeasuresAGo{});
+  char text[192];
+  GoBleAdvertisement::format_wake_report(report, text, sizeof(text));
+  CHECK(std::string(text) ==
+        "seq=7 outcome=setup-failed failed_step=start adv_start_ms=0 adv_duration_ms=0 "
+        "awake_ms=14250 payload=010080ffffffffffffff0080ff");
 }
