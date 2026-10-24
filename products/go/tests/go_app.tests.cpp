@@ -1334,7 +1334,7 @@ TEST_CASE("fast path BLE: advertises raw measurements despite configured correct
   CHECK(result.outcome == GoAppTestAccess::Outcome::Sleep);
   CHECK(board.ble.name.empty());
   CHECK(board.ble.uuid == GoBleAdvertisement::SERVICE_UUID);
-  CHECK(board.ble.interval_us == 300000);
+  CHECK(board.ble.interval_us == 50000);
   CHECK(board.ble.payload == std::vector<uint8_t>{0x01, 0xD0, 0x07, 0x33, 0x64, 0x00, 0x90, 0x01,
                                                   0x95, 0x27, 0xD5, 0xFF, 0x4B});
   CHECK(board.ble.calls ==

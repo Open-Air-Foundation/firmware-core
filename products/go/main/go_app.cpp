@@ -81,7 +81,9 @@ static constexpr uint32_t FAST_PATH_GAS_SAMPLE_INTERVAL_MS = 500;
 static constexpr uint32_t FAST_PATH_LIGHT_SLEEP_MIN_MS = 1000;
 // Leave room for waking and issuing the raw command before conditioning expires.
 static constexpr uint32_t FAST_PATH_GAS_WAKE_MARGIN_MS = 100;
-static constexpr uint32_t FAST_PATH_BLE_ADVERTISING_INTERVAL_US = 300000;
+// Scanners catch only some advertising events, so a dense burst inside the
+// display refresh adds chances without extending the wake.
+static constexpr uint32_t FAST_PATH_BLE_ADVERTISING_INTERVAL_US = 50000;
 
 /// A transient BMS communication failure gets one same-boot retry.
 static constexpr uint8_t BMS_INIT_MAX_ATTEMPTS = 2;

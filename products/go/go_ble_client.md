@@ -34,7 +34,7 @@ download protocol.
 
 Offline timer wakes broadcast public, unencrypted measurements without a
 connection, pairing, or bonding. The same payload repeats at a configured
-300 ms interval during display refresh (typically about 3 seconds), then BLE
+50 ms interval during display refresh (typically about 2.5 seconds), then BLE
 shuts down. Reception on every wakeup is not guaranteed.
 
 OS scan scheduling or duplicate filtering may cause missed reports. Where

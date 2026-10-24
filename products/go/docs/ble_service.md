@@ -105,10 +105,11 @@ uses the stack defaults.
 
 `GoApp::execute_fast_path()` encodes raw measurements and the latest battery
 percentage, then starts a non-connectable broadcast before synchronous display
-refresh. The interval is 300 ms; the window follows refresh duration (typically
-about 3 seconds), with no additional wait. The display's 10 ms BUSY-poll delays
-allow NimBLE to run. BLE stops and deinitializes before the final sleep decision,
-which includes BLE setup and teardown time.
+refresh. The interval is 50 ms; the window follows refresh duration (typically
+about 2.5 seconds), with no additional wait. A dense burst gives duty-cycled
+scanners more chances without lengthening the wake. The display's 10 ms
+BUSY-poll delays allow NimBLE to run. BLE stops and deinitializes before the
+final sleep decision, which includes BLE setup and teardown time.
 
 Each fast-path wake stores a broadcast report in RTC memory (outcome, skip or
 setup-failure reason, advertising start and duration, awake time, payload).
