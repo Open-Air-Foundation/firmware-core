@@ -19,6 +19,26 @@ constexpr uint32_t ADVERTISING_INTERVAL_UNIT_US = 625;
 constexpr size_t UUID128_SIZE = 16;
 constexpr size_t AD_HEADER_SIZE = 2;
 constexpr size_t MAX_BROADCAST_DATA_SIZE = BLE_HS_ADV_MAX_SZ - AD_HEADER_SIZE - UUID128_SIZE;
+constexpr size_t COMPANY_ID_SIZE = 2;
+// UUID list element plus the manufacturer data element header.
+constexpr size_t MAX_LIST_BROADCAST_DATA_SIZE =
+    BLE_HS_ADV_MAX_SZ - (AD_HEADER_SIZE + UUID128_SIZE) - AD_HEADER_SIZE;
+
+// Configures a non-connectable, non-discoverable broadcast with no scan
+// response, then uploads packet as the complete advertising data.
+bool apply_nonconnectable_broadcast(NimBLEAdvertising &advertising,
+                                    NimBLEAdvertisementData &packet) {
+  advertising.setDiscoverableMode(BLE_GAP_DISC_MODE_NON);
+  advertising.setConnectableMode(BLE_GAP_CONN_MODE_NON);
+  advertising.enableScanResponse(false);
+  // Clear controller-side scan response too, including any previous session.
+  // NimBLE's enableScanResponse(false) only suppresses future uploads.
+  if (ble_gap_adv_rsp_set_data(nullptr, 0) != 0) {
+    return false;
+  }
+  // Set the complete packet last: NimBLE's mode setters may insert Flags.
+  return advertising.setAdvertisementData(packet);
+}
 
 // Maps AgBleProperty flags to the corresponding NIMBLE_PROPERTY bitmask.
 // NIMBLE_PROPERTY is an unscoped enum; its enumerators are in global scope.
@@ -355,17 +375,31 @@ bool NimbleBleServer::set_service_broadcast(const char *uuid, const uint8_t *dat
   if (!packet.setServiceData(service_uuid, data, len)) {
     return false;
   }
+  return apply_nonconnectable_broadcast(*advertising, packet);
+}
 
-  advertising->setDiscoverableMode(BLE_GAP_DISC_MODE_NON);
-  advertising->setConnectableMode(BLE_GAP_CONN_MODE_NON);
-  advertising->enableScanResponse(false);
-  // Clear controller-side scan response too, including any previous session.
-  // NimBLE's enableScanResponse(false) only suppresses future uploads.
-  if (ble_gap_adv_rsp_set_data(nullptr, 0) != 0) {
+bool NimbleBleServer::set_service_list_broadcast(const char *uuid, const uint8_t *manufacturer_data,
+                                                 size_t len) {
+  if (_server == nullptr || uuid == nullptr || manufacturer_data == nullptr ||
+      len <= COMPANY_ID_SIZE || len > MAX_LIST_BROADCAST_DATA_SIZE ||
+      _server->getConnectedCount() != 0) {
     return false;
   }
-  // Set the complete packet last: NimBLE's mode setters may insert Flags.
-  return advertising->setAdvertisementData(packet);
+  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+  if (advertising == nullptr || advertising->isAdvertising()) {
+    return false;
+  }
+
+  const NimBLEUUID service_uuid(uuid);
+  if (service_uuid.bitSize() != BLE_UUID_TYPE_128) {
+    return false;
+  }
+  NimBLEAdvertisementData packet;
+  if (!packet.setCompleteServices(service_uuid) ||
+      !packet.setManufacturerData(manufacturer_data, len)) {
+    return false;
+  }
+  return apply_nonconnectable_broadcast(*advertising, packet);
 }
 
 bool NimbleBleServer::start_advertising() {

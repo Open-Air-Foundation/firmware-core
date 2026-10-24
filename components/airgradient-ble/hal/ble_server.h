@@ -143,6 +143,20 @@ public:
     return false;
   }
 
+  // Replaces advertising data with a Complete List of 128-bit Service UUIDs
+  // holding uuid, followed by one Manufacturer Specific Data element. Unlike
+  // Service Data alone, the UUID list lets iOS match the broadcast with a
+  // service-filtered scan while the phone is locked. manufacturer_data starts
+  // with the 2-byte little-endian company ID and holds 3..11 bytes. Same
+  // lifecycle rules as set_service_broadcast(). Default unsupported.
+  virtual bool set_service_list_broadcast(const char *uuid, const uint8_t *manufacturer_data,
+                                          size_t len) {
+    (void)uuid;
+    (void)manufacturer_data;
+    (void)len;
+    return false;
+  }
+
   // Sets a fixed legacy advertising interval in microseconds. Valid values
   // are 20,000..10,240,000 inclusive, in exact 625 us steps. Must be called
   // after init() while advertising is stopped. Retained across advertising

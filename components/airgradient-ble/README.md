@@ -141,6 +141,13 @@ disables connections and scan responses, and omits Flags and local name.
 Call after `init()` while advertising is stopped and no peer is connected,
 then set the interval and call `start_advertising()`.
 
+`set_service_list_broadcast(uuid, manufacturer_data, len)` instead places a
+Complete List of 128-bit Service UUIDs holding `uuid`, followed by one
+Manufacturer Specific Data field of 3–11 bytes that starts with the 2-byte
+little-endian company ID. Scanners that filter by service UUID, such as iOS
+while the phone is locked, match this form; Service Data alone does not match.
+The same lifecycle rules apply.
+
 Broadcasts are public and require no pairing. Stop and `deinit()` when done;
 reinitialize before returning to connectable advertising. On setup failure,
 retry or deinitialize.

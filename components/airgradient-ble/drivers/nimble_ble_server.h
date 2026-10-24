@@ -84,6 +84,8 @@ public:
   bool add_advertised_service_uuid(const char *uuid) override;
   bool set_manufacturer_data(const uint8_t *data, size_t len) override;
   bool set_service_broadcast(const char *uuid, const uint8_t *data, size_t len) override;
+  bool set_service_list_broadcast(const char *uuid, const uint8_t *manufacturer_data,
+                                  size_t len) override;
   bool set_advertising_interval(uint32_t interval_us) override;
   bool start_advertising() override;
   bool stop_advertising() override;
