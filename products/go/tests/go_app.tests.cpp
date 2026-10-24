@@ -331,6 +331,12 @@ public:
     payload.assign(data, data + len);
     return fail_at != "payload";
   }
+  bool set_service_list_broadcast(const char *value, const uint8_t *data, size_t len) override {
+    calls.push_back("payload");
+    uuid = value;
+    payload.assign(data, data + len);
+    return fail_at != "payload";
+  }
   bool set_advertising_interval(uint32_t value) override {
     calls.push_back("interval");
     interval_us = value;
@@ -1335,8 +1341,9 @@ TEST_CASE("fast path BLE: advertises raw measurements despite configured correct
   CHECK(board.ble.name.empty());
   CHECK(board.ble.uuid == GoBleAdvertisement::SERVICE_UUID);
   CHECK(board.ble.interval_us == 50000);
-  CHECK(board.ble.payload == std::vector<uint8_t>{0x01, 0xD0, 0x07, 0x33, 0x64, 0x00, 0x90, 0x01,
-                                                  0x95, 0x27, 0xD5, 0xFF, 0x4B});
+  // Test company ID 0xFFFF, then the v2 bit-packed payload.
+  CHECK(board.ble.payload ==
+        std::vector<uint8_t>{0xFF, 0xFF, 0xC2, 0xD2, 0x8C, 0x0C, 0x80, 0x0C, 0xBA, 0xF7, 0x12});
   CHECK(board.ble.calls ==
         std::vector<std::string>{"init", "payload", "interval", "start", "stop", "deinit"});
   CHECK_FALSE(board.ble.initialized);
@@ -1389,8 +1396,11 @@ TEST_CASE("fast path BLE: window follows display duration and all overhead reach
   CHECK(report.advertising_started_ms == 75);
   CHECK(report.advertising_duration_ms == advertising_ms);
   CHECK(report.awake_ms == clock.now);
-  CHECK(report.has_payload);
-  CHECK(std::vector<uint8_t>(report.payload.begin(), report.payload.end()) == board.ble.payload);
+  REQUIRE(report.payload_size == GoBleAdvertisement::PAYLOAD_V2_SIZE);
+  CHECK(
+      std::vector<uint8_t>(report.payload.begin(), report.payload.begin() + report.payload_size) ==
+      std::vector<uint8_t>(board.ble.payload.begin() + GoBleAdvertisement::COMPANY_ID_SIZE,
+                           board.ble.payload.end()));
   CHECK_FALSE(GoBleAdvertisement::take_wake_report(report));
 }
 
@@ -1438,7 +1448,7 @@ TEST_CASE("fast path BLE: known promotion and shutdown paths skip broadcasting")
   REQUIRE(GoBleAdvertisement::take_wake_report(report));
   CHECK(report.outcome == expected);
   CHECK(report.advertising_started_ms == 0);
-  CHECK_FALSE(report.has_payload);
+  CHECK(report.payload_size == 0);
 }
 
 TEST_CASE("fast path BLE: setup and stop failures preserve display storage and sleep") {
@@ -1532,8 +1542,8 @@ TEST_CASE("fast path BLE: unavailable measurements and battery retain wire senti
   const auto result = access.execute_fast_path(RtcAppState{}, button);
 
   CHECK(result.outcome == GoAppTestAccess::Outcome::Sleep);
-  CHECK(board.ble.payload == std::vector<uint8_t>{0x01, 0x00, 0x80, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                                                  0xFF, 0xFF, 0x00, 0x80, 0xFF});
+  CHECK(board.ble.payload ==
+        std::vector<uint8_t>{0xFF, 0xFF, 0xFA, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x1F});
   CHECK_FALSE(board.ble.initialized);
 }
 

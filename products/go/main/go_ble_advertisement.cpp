@@ -9,6 +9,7 @@
 
 #include "go_ble_advertisement.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
@@ -85,6 +86,81 @@ Payload encode(const MeasuresAGo &m) {
 
 namespace {
 
+struct V2Field {
+  unsigned bit;
+  unsigned width;
+};
+
+constexpr V2Field V2_VERSION{0, 3};
+constexpr V2Field V2_TEMPERATURE{3, 11};
+constexpr V2Field V2_HUMIDITY{14, 7};
+constexpr V2Field V2_PM25{21, 14};
+constexpr V2Field V2_CO2{35, 14};
+constexpr V2Field V2_PRESSURE{49, 13};
+constexpr V2Field V2_BATTERY{62, 7};
+constexpr double V2_TEMPERATURE_OFFSET_C = 40.0;
+constexpr double V2_TEMPERATURE_SCALE = 10.0;
+constexpr double V2_PRESSURE_OFFSET_HPA = -300.0;
+
+constexpr uint32_t invalid_value(V2Field field) { return (1u << field.width) - 1; }
+
+// Scales value + offset; out-of-range, invalid or nonfinite values use the
+// field's all-ones sentinel. Round to nearest, ties away from zero.
+uint32_t encode_v2_field(V2Field field, double value, bool valid, double offset, double scale) {
+  const uint32_t invalid = invalid_value(field);
+  if (!valid || !std::isfinite(value)) {
+    return invalid;
+  }
+  const double rounded = std::round((value + offset) * scale);
+  if (rounded < 0 || rounded >= invalid) {
+    return invalid;
+  }
+  return static_cast<uint32_t>(rounded);
+}
+
+void put_bits(PayloadV2 &payload, V2Field field, uint32_t value) {
+  for (unsigned i = 0; i < field.width; ++i) {
+    if ((value >> i) & 1u) {
+      const unsigned bit = field.bit + i;
+      payload[bit / BITS_PER_BYTE] |= static_cast<uint8_t>(1u << (bit % BITS_PER_BYTE));
+    }
+  }
+}
+
+} // namespace
+
+PayloadV2 encode_v2(const MeasuresAGo &m) {
+  PayloadV2 payload{};
+  put_bits(payload, V2_VERSION, VERSION_V2);
+  put_bits(payload, V2_TEMPERATURE,
+           encode_v2_field(V2_TEMPERATURE, m.temp_hum_a.temperature, m.temp_hum_a.is_temp_valid(),
+                           V2_TEMPERATURE_OFFSET_C, V2_TEMPERATURE_SCALE));
+  put_bits(payload, V2_HUMIDITY,
+           encode_v2_field(V2_HUMIDITY, m.temp_hum_a.humidity, m.temp_hum_a.is_hum_valid(), 0,
+                           WHOLE_UNIT_SCALE));
+  put_bits(payload, V2_PM25,
+           encode_v2_field(V2_PM25, m.pm_a.pm_25, m.pm_a.is_pm_25_valid(), 0, PM25_SCALE));
+  put_bits(payload, V2_CO2,
+           encode_v2_field(V2_CO2, m.co2.co2, m.co2.is_valid(), 0, WHOLE_UNIT_SCALE));
+  put_bits(payload, V2_PRESSURE,
+           encode_v2_field(V2_PRESSURE, m.pressure.pressure, m.pressure.is_pressure_valid(),
+                           V2_PRESSURE_OFFSET_HPA, PRESSURE_SCALE));
+  put_bits(payload, V2_BATTERY,
+           encode_v2_field(V2_BATTERY, m.power.battery_percentage,
+                           m.power.is_battery_percentage_valid(), 0, WHOLE_UNIT_SCALE));
+  return payload;
+}
+
+ManufacturerDataV2 manufacturer_data_v2(const PayloadV2 &payload) {
+  ManufacturerDataV2 data{};
+  data[0] = static_cast<uint8_t>(COMPANY_ID);
+  data[1] = static_cast<uint8_t>(COMPANY_ID >> BITS_PER_BYTE);
+  std::copy(payload.begin(), payload.end(), data.begin() + COMPANY_ID_SIZE);
+  return data;
+}
+
+namespace {
+
 RTC_DATA_ATTR WakeReport s_wake_report;
 RTC_DATA_ATTR bool s_wake_report_valid = false;
 RTC_DATA_ATTR uint32_t s_wake_report_sequence = 0;
@@ -147,10 +223,9 @@ void format_wake_report(const WakeReport &report, char *buffer, size_t size) {
     return;
   }
   char payload[PAYLOAD_SIZE * 2 + 1] = "none";
-  if (report.has_payload) {
-    for (size_t i = 0; i < PAYLOAD_SIZE; ++i) {
-      std::snprintf(payload + i * 2, 3, "%02x", report.payload[i]);
-    }
+  const size_t payload_size = std::min<size_t>(report.payload_size, PAYLOAD_SIZE);
+  for (size_t i = 0; i < payload_size; ++i) {
+    std::snprintf(payload + i * 2, 3, "%02x", report.payload[i]);
   }
   std::snprintf(buffer, size,
                 "seq=%" PRIu32 " outcome=%s failed_step=%s adv_start_ms=%" PRIu32

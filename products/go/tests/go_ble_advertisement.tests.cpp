@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <algorithm>
 #include <limits>
 #include <string>
 
@@ -147,11 +148,103 @@ TEST_CASE("BLE advertisement: wake report formats as one line", "[ble][advertise
   report.outcome = GoBleAdvertisement::WakeOutcome::SetupFailed;
   report.failed_step = GoBleAdvertisement::SetupStep::Start;
   report.awake_ms = 14250;
-  report.has_payload = true;
   report.payload = encode(MeasuresAGo{});
+  report.payload_size = GoBleAdvertisement::PAYLOAD_SIZE;
   char text[192];
   GoBleAdvertisement::format_wake_report(report, text, sizeof(text));
   CHECK(std::string(text) ==
         "seq=7 outcome=setup-failed failed_step=start adv_start_ms=0 adv_duration_ms=0 "
         "awake_ms=14250 payload=010080ffffffffffffff0080ff");
+}
+
+namespace {
+
+MeasuresAGo v2_measures(float temperature, float humidity, float pm25, int co2, float pressure,
+                        float battery) {
+  MeasuresAGo measures{};
+  measures.temp_hum_a.temperature = temperature;
+  measures.temp_hum_a.humidity = humidity;
+  measures.pm_a.pm_25 = pm25;
+  measures.co2.co2 = co2;
+  measures.pressure.pressure = pressure;
+  measures.power.battery_percentage = battery;
+  return measures;
+}
+
+uint32_t v2_field(const GoBleAdvertisement::PayloadV2 &payload, unsigned bit, unsigned width) {
+  uint32_t value = 0;
+  for (unsigned i = 0; i < width; ++i) {
+    const unsigned position = bit + i;
+    value |= static_cast<uint32_t>((payload[position / 8] >> (position % 8)) & 1u) << i;
+  }
+  return value;
+}
+
+} // namespace
+
+TEST_CASE("BLE advertisement v2: exact bit-packed wire bytes", "[ble][advertisement]") {
+  const auto payload =
+      GoBleAdvertisement::encode_v2(v2_measures(20.0f, 50.6f, 10.0f, 400, 1013.25f, 74.6f));
+  const GoBleAdvertisement::PayloadV2 expected{0xC2, 0xD2, 0x8C, 0x0C, 0x80,
+                                               0x0C, 0xBA, 0xF7, 0x12};
+  REQUIRE(payload == expected);
+  CHECK(v2_field(payload, 0, 3) == 2);
+  CHECK(v2_field(payload, 3, 11) == 600);  // (20.0 + 40) * 10
+  CHECK(v2_field(payload, 14, 7) == 51);   // 50.6 rounds up
+  CHECK(v2_field(payload, 21, 14) == 100); // 10.0 * 10
+  CHECK(v2_field(payload, 35, 14) == 400);
+  CHECK(v2_field(payload, 49, 13) == 7133); // (1013.25 - 300) * 10, ties away from zero
+  CHECK(v2_field(payload, 62, 7) == 75);
+  CHECK(v2_field(payload, 69, 3) == 0);
+}
+
+TEST_CASE("BLE advertisement v2: invalid measurements use all-ones sentinels",
+          "[ble][advertisement]") {
+  const auto payload = GoBleAdvertisement::encode_v2(MeasuresAGo{});
+  const GoBleAdvertisement::PayloadV2 expected{0xFA, 0xFF, 0xFF, 0xFF, 0xFF,
+                                               0xFF, 0xFF, 0xFF, 0x1F};
+  CHECK(payload == expected);
+}
+
+TEST_CASE("BLE advertisement v2: range limits", "[ble][advertisement]") {
+  SECTION("lowest representable values") {
+    const auto payload =
+        GoBleAdvertisement::encode_v2(v2_measures(-40.0f, 0.0f, 0.0f, 0, 300.0f, 0.0f));
+    CHECK(v2_field(payload, 3, 11) == 0);
+    CHECK(v2_field(payload, 14, 7) == 0);
+    CHECK(v2_field(payload, 21, 14) == 0);
+    CHECK(v2_field(payload, 35, 14) == 0);
+    CHECK(v2_field(payload, 49, 13) == 0);
+    CHECK(v2_field(payload, 62, 7) == 0);
+  }
+  SECTION("highest valid sensor values fit") {
+    // MeasuresRange already rejects anything above 125 C, 10000 ppm and 1100 hPa.
+    const auto payload =
+        GoBleAdvertisement::encode_v2(v2_measures(125.0f, 100.0f, 1638.2f, 10000, 1100.0f, 100.0f));
+    CHECK(v2_field(payload, 3, 11) == 1650);
+    CHECK(v2_field(payload, 14, 7) == 100);
+    CHECK(v2_field(payload, 21, 14) == 16382);
+    CHECK(v2_field(payload, 35, 14) == 10000);
+    CHECK(v2_field(payload, 49, 13) == 8000);
+    CHECK(v2_field(payload, 62, 7) == 100);
+  }
+  SECTION("out of range becomes invalid") {
+    const auto payload =
+        GoBleAdvertisement::encode_v2(v2_measures(-40.1f, 127.0f, 1638.3f, 16383, 299.9f, 127.0f));
+    CHECK(v2_field(payload, 3, 11) == 2047);
+    CHECK(v2_field(payload, 14, 7) == 127);
+    CHECK(v2_field(payload, 21, 14) == 16383);
+    CHECK(v2_field(payload, 35, 14) == 16383);
+    CHECK(v2_field(payload, 49, 13) == 8191);
+    CHECK(v2_field(payload, 62, 7) == 127);
+  }
+}
+
+TEST_CASE("BLE advertisement v2: manufacturer data starts with the company ID",
+          "[ble][advertisement]") {
+  const auto payload = GoBleAdvertisement::encode_v2(MeasuresAGo{});
+  const auto data = GoBleAdvertisement::manufacturer_data_v2(payload);
+  CHECK(data[0] == 0xFF);
+  CHECK(data[1] == 0xFF);
+  CHECK(std::equal(payload.begin(), payload.end(), data.begin() + 2));
 }

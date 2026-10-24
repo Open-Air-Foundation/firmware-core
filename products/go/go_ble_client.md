@@ -41,31 +41,55 @@ OS scan scheduling or duplicate filtering may cause missed reports. Where
 supported, clients can adjust scan settings or disable duplicate filtering to
 improve reception.
 
-Match **Service Data UUID `992f1fe6-4519-4d4f-8ca7-546d36126ee8`**.
-The non-connectable advertisement contains one 128-bit Service Data AD field
-(type `0x21`): 2 bytes length/type + 16 bytes UUID + 13 bytes payload.
-There are no Flags, local name, separate service UUID list, or scan response;
-inspect Service Data rather than filtering by name or a service UUID list.
+The non-connectable advertisement holds two AD fields and nothing else (no
+Flags, local name, or scan response):
 
-Offsets below refer to the 13-byte body after the UUID. Multibyte integers
-are little-endian; signed values use two's complement.
+| Field | AD type | Bytes | Content |
+|---|---|---|---|
+| Complete List of 128-bit Service UUIDs | `0x07` | 2 + 16 | `992f1fe6-4519-4d4f-8ca7-546d36126ee8` |
+| Manufacturer Specific Data | `0xFF` | 2 + 2 + 9 | Company ID, then the 9-byte payload |
 
-| Offset | Type | Measurement | Unit | Invalid |
+Filter by the **service UUID `992f1fe6-4519-4d4f-8ca7-546d36126ee8`**: the UUID
+list lets iOS deliver the broadcast to a service-filtered scan while the phone
+is locked, which Service Data alone does not. The company ID is little-endian
+`0xFFFF`, the Bluetooth SIG value reserved for testing, until an assigned ID
+replaces it. Ignore manufacturer data with any other company ID.
+
+Wi-Fi provisioning advertisements also use `0xFFFF` manufacturer data (with
+`<model>#<serial>` text and the provisioning service UUID). Tell them apart by
+the service UUID list: only Offline broadcasts list the Offline UUID, and
+provisioning scanners must ignore advertisements that do.
+
+The 9-byte payload (format version 2) is bit-packed, least significant bit
+first: bit `n` is bit `n % 8` of byte `n / 8`. Each field is an unsigned
+integer; all ones means invalid or unavailable.
+
+| Bits | Width | Measurement | Decode | Invalid |
 |---|---|---|---|---|
-| 0 | `uint8` | Format version (`1`) | — | — |
-| 1–2 | `int16` | Temperature | 0.01 °C | `0x8000` |
-| 3 | `uint8` | Humidity | 1 %RH | `0xFF` |
-| 4–5 | `uint16` | PM2.5 | 0.1 µg/m³ | `0xFFFF` |
-| 6–7 | `uint16` | CO₂ | 1 ppm | `0xFFFF` |
-| 8–9 | `uint16` | Pressure | 0.1 hPa | `0xFFFF` |
-| 10–11 | `int16` | Barometric altitude | 1 m | `0x8000` |
-| 12 | `uint8` | Battery | 1 % | `0xFF` |
+| 0–2 | 3 | Format version (`2`) | — | — |
+| 3–13 | 11 | Temperature | value / 10 − 40 °C | `2047` |
+| 14–20 | 7 | Humidity | value %RH | `127` |
+| 21–34 | 14 | PM2.5 | value / 10 µg/m³ | `16383` |
+| 35–48 | 14 | CO₂ | value ppm | `16383` |
+| 49–61 | 13 | Pressure | value / 10 + 300 hPa | `8191` |
+| 62–68 | 7 | Battery | value % | `127` |
+| 69–71 | 3 | Reserved, `0` | — | — |
 
-Measurements are raw (no user corrections); altitude is pressure-derived,
-not GPS. Values round to nearest, with ties away from zero. Invalid,
-nonfinite, or unrepresentable values use the field's sentinel. Check sentinels
-before scaling, and ignore unsupported versions or bodies other than 13 bytes.
-The payload has no timestamp, sample ID, serial number, or GPS position.
+Barometric altitude is not sent. Derive it from pressure as the firmware does:
+`44330 × (1 − (hPa / 1013.25)^0.1903)` metres.
+
+Measurements are raw (no user corrections). Values round to nearest, with ties
+away from zero. Invalid, nonfinite, or out-of-range values use the field's
+sentinel. Check sentinels before scaling, and ignore other versions or
+payloads other than 9 bytes. The payload has no timestamp, sample ID, serial
+number, or GPS position.
+
+Earlier firmware sent format version 1 instead: one 128-bit Service Data field
+(type `0x21`) with a 13-byte body (version `1`; int16 temperature in 0.01 °C;
+uint8 humidity; uint16 PM2.5 in 0.1 µg/m³; uint16 CO₂; uint16 pressure in
+0.1 hPa; int16 barometric altitude in m; uint8 battery; little-endian, with
+`0x8000`, `0xFF` and `0xFFFF` sentinels). Clients may keep decoding it for
+those devices.
 
 Clients may accept the first report per device and suppress identical payloads
 for 5 seconds from that accepted report, without extending the window for
@@ -73,8 +97,9 @@ duplicates. Accept a changed payload immediately. This is a deduplication
 convention, not a guarantee that reports belong to the same measurement cycle.
 
 The [Python listener](../../scripts/ago_listen_measurements.py) prints every
-matching scanner report as JSON, including duplicates; invalid values become
-`null`, and `received_at` is the client's reception time. From the repo root:
+matching scanner report as JSON, including duplicates, for both format
+versions; invalid values become `null`, and `received_at` is the client's
+reception time. From the repo root:
 
 ```sh
 python3 -m pip install bleak

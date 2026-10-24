@@ -104,8 +104,9 @@ uses the stack defaults.
 ### Offline Broadcast Lifecycle
 
 `GoApp::execute_fast_path()` encodes raw measurements and the latest battery
-percentage, then starts a non-connectable broadcast before synchronous display
-refresh. The interval is 50 ms; the window follows refresh duration (typically
+percentage as the 9-byte version 2 payload, then starts a non-connectable
+broadcast (Offline service UUID list plus manufacturer data, through
+`set_service_list_broadcast()`) before synchronous display refresh. The interval is 50 ms; the window follows refresh duration (typically
 about 2.5 seconds), with no additional wait. A dense burst gives duty-cycled
 scanners more chances without lengthening the wake. The display's 10 ms
 BUSY-poll delays allow NimBLE to run. BLE stops and deinitializes before the

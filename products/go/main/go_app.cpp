@@ -12,6 +12,7 @@
 
 #include "go_app.h"
 
+#include <algorithm>
 #include <cstdio>
 
 #include "ag_log.h"
@@ -696,15 +697,17 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     } else {
       MeasuresAGo advertised = ago;
       advertised.power.battery_percentage = power_snapshot.battery_percentage;
-      const auto payload = GoBleAdvertisement::encode(advertised);
-      wake_report.payload = payload;
-      wake_report.has_payload = true;
+      const auto payload = GoBleAdvertisement::encode_v2(advertised);
+      const auto manufacturer_data = GoBleAdvertisement::manufacturer_data_v2(payload);
+      std::copy(payload.begin(), payload.end(), wake_report.payload.begin());
+      wake_report.payload_size = static_cast<uint8_t>(payload.size());
       broadcast = &_board.ble_server();
       SetupStep failed_step = SetupStep::None;
       if (!broadcast->init("")) {
         failed_step = SetupStep::Init;
-      } else if (!broadcast->set_service_broadcast(GoBleAdvertisement::SERVICE_UUID, payload.data(),
-                                                   payload.size())) {
+      } else if (!broadcast->set_service_list_broadcast(GoBleAdvertisement::SERVICE_UUID,
+                                                        manufacturer_data.data(),
+                                                        manufacturer_data.size())) {
         failed_step = SetupStep::Payload;
       } else if (!broadcast->set_advertising_interval(FAST_PATH_BLE_ADVERTISING_INTERVAL_US)) {
         failed_step = SetupStep::Interval;
