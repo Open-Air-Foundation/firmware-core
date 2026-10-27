@@ -3,9 +3,11 @@
 # AirGradient device model.
 CONFIG_AG_DEVICE_MODEL_GO=y
 
-# Enable power management and dynamic frequency scaling at startup.
-CONFIG_PM_ENABLE=y
-CONFIG_PM_DFS_INIT_AUTO=y
+# Power management (DFS) stays off. With it and CONFIG_BT_LE_SLEEP_ENABLE both
+# on, a USB-Serial-JTAG reset (idf.py monitor, esptool hard reset) taken while
+# the app runs hangs the ESP32-C5 in the 2nd-stage bootloader until a power-on
+# reset. Either option alone boots fine, and DFS measured no power difference.
+CONFIG_PM_ENABLE=n
 
 # PayloadCache: store MeasuresAGo (temp/hum, PM, CO2, TVOC/NOx, power) rather
 # than the full Measures struct. Go does not use the secondary sensor channels
