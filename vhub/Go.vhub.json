@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "6222df6",
+  "rev": "af8092e",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1566,7 +1566,7 @@
     {
       "id": "go.tracking.pause",
       "title": "Pausing stops new route points but keeps live readings",
-      "objective": "Verify this on-device route state transition.",
+      "objective": "Verify Pause shows the paused indicator, stops the point count, and leaves live measurements updating.",
       "category": "Tracking & Storage",
       "sub_category": "Route Lifecycle",
       "applicability": [
@@ -1574,35 +1574,33 @@
       ],
       "setup": [
         "Tracking is idle.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "The Portable/Stationary measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record the interval under Settings > Operations > Measurement Interval.",
+          "expected_result": "Portable is selected and the original interval is recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
+          "action": "Set the interval to 10 seconds and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
+          "expected_result": "Home displays measurements."
         },
         {
-          "action": "Set interval 10s and Auto Lock Off.",
-          "expected_result": "The device is ready to operate the tracking menu."
+          "action": "Select Main Menu > Start Tracking, then open Tracking > Status. Allow up to 40 seconds.",
+          "expected_result": "State shows Recording and Points reaches at least three."
         },
         {
-          "action": "Start Tracking and record the ID from the Tracking start = <ID> snackbar. Open Tracking > Status, wait for three points (40 seconds), then Pause. Record Points from Status and observe three scheduled Home updates (40 seconds). Reopen Status.",
-          "expected_result": "The pause icon appears, Points stays fixed, and live readings continue."
+          "action": "Select Tracking > Pause Tracking and inspect Home. Open Tracking > Status and record Points.",
+          "expected_result": "Home shows the paused indicator. Status shows Paused."
         },
         {
-          "action": "Stop Tracking and compare the Tracking stop = <ID> snackbar with the recorded start ID.",
-          "expected_result": "The same session ends."
+          "action": "Return Home and observe for 40 seconds, then reopen Tracking > Status.",
+          "expected_result": "Home continues refreshing measurements while the paused indicator remains visible. Points matches the count recorded after pausing."
         }
       ],
       "cleanup": [
-        "Stop any session created by this case; its route data is expendable.",
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: Portable/Stationary interval and Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Stop the session created by this case, including after interruption.",
+        "Restore and confirm the recorded measurement interval, then return Home. Record any restoration failure. The test session’s route data is expendable."
       ],
       "references": [
         "products/go/docs/storage_service.md",
