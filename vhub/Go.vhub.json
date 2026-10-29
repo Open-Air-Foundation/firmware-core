@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "36e313c",
+  "rev": "b9c1036",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -639,8 +639,8 @@
     },
     {
       "id": "go.settings.aqi-brightness",
-      "title": "AQI LED brightness levels are distinct and persistent",
-      "objective": "Verify brightness controls the rear LEDs without changing their AQI meaning.",
+      "title": "Rear LED brightness levels are distinct and survive a power cycle",
+      "objective": "Verify that the AQI LED setting visibly controls rear LED brightness and persists after powering off and on.",
       "category": "Display & Controls",
       "sub_category": "Indicators",
       "applicability": [
@@ -651,26 +651,29 @@
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and AQI LED brightness. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Display & Touch > AQI LED and record the current choice.",
+          "expected_result": "The original brightness setting is recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Return Home and confirm that a numeric PM2.5 reading is available.",
+          "expected_result": "Home displays a PM2.5 value rather than a dash."
         },
         {
-          "action": "After a valid PM reading, open Display & Touch > AQI LED and select Off, Dim, Mid, Bright.",
-          "expected_result": "Off emits no light; successive levels increase brightness for the current AQI color."
+          "action": "Open Settings > Display & Touch > AQI LED. Select Off, Dim, Mid, and Bright in turn, inspecting the rear LEDs after each selection. Keep the device position and room lighting unchanged.",
+          "expected_result": "Off produces no rear light. Dim, Mid, and Bright produce visibly increasing brightness."
         },
         {
-          "action": "Leave Mid selected. Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
-          "expected_result": "Mid remains selected and takes effect after a valid PM reading."
+          "action": "Select Mid, or Dim if the original setting was Mid. Note the selected level and observe its brightness.",
+          "expected_result": "The selected level differs from the original setting and the rear LEDs are illuminated."
+        },
+        {
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release, and wait 10 seconds. Press and release Power to start, allowing up to five minutes for Home with a numeric PM2.5 reading. Inspect the rear LEDs and reopen AQI LED.",
+          "expected_result": "The selected level persists in the menu, and the rear LEDs return to that brightness after startup."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: AQI LED brightness, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Restore the recorded AQI LED setting, including after interruption.",
+        "Confirm the restored choice and return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/led_service.md"
