@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "652908a",
+  "rev": "16bb5cf",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -524,8 +524,8 @@
     },
     {
       "id": "go.settings.pm",
-      "title": "The PM Display setting changes and survives restart",
-      "objective": "Verify selection, visible units and persistence of this presentation setting.",
+      "title": "PM Display changes on Home and survives a power cycle",
+      "objective": "Verify that switching between particulate concentration and USAQI updates Home and remains selected after powering off and on.",
       "category": "Display & Controls",
       "sub_category": "Settings",
       "applicability": [
@@ -534,26 +534,28 @@
       "setup": [],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and PM Display. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Display & Touch > PM Display and record the current choice.",
+          "expected_result": "The current choice, ug/m3 or USAQI, is identified."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Return Home and inspect the PM2.5 value and label.",
+          "expected_result": "A numeric value appears with the label matching the recorded choice."
         },
         {
-          "action": "Open Settings > Display & Touch > PM Display. Select Mass then USAQI, returning Home after each.",
-          "expected_result": "The choice summary and Home labels use the selected presentation; unavailable fields remain dashes."
+          "action": "Open Settings > Display & Touch > PM Display and select the other choice. Return Home and inspect the completed refresh.",
+          "expected_result": "The PM2.5 label changes to the selected presentation. The value and label are readable without clipping or leftover digits."
         },
         {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start. Reopen the same choice.",
-          "expected_result": "The last selected value persists on Home and in the choice page."
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release, and wait 10 seconds. Press and release Power to start, allowing up to five minutes for Home with a numeric PM2.5 value. Inspect Home, then reopen PM Display.",
+          "expected_result": "Home and the menu retain the newly selected presentation.",
+          "evidence": [
+            "Save a photo of Home after restart."
+          ]
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: PM Display, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Restore the recorded PM Display choice, including after interruption.",
+        "Return Home and confirm the original presentation. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/settings.md",
