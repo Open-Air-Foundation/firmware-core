@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "af8092e",
+  "rev": "ff73d8a",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1610,7 +1610,7 @@
     {
       "id": "go.tracking.resume",
       "title": "Resume restores the recording display",
-      "objective": "Verify the physical Resume control restores the Home recording indicator and live Tracking Status display.",
+      "objective": "Verify Resume restores the recording indicator and continues the displayed point count.",
       "category": "Tracking & Storage",
       "sub_category": "Route Lifecycle",
       "applicability": [
@@ -1618,39 +1618,37 @@
       ],
       "setup": [
         "Tracking is idle.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "The Portable/Stationary measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record the interval under Settings > Operations > Measurement Interval.",
+          "expected_result": "Portable is selected and the original interval is recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
+          "action": "Set the interval to 10 seconds and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
+          "expected_result": "Home displays measurements."
         },
         {
-          "action": "Set interval 10s and Auto Lock Off.",
-          "expected_result": "The device is ready to operate the tracking menu."
+          "action": "Select Main Menu > Start Tracking, then open Tracking > Status. Allow up to 40 seconds.",
+          "expected_result": "State shows Recording and Points reaches at least three."
         },
         {
-          "action": "Start Tracking and record the ID from the Tracking start = <ID> snackbar. Open Status and wait for three points, allowing 40 seconds. Pause, return Home and inspect the tracking indicator.",
-          "expected_result": "Home shows the paused indicator and the Tracking menu offers Resume."
+          "action": "Select Tracking > Pause Tracking. Inspect Home, then open Tracking > Status and record Points.",
+          "expected_result": "Home shows the paused indicator and Status shows Paused."
         },
         {
-          "action": "Select Resume, return Home, then reopen Tracking > Status. Observe for 40 seconds at the selected 10-second interval.",
-          "expected_result": "The recording dot replaces the paused indicator. Status shows Recording and Points advances; the menu offers Pause instead of Resume."
+          "action": "Select Tracking > Resume Tracking. Inspect Home, then reopen the Tracking menu.",
+          "expected_result": "The recording dot replaces the paused indicator, and Pause Tracking replaces Resume Tracking."
         },
         {
-          "action": "Stop Tracking and compare the Tracking stop = <ID> snackbar with the recorded start ID.",
-          "expected_result": "The stop snackbar displays the recorded start ID and the recording indicator clears."
+          "action": "Open Status and observe for up to 40 seconds.",
+          "expected_result": "State shows Recording and Points increases beyond the count recorded while paused."
         }
       ],
       "cleanup": [
-        "Stop any session created by this case; its route data is expendable.",
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: Portable/Stationary interval and Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Stop the session created by this case, including after interruption.",
+        "Restore and confirm the recorded measurement interval, then return Home. Record any restoration failure. The test session’s route data is expendable."
       ],
       "references": [
         "products/go/docs/storage_service.md",
