@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "b9c1036",
+  "rev": "2c96cdc",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -681,8 +681,8 @@
     },
     {
       "id": "go.settings.touch-brightness",
-      "title": "Touch LED settings control per-pad feedback",
-      "objective": "Verify the selected feedback level and correct pad mapping.",
+      "title": "Touch LED brightness controls each pad's feedback and survives a power cycle",
+      "objective": "Verify that each touch control flashes its corresponding LED at the selected brightness, and the setting persists after powering off and on.",
       "category": "Display & Controls",
       "sub_category": "Indicators",
       "applicability": [
@@ -693,26 +693,25 @@
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Touch LED intensity. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Display & Touch > Touch LED and record the current choice.",
+          "expected_result": "The original Touch LED setting is recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Select Off and return Home. Lock Home with a short Power press if it is unlocked. Tap left, center, and right separately.",
+          "expected_result": "None of the touch LEDs lights."
         },
         {
-          "action": "Select Display & Touch > Touch LED > Off, Dim, then Bright. At each level touch left, center and right separately.",
-          "expected_result": "Off has no feedback. Dim and Bright flash only the corresponding touch LED; Bright is stronger."
+          "action": "Repeat with Dim, then Bright. For each setting, return to locked Home and tap each control separately, letting each flash finish before the next tap. Keep room lighting unchanged.",
+          "expected_result": "Only the LED corresponding to the touched control flashes white, then turns off. Bright is visibly brighter than Dim."
         },
         {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
-          "expected_result": "Bright remains selected and produces the same feedback."
+          "action": "Select Dim, or Bright if the original setting was Dim. Note the selected level. Disconnect USB, power off, release Power, and wait 10 seconds. Press and release Power to start, allowing up to five minutes for Home. Check the Touch LED setting, then return to locked Home and tap each control separately.",
+          "expected_result": "The selected level persists, and each control produces its corresponding LED flash at that level."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Touch LED intensity, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Restore the recorded Touch LED setting, including after interruption.",
+        "Confirm the restored choice and return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/led_service.md"
