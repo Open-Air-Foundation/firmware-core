@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "ff73d8a",
+  "rev": "8fc164a",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1657,88 +1657,43 @@
     },
     {
       "id": "go.tracking.stop-recording",
-      "title": "Stopping a recording session returns to Idle",
-      "objective": "Verify this on-device route state transition.",
+      "title": "Stopping a recording or paused session returns to Idle",
+      "objective": "Verify Stop clears either tracking indicator and allows a new session.",
       "category": "Tracking & Storage",
       "sub_category": "Route Lifecycle",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "Tracking is idle.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "Tracking is idle."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable, then Start Tracking. Record the ID from Tracking start = <ID>.",
+          "expected_result": "Home shows the recording dot."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
+          "action": "Select Tracking > Stop Tracking. Inspect the stop message and Home, then open Main Menu.",
+          "expected_result": "The stop ID matches the recorded ID, the recording dot clears, and Start Tracking is available."
         },
         {
-          "action": "Set interval 10s and Auto Lock Off.",
-          "expected_result": "The device is ready to operate the tracking menu."
+          "action": "Select Start Tracking again and record the new ID.",
+          "expected_result": "The new ID differs from the first, and Home shows the recording dot."
         },
         {
-          "action": "Start Tracking and record the ID from the Tracking start = <ID> snackbar. Open Tracking > Status and wait for three points, allowing 40 seconds, then Stop Tracking. Record the stop snackbar ID.",
-          "expected_result": "The stop ID matches the start ID, the recording icon clears and Main Menu offers Start Tracking."
+          "action": "Select Tracking > Pause Tracking.",
+          "expected_result": "Home shows the paused indicator."
         },
         {
-          "action": "Start Tracking again and record the ID from the new Tracking start = <ID> snackbar.",
-          "expected_result": "The new session has a different ID."
+          "action": "Select Tracking > Stop Tracking. Inspect the stop message and Home, then open Main Menu.",
+          "expected_result": "The stop ID matches the second session’s ID, the paused indicator clears, and Start Tracking is available."
         }
       ],
       "cleanup": [
-        "Stop any session created by this case; its route data is expendable.",
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: Portable/Stationary interval and Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Stop any session created by this case that remains active, including after interruption. Return Home and record any failure to stop. The test sessions’ route data is expendable."
       ],
       "references": [
         "products/go/docs/storage_service.md",
-        "products/go/docs/ui_manager.md"
-      ]
-    },
-    {
-      "id": "go.tracking.stop-paused",
-      "title": "Stopping a paused session returns to Idle",
-      "objective": "Verify this on-device route state transition.",
-      "category": "Tracking & Storage",
-      "sub_category": "Route Lifecycle",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Set interval 10s and Auto Lock Off.",
-          "expected_result": "The device is ready to operate the tracking menu."
-        },
-        {
-          "action": "Start Tracking and record the ID from the Tracking start = <ID> snackbar. Open Tracking > Status and wait for three points, allowing 40 seconds. Pause and record Points, then Stop Tracking and compare the stop snackbar ID with the start ID.",
-          "expected_result": "The pause icon clears and Main Menu offers Start Tracking. The stop ID matches the recorded start ID."
-        }
-      ],
-      "cleanup": [
-        "Stop the test session if it remains active.",
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore the recorded Portable/Stationary interval and Auto Lock, operating mode, lock state and USB connection state, including after interruption. Confirm each restored setting; record any remaining change."
-      ],
-      "references": [
-        "products/go/docs/orchestrator.md",
         "products/go/docs/ui_manager.md"
       ]
     },
