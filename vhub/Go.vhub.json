@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "6594df1",
+  "rev": "3276e17",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -340,8 +340,8 @@
     },
     {
       "id": "go.ui.menu-wrap",
-      "title": "Menu navigation wraps through visible rows",
-      "objective": "Verify menu navigation wraps through visible rows.",
+      "title": "Menu wraparound keeps rows and highlighting readable",
+      "objective": "Verify that navigating across menu boundaries produces a complete, readable display without a full-screen flash.",
       "category": "Display & Controls",
       "sub_category": "Navigation",
       "applicability": [
@@ -350,22 +350,24 @@
       "setup": [],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock and Buzzer. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Unlock with a short Power press if needed. Select Main Menu > Operating Mode > Portable.",
+          "expected_result": "Portable mode is selected."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Open Main Menu > Settings and inspect the menu.",
+          "expected_result": "All rows, including Exit and About Device, are readable without clipping or overlap."
         },
         {
-          "action": "Set Auto Lock Off. In Settings move Up from Exit and Down from About Device. Repeat at the first/last selectable rows in Operations.",
-          "expected_result": "Selection wraps in both directions; rows fit without clipping and ordinary movement uses partial refresh."
+          "action": "Move the highlight to Exit. Tap left (Up) once, inspect the completed refresh, then tap right (Down) once and inspect again.",
+          "expected_result": "The highlight moves to About Device, then back to Exit. Only the intended row is highlighted after each refresh, with no full-screen flash."
+        },
+        {
+          "action": "Open Operations. Move the highlight to Exit, tap left once, then right once, inspecting each completed refresh.",
+          "expected_result": "The highlight moves to Buzzer, then back to Exit. All rows remain readable, only the intended row is highlighted, and no full-screen flash occurs."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock and Buzzer, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Return to Home, including after interruption."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
