@@ -375,6 +375,79 @@
       ]
     },
     {
+      "id": "go.ui.about",
+      "title": "About Device identifies the release unit",
+      "objective": "Verify the identity shown to QA and menu return.",
+      "category": "Display & Controls",
+      "sub_category": "Identity",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "The device serial label.",
+        "The expected firmware version from the release record."
+      ],
+      "steps": [
+        {
+          "action": "Record the initial USB connection and lock state. Unlock with a short Power press if needed.",
+          "expected_result": "The initial state is recorded and the controls are unlocked."
+        },
+        {
+          "action": "Unlock and open Main Menu > Settings > About Device.",
+          "expected_result": "Serial and firmware match the label/release record. Product and Open Source Hardware text fit without clipping."
+        },
+        {
+          "action": "Select Back.",
+          "expected_result": "Settings returns with About Device selected."
+        }
+      ],
+      "cleanup": [
+        "Return to Home and restore the recorded USB connection and lock state, including after interruption."
+      ],
+      "references": [
+        "products/go/docs/ui_manager.md"
+      ]
+    },
+    {
+      "id": "go.ui.setup-guide",
+      "title": "Reopening Setup Guide preserves onboarding",
+      "objective": "Verify an onboarded user can view and leave the guide without resetting first use.",
+      "category": "Display & Controls",
+      "sub_category": "Identity",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "Onboarding has already been completed.",
+        "A phone with a camera capable of scanning QR codes.",
+        "Internet access on the phone."
+      ],
+      "steps": [
+        {
+          "action": "Record the initial USB connection and lock state. Unlock with a short Power press if needed.",
+          "expected_result": "The initial state is recorded and the controls are unlocked."
+        },
+        {
+          "action": "Open Main Menu > Settings > Setup Guide and scan the QR.",
+          "expected_result": "The QR targets https://l.airgradient.net/GO and the sole action is Back."
+        },
+        {
+          "action": "Touch Up and Down, then Menu.",
+          "expected_result": "Up/Down do not navigate the guide; Menu returns to Settings on Setup Guide."
+        },
+        {
+          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
+          "expected_result": "Home returns without the first-use guide."
+        }
+      ],
+      "cleanup": [
+        "Return to Home and restore the recorded USB connection and lock state, including after interruption."
+      ],
+      "references": [
+        "products/go/docs/ui_manager.md"
+      ]
+    },
+    {
       "id": "go.settings.temperature",
       "title": "The Temperature Unit setting changes and survives restart",
       "objective": "Verify selection, visible units and persistence of this presentation setting.",
@@ -486,79 +559,6 @@
       "references": [
         "products/go/docs/settings.md",
         "products/go/docs/display_service.md"
-      ]
-    },
-    {
-      "id": "go.ui.about",
-      "title": "About Device identifies the release unit",
-      "objective": "Verify the identity shown to QA and menu return.",
-      "category": "Display & Controls",
-      "sub_category": "Identity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "The device serial label.",
-        "The expected firmware version from the release record."
-      ],
-      "steps": [
-        {
-          "action": "Record the initial USB connection and lock state. Unlock with a short Power press if needed.",
-          "expected_result": "The initial state is recorded and the controls are unlocked."
-        },
-        {
-          "action": "Unlock and open Main Menu > Settings > About Device.",
-          "expected_result": "Serial and firmware match the label/release record. Product and Open Source Hardware text fit without clipping."
-        },
-        {
-          "action": "Select Back.",
-          "expected_result": "Settings returns with About Device selected."
-        }
-      ],
-      "cleanup": [
-        "Return to Home and restore the recorded USB connection and lock state, including after interruption."
-      ],
-      "references": [
-        "products/go/docs/ui_manager.md"
-      ]
-    },
-    {
-      "id": "go.ui.setup-guide",
-      "title": "Reopening Setup Guide preserves onboarding",
-      "objective": "Verify an onboarded user can view and leave the guide without resetting first use.",
-      "category": "Display & Controls",
-      "sub_category": "Identity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Onboarding has already been completed.",
-        "A phone with a camera capable of scanning QR codes.",
-        "Internet access on the phone."
-      ],
-      "steps": [
-        {
-          "action": "Record the initial USB connection and lock state. Unlock with a short Power press if needed.",
-          "expected_result": "The initial state is recorded and the controls are unlocked."
-        },
-        {
-          "action": "Open Main Menu > Settings > Setup Guide and scan the QR.",
-          "expected_result": "The QR targets https://l.airgradient.net/GO and the sole action is Back."
-        },
-        {
-          "action": "Touch Up and Down, then Menu.",
-          "expected_result": "Up/Down do not navigate the guide; Menu returns to Settings on Setup Guide."
-        },
-        {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
-          "expected_result": "Home returns without the first-use guide."
-        }
-      ],
-      "cleanup": [
-        "Return to Home and restore the recorded USB connection and lock state, including after interruption."
-      ],
-      "references": [
-        "products/go/docs/ui_manager.md"
       ]
     },
     {
