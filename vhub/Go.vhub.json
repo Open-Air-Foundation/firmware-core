@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "3a3bcfd",
+  "rev": "f721e07",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1174,8 +1174,8 @@
     },
     {
       "id": "go.diagnostics.peripheral-pass",
-      "title": "Peripheral Test verifies working outputs and sensors",
-      "objective": "Verify the physical diagnostic outputs, passing summary and restoration after exit.",
+      "title": "Peripheral Test shows passing and failing results",
+      "objective": "Verify physical diagnostic outputs, both result cues and restoration after exit.",
       "category": "Diagnostics",
       "sub_category": "Peripheral",
       "applicability": [
@@ -1205,56 +1205,19 @@
         {
           "action": "Exit the test, return Home and check the recorded settings.",
           "expected_result": "The settings remain unchanged. Rear LEDs resume normal AQI indication at the saved brightness, and touch LEDs no longer remain steadily lit."
+        },
+        {
+          "action": "Reopen Settings > Hardware Test > Peripheral Test. Deliberately select Fail for Back LED, even though it works. Verify the Touch LED and Buzzer outputs and select Pass. Allow up to five minutes for the sensor checks.",
+          "expected_result": "Back LED shows FAIL; all other rows show PASS. The overall result is FAIL, the rear LEDs turn red and the alert melody plays."
+        },
+        {
+          "action": "Exit the test, return Home and check the recorded settings.",
+          "expected_result": "Settings remain unchanged, normal AQI lighting returns and touch LEDs no longer remain steadily lit."
         }
       ],
       "cleanup": [
         "Exit the diagnostic, including after interruption.",
         "Confirm the recorded settings; restore any that changed. Return Home and record any restoration failure."
-      ],
-      "references": [
-        "products/go/docs/hardware_test.md"
-      ]
-    },
-    {
-      "id": "go.diagnostics.peripheral-fail",
-      "title": "Peripheral Test reports a deliberately failed output",
-      "objective": "Verify the guided diagnostic result and exit restoration.",
-      "category": "Diagnostics",
-      "sub_category": "Peripheral",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Buzzer, AQI LED and Touch LED levels. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Warm sensors for five minutes, note current rear AQI color, then open Settings > Hardware Test > Peripheral Test.",
-          "expected_result": "The guided test opens without inactivity locking."
-        },
-        {
-          "action": "Follow each LED/touch/buzzer prompt. Mark the rear LED prompt Fail even if it works; mark the other working outputs Pass.",
-          "expected_result": "The prompted actuators operate."
-        },
-        {
-          "action": "Allow the automatic sensor sweep up to five minutes.",
-          "expected_result": "All valid sensor roles pass. Back LED alone is FAIL; overall FAIL shows with red LEDs and alert melody."
-        },
-        {
-          "action": "Exit to Home.",
-          "expected_result": "Normal LED brightness, AQI indication and buzzer preference return."
-        }
-      ],
-      "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Buzzer, AQI LED and Touch LED levels, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
       ],
       "references": [
         "products/go/docs/hardware_test.md"
