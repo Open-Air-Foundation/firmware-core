@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "610d8e6",
+  "rev": "cb9ec5e",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1386,55 +1386,6 @@
       "references": [
         "products/go/docs/sensor_producer.md",
         "products/go/docs/ui_manager.md"
-      ]
-    },
-    {
-      "id": "go.gps.tracking-idle",
-      "title": "Tracking-controlled GPS stays off while idle",
-      "objective": "Verify GPS policy in this tracking state.",
-      "category": "GPS",
-      "sub_category": "Operating Policy",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "An outdoor test location with an unobstructed view of the sky.",
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and GPS mode. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Set interval 10s and GPS Always On. Outdoors wait up to five minutes for a fix, then select Operations > GPS > On When Tracking.",
-          "expected_result": "The selected GPS policy is active."
-        },
-        {
-          "action": "Observe the receiver, Home icon and serial for 30 seconds.",
-          "expected_result": "With no session active, no GPS fix icon appears."
-        }
-      ],
-      "cleanup": [
-        "Stop this case’s session if active; its data is expendable.",
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: GPS mode and Portable/Stationary interval, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
-      ],
-      "references": [
-        "products/go/docs/gps_service.md"
       ]
     },
     {
