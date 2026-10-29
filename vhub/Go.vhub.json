@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "4077a6b",
+  "rev": "0ed760f",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -442,36 +442,40 @@
     },
     {
       "id": "go.settings.temperature",
-      "title": "The Temperature Unit setting changes and survives restart",
-      "objective": "Verify selection, visible units and persistence of this presentation setting.",
+      "title": "Home temperature units change and survive a power cycle",
+      "objective": "Verify that changing Temperature Unit updates Home and remains selected after powering off and on.",
       "category": "Display & Controls",
       "sub_category": "Settings",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "The Portable/Stationary measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the lock state and USB connection. Unlock with a short Power press if needed, then record the operating mode and Temperature Unit. Settings paths start at Main Menu > Settings.",
-          "expected_result": "Original settings are recorded before changes and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record the current Temperature Unit under Settings > Display & Touch and measurement interval under Settings > Operations.",
+          "expected_result": "Both original values are recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
+          "action": "Set Operations > Measure Int. to 5m. Return Home and allow up to six minutes for a numeric temperature reading.",
+          "expected_result": "Home displays temperature in the recorded unit, with readable values and no clipping."
         },
         {
-          "action": "Set Operations > Measure Int. > 5m and allow six minutes for a valid Home temperature reading. Open Display & Touch > Temperature Unit. Select C then F, returning Home after each and allowing the display refresh to finish.",
-          "expected_result": "The menu selects the chosen unit. Home temperature uses °C then °F with readable bold values and units and no stale digits."
+          "action": "Open Settings > Display & Touch > Temperature Unit and select the opposite unit. Return Home and inspect the completed refresh.",
+          "expected_result": "Temperature changes from °C to °F, or vice versa. The value and unit are readable without leftover digits from the previous display."
         },
         {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release, wait 10 seconds and press Power to start. Allow 30 seconds for Home and up to six minutes for a valid temperature, then inspect Home and reopen Temperature Unit.",
-          "expected_result": "The last selected value persists on Home and in the choice page."
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release, and wait 10 seconds. Press and release Power to start. Allow up to six minutes for a numeric Home temperature reading, then reopen Temperature Unit.",
+          "expected_result": "Home uses the newly selected unit, and that same unit remains selected in the menu.",
+          "evidence": [
+            "Save a photo of Home after restart."
+          ]
         }
       ],
       "cleanup": [
-        "In Portable, exit menus and restore the recorded Temperature Unit and Portable/Stationary interval, operating mode, lock state and USB connection, including after interruption. Confirm each restored setting; record any remaining change."
+        "Restore the recorded Temperature Unit and measurement interval, including after interruption.",
+        "Return Home and confirm the original unit is displayed. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/settings.md",
