@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "752fe15",
+  "rev": "3a3bcfd",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1174,44 +1174,42 @@
     },
     {
       "id": "go.diagnostics.peripheral-pass",
-      "title": "Peripheral Test reports working actuators and sensors",
-      "objective": "Verify the guided diagnostic result and exit restoration.",
+      "title": "Peripheral Test verifies working outputs and sensors",
+      "objective": "Verify the physical diagnostic outputs, passing summary and restoration after exit.",
       "category": "Diagnostics",
       "sub_category": "Peripheral",
       "applicability": [
         "V1"
       ],
-      "setup": [],
+      "setup": [
+        "A quiet environment.",
+        "Dim lighting so the LEDs are visible."
+      ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Buzzer, AQI LED and Touch LED levels. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record Buzzer under Settings > Operations, and AQI LED and Touch LED under Settings > Display & Touch.",
+          "expected_result": "All three original settings are recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Return Home and allow five minutes for sensor warmup. Open Settings > Hardware Test > Peripheral Test.",
+          "expected_result": "The first actuator prompt appears."
         },
         {
-          "action": "Warm sensors for five minutes, note current rear AQI color, then open Settings > Hardware Test > Peripheral Test.",
-          "expected_result": "The guided test opens without inactivity locking."
+          "action": "Follow the Back LED, Touch LED and Buzzer prompts. Select Pass only after observing each requested output.",
+          "expected_result": "The rear LEDs cycle red, green and blue; all three touch LEDs illuminate; the buzzer sounds."
         },
         {
-          "action": "Follow each LED/touch/buzzer prompt. Mark Pass only after observing the requested output.",
-          "expected_result": "The prompted actuators operate."
+          "action": "Allow up to five minutes for the automatic sensor checks and inspect the summary.",
+          "expected_result": "All actuator and sensor rows show PASS, and the overall result is PASS. The rear LEDs turn green and the completion melody plays. Results remain readable without clipping."
         },
         {
-          "action": "Allow the automatic sensor sweep up to five minutes.",
-          "expected_result": "All valid sensor roles pass. All rows and overall result are PASS, with green LEDs and completion melody."
-        },
-        {
-          "action": "Exit to Home.",
-          "expected_result": "Normal LED brightness, AQI indication and buzzer preference return."
+          "action": "Exit the test, return Home and check the recorded settings.",
+          "expected_result": "The settings remain unchanged. Rear LEDs resume normal AQI indication at the saved brightness, and touch LEDs no longer remain steadily lit."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Buzzer, AQI LED and Touch LED levels, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Exit the diagnostic, including after interruption.",
+        "Confirm the recorded settings; restore any that changed. Return Home and record any restoration failure."
       ],
       "references": [
         "products/go/docs/hardware_test.md"
