@@ -3114,9 +3114,19 @@ TEST_CASE("tracking timing: inactive Stop is a no-op while Clear Data clears sta
 TEST_CASE("pause/resume: keep session, GPS and live data; record results only while Recording",
           "[Orchestrator][tracking][pause]") {
   TestFixture f;
+  f.settings.gps_mode = GpsMode::OnWhenTracking;
   auto orch = f.make_orchestrator();
+  uint32_t now_ms = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  A::unlock(orch);
   REQUIRE(A::start_tracking(orch));
   const auto session = A::tracking_session_id(orch);
+
+  GpsData fix{};
+  fix.position = {47.376, 8.541};
+  fix.fix = {GpsFixType::Fix3D, 8, 1.0f};
+  A::on_gps_fix(orch, fix);
+  REQUIRE(A::build_context(orch).gps_fix);
   test_spy::reset();
 
   REQUIRE(A::pause_tracking(orch));
@@ -3125,13 +3135,48 @@ TEST_CASE("pause/resume: keep session, GPS and live data; record results only wh
   CHECK(test_spy::route_ended);
   CHECK_FALSE(test_spy::route_file_open);
   CHECK_FALSE(test_spy::gps_sleeping_started);
+  CHECK_FALSE(test_spy::gps_stopped);
+  CHECK_FALSE(test_spy::gps_started);
   CHECK(A::is_gps_active(orch));
+  CHECK(A::latest_gps(orch).position.latitude == fix.position.latitude);
+  CHECK(A::latest_gps(orch).position.longitude == fix.position.longitude);
+  const auto paused = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(paused.gps_enabled);
+  CHECK(paused.gps_fix);
   CHECK(test_spy::ble_last_status_tracking);
   CHECK(test_spy::ble_last_status_session == session);
   CHECK(test_spy::ble_tracking_state == TrackingState::Paused);
   REQUIRE(A::pause_tracking(orch));
   CHECK(test_spy::ble_notify_tracking_status_count == 1);
   CHECK_FALSE(A::start_tracking(orch));
+
+  enter_tracking_status(f, orch);
+  open_ui_row(f, orch, "GPS details");
+  Event gps_update{};
+  gps_update.type = EventType::GpsFixUpdate;
+  gps_update.gps_data = fix;
+  gps_update.gps_data.position = {47.377, 8.542};
+  A::dispatch(orch, gps_update);
+  CHECK(A::latest_gps(orch).position.latitude == 47.377);
+  CHECK(A::latest_gps(orch).position.longitude == 8.542);
+
+  const auto display_updates = DisplayService::spy_update_count;
+  now_ms = A::tracking_status_refresh_deadline_ms(orch);
+  REQUIRE(now_ms != 0);
+  A::check_timers(orch);
+  CHECK(DisplayService::spy_update_count == display_updates + 1);
+  CHECK(DisplayService::spy_last_screen == Screen::TrackingStatus);
+  const auto details = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(details.row_count == 9);
+  CHECK(details.gps_fix);
+  CHECK(std::string(details.rows[3].text) == "GPS: On");
+  CHECK(std::string(details.rows[4].text) == "Fix: 3D");
+  CHECK(std::string(details.rows[7].text) == "Lat: 47.37700");
+  CHECK(std::string(details.rows[8].text) == "Lon: 8.54200");
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  CHECK_FALSE(test_spy::gps_stopped);
+  CHECK_FALSE(test_spy::gps_started);
+  CHECK_FALSE(test_spy::gps_sleeping_started);
 
   Event reading{};
   reading.type = EventType::SensorDataReady;
