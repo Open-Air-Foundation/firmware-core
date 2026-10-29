@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "3d36f53",
+  "rev": "0c35eb5",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1695,49 +1695,6 @@
       "references": [
         "products/go/docs/storage_service.md",
         "products/go/docs/ui_manager.md"
-      ]
-    },
-    {
-      "id": "go.tracking.status-auto-lock",
-      "title": "Status suppresses inactivity locking until exit",
-      "objective": "Verify this behavior of the live session status page.",
-      "category": "Tracking & Storage",
-      "sub_category": "Tracking Status",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "A phone displaying the current time.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Set interval 10s and Auto Lock 10s. Start Tracking and open Status. Wait for three points, allowing 40 seconds.",
-          "expected_result": "Session displays State, UTC, Active, Elapsed, Points and Last."
-        },
-        {
-          "action": "Leave Status open 30 seconds with no input, then return Home and give no input for 12 seconds.",
-          "expected_result": "Status stays unlocked through 30 seconds; leaving starts a fresh 10-second timeout and Home locks after that timeout."
-        }
-      ],
-      "cleanup": [
-        "Stop the test session.",
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: Portable/Stationary interval and Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
-      ],
-      "references": [
-        "products/go/docs/ui_manager.md",
-        "products/go/docs/storage_service.md"
       ]
     },
     {
