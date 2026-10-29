@@ -10455,6 +10455,72 @@ TEST_CASE("local correction activation republishes corrected data",
   CHECK(f.local_api.get_measures().temp_hum_a.temperature == 21.0f);
 }
 
+TEST_CASE("local temperature correction redraws existing chart history without new samples",
+          "[Orchestrator][local-api][correction][chart]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Stationary;
+  f.settings.measure_interval_seconds = 300;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  f.ui_manager.sync_settings(f.settings);
+  f.local_api.publish_config_snapshot(f.settings);
+  CP2_ALLOW_CONFIG_WRITES(f);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+
+  const std::vector<float> temperatures = {18.0f, 19.0f, 21.0f, 22.0f, 23.0f};
+  for (float temperature : temperatures) {
+    MeasuresAGo sample{};
+    sample.temp_hum_a = {temperature, 50.0f};
+    sample.pm_a.pm_25 = 10.0f;
+    test_spy::cached_measurements.push_back(sample);
+  }
+  A::on_sensor_data(orch, test_spy::cached_measurements.back());
+  A::unlock(orch);
+  A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress}); // PM2.5
+  A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress}); // CO2
+  A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress}); // Temperature
+  auto values = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(values.active_metric == Metric::Temp);
+  REQUIRE(values.chart_count == temperatures.size());
+  REQUIRE(values.chart_samples != nullptr);
+  REQUIRE(values.chart_min == 18.0f);
+  REQUIRE(values.chart_max == 23.0f);
+  for (size_t i = 0; i < temperatures.size(); ++i) {
+    REQUIRE(values.chart_samples[i] == temperatures[i]);
+  }
+
+  Corrections corrections{};
+  corrections.temperature = CorrectionEntry{"custom", SlrParams{20.0f, 0.0f, std::nullopt}};
+  LocalServerConfig update{};
+  update.corrections = corrections;
+  test_spy::measurement_requested = false;
+  test_spy::cache_measurement_called = false;
+  const auto display_updates = DisplayService::spy_update_count;
+  REQUIRE(f.local_api.submit_config(update).status == ConfigSubmitStatus::Accepted);
+  dispatch_next_local_request(f, orch);
+
+  CHECK(DisplayService::spy_update_count > display_updates);
+  CHECK_FALSE(test_spy::measurement_requested);
+  CHECK_FALSE(test_spy::cache_measurement_called);
+  values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(values.active_metric == Metric::Temp);
+  CHECK_FALSE(values.use_fahrenheit);
+  CHECK(values.temperature_c == 20.0f);
+  REQUIRE(values.chart_count == temperatures.size());
+  REQUIRE(values.chart_samples != nullptr);
+  CHECK(values.chart_min == 20.0f);
+  CHECK(values.chart_max == 20.0f);
+  REQUIRE(test_spy::cached_measurements.size() == temperatures.size());
+  for (size_t i = 0; i < temperatures.size(); ++i) {
+    CAPTURE(i);
+    CHECK(values.chart_samples[i] == 20.0f);
+    CHECK(test_spy::cached_measurements[i].temp_hum_a.temperature == temperatures[i]);
+    CHECK(test_spy::cached_measurements[i].temp_hum_a.humidity == 50.0f);
+    CHECK(test_spy::cached_measurements[i].pm_a.pm_25 == 10.0f);
+  }
+  CHECK(A::raw_measures(orch).temp_hum_a.temperature == 23.0f);
+}
+
 TEST_CASE("local correction limits recover original display values without another sample",
           "[Orchestrator][local-api][correction][display]") {
   TestFixture f;
