@@ -54,6 +54,7 @@ extern "C" void __wrap__Z6rebootv() {
 namespace test_spy {
 extern std::function<void()> during_melody;
 extern uint32_t buzzer_refresh_ack_count;
+extern uint32_t buzzer_play_count;
 extern uint32_t retained_time_read_count;
 extern bool sensor_started;
 extern bool sensor_stopped;
@@ -90,6 +91,7 @@ extern bool input_stopped;
 
 // --- LedService ---
 extern uint32_t led_back_brightness_count;
+extern uint32_t led_back_solid_count;
 extern LedBrightness led_last_back_brightness;
 extern bool led_back_bright_seen;
 extern uint32_t led_back_play_count;
@@ -6785,7 +6787,7 @@ TEST_CASE("Accel Test: entries reuse the service-owned driver", "[Orchestrator][
   CHECK(f.stub_board.new_accel_sensor_calls == 0);
 }
 
-TEST_CASE("Accel Test: poll re-samples and refreshes classification",
+TEST_CASE("Accel Test: polling recovers from FAIL to PASS without replaying entry cues",
           "[Orchestrator][hwtest][accel]") {
   FakeAccel accel;
   TestFixture f(&accel);
@@ -6795,15 +6797,42 @@ TEST_CASE("Accel Test: poll re-samples and refreshes classification",
   AccelWorker worker(f);
 
   A::unlock(orch);
+  const auto sounds_before_entry = test_spy::buzzer_play_count;
+  const auto led_cues_before_entry = test_spy::led_back_solid_count;
   enter_accel_test(f, orch);
   REQUIRE(A::accel_pass(orch));
+  REQUIRE(test_spy::buzzer_play_count == sounds_before_entry + 1);
+  REQUIRE(test_spy::led_back_solid_count == led_cues_before_entry + 1);
+  auto values = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(std::string(values.rows[6].text) == "Result: PASS");
   const int reads_after_entry = accel.read_calls;
+  const auto renders_after_entry = DisplayService::spy_update_count;
 
   // A later poll re-reads; a now-out-of-band sample flips the result to FAIL.
   accel.reading = {0, 0, 300};
   A::poll_accel_test(orch);
   CHECK(accel.read_calls == reads_after_entry + 1);
   CHECK_FALSE(A::accel_pass(orch));
+  CHECK(DisplayService::spy_update_count == renders_after_entry + 1);
+  CHECK(DisplayService::spy_last_screen == Screen::AccelTest);
+  values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(std::string(values.rows[5].text) == "|a|: 300 mg");
+  CHECK(std::string(values.rows[6].text) == "Result: FAIL");
+  CHECK(test_spy::buzzer_play_count == sounds_before_entry + 1);
+  CHECK(test_spy::led_back_solid_count == led_cues_before_entry + 1);
+
+  // A stationary sample recovers in the same diagnostic session.
+  accel.reading = {0, 0, 1000};
+  A::poll_accel_test(orch);
+  CHECK(accel.read_calls == reads_after_entry + 2);
+  CHECK(A::accel_pass(orch));
+  CHECK(DisplayService::spy_update_count == renders_after_entry + 2);
+  CHECK(DisplayService::spy_last_screen == Screen::AccelTest);
+  values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(std::string(values.rows[5].text) == "|a|: 1000 mg");
+  CHECK(std::string(values.rows[6].text) == "Result: PASS");
+  CHECK(test_spy::buzzer_play_count == sounds_before_entry + 1);
+  CHECK(test_spy::led_back_solid_count == led_cues_before_entry + 1);
 }
 
 TEST_CASE("Accel Test: poll deadline caps the queue timeout while open",

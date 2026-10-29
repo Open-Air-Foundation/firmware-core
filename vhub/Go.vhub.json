@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "d2b0c83",
+  "rev": "224a447",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1299,43 +1299,6 @@
       "cleanup": [
         "Exit the diagnostic, including after interruption.",
         "Confirm the recorded settings; restore any that changed. Return Home and record any restoration failure."
-      ],
-      "references": [
-        "products/go/docs/hardware_test.md"
-      ]
-    },
-    {
-      "id": "go.diagnostics.accelerometer-recovery",
-      "title": "Accelerometer Test recovers after out-of-range motion",
-      "objective": "Verify independent FAIL and return-to-PASS behavior.",
-      "category": "Diagnostics",
-      "sub_category": "Motion",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Buzzer and AQI LED levels. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Open Hardware Test > Accelerometer Test, then move the unit until displayed magnitude is outside 850–1150 mg.",
-          "expected_result": "Within two half-second updates Result becomes FAIL; the entry cue does not repeatedly replay."
-        },
-        {
-          "action": "Rest the unit flat and observe four updates.",
-          "expected_result": "Magnitude returns to 850–1150 mg and Result returns to PASS."
-        }
-      ],
-      "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Buzzer and AQI LED levels, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
       ],
       "references": [
         "products/go/docs/hardware_test.md"
