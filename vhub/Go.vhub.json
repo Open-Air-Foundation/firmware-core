@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "3195834",
+  "rev": "6a39c10",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -413,38 +413,28 @@
     },
     {
       "id": "go.ui.setup-guide",
-      "title": "Reopening Setup Guide preserves onboarding",
-      "objective": "Verify an onboarded user can view and leave the guide without resetting first use.",
+      "title": "Setup Guide opens from Settings and closes with a Menu tap",
+      "objective": "Verify that an onboarded user can reopen the guide and return to Settings without repeating the onboarding gesture.",
       "category": "Display & Controls",
       "sub_category": "Identity",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "Onboarding has already been completed.",
-        "A phone with a camera capable of scanning QR codes.",
-        "Internet access on the phone."
+        "Onboarding has already been completed."
       ],
       "steps": [
         {
-          "action": "Record the initial USB connection and lock state. Unlock with a short Power press if needed.",
-          "expected_result": "The initial state is recorded and the controls are unlocked."
+          "action": "Unlock with a short Power press if needed. Open Main Menu > Settings > Setup Guide.",
+          "expected_result": "The guide and QR code are fully visible without clipping. The single action reads Back, rather than Hold menu to start."
         },
         {
-          "action": "Open Main Menu > Settings > Setup Guide and scan the QR.",
-          "expected_result": "The QR targets https://l.airgradient.net/GO and the sole action is Back."
-        },
-        {
-          "action": "Touch Up and Down, then Menu.",
-          "expected_result": "Up/Down do not navigate the guide; Menu returns to Settings on Setup Guide."
-        },
-        {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
-          "expected_result": "Home returns without the first-use guide."
+          "action": "Tap Menu once and release.",
+          "expected_result": "Settings appears with Setup Guide highlighted. Holding Menu is not required."
         }
       ],
       "cleanup": [
-        "Return to Home and restore the recorded USB connection and lock state, including after interruption."
+        "Return to Home, including after interruption."
       ],
       "references": [
         "products/go/docs/ui_manager.md"
