@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "0fe4113",
+  "rev": "d2b0c83",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1268,36 +1268,37 @@
     },
     {
       "id": "go.diagnostics.accelerometer-orientation",
-      "title": "Accelerometer readings respond to orientation",
-      "objective": "Verify identity, at-rest magnitude and axis direction.",
+      "title": "Accelerometer readings respond to device orientation",
+      "objective": "Verify that physical rotation changes the displayed axes while stationary readings remain valid.",
       "category": "Diagnostics",
       "sub_category": "Motion",
       "applicability": [
         "V1"
       ],
-      "setup": [],
+      "setup": [
+        "A flat, stable surface."
+      ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Buzzer and AQI LED levels. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record Buzzer under Settings > Operations and AQI LED under Settings > Display & Touch.",
+          "expected_result": "Both original settings are recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Open Settings > Hardware Test > Accelerometer Test. Place the device still on the surface and observe for five seconds.",
+          "expected_result": "WHO_AM_I shows 0x33 OK, magnitude is 850–1150 mg and Result shows PASS. Values and labels are readable."
         },
         {
-          "action": "Open Hardware Test > Accelerometer Test and place the unit still on a flat face.",
-          "expected_result": "WHO_AM_I is 0x33 OK, magnitude is 850–1150 mg and Result is PASS."
+          "action": "Without tapping the touch controls, rotate the device upright, onto its side and upside down. Hold it still for five seconds in each orientation.",
+          "expected_result": "Axis values and signs respond to orientation. In each stationary position, magnitude returns to 850–1150 mg and Result shows PASS."
         },
         {
-          "action": "Rotate onto different faces, pausing at rest on each.",
-          "expected_result": "Axes/signs change with orientation while the magnitude returns to approximately 1 g."
+          "action": "Tap to exit, return Home and check the recorded settings.",
+          "expected_result": "Settings remain unchanged and normal AQI lighting resumes."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Buzzer and AQI LED levels, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Exit the diagnostic, including after interruption.",
+        "Confirm the recorded settings; restore any that changed. Return Home and record any restoration failure."
       ],
       "references": [
         "products/go/docs/hardware_test.md"
