@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "5412efe",
+  "rev": "f454d67",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -46,8 +46,8 @@
     },
     {
       "id": "go.onboarding.enter-hold",
-      "title": "Only a full Menu hold completes onboarding and persists",
-      "objective": "Verify physical touch gestures reject incomplete acknowledgement and a full hold durably completes onboarding.",
+      "title": "Menu hold completes onboarding and survives a power cycle",
+      "objective": "Verify that brief Menu touches leave Getting Started open, holding Menu opens Home, and Getting Started does not return after a power cycle.",
       "category": "Boot & Onboarding",
       "sub_category": "First Use",
       "applicability": [
@@ -58,33 +58,24 @@
       ],
       "steps": [
         {
-          "action": "Record whether USB is initially connected.",
-          "expected_result": "The initial USB state is recorded for cleanup."
-        },
-        {
-          "action": "Factory-reset with a BOOT hold of at least two seconds.",
+          "action": "Disconnect USB. Hold BOOT for at least two seconds to factory-reset, then release. Allow 30 seconds from release for Getting Started to appear.",
           "expected_result": "Getting Started is visible after restart."
         },
         {
-          "action": "On Getting Started, tap Menu once, double-tap within 250 ms, then hold for about half a second and release. Let each screen refresh finish before the next gesture.",
-          "expected_result": "Getting Started remains open after each gesture; none completes onboarding."
+          "action": "On Getting Started, tap Menu once, quickly double-tap Menu, then hold Menu for about half a second and release. Pause and inspect the screen after each gesture.",
+          "expected_result": "Getting Started remains open after each gesture."
         },
         {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release, wait 10 seconds and press Power to start.",
-          "expected_result": "Getting Started returns: the incomplete gestures did not save onboarding."
+          "action": "Hold Menu for at least one second, keeping it held until Home appears; then release.",
+          "expected_result": "Home appears unlocked while Menu is still held. Releasing Menu leaves Home open."
         },
         {
-          "action": "Hold Menu for at least one second, keeping it held until Home paints; then release.",
-          "expected_result": "Home opens while held, unlocked; release causes no extra navigation. Warmup fields may still be dashes."
-        },
-        {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
+          "action": "Hold Power until Powered off is fully displayed, release Power, and wait 10 seconds. Press and release Power to start, allowing up to five minutes from this press for Home to appear.",
           "expected_result": "The device reaches Home without showing Getting Started."
         }
       ],
       "cleanup": [
-        "Complete onboarding if interrupted.",
-        "Restore the recorded USB connection state. The factory-reset data is intentionally not restored."
+        "If interrupted, complete onboarding by holding Menu on Getting Started. If this fails, record that the device remains on Getting Started."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
