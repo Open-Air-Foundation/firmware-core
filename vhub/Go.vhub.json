@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "1bcfef8",
+  "rev": "0fe4113",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1261,46 +1261,6 @@
       "cleanup": [
         "Exit the diagnostic and restore the recorded GPS setting, including after interruption.",
         "Confirm the restored choice and return Home. Record any restoration failure."
-      ],
-      "references": [
-        "products/go/docs/hardware_test.md"
-      ]
-    },
-    {
-      "id": "go.diagnostics.gps-no-fix",
-      "title": "GPS Test remains truthful without reception",
-      "objective": "Verify no-fix display and clean diagnostic exit.",
-      "category": "Diagnostics",
-      "sub_category": "GPS",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "A test location previously confirmed to prevent satellite reception."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and GPS mode. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Set GPS On When Tracking and open Hardware Test > GPS Test in the no-reception location. Observe for two minutes.",
-          "expected_result": "NoFix remains, TTFF increases, no green fix cue appears, and no invented coordinates/time are displayed."
-        },
-        {
-          "action": "Exit the diagnostic.",
-          "expected_result": "Normal AQI behavior returns and receiver activity ends with no route active."
-        }
-      ],
-      "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: GPS mode, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
       ],
       "references": [
         "products/go/docs/hardware_test.md"
