@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "6f9bd12",
+  "rev": "a5a2244",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1119,53 +1119,6 @@
         "Restore the recorded measurement interval, Auto Lock and Buzzer, including after interruption.",
         "Confirm the restored choices and return Home. Record any restoration failure.",
         "Save the relevant logs and disconnect the logging tool."
-      ],
-      "references": [
-        "products/go/docs/accel_service.md",
-        "products/go/docs/sensor_producer.md"
-      ]
-    },
-    {
-      "id": "go.refresh.pending",
-      "title": "Additional shakes do not queue duplicate refreshes",
-      "objective": "Verify this observable manual-refresh behavior.",
-      "category": "Measurements",
-      "sub_category": "Shake Refresh",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state, Auto Lock and Buzzer. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Set interval 60s, Auto Lock Off and Buzzer On.",
-          "expected_result": "The unit remains awake and scheduled measurements are identifiable."
-        },
-        {
-          "action": "After a scheduled measurement and PM sleep, swing the unit side to side about three left/right pairs in one second to start refresh; shake again while progress is visible. Observe through completion, allowing one 60-second interval.",
-          "expected_result": "Only the first shake is accepted/beeps; one refreshed result clears progress and there is no queued second refresh."
-        }
-      ],
-      "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: Portable/Stationary interval, Auto Lock and Buzzer, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
       ],
       "references": [
         "products/go/docs/accel_service.md",
