@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "b9eb08c",
+  "rev": "d94a078",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -841,43 +841,41 @@
     },
     {
       "id": "go.display.chart-reset-lock",
-      "title": "Pinned chart stays clean through lock and restart",
-      "objective": "Verify the physical transition from browsing to the pinned overview and its presentation after cold start.",
+      "title": "Pinned chart returns after locking and remains selected after a power cycle",
+      "objective": "Verify that locking clears chart-browsing details and restores the pinned chart cleanly.",
       "category": "Measurements",
       "sub_category": "Charts",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "The Portable/Stationary measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the lock state and USB connection. Unlock with a short Power press if needed, then record the operating mode, Auto Lock and Pinned Chart. Settings paths start at Main Menu > Settings.",
-          "expected_result": "Original settings are recorded before changes and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record the measurement interval under Settings > Operations, and Auto Lock and Pinned Chart under Settings > Display & Touch.",
+          "expected_result": "All three original settings are recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
+          "action": "Set Auto Lock to Off, Measure Int. to 10s and Pinned Chart to CO2. Allow five minutes for warmup, then one minute to collect history. Return Home and browse to CO2 using the left/right touch controls.",
+          "expected_result": "The CO2 chart displays a readable header, Min/Max and plot."
         },
         {
-          "action": "Set Auto Lock Off, Measure Int. 10s and Pinned Chart CO2. Allow five minutes for warmup, then one minute for five scheduled updates. Browse CO2 on Home and photograph its plot.",
-          "expected_result": "CO2 history is visible with its browsing header and Min/Max."
+          "action": "Browse to PM2.5. Lock Home with a short Power press and inspect the completed refresh.",
+          "expected_result": "The CO2 pinned chart returns. The browsing header, arrows, highlight and Min/Max disappear without leftover content."
         },
         {
-          "action": "Browse PM2.5, then lock and unlock with short Power presses, letting each refresh finish.",
-          "expected_result": "The overview returns with the CO2 plot. The browsing header, arrows, highlight and Min/Max disappear cleanly on lock and remain absent after unlock.",
-          "evidence": [
-            "Save the locked Home photo for comparison with the CO2 plot."
-          ]
+          "action": "Unlock with a short Power press.",
+          "expected_result": "The CO2 pinned chart remains visible without browsing details."
         },
         {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release, wait 10 seconds and press Power to start. Allow 30 seconds for Home, then reopen Pinned Chart.",
-          "expected_result": "Home uses the overview without browsing details, and CO2 remains selected in the Pinned Chart menu after cold start."
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release, and wait 10 seconds. Press and release Power to start, allowing up to five minutes for Home. Inspect Home, then reopen Settings > Display & Touch > Pinned Chart.",
+          "expected_result": "Home shows the overview without browsing details, and CO2 remains selected in the menu."
         }
       ],
       "cleanup": [
-        "In Portable, exit menus and restore the recorded Auto Lock, Portable/Stationary interval and Pinned Chart, operating mode, lock state and USB connection, including after interruption. Confirm each restored setting; record any remaining change."
+        "Restore the recorded measurement interval, Auto Lock and Pinned Chart, including after interruption.",
+        "Confirm the restored choices and return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/display_service.md",
