@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "f721e07",
+  "rev": "1bcfef8",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1226,42 +1226,41 @@
     {
       "id": "go.diagnostics.gps-fix",
       "title": "GPS Test acquires and displays an outdoor fix",
-      "objective": "Verify diagnostic position, UTC and first-fix timing.",
+      "objective": "Verify the displayed position, UTC, first-fix timing and physical fix indication.",
       "category": "Diagnostics",
       "sub_category": "GPS",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "Tracking is idle.",
-        "An outdoor test location with an unobstructed view of the sky.",
+        "No recording or paused tracking session is active.",
+        "An outdoor location with an unobstructed view of the sky.",
         "A phone displaying current position and UTC."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and GPS mode. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record GPS under Settings > Operations.",
+          "expected_result": "The original GPS setting is recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Set GPS to On When Tracking. Open Settings > Hardware Test > GPS Test outdoors and observe for up to five minutes.",
+          "expected_result": "A 2D or 3D fix appears. Position, UTC, satellite count and HDOP are readable, and the rear LEDs begin breathing green."
         },
         {
-          "action": "Select Operations > GPS > On When Tracking and open Hardware Test > GPS Test outdoors. Observe for five minutes.",
-          "expected_result": "A 2D/3D fix appears; location is within 1 km of the phone and UTC within five seconds. TTFF freezes on first fix and the rear LED breathes green.",
+          "action": "Compare the displayed position and UTC with the phone. Observe TTFF for another 10 seconds.",
+          "expected_result": "Position is within 1 km of the phone and UTC is within five seconds. TTFF remains fixed while UTC continues updating.",
           "evidence": [
-            "Photograph the first fix with phone position/time."
+            "Save a photo showing the GPS result alongside the phone’s position and UTC."
           ]
         },
         {
-          "action": "Exit and wait 10 seconds.",
-          "expected_result": "Normal AQI behavior returns; with no route active the receiver stops."
+          "action": "Tap to exit the test and return Home.",
+          "expected_result": "The green breathing indication stops and normal AQI lighting resumes."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: GPS mode, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Exit the diagnostic and restore the recorded GPS setting, including after interruption.",
+        "Confirm the restored choice and return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/hardware_test.md"
