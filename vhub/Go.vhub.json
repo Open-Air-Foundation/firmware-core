@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "2851b1c",
+  "rev": "c72ba23",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -196,7 +196,7 @@
     {
       "id": "go.ui.lock",
       "title": "Locked Home rejects touch navigation",
-      "objective": "Verify locked Home rejects touch navigation.",
+      "objective": "Verify that locked Home ignores touch navigation and unlocking restores access to Main Menu without leftover message text.",
       "category": "Display & Controls",
       "sub_category": "Navigation",
       "applicability": [
@@ -205,26 +205,24 @@
       "setup": [],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock and Buzzer. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Unlock with a short Power press if needed. Select Main Menu > Operating Mode > Portable, then return Home.",
+          "expected_result": "Home is displayed in Portable mode."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "If Home is unlocked, short-press Power to lock it.",
+          "expected_result": "Home shows the locked state."
         },
         {
-          "action": "Set Auto Lock Off. Short-press Power to lock, then touch left, center and right.",
-          "expected_result": "Touches show Unlock First but cannot change Home or menu selection."
+          "action": "Tap the left, center (Menu), and right touch controls individually. Inspect the screen after each tap.",
+          "expected_result": "Each tap shows Unlock First. Home remains displayed; no menu or chart browsing opens."
         },
         {
-          "action": "Short-press Power to unlock, then immediately touch center while Unlocked is visible to open Main Menu. Inspect the menu after its refresh.",
-          "expected_result": "Main Menu opens with no Unlocked text or snackbar rectangle left at the bottom. If Unlocked expired before the touch, this observation is incomplete."
+          "action": "Short-press Power to unlock. Immediately tap Menu while Unlocked is visible, then inspect Main Menu after the refresh finishes.",
+          "expected_result": "Main Menu opens without leftover Unlocked text or its message rectangle. If the message disappeared before tapping Menu, this observation is incomplete."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock and Buzzer, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Return to Home, including after interruption."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
