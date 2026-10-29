@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "2c96cdc",
+  "rev": "05b2a67",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -719,65 +719,38 @@
     },
     {
       "id": "go.settings.buzzer-off",
-      "title": "Buzzer Off persists and controls boot sound",
-      "objective": "Verify the saved audio preference through a normal restart.",
+      "title": "Buzzer setting controls startup sound and survives power cycles",
+      "objective": "Verify audible startup with Buzzer On, silent startup with Buzzer Off, and persistence of both settings.",
       "category": "Display & Controls",
       "sub_category": "Audio",
       "applicability": [
         "V1"
       ],
-      "setup": [],
+      "setup": [
+        "Onboarding has already been completed.",
+        "A quiet environment where the buzzer can be heard."
+      ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Buzzer. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Operations > Buzzer, record the current choice, then select On.",
+          "expected_result": "Buzzer is set to On."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release, and wait 10 seconds. Press and release Power to start. Listen throughout startup, allowing up to five minutes for Home.",
+          "expected_result": "The startup sound is audible and Home appears."
         },
         {
-          "action": "Select Settings > Operations > Buzzer > Off. Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
-          "expected_result": "The ordinary boot sound is silent and Buzzer remains Off."
+          "action": "Open Settings > Operations > Buzzer. Confirm On remains selected, then select Off.",
+          "expected_result": "On survived the power cycle, and Off is now selected."
+        },
+        {
+          "action": "Repeat the power-off and startup sequence from step 2. Listen throughout startup, then reopen Buzzer.",
+          "expected_result": "Home appears without the startup sound, and Off remains selected."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Buzzer, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
-      ],
-      "references": [
-        "products/go/docs/ui_manager.md"
-      ]
-    },
-    {
-      "id": "go.settings.buzzer-on",
-      "title": "Buzzer On persists and controls boot sound",
-      "objective": "Verify the saved audio preference through a normal restart.",
-      "category": "Display & Controls",
-      "sub_category": "Audio",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Buzzer. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Select Settings > Operations > Buzzer > On. Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
-          "expected_result": "The ordinary boot sound plays and Buzzer remains On."
-        }
-      ],
-      "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Buzzer, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Restore the recorded Buzzer setting, including after interruption.",
+        "Confirm the restored choice and return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/ui_manager.md"
