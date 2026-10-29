@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "d94a078",
+  "rev": "8de3b6f",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -885,8 +885,8 @@
     },
     {
       "id": "go.display.chart-reset-menu",
-      "title": "Leaving the menu restores the unselected overview",
-      "objective": "Verify the documented Home selection reset.",
+      "title": "Leaving the menu clears chart-browsing details",
+      "objective": "Verify that returning from Main Menu restores a clean Home overview.",
       "category": "Measurements",
       "sub_category": "Charts",
       "applicability": [
@@ -895,20 +895,21 @@
       "setup": [],
       "steps": [
         {
-          "action": "Record the lock state and USB connection. Unlock with a short Power press if needed, then record the operating mode and Auto Lock and Pinned Chart. Settings paths start at Main Menu > Settings.",
-          "expected_result": "Original settings are recorded before changes and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Display & Touch > Pinned Chart and record the current choice.",
+          "expected_result": "The original Pinned Chart setting is recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Select None. Return Home and browse to CO2 using the left/right touch controls.",
+          "expected_result": "The CO2 browsing header, arrows and Min/Max are displayed."
         },
         {
-          "action": "Set Auto Lock Off and Pinned Chart None. Browse CO2 on Home, then open Main Menu and select Exit Menu. Let each refresh finish.",
-          "expected_result": "Home returns to the measurement overview with no chart, browsing header, arrows or Min/Max. Below a five-minute measurement interval, “Pin a chart here” appears centered in the bottom row; at longer intervals, that row shows pressure/altitude. The menu overlay leaves no stale text."
+          "action": "Tap center (Menu), then select Exit Menu. Inspect the completed refresh.",
+          "expected_result": "Home returns to the measurement overview without a chart, browsing header, arrows or Min/Max. No menu text or browsing highlight remains."
         }
       ],
       "cleanup": [
-        "Exit menus and restore the recorded Auto Lock and Pinned Chart, operating mode, lock state and USB connection, including after interruption. Confirm each restored setting; record any remaining change."
+        "Restore the recorded Pinned Chart setting, including after interruption.",
+        "Confirm the restored choice and return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/ui_manager.md"
