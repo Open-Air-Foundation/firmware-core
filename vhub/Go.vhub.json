@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "ad6cb2c",
+  "rev": "6621b68",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1435,39 +1435,43 @@
     },
     {
       "id": "go.ble.wrong-passkey",
-      "title": "A wrong passkey does not complete onboarding",
-      "objective": "Verify the first-use authentication boundary.",
+      "title": "A wrong Bluetooth passkey leaves onboarding incomplete",
+      "objective": "Verify incorrect pairing is rejected and Getting Started remains after restarting.",
       "category": "Portable BLE",
       "sub_category": "Pairing",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "All routes, charts, settings and bonds on this unit are expendable.",
+        "All routes, charts, settings, and bonds on this unit are expendable.",
         "A Linux computer with Bluetooth enabled and a Bluetooth settings GUI.",
-        "The test unit’s serial label is readable."
+        "The unit’s serial label is readable."
       ],
       "steps": [
         {
-          "action": "Record whether USB is initially connected.",
-          "expected_result": "The initial USB state is recorded for cleanup."
+          "action": "Disconnect USB. Hold BOOT for at least two seconds, then release. Allow 30 seconds for restart.",
+          "expected_result": "Getting Started appears."
         },
         {
-          "action": "Factory-reset with a BOOT hold of at least two seconds. In the computer’s Bluetooth settings, forget any bond for this test unit, then scan for up to 30 seconds. Match AirGradient Go <last4> to the last four characters of the unit’s serial label.",
-          "expected_result": "AirGradient Go <last4> appears; the device shows Getting Started."
+          "action": "In the computer’s Bluetooth settings, forget any existing bond for this unit. Scan for up to 30 seconds and select AirGradient Go <last4>, matching the serial label.",
+          "expected_result": "The intended device appears."
         },
         {
-          "action": "Start pairing in Bluetooth settings and enter the displayed passkey with its first digit changed.",
-          "expected_result": "Pairing fails and returns to Getting Started."
+          "action": "Start pairing.",
+          "expected_result": "The Go displays a readable six-digit passkey, and the computer prompts for it."
         },
         {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
-          "expected_result": "The device returns to Getting Started; failed authentication did not save onboarding."
+          "action": "Enter the displayed passkey with its first digit changed, keeping six digits. Allow 30 seconds after submission.",
+          "expected_result": "The computer reports pairing failure. The passkey overlay closes and Getting Started returns."
+        },
+        {
+          "action": "Hold Power until Powered off is fully displayed, release it, and wait ten seconds. Press and release Power; allow up to five minutes.",
+          "expected_result": "Getting Started returns; Home does not open automatically."
         }
       ],
       "cleanup": [
-        "Complete onboarding with a one-second Menu hold and close BLE tools.",
-        "Restore the recorded USB connection state. The factory-reset data is intentionally not restored."
+        "Complete onboarding with a one-second Menu hold, including after interruption. Confirm Home appears and close Bluetooth settings.",
+        "Record any failure to return Home. Factory-reset data is intentionally not restored."
       ],
       "references": [
         "products/go/docs/ble_service.md",
