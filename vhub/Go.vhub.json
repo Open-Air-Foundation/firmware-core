@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "c72ba23",
+  "rev": "e538f2a",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -231,8 +231,8 @@
     },
     {
       "id": "go.ui.back-gesture",
-      "title": "Double Menu goes back once",
-      "objective": "Verify double Menu goes back once.",
+      "title": "Double-tapping Menu goes back one level",
+      "objective": "Verify that a physical double-tap returns to the parent menu once, with the previous row highlighted.",
       "category": "Display & Controls",
       "sub_category": "Navigation",
       "applicability": [
@@ -241,22 +241,20 @@
       "setup": [],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock and Buzzer. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Unlock with a short Power press if needed. Select Main Menu > Operating Mode > Portable.",
+          "expected_result": "Portable mode is selected."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Open Main Menu > Settings > Operations > Buzzer.",
+          "expected_result": "The Buzzer choice screen is displayed."
         },
         {
-          "action": "Set Auto Lock Off. Open Settings > Operations > Buzzer and double-tap Menu within 250 ms.",
-          "expected_result": "Operations returns with Buzzer selected; no second Back or setting application occurs."
+          "action": "Quickly double-tap Menu, release, and inspect the screen after the refresh finishes.",
+          "expected_result": "Operations appears with Buzzer highlighted. The device does not go back another level or reopen the Buzzer choice screen."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock and Buzzer, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Return to Home, including after interruption."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
