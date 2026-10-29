@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "2999e46",
+  "rev": "3195834",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -376,33 +376,36 @@
     },
     {
       "id": "go.ui.about",
-      "title": "About Device identifies the release unit",
-      "objective": "Verify the identity shown to QA and menu return.",
+      "title": "About Device displays the correct device identity",
+      "objective": "Verify that the displayed serial number and firmware version identify the tested unit and are fully readable.",
       "category": "Display & Controls",
       "sub_category": "Identity",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "The device serial label.",
+        "The device's serial-number label.",
         "The expected firmware version from the release record."
       ],
       "steps": [
         {
-          "action": "Record the initial USB connection and lock state. Unlock with a short Power press if needed.",
-          "expected_result": "The initial state is recorded and the controls are unlocked."
+          "action": "Unlock with a short Power press if needed. Open Main Menu > Settings > About Device.",
+          "expected_result": "About Device is displayed."
         },
         {
-          "action": "Unlock and open Main Menu > Settings > About Device.",
-          "expected_result": "Serial and firmware match the label/release record. Product and Open Source Hardware text fit without clipping."
+          "action": "Compare the displayed serial number with the device label and the firmware version with the release record. Inspect all text.",
+          "expected_result": "Both values match. AirGradient Go, the complete firmware version and serial number, and Open Source Hardware are readable without clipping or overlap.",
+          "evidence": [
+            "Save a photo of About Device."
+          ]
         },
         {
           "action": "Select Back.",
-          "expected_result": "Settings returns with About Device selected."
+          "expected_result": "Settings appears with About Device highlighted."
         }
       ],
       "cleanup": [
-        "Return to Home and restore the recorded USB connection and lock state, including after interruption."
+        "Return to Home, including after interruption."
       ],
       "references": [
         "products/go/docs/ui_manager.md"
