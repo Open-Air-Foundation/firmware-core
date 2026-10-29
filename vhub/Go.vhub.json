@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "6621b68",
+  "rev": "e4e86e7",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1480,8 +1480,8 @@
     },
     {
       "id": "go.ble.bond-reconnect",
-      "title": "A saved bond reconnects after cold restart",
-      "objective": "Verify the existing phone bond reconnects after cold power without asking the user to pair again.",
+      "title": "A saved Bluetooth bond survives a power cycle",
+      "objective": "Verify the same phone reconnects and reads protected data after restarting the Go without another passkey.",
       "category": "Portable BLE",
       "sub_category": "Pairing",
       "applicability": [
@@ -1492,32 +1492,24 @@
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and the device serial shown in About Device. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Read the serial from About Device, then return Home.",
+          "expected_result": "The device is in Portable mode and its serial is identified."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable Home is shown."
+          "action": "In nRF Connect, scan for up to 30 seconds and connect to AirGradient Go <last4>, matching the last four characters of the serial. Expand Device Information (0x180A) and read Serial Number String (0x2A25). If prompted, enter the passkey displayed on Go.",
+          "expected_result": "The serial matches the Go. Pairing completes if needed, and the read succeeds."
         },
         {
-          "action": "In nRF Connect, scan for up to 30 seconds and connect to AirGradient Go <last4>, matching the last four characters of the recorded device serial. Expand service d1c0c0a0-6b48-4b2a-9b1d-59f9f2b0a1e1 and use Read on characteristic d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1. If pairing is requested, enter the six-digit passkey shown on Go. Do not write to any characteristic.",
-          "expected_result": "The read succeeds over a paired connection. Keep the connection open for the display observation; decoding the returned bytes is unnecessary."
+          "action": "Disconnect in nRF Connect without deleting the bond. Disconnect USB. Hold Power until Powered off is fully displayed, release it, and wait ten seconds. Press and release Power; allow up to five minutes.",
+          "expected_result": "Home returns."
         },
         {
-          "action": "Disconnect in nRF Connect without deleting the bond. Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
-          "expected_result": "The unit returns to Home after cold power."
-        },
-        {
-          "action": "After Home returns, scan in nRF Connect for up to 30 seconds.",
-          "expected_result": "The same AirGradient Go <last4> appears."
-        },
-        {
-          "action": "Connect to the rediscovered Go and read the same Config characteristic within 30 seconds of Connect. Keep the connection open for another 30 seconds.",
-          "expected_result": "The read succeeds without another passkey. The connection stays open and Home shows the connected BLE icon."
+          "action": "Scan for up to 30 seconds and reconnect to the same Go. Read Serial Number String (0x2A25) in Device Information (0x180A) within 30 seconds of connecting. Keep the connection open for another 30 seconds.",
+          "expected_result": "The same serial is read without requesting or displaying another passkey. The connection remains open, and Home shows the connected BLE icon."
         }
       ],
       "cleanup": [
-        "Disconnect in nRF Connect, preserving any pre-existing bond. Restore the recorded operating mode, lock state and USB connection."
+        "Disconnect in nRF Connect, leave the bond intact, and return Home, including after interruption."
       ],
       "references": [
         "products/go/docs/ble_service.md"
