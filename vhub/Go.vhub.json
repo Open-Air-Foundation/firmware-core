@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "1a6b2f9",
+  "rev": "5fe6439",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1344,52 +1344,44 @@
     },
     {
       "id": "go.calibration.ui",
-      "title": "UI CO2 calibration reports the sensor outcome",
-      "objective": "Verify the request reaches the fitted sensor and its completion is observable through the initiating interface or device.",
+      "title": "CO2 calibration displays the sensor outcome",
+      "objective": "Verify calibration started from the menu reaches the sensor and displays its result.",
       "category": "Diagnostics",
       "sub_category": "CO2 Calibration",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "An outdoor calibration location away from people, vehicles and combustion.",
+        "A unit whose CO2 calibration may be changed.",
+        "An outdoor location away from people, vehicles, and combustion.",
         "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "A unit record or saved startup log identifying the fitted CO2 sensor as S12, SCD4x or STCC4."
+        "A computer with the AirGradient logging tool.",
+        "A unit record or startup log identifying the fitted CO2 sensor."
       ],
       "steps": [
         {
-          "action": "Read the fitted sensor from the unit record or startup log and record the expected outcome before sending the request: S12/SCD4x support manual calibration; the current STCC4 driver reports unsupported.",
-          "expected_result": "The expected outcome is established independently of the command result; an unknown sensor blocks this run."
+          "action": "Identify the fitted sensor and record the expected outcome: success for S12/SCD4x; unsupported for STCC4.",
+          "expected_result": "The expected outcome is established before calibration. An unknown sensor blocks the test."
         },
         {
-          "action": "Record the initial USB connection and lock state. Unlock with a short Power press if needed.",
-          "expected_result": "The initial state is recorded and the controls are unlocked."
+          "action": "Connect USB and start the AirGradient logging tool.",
+          "expected_result": "Device logs are visible."
         },
         {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
+          "action": "Select Main Menu > Operating Mode > Portable. Leave the device stationary in the outdoor calibration location, measuring for at least three minutes.",
+          "expected_result": "The device remains powered and measuring in the calibration environment."
         },
         {
-          "action": "Keep the sensor measuring in the outdoor calibration air for at least three minutes.",
-          "expected_result": "The warmed unit is stationary in the calibration environment."
-        },
-        {
-          "action": "Open Main Menu > Settings > Operations > CO2 Calibration and choose Yes.",
-          "expected_result": "The UI starts calibration."
-        },
-        {
-          "action": "Watch the display and logs in the AirGradient logging tool from the request until completion, allowing 90 seconds. Save the completion outcome.",
-          "expected_result": "Calibrating CO2... appears on request. For S12/SCD4x, CO2 cal. done appears and the serial completion reports success. For STCC4, CO2 cal. unsupported appears and serial reports unsupported. CO2 cal. failed is a failure for either branch.",
+          "action": "Open Main Menu > Settings > Operations > CO2 Calibration and select Yes. Watch the display and logs for up to 90 seconds.",
+          "expected_result": "S12/SCD4x displays Calibrating CO2... followed by CO2 cal. done, with success reported in the logs. STCC4 displays CO2 cal. unsupported, with unsupported reported in the logs. Completion text is readable. CO2 cal. failed or no completion within 90 seconds fails the test.",
           "evidence": [
-            "Record the physical completion and command result."
+            "Record the displayed result and save the matching completion log."
           ]
         }
       ],
       "cleanup": [
-        "Allow an in-flight calibration to finish before moving the device. Successful calibration changes the sensor baseline and cannot be undone by restoring configuration; an unsupported result does not calibrate the sensor.",
-        "Return to Home and restore the recorded USB connection and lock state, including after interruption.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
+        "Allow calibration to finish before moving the device, including after interruption.",
+        "Return Home, save the relevant logs, and disconnect the logging tool. Successful calibration changes the sensor baseline; restoring settings does not undo it."
       ],
       "references": [
         "products/go/docs/sensor_producer.md",
