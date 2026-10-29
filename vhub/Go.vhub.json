@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "5d95bea",
+  "rev": "21fc67e",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -156,8 +156,8 @@
     },
     {
       "id": "go.onboarding.welcome",
-      "title": "Fresh onboarding plays the welcome cue once",
-      "objective": "Verify the audible and visual first-use cue.",
+      "title": "Factory-reset startup plays the welcome cue once",
+      "objective": "Verify that startup after a factory reset plays the welcome chime with rear-LED color changes and does not repeat it while Getting Started remains open.",
       "category": "Boot & Onboarding",
       "sub_category": "First Use",
       "applicability": [
@@ -168,21 +168,16 @@
       ],
       "steps": [
         {
-          "action": "Record whether USB is initially connected.",
-          "expected_result": "The initial USB state is recorded for cleanup."
+          "action": "Hold BOOT for at least two seconds to factory-reset, then release. Watch the rear LEDs and listen during restart, allowing 30 seconds from release for Getting Started to appear.",
+          "expected_result": "A short chime of three rising notes plays. The rear LEDs change color with the notes, then turn off. Getting Started appears."
         },
         {
-          "action": "Factory-reset and watch/listen through arrival at Getting Started.",
-          "expected_result": "The complete welcome Chime plays with rear-LED color steps."
-        },
-        {
-          "action": "Leave the guide open for 30 seconds without input.",
-          "expected_result": "The welcome cue does not repeatedly replay."
+          "action": "Leave Getting Started open without touching the controls for 30 seconds after the welcome cue finishes and the screen appears.",
+          "expected_result": "Getting Started remains displayed. Neither the welcome chime nor its rear-LED sequence repeats."
         }
       ],
       "cleanup": [
-        "Finish onboarding.",
-        "Restore the recorded USB connection state. The factory-reset data is intentionally not restored."
+        "Hold Menu on Getting Started to complete onboarding, including after interruption. Record any failure to reach Home."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
