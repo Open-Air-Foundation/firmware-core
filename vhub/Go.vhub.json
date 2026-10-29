@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "cae88ce",
+  "rev": "b9eb08c",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -802,43 +802,37 @@
     },
     {
       "id": "go.display.chart-navigation",
-      "title": "All available charts render clearly during touch browsing",
-      "objective": "Verify physical Up/Down navigation and readable chart headers, statistics and plots; cycle logic and sample filtering are covered by host tests.",
+      "title": "All charts remain readable during touch browsing",
+      "objective": "Verify that the touch controls browse charts with readable values, statistics and plots.",
       "category": "Measurements",
       "sub_category": "Charts",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "The Portable/Stationary measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the lock state and USB connection. Unlock with a short Power press if needed, then record the operating mode, Auto Lock and Pinned Chart. Settings paths start at Main Menu > Settings.",
-          "expected_result": "Original settings are recorded before changes and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record the measurement interval under Settings > Operations and Auto Lock under Settings > Display & Touch.",
+          "expected_result": "Both original settings are recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
+          "action": "Set Auto Lock to Off and Operations > Measure Int. to 10s. Allow five minutes for warmup, then one minute to collect history.",
+          "expected_result": "Recent measurements are available for the charts."
         },
         {
-          "action": "Set Display & Touch > Auto Lock > Off and Operations > Measure Int. > 10s. Allow five minutes for warmup, then one minute for five scheduled updates. Set Measure Int. > 5m.",
-          "expected_result": "Recent history is available before browsing all metrics."
+          "action": "Set Measure Int. to 5m and return Home. Tap right (Down) to browse each chart, letting each refresh finish.",
+          "expected_result": "PM2.5, CO2, Temperature, Humidity, TVOC, NOx, Pressure and Altitude appear before returning to the overview. Each chart's name, value, applicable unit, Min/Max and plot are readable without clipping, overlap or leftover content."
         },
         {
-          "action": "Open Display & Touch > Pinned Chart, scroll to Altitude and select it. Reopen the choice and select None; return Home.",
-          "expected_result": "The last option remains readable and selectable when scrolled. None restores the measurement overview without a chart."
-        },
-        {
-          "action": "Press Down through a complete Home cycle, then Up through the reverse cycle, letting each refresh finish.",
-          "expected_result": "Down visits PM2.5, CO2, Temperature, Humidity, TVOC, NOx, Pressure, Altitude and the overview. Each selected metric has a regular name above a bold value and applicable unit, up/down arrows, Min/Max and a plot when history is valid. TVOC/NOx have no unit suffix. PM2.5/CO2 hero values are not highlighted; labels, arrows and values do not overlap or clip.",
-          "evidence": [
-            "Save representative header photos, including Temperature and Altitude; capture any stale or clipped content."
-          ]
+          "action": "Tap left (Up) through the charts and back to the overview, inspecting each completed refresh.",
+          "expected_result": "Charts appear in reverse order and remain readable. The arrows and highlight follow the selected chart; the PM2.5 and CO2 values above it remain unhighlighted."
         }
       ],
       "cleanup": [
-        "In Portable, exit menus and restore the recorded Auto Lock, Portable/Stationary interval and Pinned Chart, operating mode, lock state and USB connection, including after interruption. Confirm each restored setting; record any remaining change."
+        "Restore the recorded measurement interval and Auto Lock, including after interruption.",
+        "Return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
