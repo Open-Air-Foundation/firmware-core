@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "2315de8",
+  "rev": "1a6b2f9",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1340,42 +1340,6 @@
       ],
       "references": [
         "products/go/docs/fg_learning.md"
-      ]
-    },
-    {
-      "id": "go.calibration.cancel",
-      "title": "Cancelling CO2 calibration does not start it",
-      "objective": "Verify confirmation protects the sensor baseline.",
-      "category": "Diagnostics",
-      "sub_category": "CO2 Calibration",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool."
-      ],
-      "steps": [
-        {
-          "action": "Record the initial USB connection and lock state. Unlock with a short Power press if needed.",
-          "expected_result": "The initial state is recorded and the controls are unlocked."
-        },
-        {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Open Main Menu > Settings > Operations > CO2 Calibration; choose No. Reopen and choose Back.",
-          "expected_result": "Both return on the CO2 Calibration row. No Calibrating CO2 screen or calibration-start log appears."
-        }
-      ],
-      "cleanup": [
-        "Return to Home and restore the recorded USB connection and lock state, including after interruption.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
-      ],
-      "references": [
-        "products/go/docs/ui_manager.md",
-        "products/go/docs/sensor_producer.md"
       ]
     },
     {

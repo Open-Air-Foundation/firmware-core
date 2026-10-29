@@ -6381,6 +6381,31 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
   CHECK(f.ui_manager.current_screen() == Screen::Home);
 }
 
+TEST_CASE("on_input: cancelling CO2 calibration does not request calibration",
+          "[Orchestrator][calibration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  test_spy::reset();
+  enter_settings(f, orch);
+  open_ui_row(f, orch, "Operations");
+  open_ui_row(f, orch, "CO2 Calibration");
+  REQUIRE(f.ui_manager.current_screen() == Screen::Confirm);
+
+  SECTION("No") { open_ui_row(f, orch, "No"); }
+  SECTION("Back") { open_ui_row(f, orch, "Back"); }
+
+  CHECK_FALSE(test_spy::co2_calibration_requested);
+  REQUIRE(f.ui_manager.current_screen() == Screen::Operations);
+  const auto values = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(values.selected_row < values.row_count);
+  CHECK(std::string(values.rows[values.selected_row].text) == "CO2 Calibration");
+  if (values.snackbar_text != nullptr) {
+    CHECK(std::string(values.snackbar_text) != "Calibrating CO2...");
+  }
+}
+
 TEST_CASE("on_input: cancelling Battery Calibration leaves factory state unchanged",
           "[Orchestrator][hwtest][fg]") {
   TestFixture f;

@@ -1748,7 +1748,7 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
     // Navigate to No (index 3)
     press(ui, InputSource::TouchDown); // 1→2
     press(ui, InputSource::TouchDown); // 2→3 (No)
-    press(ui, InputSource::TouchEnter);
+    CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
 
     CHECK(ui.current_screen() == Screen::Operations);
     const auto values = ui.build_values(make_default_ctx());
@@ -1760,7 +1760,7 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
     CHECK(ui.current_screen() == Screen::Confirm);
 
     // Cursor starts on Back (index 1)
-    press(ui, InputSource::TouchEnter);
+    CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
 
     CHECK(ui.current_screen() == Screen::Operations);
     const auto values = ui.build_values(make_default_ctx());
