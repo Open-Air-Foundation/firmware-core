@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "4a238f9",
+  "rev": "b131d57",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1131,8 +1131,8 @@
     },
     {
       "id": "go.refresh.menu-progress",
-      "title": "Refresh progress survives menu navigation",
-      "objective": "Verify this observable manual-refresh behavior.",
+      "title": "Refresh progress remains readable during menu navigation",
+      "objective": "Verify that refresh progress displays and clears cleanly while a menu is open.",
       "category": "Measurements",
       "sub_category": "Shake Refresh",
       "applicability": [
@@ -1141,35 +1141,31 @@
       "setup": [
         "A USB data cable.",
         "A computer with access to the AirGradient logging tool.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "A quiet environment where the PM fan can be heard.",
+        "The Portable/Stationary measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state, Auto Lock and Buzzer. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record Measure Int. under Settings > Operations and Auto Lock under Settings > Display & Touch. Connect USB and open the AirGradient logging tool.",
+          "expected_result": "Both original settings are recorded and device logs are visible."
         },
         {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
+          "action": "Set Measure Int. to 60s and Auto Lock to Off. Return Home and allow five minutes for warmup.",
+          "expected_result": "Home displays measurements."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
+          "action": "Keep the device still. Wait for the next MeasuresAGo entry and the PM fan to stop, allowing 90 seconds.",
+          "expected_result": "A scheduled measurement completes and the PM sensor sleeps."
         },
         {
-          "action": "Set interval 60s, Auto Lock Off and Buzzer On.",
-          "expected_result": "The unit remains awake and scheduled measurements are identifiable."
-        },
-        {
-          "action": "After a scheduled measurement and PM sleep, swing the unit side to side about three left/right pairs in one second, then open Settings while refresh progress is visible. Observe through completion, allowing one 60-second interval.",
-          "expected_result": "Progress remains visible in the menu and ordinary navigation snackbars do not replace it; it clears when the result arrives."
+          "action": "Swing the device side to side about three left/right pairs in one second. While Preparing... is visible, open Main Menu > Settings. Inspect the screen through refresh completion, allowing 60 seconds from the shake.",
+          "expected_result": "Refresh progress remains readable after navigation. On completion, it clears without leftover text or a message rectangle. Settings remains open with readable rows and highlighting. If refresh finishes before entering Settings, the observation is incomplete."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: Portable/Stationary interval, Auto Lock and Buzzer, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
+        "Restore the recorded measurement interval and Auto Lock, including after interruption.",
+        "Confirm the restored choices and return Home. Record any restoration failure.",
+        "Save the relevant logs and disconnect the logging tool."
       ],
       "references": [
         "products/go/docs/accel_service.md",
