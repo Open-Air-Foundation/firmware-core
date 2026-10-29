@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "4d14937",
+  "rev": "e841d71",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -998,81 +998,6 @@
       "references": [
         "products/go/docs/display_service.md",
         "products/go/docs/ui_manager.md"
-      ]
-    },
-    {
-      "id": "go.corrections.aqi-led",
-      "title": "Corrected PM controls the displayed AQI and rear color",
-      "objective": "Verify that a prepared PM correction produces the expected physical AQI display and rear LED color.",
-      "category": "Measurements",
-      "sub_category": "Corrections",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A computer with Postman or an equivalent GUI API client that resolves .local names on the test LAN.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go.",
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "Ambient conditions that produce a valid raw PM2.5 reading greater than zero."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings. Configuration values are captured with the API in the following steps.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Stationary.",
-          "expected_result": "Stationary is selected."
-        },
-        {
-          "action": "Read the full serial from About Device and replace <serial> in every request URL with that value. In the API client, set a five-second request timeout, send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body, and save the response as the original configuration before changing anything.",
-          "expected_result": "The intended unit is connected and its original settings are saved for cleanup."
-        },
-        {
-          "action": "Enable local authority. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response shows the requested values before the behavior check continues."
-        },
-        {
-          "action": "In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"cloudConnection\":false}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response shows the requested values before the behavior check continues."
-        },
-        {
-          "action": "In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth, Content-Type: application/json and raw JSON body {\"measurementInterval\":10}. Send GET at the same URL every five seconds for up to 20 seconds.",
-          "expected_result": "The GET response confirms measurementInterval=10 before sampling the raw PM baseline."
-        },
-        {
-          "action": "Warm the sensors for five minutes. Check the raw PM2.5 in the MeasuresAGo serial output for up to one minute. Continue only if a valid value greater than zero is present.",
-          "expected_result": "A positive raw PM2.5 reading establishes that this correction can affect the physical LED; missing or zero readings leave this run blocked."
-        },
-        {
-          "action": "In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"measurementInterval\":10,\"pmStandard\":\"us-aqi\",\"backLedBrightness\":2,\"corrections\":{\"pm25\":{\"correctionAlgorithm\":\"custom_via_pm25_raw\",\"slr\":{\"scalingFactor\":0,\"intercept\":35.4}}}}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response shows the requested values before the behavior check continues."
-        },
-        {
-          "action": "Watch Home, the rear LEDs and raw PM2.5 in the AirGradient logging tool through the next two scheduled measurements, allowing 30 seconds. Save a photo of Home and the LED color for a measurement whose raw PM2.5 is greater than zero.",
-          "expected_result": "For a valid positive raw PM2.5 sample, Home displays AQI 100 and the rear LEDs are visibly yellow. If no positive sample is available in this window, the check is blocked; otherwise a different physical output is a failure.",
-          "evidence": [
-            "Record which raw-value branch was exercised."
-          ]
-        }
-      ],
-      "cleanup": [
-        "If interrupted before the original configuration was saved, restore only the recorded UI/USB state and report the missing baseline.",
-        "With the saved original configuration available, return to Stationary. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send. Confirm configurationControl is local before restoring values.",
-        "In the API client, copy these fields and their original values from the saved configuration into a raw JSON request body: pmStandard, backLedBrightness, corrections, measurementInterval. Copy the complete corrections object. Send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and Content-Type: application/json. Read back with GET at the same URL every five seconds for up to 20 seconds to confirm restoration.",
-        "Restore cloudConnection first and configurationControl last from the saved configuration. For each, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth, Content-Type: application/json and a raw JSON object containing that field and its saved value. Confirm each through GET at the same URL within 20 seconds.",
-        "Restore the recorded operating mode, lock state and USB connection. Record any value that could not be restored.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
-      ],
-      "references": [
-        "products/go/docs/measurement_corrections.md",
-        "products/go/docs/led_service.md"
       ]
     },
     {

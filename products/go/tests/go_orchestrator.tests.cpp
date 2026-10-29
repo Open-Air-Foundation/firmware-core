@@ -10530,6 +10530,63 @@ TEST_CASE("local correction limits recover original display values without anoth
   CHECK(A::raw_measures(orch).pm_a.pm_25 == 10.0f);
 }
 
+TEST_CASE("local PM correction drives AQI display and LEDs on activation and later samples",
+          "[Orchestrator][local-api][correction][display][led]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Stationary;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  f.ui_manager.sync_settings(f.settings);
+  f.local_api.publish_config_snapshot(f.settings);
+  CP2_ALLOW_CONFIG_WRITES(f);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+
+  MeasuresAGo raw{};
+  raw.pm_a.pm_25 = 5.0f;
+  A::on_sensor_data(orch, raw);
+  REQUIRE(test_spy::led_last_aqi_pm25 == 5.0f);
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).pm25_ugm3 == 5.0f);
+
+  constexpr float CORRECTED_PM25 = 35.4f;
+  Corrections corrections{};
+  corrections.pm25 =
+      CorrectionEntry{"custom_via_pm25_raw", SlrParams{CORRECTED_PM25, 0.0f, std::nullopt}};
+  LocalServerConfig update{};
+  update.pm_standard = "us-aqi";
+  update.corrections = corrections;
+  const auto led_updates = test_spy::led_back_update_aqi_count;
+  const auto display_updates = DisplayService::spy_update_count;
+  REQUIRE(f.local_api.submit_config(update).status == ConfigSubmitStatus::Accepted);
+  dispatch_next_local_request(f, orch);
+
+  CHECK(test_spy::led_back_update_aqi_count > led_updates);
+  CHECK(DisplayService::spy_update_count > display_updates);
+  CHECK(test_spy::led_last_aqi_pm25 == CORRECTED_PM25);
+  auto values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(values.pm_use_usaqi);
+  CHECK(values.pm25_ugm3 == CORRECTED_PM25);
+  CHECK(f.local_api.get_measures().pm_a.pm_25 == CORRECTED_PM25);
+  CHECK(A::raw_measures(orch).pm_a.pm_25 == 5.0f);
+
+  // Raw samples in different AQI bands must still use the saved correction.
+  for (float pm25 : {10.0f, 100.0f}) {
+    CAPTURE(pm25);
+    raw.pm_a.pm_25 = pm25;
+    const auto previous_led_updates = test_spy::led_back_update_aqi_count;
+    const auto previous_display_updates = DisplayService::spy_update_count;
+    A::on_sensor_data(orch, raw);
+
+    CHECK(test_spy::led_back_update_aqi_count > previous_led_updates);
+    CHECK(DisplayService::spy_update_count > previous_display_updates);
+    CHECK(test_spy::led_last_aqi_pm25 == CORRECTED_PM25);
+    values = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(values.pm_use_usaqi);
+    CHECK(values.pm25_ugm3 == CORRECTED_PM25);
+    CHECK(f.local_api.get_measures().pm_a.pm_25 == CORRECTED_PM25);
+    CHECK(A::raw_measures(orch).pm_a.pm_25 == pm25);
+  }
+}
+
 TEST_CASE("Stationary Wi-Fi transitions publish RSSI without clearing queued work",
           "[Orchestrator][local-api][snapshot][wifi]") {
   TestFixture f;
