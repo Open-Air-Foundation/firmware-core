@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "e4e86e7",
+  "rev": "160c464",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1481,7 +1481,7 @@
     {
       "id": "go.ble.bond-reconnect",
       "title": "A saved Bluetooth bond survives a power cycle",
-      "objective": "Verify the same phone reconnects and reads protected data after restarting the Go without another passkey.",
+      "objective": "Verify the same phone reconnects and reads protected data after restarting the Go without another passkey, and the BLE icon and advertising reflect connection changes.",
       "category": "Portable BLE",
       "sub_category": "Pairing",
       "applicability": [
@@ -1496,6 +1496,10 @@
           "expected_result": "The device is in Portable mode and its serial is identified."
         },
         {
+          "action": "Disconnect any BLE client and observe Home for up to 30 seconds.",
+          "expected_result": "Home shows the unlinked BLE icon."
+        },
+        {
           "action": "In nRF Connect, scan for up to 30 seconds and connect to AirGradient Go <last4>, matching the last four characters of the serial. Expand Device Information (0x180A) and read Serial Number String (0x2A25). If prompted, enter the passkey displayed on Go.",
           "expected_result": "The serial matches the Go. Pairing completes if needed, and the read succeeds."
         },
@@ -1506,53 +1510,14 @@
         {
           "action": "Scan for up to 30 seconds and reconnect to the same Go. Read Serial Number String (0x2A25) in Device Information (0x180A) within 30 seconds of connecting. Keep the connection open for another 30 seconds.",
           "expected_result": "The same serial is read without requesting or displaying another passkey. The connection remains open, and Home shows the connected BLE icon."
+        },
+        {
+          "action": "Disconnect in nRF Connect and scan for up to 30 seconds while observing Home.",
+          "expected_result": "Home returns to the unlinked icon, and the same Go appears in the scan."
         }
       ],
       "cleanup": [
         "Disconnect in nRF Connect, leave the bond intact, and return Home, including after interruption."
-      ],
-      "references": [
-        "products/go/docs/ble_service.md"
-      ]
-    },
-    {
-      "id": "go.ble.connection-icon",
-      "title": "The BLE icon follows authenticated connection state",
-      "objective": "Verify the on-screen connection indicator and advertising recovery.",
-      "category": "Portable BLE",
-      "sub_category": "Pairing",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "An Android phone with nRF Connect for Mobile and Bluetooth enabled."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock and the device serial shown in About Device. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Portable mode, set Settings > Display & Touch > Auto Lock to Off and disconnect any BLE client.",
-          "expected_result": "Home shows the unlinked BLE icon."
-        },
-        {
-          "action": "In nRF Connect, scan for up to 30 seconds and connect to AirGradient Go <last4>, matching the last four characters of the recorded device serial. Expand service d1c0c0a0-6b48-4b2a-9b1d-59f9f2b0a1e1 and use Read on characteristic d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1. If pairing is requested, enter the six-digit passkey shown on Go. Do not write to any characteristic.",
-          "expected_result": "The read succeeds over a paired connection. Keep the connection open for the display observation; decoding the returned bytes is unnecessary."
-        },
-        {
-          "action": "Keep the nRF Connect connection open and observe Home for 30 seconds.",
-          "expected_result": "The linked BLE icon is visible while the authenticated connection remains open."
-        },
-        {
-          "action": "Disconnect in nRF Connect and scan for the device again for up to 30 seconds.",
-          "expected_result": "Home returns to the unlinked icon and the Go appears in the scan."
-        }
-      ],
-      "cleanup": [
-        "Disconnect in nRF Connect.",
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore the recorded Auto Lock, operating mode, lock state and USB connection state, including after interruption. Confirm each restored setting; record any remaining change."
       ],
       "references": [
         "products/go/docs/ble_service.md"
