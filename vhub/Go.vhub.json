@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "f454d67",
+  "rev": "5d95bea",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -84,8 +84,8 @@
     },
     {
       "id": "go.onboarding.background-sensing",
-      "title": "Getting Started does not block sensing",
-      "objective": "Verify measurements continue before onboarding completes.",
+      "title": "Measurements continue while Getting Started is open",
+      "objective": "Verify that the device produces sensor snapshots before onboarding is completed, without leaving Getting Started.",
       "category": "Boot & Onboarding",
       "sub_category": "First Use",
       "applicability": [
@@ -98,25 +98,24 @@
       ],
       "steps": [
         {
-          "action": "Record whether USB is initially connected.",
-          "expected_result": "The initial USB state is recorded for cleanup."
+          "action": "Connect USB and open the AirGradient logging tool.",
+          "expected_result": "Live device logs are visible."
         },
         {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
+          "action": "Hold BOOT for at least two seconds to factory-reset, then release. Allow 30 seconds for Getting Started to appear. Reconnect the logging tool if needed.",
+          "expected_result": "Getting Started is displayed and live logs are available."
         },
         {
-          "action": "Factory-reset with BOOT held at least two seconds. Reconnect the AirGradient logging tool after restart if needed and leave Getting Started open on the device.",
-          "expected_result": "Getting Started stays visible on the device while logs are available in the AirGradient logging tool."
-        },
-        {
-          "action": "Capture until two sensor snapshots complete, allowing five minutes.",
-          "expected_result": "Two MeasuresAGo snapshots appear without dismissing Getting Started on the device."
+          "action": "Leave Getting Started open without touching the controls. Capture logs for up to five minutes from when logging resumes after reset.",
+          "expected_result": "At least two new MeasuresAGo sensor snapshots appear while Getting Started remains displayed.",
+          "evidence": [
+            "Save the log excerpt containing both snapshots and a photo of Getting Started."
+          ]
         }
       ],
       "cleanup": [
-        "Download the required logs from the AirGradient logging tool, disconnect the tool and complete onboarding.",
-        "Restore the recorded USB connection state. The factory-reset data is intentionally not restored."
+        "Disconnect the logging tool and USB.",
+        "Hold Menu on Getting Started to complete onboarding, including after interruption. Record any failure to reach Home."
       ],
       "references": [
         "products/go/docs/sensor_producer.md",
