@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "122a18c",
+  "rev": "4d14937",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -998,84 +998,6 @@
       "references": [
         "products/go/docs/display_service.md",
         "products/go/docs/ui_manager.md"
-      ]
-    },
-    {
-      "id": "go.display.correction-limits",
-      "title": "Correction limits render clearly and recover on Home",
-      "objective": "Verify the real display replaces valid readings with dashes or zero and redraws them after restoring corrections; numerical validation and clamping belong to host tests.",
-      "category": "Measurements",
-      "sub_category": "Corrections",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A computer with Postman or an equivalent GUI API client that resolves .local names on the test LAN.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go.",
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings. Configuration values are captured with the API in the following steps.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Stationary.",
-          "expected_result": "Stationary is selected."
-        },
-        {
-          "action": "Read the full serial from About Device and replace <serial> in every request URL with that value. In the API client, set a five-second request timeout, send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body, and save the response as the original configuration before changing anything.",
-          "expected_result": "The intended unit is connected and its original settings are saved for cleanup."
-        },
-        {
-          "action": "Enable local authority. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response shows the requested values before the behavior check continues."
-        },
-        {
-          "action": "In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"cloudConnection\":false}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response shows the requested values before the behavior check continues."
-        },
-        {
-          "action": "In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"measurementInterval\":300,\"temperatureUnit\":\"c\",\"pmStandard\":\"ugm3\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response shows the requested values before the behavior check continues."
-        },
-        {
-          "action": "Wait up to six minutes for valid raw temperature, humidity and PM2.5 in serial and valid corresponding Home readings. Capture Home before changing corrections.",
-          "expected_result": "All three source fields and their current Home presentation are valid, providing the recovery baseline."
-        },
-        {
-          "action": "Apply the prepared display inputs. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"corrections\":{\"temperature\":{\"correctionAlgorithm\":\"custom\",\"slr\":{\"scalingFactor\":0,\"intercept\":126}},\"humidity\":{\"correctionAlgorithm\":\"custom\",\"slr\":{\"scalingFactor\":0,\"intercept\":101}},\"pm25\":{\"correctionAlgorithm\":\"custom_via_pm25_raw\",\"slr\":{\"scalingFactor\":0,\"intercept\":-1}}}}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response shows the requested values before the behavior check continues."
-        },
-        {
-          "action": "Watch Home for the next two scheduled measurements, allowing 11 minutes. Capture a photo of the three affected fields.",
-          "expected_result": "Temperature and humidity show dashes; PM2.5 shows zero. Previous digits are removed cleanly and the rest of Home remains readable.",
-          "evidence": [
-            "Save before, limited-output and restored Home photos."
-          ]
-        },
-        {
-          "action": "Restore the corrections object from the saved original configuration with PUT /api/v1/config, using the API restoration procedure in cleanup. Confirm it through GET Config within 20 seconds, then observe Home for two measurements, allowing 11 minutes.",
-          "expected_result": "Valid temperature, humidity and PM2.5 readings return without leftover dashes, overlapping digits or a restart."
-        }
-      ],
-      "cleanup": [
-        "If interrupted before the original configuration was saved, restore only the recorded UI/USB state and report the missing baseline.",
-        "With the saved original configuration available, return to Stationary. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send. Confirm configurationControl is local before restoring values.",
-        "In the API client, copy these fields and their original values from the saved configuration into a raw JSON request body: corrections, measurementInterval, temperatureUnit, pmStandard. Copy the complete corrections object. Send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and Content-Type: application/json. Read back with GET at the same URL every five seconds for up to 20 seconds to confirm restoration.",
-        "Restore cloudConnection first and configurationControl last from the saved configuration. For each, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth, Content-Type: application/json and a raw JSON object containing that field and its saved value. Confirm each through GET at the same URL within 20 seconds.",
-        "Restore the recorded operating mode, lock state and USB connection. Record any value that could not be restored.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
-      ],
-      "references": [
-        "products/go/docs/measurement_corrections.md",
-        "components/airgradient-common/tests/measurement_corrections.tests.cpp"
       ]
     },
     {

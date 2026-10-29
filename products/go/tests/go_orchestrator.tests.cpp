@@ -10455,6 +10455,81 @@ TEST_CASE("local correction activation republishes corrected data",
   CHECK(f.local_api.get_measures().temp_hum_a.temperature == 21.0f);
 }
 
+TEST_CASE("local correction limits recover original display values without another sample",
+          "[Orchestrator][local-api][correction][display]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Stationary;
+  f.settings.measure_interval_seconds = 300;
+  f.settings.corrections.temperature = {LinearCorrectionAlgorithm::Custom, 1.0f, 2.0f};
+  f.settings.corrections.humidity = {LinearCorrectionAlgorithm::Custom, 1.0f, -5.0f};
+  f.settings.corrections.pm25 = {Pm25CorrectionAlgorithm::CustomViaPm25Raw, 2.0f, 1.0f, false};
+  const auto original = f.settings.corrections;
+  auto orch = f.make_orchestrator();
+  // Model completed boot without starting hardware services.
+  A::set_mode(orch, OperatingMode::Stationary);
+  f.ui_manager.sync_settings(f.settings);
+  f.local_api.publish_config_snapshot(f.settings);
+  CP2_ALLOW_CONFIG_WRITES(f);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+
+  MeasuresAGo raw{};
+  raw.temp_hum_a = {20.0f, 50.0f};
+  raw.pm_a.pm_25 = 10.0f;
+  A::on_sensor_data(orch, raw);
+  LocalServerConfig restore{};
+  restore.corrections = f.local_api.get_config().corrections;
+  REQUIRE(restore.corrections.has_value());
+
+  auto values = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(values.show_temp_hum);
+  REQUIRE(values.temperature_c == 22.0f);
+  REQUIRE(values.humidity_pct == 45.0f);
+  REQUIRE(values.pm25_ugm3 == 21.0f);
+
+  // The same constant-output inputs used by go.display.correction-limits.
+  Corrections limits{};
+  limits.temperature = CorrectionEntry{"custom", SlrParams{126.0f, 0.0f, std::nullopt}};
+  limits.humidity = CorrectionEntry{"custom", SlrParams{101.0f, 0.0f, std::nullopt}};
+  limits.pm25 = CorrectionEntry{"custom_via_pm25_raw", SlrParams{-1.0f, 0.0f, std::nullopt}};
+  LocalServerConfig update{};
+  update.corrections = limits;
+  auto display_updates = DisplayService::spy_update_count;
+  REQUIRE(f.local_api.submit_config(update).status == ConfigSubmitStatus::Accepted);
+  dispatch_next_local_request(f, orch);
+
+  CHECK(DisplayService::spy_update_count > display_updates);
+  values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(values.temperature_c == MeasuresInvalid::TEMPERATURE);
+  CHECK(values.humidity_pct == MeasuresInvalid::HUMIDITY);
+  CHECK(values.pm25_ugm3 == 0.0f);
+  auto published = f.local_api.get_measures();
+  CHECK_FALSE(published.temp_hum_a.is_temp_valid());
+  CHECK_FALSE(published.temp_hum_a.is_hum_valid());
+  CHECK(published.pm_a.pm_25 == 0.0f);
+
+  // Restore the saved nonidentity corrections without rebooting or feeding a sample.
+  display_updates = DisplayService::spy_update_count;
+  REQUIRE(f.local_api.submit_config(restore).status == ConfigSubmitStatus::Accepted);
+  dispatch_next_local_request(f, orch);
+
+  CHECK(DisplayService::spy_update_count > display_updates);
+  CHECK(measurement_corrections_equal(A::settings(orch).corrections, original));
+  values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(values.temperature_c == 22.0f);
+  CHECK(values.humidity_pct == 45.0f);
+  CHECK(values.pm25_ugm3 == 21.0f);
+  published = f.local_api.get_measures();
+  CHECK(published.temp_hum_a.is_temp_valid());
+  CHECK(published.temp_hum_a.is_hum_valid());
+  CHECK(published.pm_a.is_pm_25_valid());
+  CHECK(published.temp_hum_a.temperature == 22.0f);
+  CHECK(published.temp_hum_a.humidity == 45.0f);
+  CHECK(published.pm_a.pm_25 == 21.0f);
+  CHECK(A::raw_measures(orch).temp_hum_a.temperature == 20.0f);
+  CHECK(A::raw_measures(orch).temp_hum_a.humidity == 50.0f);
+  CHECK(A::raw_measures(orch).pm_a.pm_25 == 10.0f);
+}
+
 TEST_CASE("Stationary Wi-Fi transitions publish RSSI without clearing queued work",
           "[Orchestrator][local-api][snapshot][wifi]") {
   TestFixture f;

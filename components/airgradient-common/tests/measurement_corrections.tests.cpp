@@ -69,6 +69,29 @@ TEST_CASE("custom linear corrections apply before range validation", "[correctio
   REQUIRE(corrected.temp_hum_a.temperature == MeasuresInvalid::TEMPERATURE);
 }
 
+TEST_CASE("custom humidity correction validates the corrected range", "[correction]") {
+  const MeasuresAGo raw = valid_measures();
+  MeasurementCorrections corrections{};
+  corrections.humidity.algorithm = LinearCorrectionAlgorithm::Custom;
+  corrections.humidity.scaling_factor = 0.0f;
+
+  for (float humidity : {-1.0f, 0.0f, 100.0f, 101.0f}) {
+    CAPTURE(humidity);
+    corrections.humidity.intercept = humidity;
+    const auto corrected = apply_measurement_corrections(raw, corrections);
+    if (humidity == 0.0f || humidity == 100.0f) {
+      CHECK(corrected.temp_hum_a.is_hum_valid());
+      CHECK(corrected.temp_hum_a.humidity == humidity);
+    } else {
+      CHECK_FALSE(corrected.temp_hum_a.is_hum_valid());
+      CHECK(corrected.temp_hum_a.humidity == MeasuresInvalid::HUMIDITY);
+    }
+    CHECK(corrected.temp_hum_a.temperature == raw.temp_hum_a.temperature);
+    CHECK(corrected.pm_a.pm_25 == raw.pm_a.pm_25);
+    CHECK(raw.temp_hum_a.humidity == 50.0f);
+  }
+}
+
 TEST_CASE("custom PM correction handles zero, clamp, and EPA ordering", "[correction]") {
   MeasuresAGo raw = valid_measures();
   MeasurementCorrections corrections{};
