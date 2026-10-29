@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "5fe6439",
+  "rev": "a99a138",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1386,83 +1386,6 @@
       "references": [
         "products/go/docs/sensor_producer.md",
         "products/go/docs/ui_manager.md"
-      ]
-    },
-    {
-      "id": "go.calibration.http",
-      "title": "HTTP CO2 calibration reports the sensor outcome",
-      "objective": "Verify the request reaches the fitted sensor and its completion is observable through the initiating interface or device.",
-      "category": "Diagnostics",
-      "sub_category": "CO2 Calibration",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "An outdoor calibration location away from people, vehicles and combustion.",
-        "A computer with Postman or an equivalent GUI API client that resolves .local names on the test LAN.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go.",
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "Test Wi-Fi coverage at the outdoor calibration location.",
-        "A unit record or saved startup log identifying the fitted CO2 sensor as S12, SCD4x or STCC4."
-      ],
-      "steps": [
-        {
-          "action": "Read the fitted sensor from the unit record or startup log and record the expected outcome before sending the request: S12/SCD4x support manual calibration; the current STCC4 driver reports unsupported.",
-          "expected_result": "The expected outcome is established independently of the command result; an unknown sensor blocks this run."
-        },
-        {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings. Configuration values are captured with the API in the following steps.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Stationary.",
-          "expected_result": "Stationary is selected."
-        },
-        {
-          "action": "Read the full serial from About Device and replace <serial> in every request URL with that value. In the API client, set a five-second request timeout, send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body, and save the response as the original configuration before changing anything.",
-          "expected_result": "The intended unit is connected and its original settings are saved for cleanup."
-        },
-        {
-          "action": "Enable local authority. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response shows the requested values before the behavior check continues."
-        },
-        {
-          "action": "In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"cloudConnection\":false}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response shows the requested values before the behavior check continues."
-        },
-        {
-          "action": "Keep the sensor measuring in the outdoor calibration air for at least three minutes.",
-          "expected_result": "The warmed unit is stationary in the calibration environment."
-        },
-        {
-          "action": "In the API client, send POST http://airgradient_<serial>.local/api/v1/actions/calibrate-co2 with No Auth and no body.",
-          "expected_result": "The HTTP response is empty 200; this establishes request admission only."
-        },
-        {
-          "action": "Watch the display and logs in the AirGradient logging tool from the request until completion, allowing 90 seconds. Save the completion outcome.",
-          "expected_result": "For S12/SCD4x, CO2 cal. done appears and the serial completion reports success. For STCC4, CO2 cal. unsupported appears and serial reports unsupported. CO2 cal. failed is a failure for either branch. HTTP 200 confirms admission only; this trigger does not emit the UI-only Calibrating CO2... snackbar.",
-          "evidence": [
-            "Record the physical completion and command result."
-          ]
-        }
-      ],
-      "cleanup": [
-        "Allow any in-flight calibration to finish before moving the unit. A successful calibration changes the sensor baseline and cannot be undone by restoring settings.",
-        "If interrupted before the original configuration was saved, restore only the recorded UI/USB state and report the missing baseline.",
-        "With the saved original configuration available, return to Stationary. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send. Confirm configurationControl is local before restoring values.",
-        "Restore cloudConnection first and configurationControl last from the saved configuration. For each, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth, Content-Type: application/json and a raw JSON object containing that field and its saved value. Confirm each through GET at the same URL within 20 seconds.",
-        "Restore the recorded operating mode, lock state and USB connection. Record any value that could not be restored.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
-      ],
-      "references": [
-        "products/go/docs/sensor_producer.md",
-        "docs/local_http_api.md"
       ]
     },
     {
