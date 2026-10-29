@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "8de3b6f",
+  "rev": "180f65c",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -917,41 +917,37 @@
     },
     {
       "id": "go.display.chart-temperature",
-      "title": "Temperature chart units remain readable after changing units",
-      "objective": "Verify degree symbols, bold value/unit text and redraw quality on the physical display; conversion arithmetic belongs to host tests.",
+      "title": "Temperature chart units change without leftover content",
+      "objective": "Verify that changing Temperature Unit updates the chart header and Min/Max clearly.",
       "category": "Measurements",
       "sub_category": "Charts",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "The Portable/Stationary measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state, Auto Lock and Temperature Unit. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record the measurement interval under Settings > Operations, and Auto Lock and Temperature Unit under Settings > Display & Touch.",
+          "expected_result": "All three original settings are recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
+          "action": "Set Auto Lock to Off and Measure Int. to 10s. Allow five minutes for warmup, then one minute to collect history.",
+          "expected_result": "Recent measurements are available for the chart."
         },
         {
-          "action": "Set interval 10s, Auto Lock Off and Temperature Unit C. Allow five minutes for warmup, then one minute for five scheduled updates. Set interval 5m and browse Temperature before the next scheduled reading.",
-          "expected_result": "The chart has recent history; the header and Min/Max use °C beside the values."
+          "action": "Set Measure Int. to 5m. Return Home and browse to Temperature using the left/right touch controls.",
+          "expected_result": "The chart shows a plot, with the header and Min/Max displaying numeric values in the recorded unit, °C or °F."
         },
         {
-          "action": "Before the next scheduled reading, select Temperature Unit F and return to the Temperature chart.",
-          "expected_result": "The header and Min/Max use °F beside the values. The history remains present, with no missing degree symbol, stale °C, overlapping text or clipped values after refresh.",
-          "evidence": [
-            "Save the two chart photos and times."
-          ]
+          "action": "Open Settings > Display & Touch > Temperature Unit and select the opposite unit. Return Home and browse to Temperature again.",
+          "expected_result": "The header and Min/Max use the newly selected unit, including the degree symbol. The plot remains visible, with no leftover units, overlapping text or clipped values."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: Portable/Stationary interval, Auto Lock and Temperature Unit, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Restore the recorded measurement interval, Auto Lock and Temperature Unit, including after interruption.",
+        "Confirm the restored choices and return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/display_service.md"
