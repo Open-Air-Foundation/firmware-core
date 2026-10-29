@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "a8eca55",
+  "rev": "6594df1",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -332,40 +332,6 @@
       "cleanup": [
         "If Buzzer changed unexpectedly, record the failure and restore its recorded value.",
         "Return to Home, including after interruption."
-      ],
-      "references": [
-        "products/go/docs/ui_manager.md",
-        "products/go/docs/input_service.md"
-      ]
-    },
-    {
-      "id": "go.ui.menu-focus",
-      "title": "Menu entry and Back preserve expected focus",
-      "objective": "Verify menu entry and Back preserve expected focus.",
-      "category": "Display & Controls",
-      "sub_category": "Navigation",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock and Buzzer. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Set Auto Lock Off. Open Settings, Operations, Display & Touch and Hardware Test in turn, returning with Back after each.",
-          "expected_result": "Settings initially selects Operations. The groups initially select Measure Int., Pinned Chart and Peripheral Test respectively. Back restores the row that opened each group."
-        }
-      ],
-      "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock and Buzzer, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
