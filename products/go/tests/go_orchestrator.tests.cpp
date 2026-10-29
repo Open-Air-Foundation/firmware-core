@@ -8306,6 +8306,61 @@ TEST_CASE("apply_settings_change: AlwaysOn to AlwaysOff sleeps GPS", "[Orchestra
   CHECK_FALSE(test_spy::gps_started);
 }
 
+TEST_CASE("AlwaysOff clears an existing fix and keeps GPS inactive when tracking starts",
+          "[Orchestrator][gps_sync][tracking]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Portable;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+
+  GpsData fix{};
+  fix.position = {47.376, 8.541};
+  fix.fix = {GpsFixType::Fix3D, 8, 1.0f};
+  A::on_gps_fix(orch, fix);
+  REQUIRE(A::build_context(orch).gps_fix);
+
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::NOT_FOUND);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+
+  GoSettings updated = f.settings;
+  updated.gps_mode = GpsMode::AlwaysOff;
+  f.ui_manager.sync_settings(updated);
+  A::apply_settings_change(orch);
+
+  CHECK(test_spy::gps_sleeping_started);
+  CHECK(A::latest_gps(orch).fix.fix_type == GpsFixType::NoFix);
+  CHECK(A::latest_gps(orch).position.latitude == GPS_LATITUDE_INVALID);
+  CHECK(A::latest_gps(orch).position.longitude == GPS_LONGITUDE_INVALID);
+
+  REQUIRE(A::start_tracking(orch));
+  CHECK(test_spy::route_started);
+  CHECK(A::tracking_state(orch) == TrackingState::Recording);
+  CHECK_FALSE(test_spy::gps_started);
+  CHECK_FALSE(A::is_gps_active(orch));
+
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+  const auto home = f.ui_manager.build_values(A::build_context(orch));
+  CHECK_FALSE(home.gps_enabled);
+  CHECK_FALSE(home.gps_fix);
+
+  enter_tracking_status(f, orch);
+  open_ui_row(f, orch, "GPS details");
+  const auto details = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(details.row_count == 9);
+  CHECK(std::string(details.rows[3].text) == "GPS: Off");
+  CHECK(std::string(details.rows[4].text) == "Fix: --");
+  CHECK(std::string(details.rows[5].text) == "Sats: --");
+  CHECK(std::string(details.rows[6].text) == "HDOP: --");
+  CHECK(std::string(details.rows[7].text) == "Lat: --");
+  CHECK(std::string(details.rows[8].text) == "Lon: --");
+}
+
 TEST_CASE("start_tracking: OnWhenTracking mode starts GPS service", "[Orchestrator][gps_sync]") {
   TestFixture f;
   f.settings.gps_mode = GpsMode::OnWhenTracking;
