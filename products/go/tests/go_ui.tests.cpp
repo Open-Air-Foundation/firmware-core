@@ -1539,21 +1539,58 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     ui.sync_settings(s);
     // Internal state is _setting_gps_mode = 2.
   }
+}
 
-  SECTION("auto_lock mapping") {
-    GoSettings s{};
+TEST_CASE("UIManager: every Auto Lock choice maps to its duration",
+          "[UIManager][settings][auto-lock]") {
+  struct AutoLockChoice {
+    int seconds;
+    const char *label;
+    const char *summary;
+  };
+  const AutoLockChoice choices[] = {
+      {0, "Off", "Auto Lock: Off"},
+      {10, "10 Seconds", "Auto Lock: 10s"},
+      {30, "30 Seconds", "Auto Lock: 30s"},
+      {60, "60 Seconds", "Auto Lock: 60s"},
+  };
 
-    s.auto_lock_seconds = 0;
-    ui.sync_settings(s); // Off = index 0
+  for (const auto &initial : choices) {
+    for (const auto &selected : choices) {
+      DYNAMIC_SECTION(initial.label << " -> " << selected.label) {
+        UIManager ui(DEFAULT_UI_CONFIG);
+        GoSettings settings{};
+        settings.auto_lock_seconds = initial.seconds;
+        ui.sync_settings(settings);
 
-    s.auto_lock_seconds = 10;
-    ui.sync_settings(s); // 10s = index 1
+        GoSettings output{};
+        output.auto_lock_seconds = -1;
+        ui.apply_to_settings(output);
+        CHECK(output.auto_lock_seconds == initial.seconds);
 
-    s.auto_lock_seconds = 30;
-    ui.sync_settings(s); // 30s = index 2
+        go_to_group(ui, "Display & Touch");
+        select_row(ui, "Auto Lock:");
+        auto values = ui.build_values(make_default_ctx());
+        CHECK(std::string(values.rows[values.selected_row].text) == initial.summary);
+        press(ui, InputSource::TouchEnter);
+        check_rows(ui, {"Exit", "Back", "Off", "10 Seconds", "30 Seconds", "60 Seconds"});
+        values = ui.build_values(make_default_ctx());
+        CHECK(std::string(values.rows[values.selected_row].text) == initial.label);
 
-    s.auto_lock_seconds = 60;
-    ui.sync_settings(s); // 60s = index 3
+        const auto result = open_row(ui, selected.label);
+        CHECK(result.action == UIAction::SettingsChanged);
+        REQUIRE(ui.current_screen() == Screen::DisplayTouch);
+        ui.apply_to_settings(output);
+        CHECK(output.auto_lock_seconds == selected.seconds);
+        values = ui.build_values(make_default_ctx());
+        CHECK(std::string(values.rows[values.selected_row].text) == selected.summary);
+
+        press(ui, InputSource::TouchEnter);
+        REQUIRE(ui.current_screen() == Screen::SettingsChoice);
+        values = ui.build_values(make_default_ctx());
+        CHECK(std::string(values.rows[values.selected_row].text) == selected.label);
+      }
+    }
   }
 }
 

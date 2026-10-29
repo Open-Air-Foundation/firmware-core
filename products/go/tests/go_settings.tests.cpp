@@ -747,6 +747,18 @@ TEST_CASE("save rejects invalid operating_mode", "[settings][validation]") {
   REQUIRE_FALSE(save_go_settings(store, s));
 }
 
+TEST_CASE("all Auto Lock choices survive save and reload", "[settings][auto-lock]") {
+  FakeConfigStore store;
+  for (const int seconds : {0, 10, 30, 60}) {
+    DYNAMIC_SECTION(seconds << " seconds") {
+      GoSettings settings{};
+      settings.auto_lock_seconds = seconds;
+      REQUIRE(save_go_settings(store, settings));
+      CHECK(load_go_settings(store).auto_lock_seconds == seconds);
+    }
+  }
+}
+
 TEST_CASE("save rejects invalid auto_lock_seconds", "[settings][validation]") {
   FakeConfigStore store;
   GoSettings s;

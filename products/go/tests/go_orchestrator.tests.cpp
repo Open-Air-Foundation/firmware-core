@@ -4619,18 +4619,32 @@ TEST_CASE("auto-lock eligibility is shared by scheduling, timer firing, and time
   }
 }
 
-TEST_CASE("check_timers: fires inactivity when unlocked and due", "[Orchestrator][timers]") {
-  TestFixture f;
-  f.settings.auto_lock_seconds = 10;
-  auto orch = f.make_orchestrator();
+TEST_CASE("check_timers: each Auto Lock duration fires exactly at its deadline",
+          "[Orchestrator][timers][auto-lock]") {
+  static constexpr uint32_t UNLOCK_TIME_MS = 1000;
+  static constexpr uint32_t MS_PER_SECOND = 1000;
+  for (const int timeout_seconds : {10, 30, 60}) {
+    DYNAMIC_SECTION(timeout_seconds << " seconds") {
+      TestFixture f;
+      f.settings.auto_lock_seconds = timeout_seconds;
+      f.settings.measure_interval_seconds = 3600;
+      auto orch = f.make_orchestrator();
+      uint32_t now_ms = UNLOCK_TIME_MS;
+      ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+      A::unlock(orch);
 
-  A::unlock(orch); // sets _last_input_ms to current time (0)
+      const uint32_t deadline_ms = UNLOCK_TIME_MS + timeout_seconds * MS_PER_SECOND;
+      now_ms = deadline_ms - 1;
+      A::check_timers(orch);
+      REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+      CHECK(A::compute_queue_timeout_ms(orch) == 1);
 
-  // Advance time past inactivity timeout
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
-  A::check_timers(orch);
-
-  REQUIRE(A::lock_state(orch) == LockState::Locked);
+      now_ms = deadline_ms;
+      A::check_timers(orch);
+      CHECK(A::lock_state(orch) == LockState::Locked);
+      CHECK(f.ui_manager.current_screen() == Screen::Home);
+    }
+  }
 }
 
 TEST_CASE("check_timers: does not fire inactivity when locked", "[Orchestrator][timers]") {

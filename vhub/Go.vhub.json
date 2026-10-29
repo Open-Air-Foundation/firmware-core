@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "16bb5cf",
+  "rev": "36e313c",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -563,48 +563,9 @@
       ]
     },
     {
-      "id": "go.settings.auto-lock-10",
-      "title": "Auto Lock applies the 10-second timeout",
-      "objective": "Verify inactivity locking from a reproducible input edge.",
-      "category": "Display & Controls",
-      "sub_category": "Auto Lock",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A stopwatch or a camera capable of timestamped video."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Select Settings > Display & Touch > Auto Lock > 10s. Return Home; short-press Power to lock and again to unlock. Start timing on the unlock release and give no input.",
-          "expected_result": "Home locks 10–12 seconds after release.",
-          "evidence": [
-            "Record the measured duration; retain video if outside the window."
-          ]
-        }
-      ],
-      "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
-      ],
-      "references": [
-        "products/go/docs/settings.md",
-        "products/go/docs/input_service.md"
-      ]
-    },
-    {
       "id": "go.settings.auto-lock-30",
-      "title": "Auto Lock applies the 30-second timeout",
-      "objective": "Verify inactivity locking from a reproducible input edge.",
+      "title": "Home automatically locks after 30 seconds without input",
+      "objective": "Verify that the nondefault 30-second Auto Lock setting locks Home after inactivity.",
       "category": "Display & Controls",
       "sub_category": "Auto Lock",
       "applicability": [
@@ -615,64 +576,24 @@
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Display & Touch > Auto Lock and record the current choice.",
+          "expected_result": "The original Auto Lock setting is recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Select 30 Seconds and return Home. If Home is unlocked, short-press Power to lock it.",
+          "expected_result": "Home is locked."
         },
         {
-          "action": "Select Settings > Display & Touch > Auto Lock > 30s. Return Home; short-press Power to lock and again to unlock. Start timing on the unlock release and give no input.",
-          "expected_result": "Home locks 30–32 seconds after release.",
+          "action": "Short-press Power to unlock. Start timing when you release Power, then leave the controls untouched. Stop timing when Home shows the locked state.",
+          "expected_result": "Home unlocks, then automatically locks 30–32 seconds after the Power release.",
           "evidence": [
-            "Record the measured duration; retain video if outside the window."
+            "Record the measured duration. Retain video if the result falls outside this window."
           ]
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
-      ],
-      "references": [
-        "products/go/docs/settings.md",
-        "products/go/docs/input_service.md"
-      ]
-    },
-    {
-      "id": "go.settings.auto-lock-60",
-      "title": "Auto Lock applies the 60-second timeout",
-      "objective": "Verify inactivity locking from a reproducible input edge.",
-      "category": "Display & Controls",
-      "sub_category": "Auto Lock",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A stopwatch or a camera capable of timestamped video."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Select Settings > Display & Touch > Auto Lock > 60s. Return Home; short-press Power to lock and again to unlock. Start timing on the unlock release and give no input.",
-          "expected_result": "Home locks 60–62 seconds after release.",
-          "evidence": [
-            "Record the measured duration; retain video if outside the window."
-          ]
-        }
-      ],
-      "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Restore the recorded Auto Lock setting, including after interruption.",
+        "Confirm the restored choice in the menu and return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/settings.md",
@@ -682,31 +603,35 @@
     {
       "id": "go.settings.auto-lock-off",
       "title": "Auto Lock Off leaves Home unlocked",
-      "objective": "Verify the disabled inactivity policy.",
+      "objective": "Verify that disabling Auto Lock prevents inactivity locking.",
       "category": "Display & Controls",
       "sub_category": "Auto Lock",
       "applicability": [
         "V1"
       ],
-      "setup": [],
+      "setup": [
+        "A stopwatch or a camera capable of timestamped video."
+      ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Display & Touch > Auto Lock and record the current choice.",
+          "expected_result": "The original Auto Lock setting is recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Select Off and return Home. If Home is unlocked, short-press Power to lock it.",
+          "expected_result": "Home is locked."
         },
         {
-          "action": "Select Display & Touch > Auto Lock > Off. Return Home, lock/unlock with short Power presses and wait 70 seconds.",
-          "expected_result": "Home stays unlocked for the whole observation."
+          "action": "Short-press Power to unlock. Start timing when you release Power, then leave the controls untouched for 70 seconds.",
+          "expected_result": "Home remains unlocked throughout the 70-second observation.",
+          "evidence": [
+            "Record whether Home stayed unlocked for the full observation. Retain video if it locks unexpectedly."
+          ]
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Restore the recorded Auto Lock setting, including after interruption.",
+        "Confirm the restored choice in the menu and return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/settings.md"
