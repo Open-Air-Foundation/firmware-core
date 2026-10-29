@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "224a447",
+  "rev": "11ec27b",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1302,53 +1302,6 @@
       ],
       "references": [
         "products/go/docs/hardware_test.md"
-      ]
-    },
-    {
-      "id": "go.diagnostics.shake-suppression",
-      "title": "Accelerometer Test temporarily owns motion sensing",
-      "objective": "Verify shake refresh resumes only after leaving the diagnostic.",
-      "category": "Diagnostics",
-      "sub_category": "Motion",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Set interval 60s and Auto Lock Off. Open Hardware Test > Accelerometer Test and shake while the AirGradient logging tool runs.",
-          "expected_result": "Axes respond but no shake refresh starts."
-        },
-        {
-          "action": "Exit Home and shake again. Observe for one 60-second interval.",
-          "expected_result": "An accepted shake produces refresh progress and a completed measurement."
-        }
-      ],
-      "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: Portable/Stationary interval and Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
-      ],
-      "references": [
-        "products/go/docs/hardware_test.md",
-        "products/go/docs/accel_service.md"
       ]
     },
     {
