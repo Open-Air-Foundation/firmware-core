@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "5c2642c",
+  "rev": "5412efe",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -11,8 +11,8 @@
   "tests": [
     {
       "id": "go.boot.battery",
-      "title": "Battery cold start reaches usable Home",
-      "objective": "Verify normal startup from fully powered-off state.",
+      "title": "Battery power-on reaches Home with readings",
+      "objective": "Verify that an onboarded device starts from a fully powered-off state on battery power and displays Home with sensor readings.",
       "category": "Boot & Onboarding",
       "sub_category": "Boot",
       "applicability": [
@@ -23,24 +23,22 @@
       ],
       "steps": [
         {
-          "action": "Record whether USB is initially connected.",
-          "expected_result": "The initial USB state is recorded."
+          "action": "Select Main Menu > Operating Mode > Portable, then disconnect USB.",
+          "expected_result": "Portable mode is selected and USB is disconnected."
         },
         {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
-          "expected_result": "Getting Ready completes a full screen refresh without stopping on a partial frame."
+          "action": "Hold Power until Powered off is fully displayed, release Power, and wait 10 seconds.",
+          "expected_result": "Powered off remains displayed; the device does not restart by itself."
         },
         {
-          "action": "Observe Home for up to five minutes from Power press.",
-          "expected_result": "PM2.5, CO2 and battery readings become available; warming fields show dashes. Home follows the selected interval and Pinned Chart layout: temperature/humidity are absent below five minutes, with no stale cells or incomplete frame.",
+          "action": "Press and release Power. Observe startup for up to five minutes from the Power press.",
+          "expected_result": "Getting Ready is fully displayed, followed by Home without showing Getting Started. Home shows numeric PM2.5 and CO2 readings and a battery indicator, with no missing text or leftover content from the shutdown or startup screens.",
           "evidence": [
-            "Record version and a Home photo; video a stalled or incomplete refresh."
+            "Save a Home photo. If a refresh stalls or leaves an incomplete screen, capture a video."
           ]
         }
       ],
-      "cleanup": [
-        "Restore the recorded USB connection state after reaching normal Home."
-      ],
+      "cleanup": [],
       "references": [
         "products/go/docs/hardware_init.md",
         "products/go/docs/display_service.md"
