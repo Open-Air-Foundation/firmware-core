@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "6bc8f47",
+  "rev": "2315de8",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1306,43 +1306,37 @@
     },
     {
       "id": "go.diagnostics.learning-abort",
-      "title": "An armed Battery Calibration run can be aborted",
-      "objective": "Verify entry into the dedicated boot path and its operator exit.",
+      "title": "Battery Calibration can be aborted",
+      "objective": "Verify Battery Calibration opens its dashboard and a short Power press returns the device to normal operation.",
       "category": "Diagnostics",
       "sub_category": "Fuel Gauge",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "All routes, charts, settings and bonds on this unit are expendable.",
+        "A unit whose fuel-gauge learning data may be changed.",
         "A USB power source."
       ],
       "steps": [
         {
-          "action": "Record the initial USB connection and lock state. Unlock with a short Power press if needed.",
-          "expected_result": "The initial state is recorded and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable and connect USB power.",
+          "expected_result": "Portable is selected and external power is indicated."
         },
         {
-          "action": "Connect USB power before entering Battery Calibration.",
-          "expected_result": "The device shows external power or charging."
+          "action": "Open Main Menu > Settings > Hardware Test > Battery Calibration and select Yes. Allow up to five minutes.",
+          "expected_result": "The device reboots into the learning dashboard. The stage, cycle number, and battery information are readable without overlapping text."
         },
         {
-          "action": "Open Main Menu > Settings > Hardware Test > Battery Calibration and confirm Yes.",
-          "expected_result": "The unit reboots into the Charge-stage learning dashboard rather than Home."
+          "action": "Short-press Power during the run. Allow up to five minutes.",
+          "expected_result": "The device exits calibration, reboots, and returns Home."
         },
         {
-          "action": "Short-press Power during the run.",
-          "expected_result": "The learning workflow aborts, clears its factory state and reboots into normal operation."
-        },
-        {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
-          "expected_result": "The learning dashboard does not reappear. The device reaches Home or Getting Started."
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release it, wait ten seconds, then press and release Power. Allow up to five minutes.",
+          "expected_result": "Home returns; the learning dashboard does not reappear."
         }
       ],
       "cleanup": [
-        "If interrupted, short-press Power to abort learning and return to normal operation. The dedicated unit’s user state may be reset.",
-        "If Getting Started is displayed after aborting, complete onboarding with a one-second Menu hold.",
-        "Return to Home and restore the recorded USB connection and lock state, including after interruption."
+        "If interrupted during calibration, short-press Power to abort. Confirm Home returns and record any failure to exit."
       ],
       "references": [
         "products/go/docs/fg_learning.md"
