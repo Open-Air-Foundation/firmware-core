@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "f518e18",
+  "rev": "752fe15",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1170,99 +1170,6 @@
       "references": [
         "products/go/docs/accel_service.md",
         "products/go/docs/sensor_producer.md"
-      ]
-    },
-    {
-      "id": "go.corrections.energy-saving-display",
-      "title": "Energy Saving redraws raw temperature and humidity across mode changes and timer wakes",
-      "objective": "Verify the physical Home readings and charts replace configured temperature and humidity values with raw readings in Energy Saving, remain readable after timer wakes, and restore the configured presentation on leaving the mode. Numerical correction rules are covered by host tests.",
-      "category": "Measurements",
-      "sub_category": "Corrections",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A computer with Postman or an equivalent GUI API client that resolves .local names on the test LAN.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go.",
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "No recording or paused tracking session is active.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Record Settings > Display & Touch > Auto Lock and Pinned Chart. Settings paths start at Main Menu > Settings.",
-          "expected_result": "The original device state is recorded for cleanup."
-        },
-        {
-          "action": "Connect the USB data cable and open the AirGradient logging tool. Select Main Menu > Operating Mode > Stationary and allow up to 30 seconds for the saved Wi-Fi connection. Read the full serial from About Device and replace <serial> in all request URLs. Set the GUI client request timeout to five seconds and send GET http://airgradient_<serial>.local/api/v1/config with No Auth and no body. Save the complete response before changing configuration.",
-          "expected_result": "Logs are visible and the intended device responds. Its original configuration is saved for cleanup."
-        },
-        {
-          "action": "In Postman or the equivalent GUI client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth, header Content-Type: application/json, and raw JSON body {\"configurationControl\":\"local\"}. Send GET at the same URL with No Auth and no body every five seconds for up to 20 seconds after Send.",
-          "expected_result": "GET confirms configurationControl is local before test inputs are applied."
-        },
-        {
-          "action": "In Postman or the equivalent GUI client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth, header Content-Type: application/json, and raw JSON body {\"cloudConnection\":false,\"measurementInterval\":10,\"temperatureUnit\":\"c\",\"corrections\":{\"temperature\":{\"correctionAlgorithm\":\"none\"},\"humidity\":{\"correctionAlgorithm\":\"none\"}}}. Send GET at the same URL with No Auth and no body every five seconds for up to 20 seconds after Send.",
-          "expected_result": "GET confirms the requested values; PM2.5 correction was not changed."
-        },
-        {
-          "action": "Set Settings > Display & Touch > Auto Lock > Off. Allow five minutes for sensor warmup, then collect five valid raw temperature and humidity samples in the AirGradient logging tool, allowing one minute at the 10-second interval. Continue only if the displayed precision of the raw values is visibly different from 40.0 °C and 10%.",
-          "expected_result": "Valid source readings are available to distinguish raw readings from the prepared corrected presentation. Missing or indistinguishable readings block the run."
-        },
-        {
-          "action": "Set Settings > Operations > Measurement Interval > 5m. On Home, use Up/Down to view Temperature and Humidity in turn, photographing each chart and its current reading. Record the latest completed measurement log alongside the photos.",
-          "expected_result": "Both charts contain valid samples and the Home values match that measurement after rounding temperature to one decimal and humidity to an integer. These are the raw display baselines."
-        },
-        {
-          "action": "In Postman or the equivalent GUI client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth, header Content-Type: application/json, and raw JSON body {\"corrections\":{\"temperature\":{\"correctionAlgorithm\":\"custom\",\"slr\":{\"scalingFactor\":0,\"intercept\":40}},\"humidity\":{\"correctionAlgorithm\":\"custom\",\"slr\":{\"scalingFactor\":0,\"intercept\":10}}}}. Send GET at the same URL with No Auth and no body every five seconds for up to 20 seconds after Send.",
-          "expected_result": "GET confirms the prepared inputs. Saved PM2.5 calibration remains unchanged."
-        },
-        {
-          "action": "Before the next five-minute scheduled measurement, return to Home and inspect Temperature and Humidity and their charts. Photograph the first completed redraw of each.",
-          "expected_result": "The physical readings show 40.0 °C and 10%. Each chart replaces its valid samples with the corresponding constant value. Digits, units and chart labels are complete and readable."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m. Before the next five-minute scheduled measurement, inspect the first completed Home redraw and browse the Temperature and Humidity charts. Match the readings to the latest raw measurement log; if a new sample arrived during navigation, use that sample and retain its log with the photo.",
-          "expected_result": "Raw temperature and humidity replace the prepared constants on the first completed measurement-screen redraw. Cached charts return to their raw values, with no lingering constant line or overlapping labels. Temperature uses one decimal and humidity an integer.",
-          "evidence": [
-            "Save the Stationary and Energy Saving Home/chart photos and the matching raw measurement log entries."
-          ]
-        },
-        {
-          "action": "Set Settings > Display & Touch > Pinned Chart > Temperature. Return Home and lock with Power, keeping the USB data cable connected. Observe two complete scheduled sleep/wake/measurement cycles, allowing 11 minutes from locking. Reconnect the AirGradient logging tool after a wake if necessary and photograph each completed Home frame with its matching measurement log. If required logs are missed, record the observation as incomplete.",
-          "expected_result": "Both timer wakes produce complete, readable Home readings and the Temperature chart using raw data. The prepared 40.0 °C and 10% constants do not reappear. Compare each completed frame to its own raw measurement log using the display rounding above; there are no stuck frames or leftover digits.",
-          "evidence": [
-            "Save the two wake-frame photos and corresponding raw measurement entries."
-          ]
-        },
-        {
-          "action": "After the second timer wake, confirm deep sleep in the logging tool within the current five-minute cycle. Wake with Power and select Main Menu > Operating Mode > Portable before the first new measurement. Watch Home without further touch input until that measurement arrives, allowing five minutes, then browse Temperature and Humidity. If logs cannot confirm the mode change preceded the measurement, mark this timing check incomplete.",
-          "expected_result": "The first Portable Home frame shows 40.0 °C and 10%; other previously valid readings remain visible. No extra touch is needed to restore readings. A fresh measurement arrives, and Home and both charts remain readable with the configured corrections.",
-          "evidence": [
-            "Save video of the first Portable frame and logs showing wake, mode change, and the first new measurement."
-          ]
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Stationary and allow up to 30 seconds for saved Wi-Fi to reconnect. Inspect Home and both charts after the connection page closes, then send GET http://airgradient_<serial>.local/api/v1/config with No Auth and no body.",
-          "expected_result": "The physical display still uses the prepared constants. GET retains both custom algorithms and their coefficients, confirming the mode switches did not erase the calibration."
-        }
-      ],
-      "cleanup": [
-        "After stopping any observation, restore the recorded Energy Saving interval in Energy Saving before returning to Stationary. If its baseline was not captured, leave it unchanged and report the gap.",
-        "After completion, failure or interruption, unlock with Power and return to Stationary. If the original configuration was not captured, restore only recorded UI and USB state and report the missing baseline.",
-        "With the original configuration available, use the same GUI request settings to PUT http://airgradient_<serial>.local/api/v1/config with body {\"configurationControl\":\"local\"}. Confirm local authority through GET at the same URL every five seconds for up to 20 seconds.",
-        "Copy only measurementInterval, temperatureUnit, and the corrections.temperature and corrections.humidity entries from the saved original configuration into a partial JSON body. PUT it to http://airgradient_<serial>.local/api/v1/config with No Auth and Content-Type: application/json. Omit corrections.pm25 to preserve its original algorithm. Confirm the restored fields through GET every five seconds for up to 20 seconds.",
-        "Restore cloudConnection first, then configurationControl last, using separate PUT requests at the same URL with No Auth, Content-Type: application/json, and a JSON object containing each field and its saved value. Confirm each through GET within 20 seconds.",
-        "Restore the recorded Pinned Chart and Auto Lock choices through Settings > Display & Touch, then the original operating mode and lock state. Download the required logs, disconnect the logging tool, and restore the original USB connection state. Record any state that could not be restored."
-      ],
-      "references": [
-        "products/go/docs/measurement_corrections.md",
-        "products/go/docs/ui_manager.md",
-        "products/go/docs/power_management.md",
-        "products/go/tests/go_app.tests.cpp",
-        "products/go/tests/go_orchestrator.tests.cpp"
       ]
     },
     {
