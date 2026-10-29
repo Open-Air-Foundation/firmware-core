@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "180f65c",
+  "rev": "122a18c",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -955,57 +955,45 @@
     },
     {
       "id": "go.display.interval-layout",
-      "title": "Interval changes redraw the overview and hidden pinned chart",
-      "objective": "Verify readable Home hints and clean physical layout transitions at one and five minutes, including None and temporarily unavailable Temperature/Humidity charts.",
+      "title": "Interval changes redraw Home and chart hints cleanly",
+      "objective": "Verify that changing the measurement interval updates Home rows and pinned-chart hints without leftover content.",
       "category": "Measurements",
       "sub_category": "Charts",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "The Portable/Stationary measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the lock state and USB connection. Unlock with a short Power press if needed, then record the operating mode, Auto Lock and Pinned Chart. Settings paths start at Main Menu > Settings.",
-          "expected_result": "Original settings are recorded before changes and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record the measurement interval under Settings > Operations, and Auto Lock and Pinned Chart under Settings > Display & Touch.",
+          "expected_result": "All three original settings are recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
+          "action": "Set Auto Lock to Off, Pinned Chart to None and Measure Int. to 5m. Return Home.",
+          "expected_result": "Temperature/humidity, TVOC/NOx and pressure/altitude appear below PM2.5 and CO2. No chart or chart hint appears."
         },
         {
-          "action": "Set Auto Lock Off, Pinned Chart None and Measure Int. 5m. Return Home and let the refresh finish.",
-          "expected_result": "The overview shows temperature/humidity, TVOC/NOx and pressure/altitude below the hero values. No chart or chart hint appears."
+          "action": "Set Measure Int. to 60s and return Home. Lock, then unlock with short Power presses, inspecting each completed refresh.",
+          "expected_result": "Temperature/humidity disappear and the remaining rows move up. “Pin a chart here” appears centered in the bottom row in both lock states, without clipping or leftover values."
         },
         {
-          "action": "Set Measure Int. 60s, return Home, then lock and unlock with short Power presses.",
-          "expected_result": "Temperature/humidity disappear; TVOC/NOx and pressure/altitude move up. The bottom row shows “Pin a chart here” as one small, centered line while locked and unlocked. The text is readable without clipping, overlap or stale thermal values.",
-          "evidence": [
-            "Save a Home photo showing the hint and adjacent measurement rows."
-          ]
+          "action": "Tap right (Down) through the charts and back to the overview.",
+          "expected_result": "Browsing skips Temperature and Humidity. The hint disappears during browsing and returns on the overview without leftover content."
         },
         {
-          "action": "While unlocked, browse once through Home with Down, letting each refresh finish.",
-          "expected_result": "Browsing skips Temperature and Humidity. The remaining metric headers and plots render without the hint or remnants of hidden cells. Returning to the overview restores “Pin a chart here”."
+          "action": "Select Temperature as Pinned Chart. Inspect Home at 60s while locked and unlocked, then change the interval to 5m and inspect again. Repeat with Humidity.",
+          "expected_result": "At 60s, “Not available” appears centered instead of the chart in both lock states. At 5m, the hint disappears and the temperature/humidity row and pinned chart area return cleanly. The plot may be empty until history is available."
         },
         {
-          "action": "For each of Temperature and Humidity: set Measure Int. to 60s, select that Pinned Chart and return Home. Lock and unlock with short Power presses, letting each refresh finish. Then set Measure Int. to 5m and return Home.",
-          "expected_result": "At 60s, “Not available” replaces the chart as one small, centered, readable line in both lock states; “Pin a chart here” is absent. At 5m, the hint disappears and the temperature/humidity row and pinned plot area return cleanly without a browsing header or Min/Max. No plot line is required until valid history exists.",
-          "evidence": [
-            "Save a 60s Home photo showing “Not available”; capture any clipped or stale text during the transition to 5m."
-          ]
-        },
-        {
-          "action": "Set Pinned Chart PM2.5. Compare Home at 5m and 60s, letting each refresh finish.",
-          "expected_result": "At 5m, temperature/humidity and TVOC/NOx sit above the chart. At 60s, TVOC/NOx and pressure/altitude sit above it. Both views are readable without stale rows or browsing details. Neither view shows a chart hint.",
-          "evidence": [
-            "Save the 5m and 60s Home photos."
-          ]
+          "action": "Select PM2.5 as Pinned Chart. Compare Home at 5m and 60s.",
+          "expected_result": "At 5m, temperature/humidity and TVOC/NOx appear above the chart. At 60s, TVOC/NOx and pressure/altitude appear above it. Neither view has a chart hint, overlapping rows or leftover content."
         }
       ],
       "cleanup": [
-        "In Portable, exit menus and restore the recorded Portable/Stationary interval, Auto Lock and Pinned Chart, operating mode, lock state and USB connection, including after interruption. Confirm each restored setting; record any remaining change."
+        "Restore the recorded measurement interval, Auto Lock and Pinned Chart, including after interruption.",
+        "Confirm the restored choices and return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/display_service.md",
