@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "e841d71",
+  "rev": "67eefba",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1002,8 +1002,8 @@
     },
     {
       "id": "go.sensing.cadence",
-      "title": "The three-second setting produces regular measurements",
-      "objective": "Verify scheduled cadence without manual refresh interference.",
+      "title": "Three-second measurements continue regularly",
+      "objective": "Verify that scheduled measurements continue at the selected interval without manual refresh.",
       "category": "Measurements",
       "sub_category": "Scheduling",
       "applicability": [
@@ -1012,34 +1012,29 @@
       "setup": [
         "A USB data cable.",
         "A computer with access to the AirGradient logging tool.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "The Portable/Stationary measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record the measurement interval under Settings > Operations. Connect USB and open the AirGradient logging tool.",
+          "expected_result": "The original interval is recorded and device logs are visible."
         },
         {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
+          "action": "Set Operations > Measure Int. to 3s and return Home. Keep the device still and allow five minutes for warmup.",
+          "expected_result": "Home displays measurements and MeasuresAGo entries appear in the logs."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Set Settings > Operations > Measure Int. to 3s and keep the unit still. Allow five minutes for warmup, then record five consecutive MeasuresAGo timestamps and observe Home, allowing 20 seconds.",
-          "expected_result": "The four intervals are each 2–4 seconds; measurements and Home updates continue without restart.",
+          "action": "Leave the controls untouched. Record five consecutive MeasuresAGo timestamps within 20 seconds and inspect Home.",
+          "expected_result": "Each of the four gaps is 2–4 seconds. Measurements continue and Home remains displayed without a restart.",
           "evidence": [
-            "Record timestamps and calculated gaps."
+            "Save the five timestamps and four gaps."
           ]
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: Portable/Stationary interval, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
+        "Restore the recorded measurement interval, including after interruption.",
+        "Confirm the restored choice and return Home. Record any restoration failure.",
+        "Save the relevant logs and disconnect the logging tool."
       ],
       "references": [
         "products/go/docs/sensor_producer.md"
