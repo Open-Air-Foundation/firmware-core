@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "6a39c10",
+  "rev": "4077a6b",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -241,7 +241,7 @@
       "setup": [],
       "steps": [
         {
-          "action": "Unlock with a short Power press if needed. Select Main Menu > Operating Mode > Portable.",
+          "action": "Select Main Menu > Operating Mode > Portable.",
           "expected_result": "Portable mode is selected."
         },
         {
@@ -273,7 +273,7 @@
       "setup": [],
       "steps": [
         {
-          "action": "Unlock with a short Power press if needed. Select Main Menu > Operating Mode > Portable.",
+          "action": "Select Main Menu > Operating Mode > Portable.",
           "expected_result": "Portable mode is selected."
         },
         {
@@ -309,7 +309,7 @@
       "setup": [],
       "steps": [
         {
-          "action": "Unlock with a short Power press if needed. Select Main Menu > Operating Mode > Portable.",
+          "action": "Select Main Menu > Operating Mode > Portable.",
           "expected_result": "Portable mode is selected."
         },
         {
@@ -350,7 +350,7 @@
       "setup": [],
       "steps": [
         {
-          "action": "Unlock with a short Power press if needed. Select Main Menu > Operating Mode > Portable.",
+          "action": "Select Main Menu > Operating Mode > Portable.",
           "expected_result": "Portable mode is selected."
         },
         {
@@ -389,7 +389,7 @@
       ],
       "steps": [
         {
-          "action": "Unlock with a short Power press if needed. Open Main Menu > Settings > About Device.",
+          "action": "Open Main Menu > Settings > About Device.",
           "expected_result": "About Device is displayed."
         },
         {
@@ -425,7 +425,7 @@
       ],
       "steps": [
         {
-          "action": "Unlock with a short Power press if needed. Open Main Menu > Settings > Setup Guide.",
+          "action": "Open Main Menu > Settings > Setup Guide.",
           "expected_result": "The guide and QR code are fully visible without clipping. The single action reads Back, rather than Hold menu to start."
         },
         {
