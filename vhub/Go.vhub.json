@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "67eefba",
+  "rev": "44cd1cd",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1042,8 +1042,8 @@
     },
     {
       "id": "go.sensing.pm-sleep",
-      "title": "A long interval sleeps and wakes the PM sensor",
-      "objective": "Verify PM power saving retains complete readings.",
+      "title": "PM sensor sleeps between measurements and resumes with valid readings",
+      "objective": "Verify that a longer interval stops the PM fan between measurements without losing PM readings.",
       "category": "Measurements",
       "sub_category": "Scheduling",
       "applicability": [
@@ -1052,31 +1052,30 @@
       "setup": [
         "A USB data cable.",
         "A computer with access to the AirGradient logging tool.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "A quiet environment where the PM fan can be heard.",
+        "The Portable/Stationary measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record the measurement interval under Settings > Operations. Connect USB and open the AirGradient logging tool.",
+          "expected_result": "The original interval is recorded and device logs are visible."
         },
         {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
+          "action": "Set Operations > Measure Int. to 30s and return Home. Keep the device still and allow five minutes for warmup.",
+          "expected_result": "MeasuresAGo entries contain numeric PM1, PM2.5 and PM10 readings."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Set Settings > Operations > Measure Int. to 30s and leave the unit still. Allow five minutes for warmup, then watch the PM fan and capture two complete measurement intervals in the AirGradient logging tool, allowing 90 seconds.",
-          "expected_result": "The PM fan stops between measurements and resumes for preparation. PM1, PM2.5 and PM10 return in each completed snapshot; there is no PMID collapsed or PMID wait timed out warning."
+          "action": "Leave the controls untouched. Listen to the PM fan and capture two complete measurement cycles within 90 seconds.",
+          "expected_result": "The fan stops between measurements and resumes before each measurement. Both completed snapshots contain valid PM1, PM2.5 and PM10 readings, with no PMID collapse or timeout warnings.",
+          "evidence": [
+            "Save the logs covering both cycles."
+          ]
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: Portable/Stationary interval, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
+        "Restore the recorded measurement interval, including after interruption.",
+        "Confirm the restored choice and return Home. Record any restoration failure.",
+        "Save the relevant logs and disconnect the logging tool."
       ],
       "references": [
         "products/go/docs/sensor_producer.md",
