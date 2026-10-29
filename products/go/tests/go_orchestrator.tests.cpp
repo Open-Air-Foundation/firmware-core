@@ -6381,6 +6381,31 @@ TEST_CASE("on_input: CalibrateCo2 UI action triggers co2 calibration request",
   CHECK(f.ui_manager.current_screen() == Screen::Home);
 }
 
+TEST_CASE("on_input: cancelling Battery Calibration leaves factory state unchanged",
+          "[Orchestrator][hwtest][fg]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+
+  A::unlock(orch);
+  enter_hardware_test(f, orch);
+  REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
+
+  FORBID_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_));
+  FORBID_CALL(f.mock_config, commit());
+
+  open_ui_row(f, orch, "Battery Calibration");
+  REQUIRE(f.ui_manager.current_screen() == Screen::Confirm);
+
+  SECTION("No") { open_ui_row(f, orch, "No"); }
+  SECTION("Back") { open_ui_row(f, orch, "Back"); }
+
+  REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
+  const auto values = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(values.selected_row < values.row_count);
+  CHECK(std::string(values.rows[values.selected_row].text) == "Battery Calibration");
+  CHECK(reboot_count == 0);
+}
+
 TEST_CASE("on_input: Hardware Test FG Learning arm writes factory state",
           "[Orchestrator][hwtest][fg]") {
   TestFixture f;

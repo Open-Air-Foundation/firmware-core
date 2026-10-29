@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "11ec27b",
+  "rev": "6bc8f47",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1302,44 +1302,6 @@
       ],
       "references": [
         "products/go/docs/hardware_test.md"
-      ]
-    },
-    {
-      "id": "go.diagnostics.learning-cancel",
-      "title": "Cancelling Battery Calibration leaves normal operation intact",
-      "objective": "Verify the destructive factory workflow requires confirmation.",
-      "category": "Diagnostics",
-      "sub_category": "Fuel Gauge",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Open Hardware Test > Battery Calibration, inspect the confirmation, choose No, then reopen and select Back.",
-          "expected_result": "The confirmation asks Start Battery Calibration? Both paths return to Hardware Test on Battery Calibration; no learning reboot starts."
-        },
-        {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
-          "expected_result": "Normal Home returns rather than the factory-learning dashboard."
-        }
-      ],
-      "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
-      ],
-      "references": [
-        "products/go/docs/fg_learning.md",
-        "products/go/docs/ui_manager.md"
       ]
     },
     {
