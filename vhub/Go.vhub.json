@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "e538f2a",
+  "rev": "ce2ae73",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -263,8 +263,8 @@
     },
     {
       "id": "go.ui.home-gesture",
-      "title": "Holding Menu exits a nested menu once",
-      "objective": "Verify holding Menu exits a nested menu once.",
+      "title": "Holding Menu returns directly to Home",
+      "objective": "Verify that holding Menu exits a nested menu while still held, and releasing it causes no additional navigation.",
       "category": "Display & Controls",
       "sub_category": "Navigation",
       "applicability": [
@@ -273,22 +273,24 @@
       "setup": [],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock and Buzzer. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Unlock with a short Power press if needed. Select Main Menu > Operating Mode > Portable.",
+          "expected_result": "Portable mode is selected."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Open Main Menu > Settings > Operations > Buzzer.",
+          "expected_result": "The Buzzer choice screen is displayed."
         },
         {
-          "action": "Set Auto Lock Off. Open Settings > Operations > Buzzer. Hold Menu at least one second and keep holding until Home paints, then release.",
-          "expected_result": "Home appears while held; release does not reopen a menu."
+          "action": "Hold Menu for at least one second and keep holding until Home appears.",
+          "expected_result": "Home appears while Menu is still held, without stopping at an intermediate menu."
+        },
+        {
+          "action": "Release Menu and inspect the screen after any refresh finishes.",
+          "expected_result": "Home remains displayed; releasing Menu does not reopen a menu."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock and Buzzer, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Return to Home if interrupted before completing the gesture."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
