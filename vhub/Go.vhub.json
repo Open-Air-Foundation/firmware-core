@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "21fc67e",
+  "rev": "2851b1c",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -124,8 +124,8 @@
     },
     {
       "id": "go.onboarding.guide-link",
-      "title": "First-use QR opens the Go usage guide",
-      "objective": "Verify the guide link and compact first-use layout.",
+      "title": "Getting Started QR code opens the Go usage guide",
+      "objective": "Verify that the first-use instructions are readable and the displayed QR code opens the Go usage guide.",
       "category": "Boot & Onboarding",
       "sub_category": "First Use",
       "applicability": [
@@ -138,17 +138,26 @@
       ],
       "steps": [
         {
-          "action": "Record whether USB is initially connected.",
-          "expected_result": "The initial USB state is recorded for cleanup."
+          "action": "Hold BOOT for at least two seconds to factory-reset, then release. Allow 30 seconds for Getting Started to appear.",
+          "expected_result": "Getting Started is displayed."
         },
         {
-          "action": "Factory-reset and inspect Getting Started. Scan the QR.",
-          "expected_result": "The QR opens https://l.airgradient.net/GO. Scan for guide, Or just use it right now and one highlighted Hold menu to start action fit without clipping; no hold duration is printed."
+          "action": "Inspect the Getting Started screen.",
+          "expected_result": "The QR code and the text Scan for guide, Or just use it right now, and Hold menu to start are fully visible without clipping or overlap. Hold menu to start appears once in a highlighted area, without a printed hold duration.",
+          "evidence": [
+            "Save a photo of the screen."
+          ]
+        },
+        {
+          "action": "Scan the QR code with the phone and open the detected link.",
+          "expected_result": "The detected link is https://l.airgradient.net/GO. Opening it loads the AirGradient Go usage guide; a redirect to the guide's final address is acceptable.",
+          "evidence": [
+            "Save a screenshot of the loaded guide with the browser address visible."
+          ]
         }
       ],
       "cleanup": [
-        "Hold Menu for one second to finish onboarding.",
-        "Restore the recorded USB connection state. The factory-reset data is intentionally not restored."
+        "Hold Menu on Getting Started to complete onboarding, including after interruption. Record any failure to reach Home."
       ],
       "references": [
         "products/go/docs/ui_manager.md"
