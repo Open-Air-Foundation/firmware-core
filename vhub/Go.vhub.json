@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "ce2ae73",
+  "rev": "a8eca55",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -299,8 +299,8 @@
     },
     {
       "id": "go.ui.cancel-choice",
-      "title": "Cancelling a choice preserves its saved value",
-      "objective": "Verify cancelling a choice preserves its saved value.",
+      "title": "Leaving a choice without confirming preserves its value",
+      "objective": "Verify that highlighting another option does not apply it, and reopening the choice selects the saved value.",
       "category": "Display & Controls",
       "sub_category": "Navigation",
       "applicability": [
@@ -309,22 +309,29 @@
       "setup": [],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock and Buzzer. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Unlock with a short Power press if needed. Select Main Menu > Operating Mode > Portable.",
+          "expected_result": "Portable mode is selected."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Open Main Menu > Settings > Operations. Record the displayed Buzzer value, then open Buzzer.",
+          "expected_result": "The current value, On or Off, is highlighted."
         },
         {
-          "action": "Record Buzzer. Open Operations > Buzzer and move selection to its opposite without applying it; double Menu to go Back, then reopen.",
-          "expected_result": "The original Buzzer value remains active and selected; Back returns to the Buzzer parent row."
+          "action": "Use the left or right touch control to highlight the opposite value without tapping Menu to confirm.",
+          "expected_result": "The opposite value is highlighted and the choice screen remains open."
+        },
+        {
+          "action": "Quickly double-tap Menu to go back.",
+          "expected_result": "Operations appears with Buzzer highlighted and still showing the recorded value."
+        },
+        {
+          "action": "Open Buzzer again.",
+          "expected_result": "The original value is highlighted, rather than the unconfirmed choice."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock and Buzzer, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "If Buzzer changed unexpectedly, record the failure and restore its recorded value.",
+        "Return to Home, including after interruption."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
