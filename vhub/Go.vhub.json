@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "1cc2e6e",
+  "rev": "cae88ce",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -798,59 +798,6 @@
       "references": [
         "products/go/docs/ui_manager.md",
         "products/go/docs/led_service.md"
-      ]
-    },
-    {
-      "id": "go.settings.energy-saving-interval",
-      "title": "The interval menu remembers separate Energy Saving and normal choices",
-      "objective": "Verify readable menu selection and independent preferences through mode changes and a cold restart.",
-      "category": "Settings",
-      "sub_category": "Measurement Interval",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h.",
-        "No recording or paused tracking session is active."
-      ],
-      "steps": [
-        {
-          "action": "Record the operating mode, lock state and USB connection. Unlock if needed. Select Portable and record Measurement Interval under Settings > Operations and Auto Lock under Settings > Display & Touch before changing them.",
-          "expected_result": "The original normal interval and device state are recorded."
-        },
-        {
-          "action": "Set Auto Lock to Off and Measurement Interval to 10s. Select Energy Saving, record its original interval, then open the same interval menu.",
-          "expected_result": "The menu shows 5m, 15m and 1h with the saved value selected; 3s, 10s, 30s and 60s are absent. Text and selection highlighting are readable."
-        },
-        {
-          "action": "Select 15m, return to Operations, then switch to Portable and reopen Measurement Interval.",
-          "expected_result": "Energy Saving shows Measure Int.: 15m before leaving. Portable restores selected 10s and all seven fixed choices, without leftover rows or clipped labels."
-        },
-        {
-          "action": "Return to Energy Saving and reopen Measurement Interval.",
-          "expected_result": "15m is selected and the short choices remain hidden."
-        },
-        {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release it, wait 10 seconds and press Power to start. Allow 90 seconds for Home, then reopen Measurement Interval.",
-          "expected_result": "The device returns in Energy Saving and the menu still selects 15m.",
-          "evidence": [
-            "Save a post-restart photo of the interval menu."
-          ]
-        },
-        {
-          "action": "Select Portable and reopen Measurement Interval.",
-          "expected_result": "10s is still selected with a complete, readable list."
-        }
-      ],
-      "cleanup": [
-        "After completion, failure or interruption, wake and unlock Go and exit menus.",
-        "Restore each captured interval in its own mode: the normal interval in Portable, and the Energy Saving interval in Energy Saving. Then restore the original operating mode.",
-        "Restore the captured Auto Lock, lock state and USB connection. Confirm each restored value; record any missing baseline or remaining change."
-      ],
-      "references": [
-        "products/go/docs/settings.md",
-        "products/go/docs/ui_manager.md"
       ]
     },
     {
