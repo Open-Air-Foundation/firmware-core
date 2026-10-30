@@ -2693,7 +2693,6 @@ TEST_CASE("run_fast_path: Energy Saving uses maximum GPS sleep") {
   board.settings.energy_saving_measure_interval_seconds = 900;
   constexpr uint32_t planned_sleep_ms = 120000;
   test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, planned_sleep_ms};
-  bool expect_sleep_request = true;
   uint32_t expected_gps_sleep_ms = GPS_ENERGY_SAVING_SLEEP_MS;
   RtcAppState state{};
   state.mode = OperatingMode::Offline;
@@ -2703,7 +2702,6 @@ TEST_CASE("run_fast_path: Energy Saving uses maximum GPS sleep") {
   SECTION("an existing shorter GPS timer does not shorten ESP sleep") {
     test_spy::gps_remaining_ms = 60000;
     state.gps_wake_deadline_ms = clock.retained_ms + 60000;
-    expect_sleep_request = false;
   }
   SECTION("Always Off uses maximum sleep") { board.settings.gps_mode = GpsMode::AlwaysOff; }
   SECTION("retained recording cannot activate GPS") {
@@ -2720,13 +2718,34 @@ TEST_CASE("run_fast_path: Energy Saving uses maximum GPS sleep") {
 
   REQUIRE(test_spy::enter_sleep_called);
   CHECK(test_spy::enter_sleep_duration_ms == planned_sleep_ms);
-  CHECK(test_spy::gps_sleep_requested == expect_sleep_request);
-  if (expect_sleep_request) {
-    CHECK(test_spy::gps_sleep_request_count == 1);
-    CHECK(test_spy::gps_sleep_duration_ms == expected_gps_sleep_ms);
-    CHECK(test_spy::last_saved_state.gps_wake_deadline_ms ==
-          clock.retained_ms + expected_gps_sleep_ms);
-  }
+  CHECK(test_spy::gps_sleep_requested);
+  CHECK(test_spy::gps_initial_deadline_ms == 0);
+  CHECK(test_spy::gps_sleep_request_count == 1);
+  CHECK(test_spy::gps_sleep_duration_ms == expected_gps_sleep_ms);
+  CHECK(test_spy::last_saved_state.gps_wake_deadline_ms ==
+        clock.retained_ms + expected_gps_sleep_ms);
+}
+
+TEST_CASE("timer wake probes GPS despite a retained deadline and preserves it on failure",
+          "[GoApp][gps]") {
+  test_spy::reset();
+  ScopedRetainedClock clock(200000);
+  MockBoard board;
+  board.settings.operating_mode = OperatingMode::Offline;
+  RtcAppState state{};
+  state.mode = OperatingMode::Offline;
+  state.gps_wake_deadline_ms = clock.retained_ms + GPS_ENERGY_SAVING_SLEEP_MS;
+  test_spy::gps_sleep_ok = false;
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 120000};
+  GoApp app(board);
+  GoAppTestAccess access(app);
+  access.run_fast_path(state);
+  CHECK(test_spy::gps_sleep_request_count == 1);
+  CHECK(test_spy::gps_initial_deadline_ms == 0);
+  CHECK(test_spy::gps_sleep_duration_ms == GPS_ENERGY_SAVING_SLEEP_MS);
+  CHECK(test_spy::last_saved_state.gps_wake_deadline_ms == state.gps_wake_deadline_ms);
+  CHECK(test_spy::enter_sleep_called);
+  CHECK_FALSE(test_spy::gps_read_called);
 }
 
 TEST_CASE("GoApp: deep-sleep wake restores GPS deadline and derives baud from application state") {
@@ -2833,7 +2852,6 @@ TEST_CASE("inactive GPS final fallback uses maximum sleep", "[GoApp][gps]") {
   test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 40000};
   RtcAppState state{};
   state.mode = OperatingMode::Offline;
-  bool early_attempt = true;
   bool final_success = true;
   SECTION("early request fails, final request succeeds") { test_spy::gps_sleep_ok = false; }
   SECTION("both requests fail") {
@@ -2843,14 +2861,11 @@ TEST_CASE("inactive GPS final fallback uses maximum sleep", "[GoApp][gps]") {
   SECTION("existing sleep expires during warmup") {
     state.gps_wake_deadline_ms = clock.retained_ms + 1000;
     test_spy::gps_remaining_ms = 1000;
-    early_attempt = false;
   }
   SECTION("early sleep expires during a slow cycle") {}
   test_spy::before_sensor_measurement = [&] {
-    CHECK(test_spy::gps_sleep_request_count == (early_attempt ? 1 : 0));
-    if (early_attempt) {
-      CHECK(test_spy::gps_sleep_duration_ms == GPS_ENERGY_SAVING_SLEEP_MS);
-    }
+    CHECK(test_spy::gps_sleep_request_count == 1);
+    CHECK(test_spy::gps_sleep_duration_ms == GPS_ENERGY_SAVING_SLEEP_MS);
     // Simulate elapsed retained time and the receiver's timer expiring.
     clock.retained_ms += uint64_t{GPS_ENERGY_SAVING_SLEEP_MS} + 1;
     test_spy::gps_remaining_ms = 0;
@@ -2861,7 +2876,7 @@ TEST_CASE("inactive GPS final fallback uses maximum sleep", "[GoApp][gps]") {
   access.run_fast_path(state);
   CHECK(test_spy::enter_sleep_called);
   CHECK(test_spy::enter_sleep_duration_ms == 40000);
-  CHECK(test_spy::gps_sleep_request_count == (early_attempt ? 2 : 1));
+  CHECK(test_spy::gps_sleep_request_count == 2);
   CHECK(test_spy::gps_sleep_duration_ms == GPS_ENERGY_SAVING_SLEEP_MS);
   CHECK(test_spy::last_saved_state.gps_wake_deadline_ms ==
         (final_success ? clock.retained_ms + GPS_ENERGY_SAVING_SLEEP_MS : 0));

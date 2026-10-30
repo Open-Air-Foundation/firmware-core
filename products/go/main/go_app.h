@@ -31,7 +31,7 @@ private:
 
   /// Try BMS initialization twice to recover transient communication failures.
   bool init_bms_with_retry();
-  void prepare_gps_for_sleep(RtcAppState &state);
+  void prepare_gps_for_sleep(RtcAppState &state, bool probe_receiver = false);
 
   // --- Testable fast-path core ---
 

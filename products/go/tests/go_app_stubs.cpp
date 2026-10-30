@@ -478,7 +478,8 @@ bool GpsService::request_sleep(uint32_t duration_ms) {
   test_spy::gps_sleep_requested = true;
   ++test_spy::gps_sleep_request_count;
   test_spy::gps_sleep_duration_ms = duration_ms;
-  if (duration_ms == 0 || test_spy::gps_remaining_ms != 0 || !test_spy::gps_sleep_ok) {
+  if (duration_ms == 0 || _wake_deadline_ms > RTOS::get_retained_time_ms() ||
+      !test_spy::gps_sleep_ok) {
     return false;
   }
   test_spy::gps_remaining_ms = duration_ms;

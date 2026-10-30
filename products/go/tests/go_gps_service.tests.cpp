@@ -300,6 +300,43 @@ TEST_CASE_METHOD(Fixture, "GPS service restores only the sleep deadline after MC
   CHECK(serial.writes.back().baud == GpsDriver::MODULE_DEFAULT_BAUD);
 }
 
+TEST_CASE_METHOD(Fixture, "GPS wake probe re-sleeps a responding receiver without acquisition",
+                 "[gps_service]") {
+  REQUIRE(service.request_sleep(UINT32_MAX));
+  clock.retained_ms += 300000;
+  serial.opened_bauds.clear();
+  serial.writes.clear();
+  bool awake = true;
+  SECTION("receiver woke at default baud") { serial.receiver_wake_ms = 0; }
+  SECTION("receiver woke at active baud") {
+    serial.receiver_wake_ms = 0;
+    serial.receiver_baud = GpsDriver::MODULE_ACTIVE_BAUD;
+  }
+  SECTION("receiver is still asleep") { awake = false; }
+
+  // Timer-wake probing intentionally does not restore the retained deadline.
+  GpsService probe(driver, nullptr, {});
+  CHECK(probe.request_sleep(UINT32_MAX) == awake);
+  const bool both_bauds = !awake || serial.writes.back().baud == GpsDriver::MODULE_ACTIVE_BAUD;
+  CHECK(serial.opened_bauds.size() == (both_bauds ? 2 : 1));
+  CHECK(serial.opened_bauds.front() == GpsDriver::MODULE_DEFAULT_BAUD);
+  if (both_bauds) {
+    CHECK(serial.opened_bauds.back() == GpsDriver::MODULE_ACTIVE_BAUD);
+  }
+  int sleep_commands = 0;
+  for (const auto &write : serial.writes) {
+    if (is_command(write, 0x41)) {
+      ++sleep_commands;
+      CHECK(write.baud == serial.receiver_baud);
+    }
+    CHECK_FALSE(is_command(write, 0x40)); // No GNSS start.
+    CHECK_FALSE(is_command(write, 0x00)); // No baud switch.
+  }
+  CHECK(sleep_commands == (awake ? 1 : 0));
+  CHECK(probe.sleep_remaining_ms() == (awake ? UINT32_MAX : 0));
+  CHECK_FALSE(serial.open);
+}
+
 TEST_CASE_METHOD(Fixture, "GPS service handles maximum sleep without truncating retained time",
                  "[gps_service]") {
   clock.retained_ms = uint64_t{UINT32_MAX} + 1234;

@@ -355,19 +355,30 @@ void GoApp::run_factory_learning_path(const RtcAppState & /*state*/) {
 // Fast-path boot (timer wake, locked)
 // ===========================================================================
 
-void GoApp::prepare_gps_for_sleep(RtcAppState &state) {
+void GoApp::prepare_gps_for_sleep(RtcAppState &state, bool probe_receiver) {
   const auto settings = _board.load_settings();
+  const bool probe_after_wake = probe_receiver && settings.operating_mode == OperatingMode::Offline;
   if (is_gps_active_at_boot(settings, state) ||
-      state.gps_wake_deadline_ms > RTOS::get_retained_time_ms()) {
+      (!probe_after_wake && state.gps_wake_deadline_ms > RTOS::get_retained_time_ms())) {
     return;
   }
   auto *driver = _board.new_gps_driver();
   if (driver != nullptr) {
-    GpsService service(*driver, nullptr, {.wake_deadline_ms = state.gps_wake_deadline_ms});
-    if (!service.request_sleep(gps_inactive_sleep_ms(settings.operating_mode))) {
+    // A retained deadline cannot rule out a receiver wake/reset during MCU sleep.
+    // Bypass it for this probe; preserve it if no new sleep request is sent.
+    GpsService service(*driver, nullptr,
+                       {.wake_deadline_ms = probe_after_wake ? 0 : state.gps_wake_deadline_ms});
+    if (probe_after_wake) {
+      AG_LOGI(TAG, "Timer wake: probing GPS before long sleep");
+    }
+    if (service.request_sleep(gps_inactive_sleep_ms(settings.operating_mode))) {
+      state.gps_wake_deadline_ms = service.sleep_deadline_ms();
+      AG_LOGI(TAG, "GPS sleep command sent");
+    } else if (probe_after_wake) {
+      AG_LOGI(TAG, "GPS probe/sleep not completed; retaining previous deadline");
+    } else {
       AG_LOGW(TAG, "GPS sleep request failed");
     }
-    state.gps_wake_deadline_ms = service.sleep_deadline_ms();
   }
 }
 
@@ -474,9 +485,9 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
                           state.gps_wake_deadline_ms);
     }
   } else {
-    // Sleep across this acquisition cycle and the following ESP sleep.
-    // The final sleep request remains a fallback if this one fails or expires.
-    prepare_gps_for_sleep(gps_state);
+    // Recheck the receiver on every timer wake, even with a retained deadline.
+    // The final sleep request remains a fallback if no valid deadline remains.
+    prepare_gps_for_sleep(gps_state, /*probe_receiver=*/true);
   }
 
   PowerService &power = _board.power();
