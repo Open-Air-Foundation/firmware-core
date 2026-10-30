@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "e31aa81",
+  "rev": "9d5b5fe",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1932,8 +1932,8 @@
     },
     {
       "id": "go.wifi.portal-dhcp",
-      "title": "Browser provisioning connects using DHCP",
-      "objective": "Verify ordinary portal setup and saved network reconnection.",
+      "title": "Browser setup connects using DHCP and survives power cycling",
+      "objective": "Verify browser provisioning connects Go to Wi-Fi and saves the network for automatic reconnection.",
       "category": "Stationary Network",
       "sub_category": "Provisioning",
       "applicability": [
@@ -1941,36 +1941,39 @@
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
-        "A controllable WPA2 test access point.",
-        "The test access point’s SSID and password.",
+        "A 2.4 GHz WPA2 network with DHCP enabled and known credentials.",
         "A computer with a browser and Wi-Fi settings.",
-        "Access to the router association list and assigned IP addresses."
+        "Access to the router’s connected-device list and DHCP leases."
       ],
       "steps": [
         {
-          "action": "Record the computer’s current Wi-Fi network before switching networks for provisioning.",
-          "expected_result": "The original computer network is recorded for cleanup."
+          "action": "Record the computer’s current Wi-Fi network. Disconnect USB from Go. Hold BOOT for at least two seconds, release, and allow 30 seconds for restart.",
+          "expected_result": "Getting Started appears."
         },
         {
-          "action": "Factory-reset with a BOOT hold of at least two seconds, complete onboarding with a one-second Menu hold, then select Main Menu > Operating Mode > Stationary. On app setup choose Switch to Wi-Fi and confirm Yes. Join the airgradient- network whose exact name is shown on Go, using password cleanair and open http://192.168.4.1/.",
-          "expected_result": "The Go displays portal setup and the browser shows the credential form."
+          "action": "Hold Menu for one second to complete onboarding. Select Main Menu > Operating Mode > Stationary. Select Use portal and confirm Yes.",
+          "expected_result": "Go displays the setup network name and password."
         },
         {
-          "action": "Enter the test SSID/password in the form and submit.",
-          "expected_result": "Connecting is followed by Connected! with an IP and then Home within 30 seconds."
+          "action": "Connect the computer to the exact airgradient- network shown on Go using password cleanair. Open http://192.168.4.1/.",
+          "expected_result": "The browser displays the Wi-Fi setup form."
         },
         {
-          "action": "Move the computer back to the test LAN and open the router’s connected-device list. Match the Go to the IP shown on its Connected! page.",
-          "expected_result": "The router lists the intended Go on the test network."
+          "action": "Enter the test network’s SSID and password. Leave Static IP disabled and select Connect. Observe Go for up to 30 seconds and record the displayed IP address.",
+          "expected_result": "Connecting is followed by Connected! with an IP address, then Home."
         },
         {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start.",
-          "expected_result": "The saved network reconnects without asking for credentials."
+          "action": "Connect the computer to the test network and inspect the router’s connected-device list and DHCP leases.",
+          "expected_result": "Go is connected and has a DHCP lease matching the displayed IP address."
+        },
+        {
+          "action": "Hold Power until Powered off is fully displayed, release and wait 10 seconds. Press and release Power. Observe startup for up to five minutes, then refresh the router’s connected-device list.",
+          "expected_result": "Go returns Home and reconnects to the saved network without requesting credentials. The router shows Go connected; its IP address may change."
         }
       ],
       "cleanup": [
-        "Leave the dedicated unit on the test network or Portable; its original user state was intentionally erased.",
-        "Reconnect the computer to its recorded original Wi-Fi network after saving evidence."
+        "Reconnect the computer to its recorded Wi-Fi network, including after interruption.",
+        "Leave Go on the test network or return it to Portable mode. Factory-reset data is intentionally not restored."
       ],
       "references": [
         "products/go/docs/wifi_service.md",
