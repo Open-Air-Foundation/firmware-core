@@ -9680,22 +9680,60 @@ TEST_CASE("Power long-press shutdown still fires on session screens",
 
 TEST_CASE("Auto-lock is suppressed while a setup session is active",
           "[Orchestrator][session][auto_lock]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-  A::settings(orch).auto_lock_seconds = 10;
-  A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_saved_networks = true;
-  A::enter_stationary(orch);
-  REQUIRE(A::setup_session_active(orch));
-  REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+  struct SetupCase {
+    Screen screen;
+    ProvisioningTransport transport;
+  };
+  const SetupCase cases[] = {
+      {Screen::Info, ProvisioningTransport::BleOnly},
+      {Screen::Provisioning, ProvisioningTransport::BleOnly},
+      {Screen::ProvisioningConfirm, ProvisioningTransport::BleOnly},
+      {Screen::Provisioning, ProvisioningTransport::WifiOnly},
+      {Screen::ProvisioningConfirm, ProvisioningTransport::WifiOnly},
+  };
+  for (const auto &item : cases) {
+    CAPTURE(item.screen, item.transport);
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    CP2_ALLOW_CONFIG_WRITES(f);
+    uint32_t now_ms = 0;
+    ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+    A::settings(orch).auto_lock_seconds = 10;
+    A::set_mode(orch, OperatingMode::Stationary);
+    test_spy::wifi_has_saved_networks = true;
+    A::enter_stationary(orch);
+    if (item.screen != Screen::Info) {
+      test_spy::wifi_has_been_online = false;
+      A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+      A::dispatch(orch, make_provisioning_event(ProvisioningEvent::Started, item.transport));
+      if (item.screen == Screen::ProvisioningConfirm) {
+        A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+      }
+      REQUIRE(f.ui_manager.provisioning_transport() == item.transport);
+      REQUIRE(f.wifi_service.is_provisioning());
+    }
+    REQUIRE(f.ui_manager.current_screen() == item.screen);
+    REQUIRE(A::setup_session_active(orch));
+    REQUIRE(A::lock_state(orch) == LockState::Unlocked);
 
-  // Simulate well past the auto-lock deadline.
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(2'000'000);
-  A::check_timers(orch);
+    const auto check_session = [&] {
+      CHECK(A::lock_state(orch) == LockState::Unlocked);
+      CHECK(f.ui_manager.current_screen() == item.screen);
+      CHECK(A::mode(orch) == OperatingMode::Stationary);
+      CHECK(A::setup_session_active(orch));
+      if (item.screen != Screen::Info) {
+        CHECK(f.ui_manager.provisioning_transport() == item.transport);
+        CHECK(f.wifi_service.is_provisioning());
+      }
+    };
 
-  // Still unlocked — auto-lock did not fire on the session screen.
-  CHECK(A::lock_state(orch) == LockState::Unlocked);
+    now_ms += 70'000;
+    A::check_timers(orch);
+    check_session();
+
+    A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
+    check_session();
+  }
 }
 
 TEST_CASE("Sensor + BMS deadlines are suppressed while sensitive services are paused",

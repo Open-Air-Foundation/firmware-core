@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "191da2a",
+  "rev": "a08a454",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1920,35 +1920,6 @@
       "references": [
         "products/go/docs/wifi_service.md",
         "products/go/docs/local_server.md"
-      ]
-    },
-    {
-      "id": "go.wifi.setup-lock",
-      "title": "Wi-Fi setup suppresses auto-lock and short Power",
-      "objective": "Verify setup instructions remain accessible while waiting for credentials.",
-      "category": "Stationary Network",
-      "sub_category": "Provisioning",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "All routes, charts, settings and bonds on this unit are expendable."
-      ],
-      "steps": [
-        {
-          "action": "Factory-reset, onboard and set Auto Lock 10s before entering Stationary without saved networks.",
-          "expected_result": "App setup is open."
-        },
-        {
-          "action": "Wait 70 seconds, then short-press Power.",
-          "expected_result": "The setup page remains visible and unlocked throughout; short Power does not dismiss it."
-        }
-      ],
-      "cleanup": [
-        "Cancel Setup > Yes to return Portable."
-      ],
-      "references": [
-        "products/go/docs/ui_manager.md"
       ]
     },
     {
