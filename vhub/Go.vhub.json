@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "a08a454",
+  "rev": "18597e8",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1920,37 +1920,6 @@
       "references": [
         "products/go/docs/wifi_service.md",
         "products/go/docs/local_server.md"
-      ]
-    },
-    {
-      "id": "go.wifi.no-factory-fallback",
-      "title": "Normal Stationary does not select factory credentials",
-      "objective": "Verify manufacturing credentials are confined to manufacturing entry.",
-      "category": "Stationary Network",
-      "sub_category": "Provisioning",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "All routes, charts, settings and bonds on this unit are expendable.",
-        "A controllable factory access point with SSID airgradient and WPA2 password cleanair.",
-        "Access to the factory router’s association list."
-      ],
-      "steps": [
-        {
-          "action": "Keep factory Wi-Fi available. Factory-reset, finish onboarding by holding Menu, then select Stationary.",
-          "expected_result": "With no saved networks, normal app setup opens directly; Trying default Wi-Fi... never appears."
-        },
-        {
-          "action": "Inspect the factory router association list during a 30-second observation.",
-          "expected_result": "This device does not join the factory AP."
-        }
-      ],
-      "cleanup": [
-        "Cancel Setup > Yes and leave Portable."
-      ],
-      "references": [
-        "products/go/docs/wifi_service.md"
       ]
     },
     {
