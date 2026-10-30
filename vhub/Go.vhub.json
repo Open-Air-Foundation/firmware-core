@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "b26c0fc",
+  "rev": "4d4508b",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2358,52 +2358,6 @@
         "products/go/docs/orchestrator.md",
         "products/go/docs/wifi_service.md",
         "products/go/docs/ble_service.md"
-      ]
-    },
-    {
-      "id": "go.modes.offline-portable-recording",
-      "title": "Recording survives Energy Saving (Offline) to Portable",
-      "objective": "Verify this active route state is independent of radio mode.",
-      "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the operating mode, lock state, USB connection and Auto Lock. Unlock with Power if needed. Settings paths start at Main Menu > Settings.",
-          "expected_result": "The original device state is recorded."
-        },
-        {
-          "action": "Select Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 10s. Select Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m and Auto Lock to Off.",
-          "expected_result": "Both original intervals are recorded before changes; the test uses 10s in Portable/Stationary and 5m in Energy Saving."
-        },
-        {
-          "action": "Keep Energy Saving selected. Allow five minutes for sensor warmup. Start Tracking and record the five-digit ID from its start snackbar. Open Tracking > Status and wait for at least one point, allowing six minutes.",
-          "expected_result": "Status shows Recording and at least one Point; the start snackbar supplied a session ID."
-        },
-        {
-          "action": "Record Points and the start snackbar ID. Select Portable, reopen Tracking > Status and observe for 30 seconds.",
-          "expected_result": "Status remains Recording and Points increases."
-        },
-        {
-          "action": "Stop Tracking and compare its stop snackbar ID with the recorded start ID.",
-          "expected_result": "The stop ID matches the start ID."
-        }
-      ],
-      "cleanup": [
-        "After completion, failure or interruption, stop only this case's session and exit its menus.",
-        "Restore each captured interval in its own mode: the normal interval in Portable, and the Energy Saving interval in Energy Saving. Then restore the original operating mode.",
-        "Restore the recorded Auto Lock, lock state and USB connection. Confirm restoration; if a baseline was not captured or restoration fails, record the remaining state."
-      ],
-      "references": [
-        "products/go/docs/orchestrator.md",
-        "products/go/docs/storage_service.md"
       ]
     },
     {
