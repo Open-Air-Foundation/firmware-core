@@ -377,40 +377,6 @@ TEST_CASE_METHOD(Fixture, "GPS service rechecks the deadline after an early noti
   CHECK(service.sleep_remaining_ms() == 0);
 }
 
-TEST_CASE_METHOD(Fixture, "GPS fast path leaves sleeping GPS untouched", "[gps_service]") {
-  const auto fix = gps_read_once(driver, GpsDriver::MODULE_ACTIVE_BAUD, 100, gps_no_abort,
-                                 clock.retained_ms + 60000);
-  CHECK_FALSE(is_fix_valid(fix.fix));
-  CHECK(serial.writes.empty());
-  CHECK(serial.opened_bauds.empty());
-}
-
-TEST_CASE_METHOD(Fixture, "GPS fast path uses expected active baud and falls back after timed wake",
-                 "[gps_service]") {
-  SECTION("Already acquiring") {
-    serial.receiver_baud = GpsDriver::MODULE_ACTIVE_BAUD;
-    (void)gps_read_once(driver, GpsDriver::MODULE_ACTIVE_BAUD, 100);
-    CHECK(serial.opened_bauds == std::vector<int>{GpsDriver::MODULE_ACTIVE_BAUD});
-    for (const auto &write : serial.writes)
-      CHECK_FALSE(is_command(write, 0x00));
-  }
-  SECTION("Unexpected default baud") {
-    (void)gps_read_once(driver, GpsDriver::MODULE_ACTIVE_BAUD, 100);
-    CHECK(serial.opened_bauds == std::vector<int>{GpsDriver::MODULE_ACTIVE_BAUD,
-                                                  GpsDriver::MODULE_DEFAULT_BAUD,
-                                                  GpsDriver::MODULE_ACTIVE_BAUD});
-    CHECK(is_command(serial.writes.back(), 0x40));
-  }
-  SECTION("Known timed wake") {
-    (void)gps_read_once(driver, GpsDriver::MODULE_ACTIVE_BAUD, 100, gps_no_abort,
-                        clock.retained_ms);
-    CHECK(serial.opened_bauds ==
-          std::vector<int>{GpsDriver::MODULE_DEFAULT_BAUD, GpsDriver::MODULE_ACTIVE_BAUD});
-    CHECK(is_command(serial.writes.back(), 0x40));
-  }
-  CHECK_FALSE(serial.open);
-}
-
 TEST_CASE_METHOD(Fixture, "GPS service independently repeats sleep after each wake",
                  "[gps_service]") {
   constexpr uint32_t interval_ms = 60000;

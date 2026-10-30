@@ -4,7 +4,6 @@
 #include "go_display.h"
 #include "go_power.h"
 #include "go_types.h"
-#include "gps/gps_types.h"
 #include "measures_types.h"
 
 class GoApp {
@@ -43,7 +42,6 @@ private:
     bool has_measures;
     uint32_t sleep_duration_ms;     ///< Valid when outcome == Sleep
     bool sensors_warm;              ///< RTC persistence before sleep
-    TrackingTiming tracking_timing; ///< Updated timing only; caller owns RTC state
     uint64_t gps_wake_deadline_ms;  ///< Updated by the early inactive GPS sleep request
   };
 
@@ -73,9 +71,8 @@ BootPath select_boot_path(WakeCause cause, const RtcAppState &state, bool chargi
 MeasuresAGo measures_to_ago(const Measures &m);
 
 /// Build DisplayValues for the fast-path locked dashboard.
-DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData &gps,
-                                      const PowerSnapshot &bms, const GoSettings &settings,
-                                      TrackingState tracking_state);
+DisplayValues build_fast_path_display(const MeasuresAGo &measures, const PowerSnapshot &bms,
+                                      const GoSettings &settings);
 
 /// Build DisplayValues for button-wake early paint (snapshot-based).
 DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapshot_valid);
@@ -88,5 +85,5 @@ DisplayValues build_boot_splash_values();
 inline constexpr const char *BOOT_SPLASH_TEXT = "Getting Ready";
 
 /// Determine whether GPS should be active based on settings and RTC state.
-/// Used by all three boot paths — eliminates the duplicated inline check.
+/// Used when preparing GPS sleep and starting interactive services.
 bool is_gps_active_at_boot(const GoSettings &settings, const RtcAppState &state);

@@ -591,11 +591,6 @@ void GpsService::set_aiding_data(const GpsAidingData &data) {
   test_spy::gps_aiding_data = data;
 }
 
-GpsData gps_read_once(GpsDriver & /*driver*/, int /*baud_rate*/, uint32_t /*timeout_ms*/,
-                      const volatile bool & /*abort*/, uint64_t /*wake_deadline_ms*/) {
-  return GpsData{};
-}
-
 // ============================================================================
 // InputService stubs
 // ============================================================================

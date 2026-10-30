@@ -121,22 +121,3 @@ private:
   void post_fix_event();                          // post GpsData to event queue
   void sync_system_clock(const GpsTimestamp &ts); // set ESP32 RTC from GPS time
 };
-
-/// Synchronous one-shot GPS read. Blocks until a valid fix is parsed,
-/// timeout_ms expires, or abort becomes true. For use in the fast-path
-/// timer-wake boot path only — does not require a running RTOS task.
-///
-/// Tries the expected active baud, then the other baud if GPS is silent.
-/// A receiver still within its sleep deadline is left alone.
-///
-/// @param driver     GPS driver; UART is closed before returning.
-/// @param baud_rate  Active receiver baud rate.
-/// @param timeout_ms Maximum time to wait for a valid position, in milliseconds.
-/// @param abort      When true, the polling loop exits early. Intended for
-///                   ISR-driven abort flags (volatile bool set by ISR).
-///                   Default: a static false constant (no abort support).
-/// @return           Latest GpsData; validate both fix and position before use.
-inline const volatile bool gps_no_abort = false;
-
-GpsData gps_read_once(GpsDriver &driver, int baud_rate, uint32_t timeout_ms,
-                      const volatile bool &abort = gps_no_abort, uint64_t wake_deadline_ms = 0);

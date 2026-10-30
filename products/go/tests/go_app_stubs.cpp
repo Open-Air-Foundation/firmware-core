@@ -54,7 +54,6 @@ int gas_cancel_count = 0;
 bool light_sleep_failure = false;
 int light_sleep_fallback_count = 0;
 bool fast_path_timer_only = true;
-uint32_t gps_read_duration_ms = 0;
 bool pm_sleep_ok = true;
 std::function<void()> after_pm_sleep;
 std::function<void()> after_cache;
@@ -82,8 +81,6 @@ int gps_initial_baud = 0;
 uint64_t gps_initial_deadline_ms = 0;
 uint32_t gps_sleep_duration_ms = 0;
 bool gps_sleep_ok = true;
-GpsData gps_data_to_return{};
-bool gps_read_called = false;
 
 // --- InputService ---
 bool input_started = false;
@@ -189,7 +186,6 @@ void reset() {
   light_sleep_failure = false;
   light_sleep_fallback_count = 0;
   fast_path_timer_only = true;
-  gps_read_duration_ms = 0;
   pm_sleep_ok = true;
   after_pm_sleep = nullptr;
   after_cache = nullptr;
@@ -215,8 +211,6 @@ void reset() {
   gps_initial_deadline_ms = 0;
   gps_sleep_duration_ms = 0;
   gps_sleep_ok = true;
-  gps_data_to_return = GpsData{};
-  gps_read_called = false;
 
   input_started = false;
   input_stopped = false;
@@ -494,14 +488,6 @@ GpsData GpsService::get_latest_fix() const { return GpsData{}; }
 void GpsService::set_posting_interval_ms(int /*interval_ms*/) {}
 
 void GpsService::set_aiding_data(const GpsAidingData & /*data*/) {}
-
-GpsData gps_read_once(GpsDriver & /*driver*/, int /*baud_rate*/, uint32_t /*timeout_ms*/,
-                      const volatile bool & /*abort*/, uint64_t /*wake_deadline_ms*/) {
-  test_spy::gps_read_called = true;
-  test_spy::fast_path_events.push_back("gps");
-  RTOS::delay_ms(test_spy::gps_read_duration_ms);
-  return test_spy::gps_data_to_return;
-}
 
 // ============================================================================
 // InputService stubs
