@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "f29a366",
+  "rev": "647e143",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1785,8 +1785,8 @@
     },
     {
       "id": "go.tracking.status-gps",
-      "title": "Tracking Status shows current GPS details and unavailable values",
-      "objective": "Verify the two GPS availability states on the status page.",
+      "title": "Tracking Status displays GPS position and time",
+      "objective": "Verify live GPS details are readable and disappear when GPS is disabled.",
       "category": "Tracking & Storage",
       "sub_category": "Tracking Status",
       "applicability": [
@@ -1794,33 +1794,30 @@
       ],
       "setup": [
         "Tracking is idle.",
-        "An outdoor test location with an unobstructed view of the sky.",
-        "A phone displaying current position and UTC.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "An outdoor location with an unobstructed view of the sky.",
+        "A phone displaying current coordinates and UTC."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and GPS mode. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Record GPS Mode in Settings > Operations.",
+          "expected_result": "Portable is selected and the original GPS setting is recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
+          "action": "Select GPS On When Tracking. Start Tracking, then open Main Menu > Tracking > Status > GPS details outdoors. Observe for up to five minutes.",
+          "expected_result": "GPS shows On with a 2D or 3D fix. Coordinates agree with the phone within 1 km. Labels and values are readable without overlapping or clipped text."
         },
         {
-          "action": "Set interval 10s and GPS On When Tracking. Start Tracking and open Status > GPS details outdoors. Observe for up to five minutes.",
-          "expected_result": "A 2D/3D fix appears; position agrees with the phone within 1 km and UTC in Session view agrees within 10 seconds."
+          "action": "Select Session and compare UTC with the phone.",
+          "expected_result": "UTC agrees within 10 seconds."
         },
         {
-          "action": "Select GPS Always Off and reopen Status.",
-          "expected_result": "GPS details indicate Off and no stale coordinates/UTC remain; unavailable values show dashes."
+          "action": "Set Settings > Operations > GPS Mode to Always Off. Reopen Main Menu > Tracking > Status and inspect both views.",
+          "expected_result": "GPS shows Off. UTC and GPS detail values show --, with no previous values left visible."
         }
       ],
       "cleanup": [
-        "Stop the test session.",
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: GPS mode and Portable/Stationary interval, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Stop the test session and restore the recorded GPS setting, including after interruption.",
+        "Confirm restoration and return Home; record any failure."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
