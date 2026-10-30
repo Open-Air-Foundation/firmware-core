@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "4f18029",
+  "rev": "51e98ac",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1822,69 +1822,6 @@
       "references": [
         "products/go/docs/ui_manager.md",
         "products/go/docs/gps_service.md"
-      ]
-    },
-    {
-      "id": "go.http.action-test-gps",
-      "title": "Local GPS action opens the diagnostic",
-      "objective": "Verify actual device behavior after HTTP admission.",
-      "category": "Stationary Network",
-      "sub_category": "Actions",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A computer with Postman or an equivalent GUI API client that resolves .local names on the test LAN.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings. Configuration values are captured with the API in the following steps.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Stationary.",
-          "expected_result": "Stationary is selected."
-        },
-        {
-          "action": "Read the full serial from About Device and replace <serial> in every request URL with that value. In the API client, set a five-second request timeout, send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body, and save the response as the original configuration before changing anything.",
-          "expected_result": "The intended unit is connected and its original settings are saved for cleanup."
-        },
-        {
-          "action": "Enable local authority. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response shows the requested values before the behavior check continues."
-        },
-        {
-          "action": "In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"cloudConnection\":false}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response shows the requested values before the behavior check continues."
-        },
-        {
-          "action": "Record the current rear AQI color and the AQI LED, Touch LED and GPS selections in Settings. Return to Home.",
-          "expected_result": "The visible outputs and GPS policy are recorded for comparison after the diagnostic."
-        },
-        {
-          "action": "Return to Home and close any interactive Hardware Test screen. In the API client, send POST http://airgradient_<serial>.local/api/v1/actions/test-gps with No Auth and no body. Observe the device as soon as Send is pressed.",
-          "expected_result": "The request is accepted; the following physical observation determines the result."
-        },
-        {
-          "action": "Observe the device for ten seconds from Send.",
-          "expected_result": "GPS Test opens."
-        },
-        {
-          "action": "Select Exit in GPS Test.",
-          "expected_result": "The diagnostic closes and the recorded GPS policy resumes."
-        }
-      ],
-      "cleanup": [
-        "If interrupted before the original configuration was saved, restore only the recorded UI/USB state and report the missing baseline.",
-        "With the saved original configuration available, return to Stationary. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send. Confirm configurationControl is local before restoring values.",
-        "Restore cloudConnection first and configurationControl last from the saved configuration. For each, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth, Content-Type: application/json and a raw JSON object containing that field and its saved value. Confirm each through GET at the same URL within 20 seconds.",
-        "Restore the recorded operating mode, lock state and USB connection. Record any value that could not be restored."
-      ],
-      "references": [
-        "products/go/docs/local_server.md",
-        "products/go/docs/hardware_test.md"
       ]
     },
     {
