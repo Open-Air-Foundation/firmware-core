@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "658ce03",
+  "rev": "6b968cb",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2407,46 +2407,42 @@
     },
     {
       "id": "go.modes.offline-stationary",
-      "title": "Energy Saving (Offline) to Stationary changes available services",
-      "objective": "Verify outgoing services stop and destination services become available.",
+      "title": "Switching from Energy Saving to Stationary enables local Wi-Fi access",
+      "objective": "Verify saved Wi-Fi connects and the local API becomes available after leaving Energy Saving.",
       "category": "Modes & Sleep",
       "sub_category": "Mode Transitions",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "A computer with Postman or an equivalent GUI API client that resolves .local names on the test LAN.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go.",
-        "Access to the router association list.",
-        "A Linux computer with Bluetooth enabled and a Bluetooth settings GUI."
+        "Go has saved credentials for a Wi-Fi network. The test computer is connected to that network.",
+        "Postman or an equivalent GUI API client supporting .local addresses is available.",
+        "An Android phone with nRF Connect and Bluetooth enabled."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Stationary. Allow the saved Wi-Fi connection up to 30 seconds. Read the full serial from About Device and replace <serial> in every request URL with that value. Use its last four characters to identify AirGradient Go <last4> during Bluetooth scans. Confirm this unit’s router association and send GET http://airgradient_<serial>.local/api/v1/measures in the API client with No Auth, no body and a five-second timeout.",
-          "expected_result": "The intended Go is connected, its local API responds with measurements, and its serial is recorded for the following checks."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Energy Saving.",
+          "action": "Select Main Menu > Operating Mode > Energy Saving. Read and record the serial from Settings > About Device and return Home.",
           "expected_result": "Energy Saving is selected."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Stationary.",
-          "expected_result": "The selected mode reaches Home. A transition into Stationary may first show its connection page."
+          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout.",
+          "expected_result": "Go’s local API is unreachable; no HTTP response is received."
         },
         {
-          "action": "Within 30 seconds, confirm this unit’s connection in the router association list. On the test LAN, send GET http://airgradient_<serial>.local/api/v1/measures in the API client with No Auth, no body and a five-second timeout. Scan Bluetooth with clients disconnected.",
-          "expected_result": "Saved Wi-Fi is connected and HTTP returns 200; the Portable Go data service no longer advertises."
+          "action": "Select Main Menu > Operating Mode > Stationary. Allow up to 30 seconds for connection.",
+          "expected_result": "Go reaches Home with the connected Wi-Fi icon."
+        },
+        {
+          "action": "Repeat the GET request using the five-second timeout.",
+          "expected_result": "HTTP 200 is returned with the matching serialNumber."
+        },
+        {
+          "action": "Clear previous scan results in nRF Connect and scan for 30 seconds.",
+          "expected_result": "Go does not appear in the fresh Bluetooth scan."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Return Go Home, including after interruption. Record any failure."
       ],
       "references": [
         "products/go/docs/orchestrator.md",
