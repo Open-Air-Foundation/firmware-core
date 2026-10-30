@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "78c2c14",
+  "rev": "03c0f32",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1875,8 +1875,8 @@
     },
     {
       "id": "go.wifi.portal-static",
-      "title": "Static-IP provisioning persists and disables Cloud",
-      "objective": "Verify the stored network metadata through browser provisioning.",
+      "title": "Browser setup saves a static IP and cloud-upload preference",
+      "objective": "Verify Go connects at the configured static IP and retains both the address and disabled cloud upload after power cycling.",
       "category": "Stationary Network",
       "sub_category": "Provisioning",
       "applicability": [
@@ -1884,42 +1884,42 @@
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
-        "A controllable WPA2 test access point.",
-        "The test access point’s SSID and password.",
-        "A computer with a browser and Wi-Fi settings.",
-        "Access to the router association list and assigned IP addresses.",
-        "A reserved static IP address on the test LAN.",
-        "The test LAN’s netmask, gateway and DNS addresses.",
-        "A computer with Postman or an equivalent GUI API client on the test LAN."
+        "A 2.4 GHz WPA2 network with known credentials.",
+        "An available static IP excluded from DHCP allocation, with the network’s subnet mask, gateway and DNS addresses.",
+        "A computer with Wi-Fi, a browser and Postman or an equivalent GUI API client."
       ],
       "steps": [
         {
-          "action": "Record the computer’s current Wi-Fi network before switching networks for provisioning.",
-          "expected_result": "The original computer network is recorded for cleanup."
+          "action": "Disconnect USB from Go. Hold BOOT for at least two seconds, release, and allow 30 seconds for restart.",
+          "expected_result": "Getting Started appears."
         },
         {
-          "action": "Factory-reset with a BOOT hold of at least two seconds, complete onboarding with a one-second Menu hold, then select Main Menu > Operating Mode > Stationary. On app setup choose Switch to Wi-Fi and confirm Yes. Join the airgradient- network whose exact name is shown on Go, using password cleanair and open http://192.168.4.1/.",
-          "expected_result": "The Go displays portal setup and the browser shows the credential form."
+          "action": "Hold Menu for one second to complete onboarding. Select Main Menu > Operating Mode > Stationary. Select Use portal and confirm Yes.",
+          "expected_result": "Go displays the setup network name and password."
         },
         {
-          "action": "While connected to the Go setup network, use the API client to send POST http://192.168.4.1/api/provision with No Auth, Content-Type: application/json and a raw JSON body. Replace the example SSID, password and all network addresses with the supplied test LAN values before Send:\n{\n  \"ssid\": \"TEST-SSID\",\n  \"password\": \"TEST-PASSWORD\",\n  \"disableCloud\": true,\n  \"staticIp\": {\n    \"ip\": \"192.168.1.220\",\n    \"netmask\": \"255.255.255.0\",\n    \"gateway\": \"192.168.1.1\",\n    \"dns\": \"192.168.1.1\"\n  }\n}",
-          "expected_result": "Connected! shows the reserved static IP within 30 seconds."
+          "action": "Connect the computer to the exact airgradient- network shown on Go using password cleanair. Open http://192.168.4.1/.",
+          "expected_result": "The browser displays the Wi-Fi setup form."
         },
         {
-          "action": "Join the test LAN. Set <device-ip> in the request URL to the reserved static IP, then send GET http://<device-ip>/api/v1/config in the API client with No Auth and no body.",
-          "expected_result": "The device responds at the reserved address and shows cloudConnection=false."
+          "action": "Enter the test network’s SSID and password. Open Advanced options, enable Disable cloud upload and Static IP, then enter the supplied IP address, subnet mask, gateway and DNS address. Select Connect and observe Go for up to 30 seconds.",
+          "expected_result": "Connected! shows the configured static IP, followed by Home."
         },
         {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start. After saved Wi-Fi reconnects, repeat the same GUI GET request at the reserved address, allowing 90 seconds from startup.",
-          "expected_result": "The device is reachable at its reserved IP and cloudConnection remains false."
+          "action": "Connect the computer to the test network. Send GET http://<static-ip>/api/v1/config with No Auth and no body, replacing <static-ip> with the configured address.",
+          "expected_result": "Go responds at that address and reports cloudConnection: false."
+        },
+        {
+          "action": "Hold Power until Powered off is fully displayed, release and wait 10 seconds. Press and release Power. Allow up to five minutes for Home, then repeat the GET request.",
+          "expected_result": "Go reconnects without requesting credentials, responds at the same static IP and still reports cloudConnection: false."
         }
       ],
       "cleanup": [
-        "Clear the test password from the API client request/history and keep it out of shared evidence. Leave Portable; factory-reset before repurposing this dedicated unit.",
-        "Reconnect the computer to its recorded original Wi-Fi network."
+        "Return Go to Portable mode, including after interruption. Factory-reset it before repurposing; erased data is intentionally not restored."
       ],
       "references": [
-        "products/go/docs/wifi_service.md"
+        "products/go/docs/wifi_service.md",
+        "products/go/docs/local_server.md"
       ]
     },
     {
