@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "1964770",
+  "rev": "65cacb7",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1965,66 +1965,38 @@
     },
     {
       "id": "go.wifi.runtime-recovery",
-      "title": "Stationary reconnects after an AP outage",
-      "objective": "Verify runtime recovery retains saved settings and local access.",
+      "title": "Stationary reconnects after a Wi-Fi outage",
+      "objective": "Verify Go reconnects automatically and restores local access without re-entering credentials.",
       "category": "Stationary Network",
       "sub_category": "Reconnect",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "A computer with Postman or an equivalent GUI API client that resolves .local names on the test LAN.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go.",
-        "Access to the router association list.",
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool."
+        "Go has saved credentials for a Wi-Fi network whose access point can be switched off. The test computer uses that network.",
+        "No other saved Go networks are available.",
+        "Postman or an equivalent GUI API client supporting .local addresses is available."
       ],
       "steps": [
         {
-          "action": "Record the test access point’s power state and configuration before changing either. For two access points, record both.",
-          "expected_result": "The access point baseline is available for cleanup."
+          "action": "Select Main Menu > Operating Mode > Stationary. Read the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
+          "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings. Configuration values are captured with the API in the following steps.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout.",
+          "expected_result": "HTTP 200 is returned, and serialNumber matches Go."
         },
         {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
+          "action": "Switch off the test access point and leave it off for 90 seconds. Observe Go throughout.",
+          "expected_result": "The Wi-Fi icon changes to disconnected. Home remains visible without opening setup or showing a restart screen."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Stationary.",
-          "expected_result": "Stationary is selected."
-        },
-        {
-          "action": "Read the full serial from About Device and replace <serial> in every request URL with that value. In the API client, set a five-second request timeout, send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body, and save the response as the original configuration before changing anything.",
-          "expected_result": "The intended unit is connected and its original settings are saved for cleanup."
-        },
-        {
-          "action": "Enable local authority. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response shows the requested values before the behavior check continues."
-        },
-        {
-          "action": "In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"cloudConnection\":false}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response shows the requested values before the behavior check continues."
-        },
-        {
-          "action": "Match the recorded serial to this unit’s router association. Turn the associated test access point off without deleting credentials. Observe Home and the AirGradient logging tool for up to 90 seconds.",
-          "expected_result": "The Wi-Fi icon disconnects and serial shows a runtime reconnect attempt; no provisioning page or reboot appears."
-        },
-        {
-          "action": "Restore the access point. Check the router association for up to 90 seconds. In the API client, send GET http://airgradient_<serial>.local/api/v1/measures with No Auth and no body.",
-          "expected_result": "The saved network reconnects, the Wi-Fi icon returns and measurements are available again without entering credentials."
+          "action": "Switch the access point back on. Once the test computer can reconnect to the network, observe Go for up to 90 seconds, then repeat the GET request.",
+          "expected_result": "Go reconnects without entering credentials or restarting. The connected Wi-Fi icon returns, and the request returns HTTP 200 with the matching serial."
         }
       ],
       "cleanup": [
-        "Restore the test access point to its recorded power state and configuration, including after interruption.",
-        "If interrupted before the original configuration was saved, restore only the recorded UI/USB state and report the missing baseline.",
-        "With the saved original configuration available, return to Stationary. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send. Confirm configurationControl is local before restoring values.",
-        "Restore cloudConnection first and configurationControl last from the saved configuration. For each, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth, Content-Type: application/json and a raw JSON object containing that field and its saved value. Confirm each through GET at the same URL within 20 seconds.",
-        "Restore the recorded operating mode, lock state and USB connection. Record any value that could not be restored.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
+        "Ensure the test access point is switched back on, including after interruption. Return Go Home and record any recovery failure."
       ],
       "references": [
         "products/go/docs/wifi_service.md"
