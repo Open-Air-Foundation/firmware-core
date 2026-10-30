@@ -11032,7 +11032,7 @@ TEST_CASE("GPS sleep: Portable and Stationary wait without a tracking reset",
   SECTION("Portable") { A::set_mode(orch, OperatingMode::Portable); }
   SECTION("Stationary") { A::set_mode(orch, OperatingMode::Stationary); }
   f.stub_bms.status.power_source = BmsPowerSource::OtgMode;
-  test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + 1;
+  test_spy::gps_remaining_ms = GPS_IDLE_SLEEP_MS + 1;
   FORBID_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_));
   REQUIRE(A::start_tracking(orch));
   CHECK(f.stub_bms.status_reads == 0);
@@ -11041,125 +11041,64 @@ TEST_CASE("GPS sleep: Portable and Stationary wait without a tracking reset",
   CHECK(test_spy::gps_started);
 }
 
-TEST_CASE("GPS sleep: USB and unknown supply wait without resetting", "[Orchestrator][gps_sleep]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
-  f.stub_bms.status_ok = true;
-  test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + 1;
-  SECTION("USB") { f.stub_bms.status.power_source = BmsPowerSource::UsbDcp; }
-  SECTION("Unknown source") { f.stub_bms.status.power_source = BmsPowerSource::Unknown; }
-  SECTION("Read failed") {
-    f.stub_bms.status.power_source = BmsPowerSource::None;
-    f.stub_bms.status_ok = false;
+TEST_CASE("Energy Saving transitions save the mode and stop tracking before charger reset",
+          "[Orchestrator][gps_sleep]") {
+  for (auto mode : {OperatingMode::Portable, OperatingMode::Stationary}) {
+    for (bool paused : {false, true}) {
+      TestFixture f;
+      f.settings.operating_mode = mode;
+      f.settings.gps_mode = GpsMode::AlwaysOn;
+      auto orch = f.make_orchestrator();
+      A::set_mode(orch, mode);
+      CP2_ALLOW_CONFIG_WRITES(f);
+      REQUIRE(A::start_tracking(orch));
+      if (paused) {
+        REQUIRE(A::pause_tracking(orch));
+      }
+      bool mode_saved = false;
+      bool committed = false;
+      ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+          .WITH(std::string(_1) == "opm")
+          .LR_SIDE_EFFECT(mode_saved = _2 == static_cast<int>(OperatingMode::Offline))
+          .RETURN(ConfigStoreResult::OK);
+      ALLOW_CALL(f.mock_config, commit())
+          .LR_SIDE_EFFECT(committed = true)
+          .RETURN(ConfigStoreResult::OK);
+      f.stub_bms.on_reset = [&] {
+        CHECK(mode_saved);
+        CHECK(committed);
+        CHECK_FALSE(A::tracking_active(orch));
+        CHECK(test_spy::route_ended);
+        CHECK(test_spy::cache_backed_up);
+        CHECK(test_spy::gps_sleep_interval_ms == GPS_ENERGY_SAVING_SLEEP_MS);
+      };
+      A::change_mode(orch, OperatingMode::Offline);
+      CHECK(f.stub_bms.reset_requests == 1);
+      CHECK_FALSE(A::is_gps_active(orch));
+      CHECK(A::settings(orch).gps_mode == GpsMode::AlwaysOn);
+
+      f.stub_bms.on_reset = nullptr;
+      A::change_mode(orch, mode);
+      CHECK(f.stub_bms.reset_requests == 2);
+      CHECK(A::is_gps_active(orch));
+      CHECK_FALSE(A::tracking_active(orch));
+    }
   }
-  REQUIRE(A::start_tracking(orch));
-  CHECK(f.stub_bms.status_reads == 1);
-  CHECK(f.stub_bms.reset_requests == 0);
-  CHECK(test_spy::route_started);
-  CHECK(test_spy::gps_started);
 }
 
-TEST_CASE("GPS sleep: short wait and AlwaysOff never request a tracking reset",
+TEST_CASE("Energy Saving boot ignores retained tracking and Always On GPS",
           "[Orchestrator][gps_sleep]") {
   TestFixture f;
-  f.stub_bms.status_ok = true;
-  f.stub_bms.status.power_source = BmsPowerSource::None;
-  SECTION("At threshold") { test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS; }
-  SECTION("AlwaysOff") {
-    f.settings.gps_mode = GpsMode::AlwaysOff;
-    test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + GPS_IDLE_SLEEP_MS;
-  }
+  f.settings.operating_mode = OperatingMode::Offline;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  test_spy::state_to_load.tracking_state = TrackingState::Recording;
+  test_spy::state_to_load.tracking_session_id = 42000;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
-  REQUIRE(A::start_tracking(orch));
-  CHECK(f.stub_bms.status_reads == 0);
-  CHECK(f.stub_bms.reset_requests == 0);
-  CHECK(test_spy::gps_started == (f.settings.gps_mode != GpsMode::AlwaysOff));
-}
-
-TEST_CASE("GPS sleep: battery reset persists only intent before creating a route",
-          "[Orchestrator][gps_sleep]") {
-  struct PowerCut {};
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
-  f.stub_bms.status_ok = true;
-  SECTION("No adapter") { f.stub_bms.status.power_source = BmsPowerSource::None; }
-  SECTION("OTG boost") { f.stub_bms.status.power_source = BmsPowerSource::OtgMode; }
-  test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + 1;
-  bool pending = false;
-  bool committed = false;
-  REQUIRE_CALL(f.mock_config, set_bool(trompeloeil::_, true))
-      .WITH(std::string(_1) == "trk_start")
-      .LR_SIDE_EFFECT(pending = true)
-      .RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, commit())
-      .LR_SIDE_EFFECT(committed = true)
-      .RETURN(ConfigStoreResult::OK);
-  f.stub_bms.on_reset = [&] {
-    CHECK(pending);
-    CHECK(committed);
-    const auto values = f.ui_manager.build_values(A::build_context(orch));
-    REQUIRE(values.snackbar_text != nullptr);
-    CHECK(std::string(values.snackbar_text) == "Starting tracking...");
-    CHECK(DisplayService::spy_last_update_wait);
-    CHECK(DisplayService::spy_flush_count == 1);
-    CHECK_FALSE(test_spy::route_started);
-    CHECK_FALSE(test_spy::cache_backed_up);
-    CHECK_FALSE(A::tracking_active(orch));
-    throw PowerCut{};
-  };
-  REQUIRE_THROWS_AS(A::start_tracking(orch), PowerCut);
-  CHECK(f.stub_bms.reset_requests == 1);
-  CHECK_FALSE(test_spy::route_started);
-}
-
-TEST_CASE("GPS sleep: failed reset clears intent and starts while waiting",
-          "[Orchestrator][gps_sleep]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
-  f.stub_bms.status_ok = true;
-  f.stub_bms.status.power_source = BmsPowerSource::None;
-  test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + 1;
-  SECTION("Driver error") { f.stub_bms.reset_result = false; }
-  SECTION("Command accepted but power did not cycle") { f.stub_bms.reset_result = true; }
-  bool pending = false;
-  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_))
-      .WITH(std::string(_1) == "trk_start")
-      .LR_SIDE_EFFECT(pending = _2)
-      .RETURN(ConfigStoreResult::OK);
-  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
-  REQUIRE(A::start_tracking(orch));
-  CHECK(f.stub_bms.reset_requests == 1);
-  CHECK_FALSE(pending);
-  CHECK(test_spy::route_started);
-  CHECK(test_spy::gps_started);
-}
-
-TEST_CASE("GPS sleep: failed intent save starts tracking without reset or clearing intent",
-          "[Orchestrator][gps_sleep]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
-  f.stub_bms.status_ok = true;
-  f.stub_bms.status.power_source = BmsPowerSource::None;
-  test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + 1;
-  bool write_ok = false;
-  SECTION("Write fails") {}
-  SECTION("Commit fails") { write_ok = true; }
-  REQUIRE_CALL(f.mock_config, set_bool(trompeloeil::_, true))
-      .RETURN(write_ok ? ConfigStoreResult::OK : ConfigStoreResult::ERROR);
-  std::unique_ptr<trompeloeil::expectation> commit;
-  if (write_ok) {
-    commit = NAMED_REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
-  }
-  FORBID_CALL(f.mock_config, set_bool(trompeloeil::_, false));
-  CHECK(A::start_tracking(orch));
-  CHECK(f.stub_bms.reset_requests == 0);
-  CHECK(test_spy::route_started);
-  CHECK(test_spy::gps_started);
+  orch.init(WakeCause::Button);
+  CHECK_FALSE(A::tracking_active(orch));
+  CHECK_FALSE(test_spy::route_resumed);
+  CHECK_FALSE(test_spy::gps_started);
+  CHECK(test_spy::gps_sleep_interval_ms == GPS_ENERGY_SAVING_SLEEP_MS);
 }
 
 TEST_CASE("GPS sleep: initialization selects GPS mode after restoring tracking",
@@ -11199,7 +11138,7 @@ TEST_CASE("GPS sleep: initialization configures maintenance once and timers leav
   SECTION("Offline") {
     f.settings.operating_mode = OperatingMode::Offline;
     f.settings.measure_interval_seconds = 300;
-    expected = 300000;
+    expected = GPS_ENERGY_SAVING_SLEEP_MS;
   }
   SECTION("Portable AlwaysOff") {
     f.settings.operating_mode = OperatingMode::Portable;
@@ -11213,7 +11152,7 @@ TEST_CASE("GPS sleep: initialization configures maintenance once and timers leav
     f.settings.operating_mode = OperatingMode::Offline;
     f.settings.gps_mode = GpsMode::AlwaysOff;
     f.settings.measure_interval_seconds = 300;
-    expected = 300000;
+    expected = GPS_ENERGY_SAVING_SLEEP_MS;
   }
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
@@ -11239,22 +11178,6 @@ TEST_CASE("GPS sleep: preparation preserves an existing GPS timer", "[Orchestrat
   test_spy::gps_remaining_ms = 5000;
   A::prepare_for_sleep(orch, 60000);
   CHECK(test_spy::gps_remaining_ms == 5000);
-}
-
-TEST_CASE("GPS sleep: uncleared intent prevents a duplicate session after failed reset",
-          "[Orchestrator][gps_sleep]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
-  f.stub_bms.status_ok = true;
-  f.stub_bms.status.power_source = BmsPowerSource::None;
-  test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + 1;
-  REQUIRE_CALL(f.mock_config, set_bool(trompeloeil::_, true)).RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, set_bool(trompeloeil::_, false)).RETURN(ConfigStoreResult::ERROR);
-  CHECK_FALSE(A::start_tracking(orch));
-  CHECK(f.stub_bms.reset_requests == 1);
-  CHECK_FALSE(test_spy::route_started);
 }
 
 TEST_CASE("Energy Saving mode changes recalculate current readings and charts",

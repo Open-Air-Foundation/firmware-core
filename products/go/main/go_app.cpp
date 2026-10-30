@@ -51,7 +51,6 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "go_sensor_producer.h"
 #include "go_settings.h"
 #include "go_storage.h"
-#include "go_tracking_session.h"
 #include "go_type_helpers.hpp"
 #include "go_ui.h"
 #include "go_ulp.h"
@@ -73,8 +72,7 @@ static constexpr const char *TAG = "app";
 // domain; keep in sync with the Cloud service host.
 static constexpr const char *OTA_HTTP_DOMAIN = "hw.airgradient.com";
 
-// The GPS receiver remains powered and tracking through Offline deep sleep.
-// Allow several NMEA epochs after reconnecting the UART on timer wake.
+// Allow several NMEA epochs when the saved operating mode permits GPS reads.
 static constexpr uint32_t GPS_FAST_PATH_READ_TIMEOUT_MS = 3000;
 // Offline SGP41 acquisition timing belongs to Go.
 static constexpr uint32_t FAST_PATH_GAS_CONDITIONING_MS = 10000;
@@ -217,21 +215,14 @@ void GoApp::run() {
           static_cast<int>(state.tracking_state), state.tracking_session_id,
           state.has_flag(RtcAppFlag::SensorsWarm));
 
-  BootPath path = select_boot_path(cause, state, charging_only_eligible);
-  const char *boot_message = nullptr;
-
-  // Check if its system reset from pending tracking flow
-  if (path != BootPath::ChargingOnly && cause == WakeCause::PowerOn &&
-      pending_tracking_start(_board.config_store())) {
-    const GoSettings settings = _board.load_settings();
-    if (settings.operating_mode == OperatingMode::Offline) {
-      if (recover_offline_tracking_start(settings, state)) {
-        path = BootPath::FastPath;
-      } else {
-        boot_message = "Tracking not\nstarted";
-      }
-    }
+  if (_board.load_settings().operating_mode == OperatingMode::Offline) {
+    state.behavior = Behavior::Idle;
+    state.tracking_state = TrackingState::Idle;
+    state.tracking_session_id = 0;
+    state.tracking_timing = {};
+    state.set_flag(RtcAppFlag::GpsEnabled, false);
   }
+  const BootPath path = select_boot_path(cause, state, charging_only_eligible);
 
   switch (path) {
   case BootPath::ChargingOnly:
@@ -245,62 +236,9 @@ void GoApp::run() {
     break; // never reached
   case BootPath::Interactive:
     AG_LOGI(TAG, "Serial number: %s", _board.serial_number().c_str());
-    run_interactive(cause, state, {}, boot_message);
+    run_interactive(cause, state, {});
     break; // never reached
   }
-}
-
-// ===========================================================================
-// Recover the session before entering the cold Offline fast path.
-// ===========================================================================
-
-bool GoApp::recover_offline_tracking_start(const GoSettings &settings, RtcAppState &state) {
-  if (!save_pending_tracking_start(_board.config_store(), false)) {
-    AG_LOGE(TAG, "Tracking recovery: failed to clear pending start");
-    return false;
-  }
-
-  _board.init_core();
-  StorageService &storage = _board.storage();
-  const uint32_t session_id = generate_tracking_session_id(storage);
-  if (session_id == 0 || !storage.create_route(session_id)) {
-    AG_LOGE(TAG, "Tracking recovery: failed to create route");
-    return false;
-  }
-  if (!storage.end_route()) {
-    AG_LOGE(TAG, "Tracking recovery: failed to close new route");
-    return false;
-  }
-
-  state = {};
-  state.mode = OperatingMode::Offline;
-  state.behavior = Behavior::Tracking;
-  state.tracking_state = TrackingState::Recording;
-  state.tracking_session_id = session_id;
-  state.set_flag(RtcAppFlag::GpsEnabled, settings.gps_mode != GpsMode::AlwaysOff);
-  if (!tracking_timing_start(state.tracking_timing,
-                             tracking_seconds_from_ms(RTOS::get_retained_time_ms()))) {
-    state.tracking_timing = {};
-  }
-  AG_LOGI(TAG, "Tracking recovery: starting Offline fast path");
-
-  char message[48];
-  (void)snprintf(message, sizeof(message), "Started\n%05lu",
-                 static_cast<unsigned long>(session_id));
-  DisplayValues values = build_boot_splash_values();
-  values.info_text = message;
-  values.tracking_state = TrackingState::Recording;
-  DisplayService &display = _board.display();
-  display.init(values);
-  // Leave the confirmation visible during warmup. The fast path initializes
-  // its own display worker when the first measurement is ready.
-  display.stop();
-  // This cold fast path has no InputService to suspend touch. Timer wakes
-  // preserve this state without initializing or waking the touch controller.
-  if (!_board.sleep_touch()) {
-    AG_LOGW(TAG, "tracking recovery: touch sleep failed");
-  }
-  return true;
 }
 
 // ===========================================================================
@@ -337,7 +275,11 @@ void GoApp::run_charging_only(const BmsStatus &initial_status) {
   auto &power = _board.power();
   power.set_pm_power(false);
 
-  power.save_state({}); // Consume the one-shot charging-only request.
+  RtcAppState state{};
+  if (_board.load_settings().operating_mode == OperatingMode::Offline) {
+    prepare_gps_for_sleep(state);
+  }
+  power.save_state(state); // Consume the one-shot charging-only request.
 
   _board.init_spi();
   auto &display = _board.display();
@@ -413,7 +355,7 @@ void GoApp::run_factory_learning_path(const RtcAppState & /*state*/) {
 // Fast-path boot (timer wake, locked)
 // ===========================================================================
 
-void GoApp::prepare_gps_for_sleep(uint32_t duration_ms, RtcAppState &state) {
+void GoApp::prepare_gps_for_sleep(RtcAppState &state) {
   const auto settings = _board.load_settings();
   if (is_gps_active_at_boot(settings, state) ||
       state.gps_wake_deadline_ms > RTOS::get_retained_time_ms()) {
@@ -422,7 +364,7 @@ void GoApp::prepare_gps_for_sleep(uint32_t duration_ms, RtcAppState &state) {
   auto *driver = _board.new_gps_driver();
   if (driver != nullptr) {
     GpsService service(*driver, nullptr, {.wake_deadline_ms = state.gps_wake_deadline_ms});
-    if (!service.request_sleep(gps_inactive_sleep_ms(settings.operating_mode, duration_ms))) {
+    if (!service.request_sleep(gps_inactive_sleep_ms(settings.operating_mode))) {
       AG_LOGW(TAG, "GPS sleep request failed");
     }
     state.gps_wake_deadline_ms = service.sleep_deadline_ms();
@@ -464,7 +406,7 @@ void GoApp::run_fast_path(const RtcAppState &state) {
     _board.display().deep_sleep();
     _board.ulp_start();
     log_heap(TAG, "boot:fast-path:before-sleep");
-    prepare_gps_for_sleep(result.sleep_duration_ms, save);
+    prepare_gps_for_sleep(save);
     _board.power().save_state(save);
     _board.power().enter_sleep(result.sleep_duration_ms);
     // Never returns — CPU reboots on wake.
@@ -534,9 +476,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   } else {
     // Sleep across this acquisition cycle and the following ESP sleep.
     // The final sleep request remains a fallback if this one fails or expires.
-    const uint32_t interval_ms =
-        static_cast<uint32_t>(settings.active_measure_interval_seconds()) * 1000;
-    prepare_gps_for_sleep(interval_ms, gps_state);
+    prepare_gps_for_sleep(gps_state);
   }
 
   PowerService &power = _board.power();
@@ -607,7 +547,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   stor.cache_measurement(ago);
 
   if (state.tracking_state == TrackingState::Recording) {
-    // The session was opened before sleep or during tracking-start recovery.
+    // The session was opened before sleep.
     if (!stor.resume_route(state.tracking_session_id)) {
       AG_LOGW(TAG, "fast-path: resume_route failed → promote");
       promote = true;
@@ -1224,9 +1164,10 @@ BootPath select_boot_path(WakeCause cause, const RtcAppState &state, bool chargi
 }
 
 bool is_gps_active_at_boot(const GoSettings &settings, const RtcAppState &state) {
-  return (settings.gps_mode == GpsMode::AlwaysOn) ||
-         (settings.gps_mode == GpsMode::OnWhenTracking &&
-          tracking_session_active(state.tracking_state));
+  return settings.operating_mode != OperatingMode::Offline &&
+         ((settings.gps_mode == GpsMode::AlwaysOn) ||
+          (settings.gps_mode == GpsMode::OnWhenTracking &&
+           tracking_session_active(state.tracking_state)));
 }
 
 MeasuresAGo measures_to_ago(const Measures &m) {

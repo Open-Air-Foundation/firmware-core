@@ -608,6 +608,16 @@ TEST_CASE("UIManager: tracking start/stop", "[UIManager][tracking]") {
     CHECK(ui.current_screen() == Screen::Home);
   }
 
+  SECTION("Energy Saving Start Tracking has no action and stays in the menu") {
+    GoSettings settings{};
+    settings.operating_mode = OperatingMode::Offline;
+    ui.sync_settings(settings);
+    press(ui, InputSource::TouchEnter);
+    auto result = open_row(ui, "Start Tracking");
+    CHECK(result.action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::MainMenu);
+  }
+
   SECTION("Stop Tracking returns UIAction::StopTracking") {
     // Synchronize Recording before opening the menu; rendering is read-only.
     auto ctx = make_default_ctx();
@@ -1898,6 +1908,15 @@ TEST_CASE("UIManager: GPS Test screen", "[UIManager][hwtest][gps]") {
     go_to_group(ui, "Hardware Test");
     return open_row(ui, "GPS Test");
   };
+
+  SECTION("Energy Saving GPS Test has no action") {
+    GoSettings settings{};
+    settings.operating_mode = OperatingMode::Offline;
+    ui.sync_settings(settings);
+    auto result = open_gps();
+    CHECK(result.action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+  }
 
   SECTION("selecting the row opens the live screen and emits OpenGpsTest") {
     auto result = open_gps();

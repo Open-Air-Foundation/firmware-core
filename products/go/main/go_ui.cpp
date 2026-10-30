@@ -1246,6 +1246,9 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
       go_home();
       break;
     case MENU_TRACKING:
+      if (_setting_mode == OperatingMode::Offline) {
+        break;
+      }
       if (tracking_session_active(_tracking_state)) {
         _screen = Screen::TrackingMenu;
         _tracking_menu_index = TRACKING_STATUS;
@@ -1598,7 +1601,7 @@ UIActionResult UIManager::dispatch_hardware_test(InputSource source, InputType t
       // Peripheral Test → start the guided flow (orchestrator drives hardware).
       open_peripheral_test();
       result.action = UIAction::RunPeripheralTest;
-    } else if (_hardware_test_index == HW_TEST_GPS) {
+    } else if (_hardware_test_index == HW_TEST_GPS && _setting_mode != OperatingMode::Offline) {
       // GPS Test → open the live screen (orchestrator starts receiver + TTFF).
       open_gps_test();
       result.action = UIAction::OpenGpsTest;
