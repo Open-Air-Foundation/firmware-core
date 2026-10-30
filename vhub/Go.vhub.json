@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "65cacb7",
+  "rev": "49e958c",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2004,39 +2004,34 @@
     },
     {
       "id": "go.wifi.initial-failure",
-      "title": "A failed saved-network startup opens normal provisioning",
-      "objective": "Verify initial connection failure differs from runtime recovery.",
+      "title": "Startup opens Wi-Fi setup when the saved network is unavailable",
+      "objective": "Verify a failed startup connection shows the failure and opens app setup.",
       "category": "Stationary Network",
       "sub_category": "Reconnect",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go."
+        "Go has saved credentials for a Wi-Fi network whose access point can be switched off.",
+        "No other saved Go networks are available."
       ],
       "steps": [
         {
-          "action": "Record the test access point’s power state and configuration before changing either. For two access points, record both.",
-          "expected_result": "The access point baseline is available for cleanup."
+          "action": "Select Main Menu > Operating Mode > Stationary. Return Home and allow up to 30 seconds for connection.",
+          "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release and wait 10 seconds.",
+          "expected_result": "Go remains powered off."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Stationary.",
-          "expected_result": "Stationary is selected."
-        },
-        {
-          "action": "Turn the saved AP off, then perform a battery cold start: Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start. Observe the connection page through its 30-second initial connection window and the following completed display refresh.",
-          "expected_result": "Wi-Fi failed appears after the initial connection attempt, followed by normal setup; it does not stay indefinitely on Home retrying."
+          "action": "Switch off the test access point. Press and release Power on Go and observe startup for up to 90 seconds.",
+          "expected_result": "Wi-Fi failed appears after the connection attempt, followed by app setup. The failure message and setup instructions are readable."
         }
       ],
       "cleanup": [
-        "Restore the test AP to its recorded power state. Cancel setup to Portable if it is still open.",
-        "Restore the recorded operating mode, lock state and USB connection state. Record any restoration failure.",
-        "Restore each changed access point to its recorded power state and configuration, including after interruption."
+        "Switch the access point back on, including after interruption.",
+        "Select Cancel setup > Yes to return to Portable Home if setup remains open. Record any failure to return Home."
       ],
       "references": [
         "products/go/docs/wifi_service.md"
