@@ -351,12 +351,12 @@ void GoApp::run_factory_learning_path(const RtcAppState & /*state*/) {
 // Fast-path boot (timer wake, locked)
 // ===========================================================================
 
-void GoApp::prepare_gps_for_sleep(RtcAppState &state, bool probe_receiver) {
+bool GoApp::prepare_gps_for_sleep(RtcAppState &state, bool probe_receiver) {
   const auto settings = _board.load_settings();
   const bool probe_after_wake = probe_receiver && settings.operating_mode == OperatingMode::Offline;
   if (is_gps_active_at_boot(settings, state) ||
       (!probe_after_wake && state.gps_wake_deadline_ms > RTOS::get_retained_time_ms())) {
-    return;
+    return false;
   }
   auto *driver = _board.new_gps_driver();
   if (driver != nullptr) {
@@ -370,12 +370,14 @@ void GoApp::prepare_gps_for_sleep(RtcAppState &state, bool probe_receiver) {
     if (service.request_sleep(gps_inactive_sleep_ms(settings.operating_mode))) {
       state.gps_wake_deadline_ms = service.sleep_deadline_ms();
       AG_LOGI(TAG, "GPS sleep command sent");
+      return true;
     } else if (probe_after_wake) {
       AG_LOGI(TAG, "GPS probe/sleep not completed; retaining previous deadline");
     } else {
       AG_LOGW(TAG, "GPS sleep request failed");
     }
   }
+  return false;
 }
 
 void GoApp::run_fast_path(const RtcAppState &state) {
@@ -412,7 +414,10 @@ void GoApp::run_fast_path(const RtcAppState &state) {
     _board.display().deep_sleep();
     _board.ulp_start();
     log_heap(TAG, "boot:fast-path:before-sleep");
-    prepare_gps_for_sleep(save);
+    // Only this wake's early result decides whether to retry, not the deadline.
+    if (result.gps_sleep_retry_needed) {
+      prepare_gps_for_sleep(save, /*probe_receiver=*/true);
+    }
     _board.power().save_state(save);
     _board.power().enter_sleep(result.sleep_duration_ms);
     // Never returns — CPU reboots on wake.
@@ -469,7 +474,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   // GPS sleep probing overlaps PM warmup, outside gas conditioning.
   // Recheck on every timer wake, even with a retained deadline.
   RtcAppState gps_state = state;
-  prepare_gps_for_sleep(gps_state, /*probe_receiver=*/true);
+  const bool gps_sleep_sent = prepare_gps_for_sleep(gps_state, /*probe_receiver=*/true);
 
   PowerService &power = _board.power();
   TVOCNOxData gas{};
@@ -565,6 +570,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
         .sleep_duration_ms = 0,
         .sensors_warm = false,
         .gps_wake_deadline_ms = gps_state.gps_wake_deadline_ms,
+        .gps_sleep_retry_needed = !gps_sleep_sent,
     };
   }
   // Broadcast raw measurements, matching Portable BLE, while the
@@ -624,6 +630,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
         .sleep_duration_ms = decision.duration_ms,
         .sensors_warm = warm,
         .gps_wake_deadline_ms = gps_state.gps_wake_deadline_ms,
+        .gps_sleep_retry_needed = !gps_sleep_sent,
     };
   }
 
@@ -656,6 +663,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
       .sleep_duration_ms = 0,
       .sensors_warm = false,
       .gps_wake_deadline_ms = gps_state.gps_wake_deadline_ms,
+      .gps_sleep_retry_needed = !gps_sleep_sent,
   };
 }
 

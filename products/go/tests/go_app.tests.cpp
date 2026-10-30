@@ -2333,7 +2333,7 @@ TEST_CASE("run_fast_path: Energy Saving uses maximum GPS sleep") {
         clock.retained_ms + expected_gps_sleep_ms);
 }
 
-TEST_CASE("timer wake probes GPS despite a retained deadline and preserves it on failure",
+TEST_CASE("timer wake retries failed GPS sleep before deep sleep despite a retained deadline",
           "[GoApp][gps]") {
   test_spy::reset();
   ScopedRetainedClock clock(200000);
@@ -2341,17 +2341,32 @@ TEST_CASE("timer wake probes GPS despite a retained deadline and preserves it on
   board.settings.operating_mode = OperatingMode::Offline;
   RtcAppState state{};
   state.mode = OperatingMode::Offline;
-  state.gps_wake_deadline_ms = clock.retained_ms + GPS_ENERGY_SAVING_SLEEP_MS;
+  state.gps_wake_deadline_ms = clock.retained_ms + 60000;
   test_spy::gps_sleep_ok = false;
   test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 120000};
+  bool retry_succeeds = false;
+  bool promote = false;
+  SECTION("both attempts fail and preserve the old deadline") {}
+  SECTION("final attempt succeeds and replaces the old deadline") { retry_succeeds = true; }
+  SECTION("promotion leaves GPS handling to the interactive path") {
+    promote = true;
+    test_spy::sleep_decision_to_return = {PowerService::SleepType::None, 0};
+  }
+  test_spy::before_sensor_measurement = [&] {
+    REQUIRE(test_spy::gps_sleep_request_count == 1);
+    CHECK(test_spy::gps_initial_deadline_ms == 0);
+    test_spy::gps_sleep_ok = retry_succeeds;
+  };
   GoApp app(board);
   GoAppTestAccess access(app);
   access.run_fast_path(state);
-  CHECK(test_spy::gps_sleep_request_count == 1);
-  CHECK(test_spy::gps_initial_deadline_ms == 0);
+  CHECK(test_spy::gps_sleep_request_count == (promote ? 1 : 2));
+  CHECK(test_spy::gps_initial_deadline_ms == (promote ? state.gps_wake_deadline_ms : 0));
   CHECK(test_spy::gps_sleep_duration_ms == GPS_ENERGY_SAVING_SLEEP_MS);
-  CHECK(test_spy::last_saved_state.gps_wake_deadline_ms == state.gps_wake_deadline_ms);
-  CHECK(test_spy::enter_sleep_called);
+  CHECK(test_spy::last_saved_state.gps_wake_deadline_ms ==
+        (retry_succeeds ? clock.retained_ms + GPS_ENERGY_SAVING_SLEEP_MS
+                        : state.gps_wake_deadline_ms));
+  CHECK(test_spy::enter_sleep_called == !promote);
   CHECK_FALSE(test_spy::gps_started);
 }
 
@@ -2444,7 +2459,7 @@ TEST_CASE("inactive GPS sleeps before warmup and preserves its deadline on promo
         std::find(events.begin(), events.end(), "gas_begin"));
 }
 
-TEST_CASE("inactive GPS final fallback uses maximum sleep", "[GoApp][gps]") {
+TEST_CASE("fast path final GPS attempt depends only on the early result", "[GoApp][gps]") {
   test_spy::reset();
   ScopedRetainedClock clock(200000);
   MockBoard board;
@@ -2455,6 +2470,7 @@ TEST_CASE("inactive GPS final fallback uses maximum sleep", "[GoApp][gps]") {
   test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 40000};
   RtcAppState state{};
   state.mode = OperatingMode::Offline;
+  const uint64_t early_deadline_ms = clock.retained_ms + GPS_ENERGY_SAVING_SLEEP_MS;
   bool final_success = true;
   SECTION("early request fails, final request succeeds") { test_spy::gps_sleep_ok = false; }
   SECTION("both requests fail") {
@@ -2465,7 +2481,8 @@ TEST_CASE("inactive GPS final fallback uses maximum sleep", "[GoApp][gps]") {
     state.gps_wake_deadline_ms = clock.retained_ms + 1000;
     test_spy::gps_remaining_ms = 1000;
   }
-  SECTION("early sleep expires during a slow cycle") {}
+  SECTION("expired deadline does not repeat a successful early request") {}
+  const bool retry_needed = !test_spy::gps_sleep_ok;
   test_spy::before_sensor_measurement = [&] {
     CHECK(test_spy::gps_sleep_request_count == 1);
     CHECK(test_spy::gps_sleep_duration_ms == GPS_ENERGY_SAVING_SLEEP_MS);
@@ -2479,10 +2496,12 @@ TEST_CASE("inactive GPS final fallback uses maximum sleep", "[GoApp][gps]") {
   access.run_fast_path(state);
   CHECK(test_spy::enter_sleep_called);
   CHECK(test_spy::enter_sleep_duration_ms == 40000);
-  CHECK(test_spy::gps_sleep_request_count == 2);
+  CHECK(test_spy::gps_sleep_request_count == (retry_needed ? 2 : 1));
   CHECK(test_spy::gps_sleep_duration_ms == GPS_ENERGY_SAVING_SLEEP_MS);
-  CHECK(test_spy::last_saved_state.gps_wake_deadline_ms ==
-        (final_success ? clock.retained_ms + GPS_ENERGY_SAVING_SLEEP_MS : 0));
+  const uint64_t expected_deadline_ms =
+      retry_needed ? (final_success ? clock.retained_ms + GPS_ENERGY_SAVING_SLEEP_MS : 0)
+                   : early_deadline_ms;
+  CHECK(test_spy::last_saved_state.gps_wake_deadline_ms == expected_deadline_ms);
 }
 
 TEST_CASE("build_fast_path_display: interval threshold preserves readings and controls layout") {
