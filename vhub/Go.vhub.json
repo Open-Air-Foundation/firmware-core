@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "49e958c",
+  "rev": "3d58be2",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2039,8 +2039,8 @@
     },
     {
       "id": "go.wifi.failover",
-      "title": "Stationary falls back to a second saved network",
-      "objective": "Verify saved-network selection and failover without provisioning.",
+      "title": "Stationary switches to another saved network after an outage",
+      "objective": "Verify Go connects to a second saved network without provisioning or restarting.",
       "category": "Stationary Network",
       "sub_category": "Reconnect",
       "applicability": [
@@ -2048,43 +2048,43 @@
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
-        "A controllable WPA2 test access point.",
-        "The test access point’s SSID and password.",
+        "Two independently controllable 2.4 GHz WPA2 access points, A and B, with distinct SSIDs, DHCP enabled and known credentials.",
         "A computer with a browser and Wi-Fi settings.",
-        "Access to the router association list and assigned IP addresses.",
-        "Two independently controllable DHCP access points with distinct SSIDs.",
-        "A computer Wi-Fi scanner that displays signal strength in dBm."
+        "Access to both routers’ connected-device lists."
       ],
       "steps": [
         {
-          "action": "Record the computer’s current Wi-Fi network before switching networks for provisioning.",
-          "expected_result": "The original computer network is recorded for cleanup."
+          "action": "Switch A on and B off. Disconnect USB from Go. Hold BOOT for at least two seconds, release, and allow 30 seconds for restart.",
+          "expected_result": "Getting Started appears."
         },
         {
-          "action": "Record the test access point’s power state and configuration before changing either. For two access points, record both.",
-          "expected_result": "The access point baseline is available for cleanup."
+          "action": "Hold Menu for one second to complete onboarding. Read the serial from Settings > About Device to identify Go in the routers’ connected-device lists. Select Main Menu > Operating Mode > Stationary, then Use portal and confirm Yes.",
+          "expected_result": "Go displays the setup network name and password."
         },
         {
-          "action": "Factory-reset with a BOOT hold of at least two seconds, complete onboarding with a one-second Menu hold, then select Main Menu > Operating Mode > Stationary. On app setup choose Switch to Wi-Fi and confirm Yes. Join the airgradient- network whose exact name is shown on Go, using password cleanair and open http://192.168.4.1/.",
-          "expected_result": "The Go displays portal setup and the browser shows the credential form."
+          "action": "Connect the computer to the exact airgradient- network shown on Go using password cleanair. Open http://192.168.4.1/. Enter A’s SSID and password, leave Static IP disabled and select Connect. Observe Go for up to 30 seconds.",
+          "expected_result": "Connected! shows an IP address, followed by Home with the connected Wi-Fi icon."
         },
         {
-          "action": "Provision AP A. Turn A off, cold-start and provision AP B when setup opens. Restore A; do not reset between provisioning the two.",
-          "expected_result": "Both networks are saved."
+          "action": "Hold Power until Powered off is fully displayed, release and wait 10 seconds. Switch A off and B on. Once B’s Wi-Fi network is available, press and release Power on Go. Observe startup for up to 90 seconds. Do not factory-reset Go.",
+          "expected_result": "The saved connection to A fails and app setup opens."
         },
         {
-          "action": "Position A at least 10 dB stronger than B at the unit, verified by a computer scan. Re-enter Stationary and record the Go’s association in the router’s connected-device list.",
-          "expected_result": "The unit joins A. Failure to establish the signal separation blocks the selection check."
+          "action": "Select Use portal and confirm Yes. Connect the computer to the exact airgradient- network shown on Go using password cleanair, then open http://192.168.4.1/. Enter B’s SSID and password, leave Static IP disabled and select Connect. Observe Go for up to 30 seconds.",
+          "expected_result": "Connected! shows an IP address, followed by Home with the connected Wi-Fi icon."
         },
         {
-          "action": "Turn A off. Allow 90 seconds for failover, then open router B’s connected-device list and inspect the Go display.",
-          "expected_result": "Router B lists the Go and its Wi-Fi icon shows connected, without a provisioning page or reboot."
+          "action": "Select Main Menu > Operating Mode > Portable. Switch A on and B off. Once A’s Wi-Fi network is available, select Stationary and allow up to 30 seconds for connection. Connect the computer to A and inspect router A’s connected-device list.",
+          "expected_result": "Go reconnects to A without entering credentials. Router A lists Go as connected, and Home shows the connected Wi-Fi icon."
+        },
+        {
+          "action": "Switch B on and wait until its Wi-Fi network is available. Confirm Go remains connected to A, then switch A off. Connect the computer to B. Observe Go and refresh router B’s connected-device list for up to 90 seconds from switching A off.",
+          "expected_result": "Router B lists Go as connected, and Home shows the connected Wi-Fi icon. No provisioning page or restart screen appears."
         }
       ],
       "cleanup": [
-        "Restore both APs and leave the dedicated unit Portable.",
-        "Restore each changed access point to its recorded power state and configuration, including after interruption.",
-        "Reconnect the computer to its recorded original Wi-Fi network after saving evidence."
+        "Switch both access points back on, including after interruption.",
+        "Return Go to Portable Home and record any recovery failure. Factory-reset data is intentionally not restored."
       ],
       "references": [
         "products/go/docs/wifi_service.md"
