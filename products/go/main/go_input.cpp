@@ -66,9 +66,6 @@ InputService::~InputService() {
 // ---------------------------------------------------------------------------
 
 bool InputService::start() {
-  if (!_touch.set_sleep(false)) {
-    AG_LOGW(TAG, "touch resume failed");
-  }
   _raw_queue = RTOS::queue_create(RAW_QUEUE_DEPTH, sizeof(RawInputEvent));
   if (_raw_queue == nullptr) {
     return false;
@@ -117,9 +114,6 @@ void InputService::stop() {
   if (_raw_queue != nullptr) {
     RTOS::queue_delete(_raw_queue);
     _raw_queue = nullptr;
-  }
-  if (!_touch.set_sleep(true)) {
-    AG_LOGW(TAG, "touch sleep failed");
   }
 }
 

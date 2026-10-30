@@ -366,10 +366,6 @@ public:
 
 class MockBoard : public GoBoard {
 public:
-  bool sleep_touch() override {
-    call_log.push_back("sleep_touch");
-    return true;
-  }
   // Call ordering log — records every method call in sequence.
   std::vector<std::string> call_log;
 
@@ -1842,7 +1838,6 @@ TEST_CASE("run_fast_path: Sleep saves SensorsWarm and preserves unrelated RTC st
   REQUIRE(test_spy::state_saved);
   CHECK(test_spy::enter_sleep_called);
   CHECK_FALSE(test_spy::orchestrator_init_called);
-  CHECK(board.call_index("sleep_touch") == -1);
   CHECK(board.call_index("new_touch_sensor") == -1);
   auto expected = state;
   expected.set_flag(RtcAppFlag::SensorsWarm, test_spy::should_hold_pm_result);

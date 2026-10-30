@@ -141,7 +141,6 @@ public:
   void init_spi() override {}
   void init_fuel_gauge() override {}
   bool init_bms() override { return true; }
-  bool sleep_touch() override { return true; }
   void init_wifi_subsystem() override { ++init_wifi_subsystem_calls; }
   void init_core() override {}
 
