@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "1991fe5",
+  "rev": "c9cd229",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1699,38 +1699,41 @@
     },
     {
       "id": "go.storage.chart-cold-power",
-      "title": "Cold power clears temporary chart history",
-      "objective": "Verify temporary chart history is cleared by a cold restart.",
+      "title": "Power cycling clears temporary chart history",
+      "objective": "Verify chart history collected before power-off does not return after restarting.",
       "category": "Tracking & Storage",
       "sub_category": "Persistence",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "Existing temporary chart history is expendable.",
+        "The Portable/Stationary measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Portable mode. Record Measurement Interval under Settings > Operations and Auto Lock under Settings > Display & Touch.",
+          "expected_result": "The original settings are recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
+          "action": "Set Measurement Interval to 10 seconds and Auto Lock to Off. Return Home and allow up to five minutes for numeric CO2 readings, then leave the device measuring for one minute.",
+          "expected_result": "CO2 measurements continue updating."
         },
         {
-          "action": "Set interval 10s and Auto Lock Off. Allow five minutes for sensor warmup, then collect five scheduled samples over one minute and inspect the CO2 chart.",
-          "expected_result": "The chart shows the collected samples."
+          "action": "Open the CO2 chart and photograph its history.",
+          "expected_result": "The chart contains multiple samples before power-off."
         },
         {
-          "action": "Set interval 60s. Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start. After the first Home measurement inspect CO2 before the next sample.",
-          "expected_result": "The chart contains only post-boot data; the previous chart history is gone."
+          "action": "Set Measurement Interval to 60 seconds. Disconnect USB. Hold Power until Powered off is fully displayed, release it, and wait ten seconds. Press and release Power; allow up to five minutes for the first Home measurement.",
+          "expected_result": "Home returns with a new measurement."
+        },
+        {
+          "action": "Within 30 seconds of that measurement, open the CO2 chart and compare it with the photograph.",
+          "expected_result": "The previous history is absent; only post-restart data is shown."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: Portable/Stationary interval and Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Restore and confirm the recorded Measurement Interval and Auto Lock, including after interruption. Return Home and record any restoration failure. Cleared chart history is not restored."
       ],
       "references": [
         "products/go/docs/storage_service.md"
