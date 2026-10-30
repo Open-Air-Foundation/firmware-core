@@ -79,6 +79,7 @@ uint32_t gps_sleep_request_count = 0;
 uint32_t gps_remaining_ms = 0;
 int gps_initial_baud = 0;
 uint64_t gps_initial_deadline_ms = 0;
+bool gps_fast_path_sleep_probe = false;
 uint32_t gps_sleep_duration_ms = 0;
 bool gps_sleep_ok = true;
 
@@ -209,6 +210,7 @@ void reset() {
   gps_remaining_ms = 0;
   gps_initial_baud = 0;
   gps_initial_deadline_ms = 0;
+  gps_fast_path_sleep_probe = false;
   gps_sleep_duration_ms = 0;
   gps_sleep_ok = true;
 
@@ -450,6 +452,7 @@ GpsService::GpsService(GpsDriver &driver, RtosQueueHandle event_queue, const Con
       _wake_deadline_ms(config.wake_deadline_ms) {
   test_spy::gps_initial_baud = config.expected_baud;
   test_spy::gps_initial_deadline_ms = config.wake_deadline_ms;
+  test_spy::gps_fast_path_sleep_probe = config.fast_path_sleep_probe;
 }
 
 GpsService::~GpsService() = default;

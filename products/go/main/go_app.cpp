@@ -363,7 +363,8 @@ bool GoApp::prepare_gps_for_sleep(RtcAppState &state, bool probe_receiver) {
     // A retained deadline cannot rule out a receiver wake/reset during MCU sleep.
     // Bypass it for this probe; preserve it if no new sleep request is sent.
     GpsService service(*driver, nullptr,
-                       {.wake_deadline_ms = probe_after_wake ? 0 : state.gps_wake_deadline_ms});
+                       {.wake_deadline_ms = probe_after_wake ? 0 : state.gps_wake_deadline_ms,
+                        .fast_path_sleep_probe = probe_after_wake});
     if (probe_after_wake) {
       AG_LOGI(TAG, "Timer wake: probing GPS before long sleep");
     }

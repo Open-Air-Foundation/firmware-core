@@ -35,6 +35,7 @@ public:
     uint8_t task_priority = 3; // must be below display worker (4)
     int expected_baud = GpsDriver::MODULE_DEFAULT_BAUD;
     uint64_t wake_deadline_ms = 0; // restored from RtcAppState after deep sleep
+    bool fast_path_sleep_probe = false; // repeated 9600-only probe before sleep
   };
 
   /// Construct the service.  Does not start the task.

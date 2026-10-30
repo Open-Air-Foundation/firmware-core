@@ -113,7 +113,8 @@ bool GpsService::send_sleep(uint32_t duration_ms) {
   if (sleep_remaining_ms() != 0) {
     return false; // Sleeping GPS cannot accept a replacement interval.
   }
-  const int baud = _driver.connect(_baud_rate);
+  const int baud =
+      _config.fast_path_sleep_probe ? _driver.connect_fast_path() : _driver.connect(_baud_rate);
   if (baud == 0) {
     return false;
   }

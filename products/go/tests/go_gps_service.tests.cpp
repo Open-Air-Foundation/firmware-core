@@ -184,6 +184,60 @@ TEST_CASE_METHOD(Fixture, "GPS service sleep uses default baud without acquisiti
   CHECK_FALSE(serial.open);
 }
 
+TEST_CASE_METHOD(Fixture, "Fast-path GPS probe retries at 9600 every 300 ms for five seconds",
+                 "[gps_service][fast_path]") {
+  GpsService gps(driver, nullptr, {.fast_path_sleep_probe = true});
+  const uint64_t start_ms = clock.retained_ms;
+  bool succeeds = false;
+  size_t polls = 17;
+  uint64_t elapsed_ms = 5000;
+
+  SECTION("silent receiver") { serial.respond = false; }
+  SECTION("receiver at 115200 is not probed there") {
+    serial.receiver_baud = GpsDriver::MODULE_ACTIVE_BAUD;
+  }
+  SECTION("short writes keep the cadence") { serial.short_write = true; }
+  SECTION("UART open fails immediately") {
+    serial.open_ok = false;
+    polls = 0;
+    elapsed_ms = 0;
+  }
+  SECTION("immediate response stops probing") {
+    succeeds = true;
+    polls = 1;
+    elapsed_ms = 20;
+  }
+  SECTION("receiver responds after several probes") {
+    serial.receiver_wake_ms = start_ms + 850;
+    succeeds = true;
+    polls = 4;
+    elapsed_ms = 920;
+  }
+  SECTION("receiver responds to the final probe") {
+    serial.receiver_wake_ms = start_ms + 4800;
+    succeeds = true;
+    polls = 17;
+    elapsed_ms = 4820;
+  }
+
+  REQUIRE(gps.request_sleep(UINT32_MAX) == succeeds);
+  CHECK(serial.opened_bauds == std::vector<int>{9600});
+  CHECK_FALSE(serial.open);
+  CHECK(clock.retained_ms - start_ms == elapsed_ms);
+  REQUIRE(serial.writes.size() == polls + (succeeds ? 1 : 0));
+  for (size_t i = 0; i < polls; ++i) {
+    CHECK(serial.writes[i].time_ms == start_ms + i * 300);
+    CHECK(serial.writes[i].bytes[2] == 0x0A);
+    CHECK(serial.writes[i].bytes[3] == 0x04);
+  }
+  if (succeeds) {
+    CHECK(is_command(serial.writes.back(), 0x41));
+    CHECK(gps.sleep_remaining_ms() == UINT32_MAX);
+  } else {
+    CHECK(gps.sleep_deadline_ms() == 0);
+  }
+}
+
 TEST_CASE_METHOD(Fixture, "GPS service tries the other baud only when expected baud is silent",
                  "[gps_service]") {
   int expected = GpsDriver::MODULE_DEFAULT_BAUD;

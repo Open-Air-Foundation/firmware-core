@@ -107,6 +107,7 @@ extern bool gps_sleep_ok;
 extern uint32_t gps_remaining_ms;
 extern int gps_initial_baud;
 extern uint64_t gps_initial_deadline_ms;
+extern bool gps_fast_path_sleep_probe;
 extern bool input_started;
 extern bool cache_measurement_called;
 extern MeasuresAGo last_cached_measurement;
@@ -2324,6 +2325,7 @@ TEST_CASE("run_fast_path: Energy Saving uses maximum GPS sleep") {
   CHECK(test_spy::gps_initial_deadline_ms == 0);
   CHECK(test_spy::gps_sleep_request_count == 1);
   CHECK(test_spy::gps_sleep_duration_ms == expected_gps_sleep_ms);
+  CHECK(test_spy::gps_fast_path_sleep_probe);
   CHECK(test_spy::last_saved_state.gps_wake_deadline_ms ==
         clock.retained_ms + expected_gps_sleep_ms);
 }
@@ -2350,6 +2352,7 @@ TEST_CASE("timer wake retries failed GPS sleep before deep sleep despite a retai
   test_spy::before_sensor_measurement = [&] {
     REQUIRE(test_spy::gps_sleep_request_count == 1);
     CHECK(test_spy::gps_initial_deadline_ms == 0);
+    CHECK(test_spy::gps_fast_path_sleep_probe);
     test_spy::gps_sleep_ok = retry_succeeds;
   };
   GoApp app(board);
@@ -2357,6 +2360,7 @@ TEST_CASE("timer wake retries failed GPS sleep before deep sleep despite a retai
   access.run_fast_path(state);
   CHECK(test_spy::gps_sleep_request_count == (promote ? 1 : 2));
   CHECK(test_spy::gps_initial_deadline_ms == (promote ? state.gps_wake_deadline_ms : 0));
+  CHECK(test_spy::gps_fast_path_sleep_probe == !promote);
   CHECK(test_spy::gps_sleep_duration_ms == GPS_ENERGY_SAVING_SLEEP_MS);
   CHECK(test_spy::last_saved_state.gps_wake_deadline_ms ==
         (retry_succeeds ? clock.retained_ms + GPS_ENERGY_SAVING_SLEEP_MS
