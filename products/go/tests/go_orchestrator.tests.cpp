@@ -3474,24 +3474,46 @@ TEST_CASE("clear_data: clears cache and routes, stopping tracking first",
           "[Orchestrator][storage]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  A::unlock(orch);
 
   ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
 
-  A::start_tracking(orch);
+  f.mock_rtos.retained_time_ms = 100'000;
+  REQUIRE(A::start_tracking(orch));
+  bool route_was_open = true;
+  SECTION("Recording") {}
+  SECTION("Paused") {
+    f.mock_rtos.retained_time_ms = 110'000;
+    REQUIRE(A::pause_tracking(orch));
+    REQUIRE(A::tracking_state(orch) == TrackingState::Paused);
+    REQUIRE(f.ui_manager.build_values(A::build_context(orch)).tracking_state ==
+            TrackingState::Paused);
+    route_was_open = false;
+  }
   test_spy::route_ended = false;
 
   REQUIRE(A::clear_data(orch));
 
   CHECK_FALSE(A::tracking_active(orch));
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
   CHECK(A::behavior(orch) == Behavior::Idle);
   CHECK(A::tracking_session_id(orch) == 0);
   check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
-  CHECK(test_spy::route_ended);
+  CHECK(test_spy::route_ended == route_was_open);
+  CHECK_FALSE(test_spy::route_file_open);
   CHECK(test_spy::cache_cleared);
   CHECK(test_spy::routes_cleared);
+
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).tracking_state == TrackingState::Idle);
+  A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+  REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
+  const auto menu = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(menu.row_count > 1);
+  CHECK(std::string(menu.rows[1].text) == "Start Tracking");
 }
 
 TEST_CASE("BLE ClearData command sends progress then reports storage clear failure",
