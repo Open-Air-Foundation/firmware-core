@@ -3516,6 +3516,52 @@ TEST_CASE("clear_data: clears cache and routes, stopping tracking first",
   CHECK(std::string(menu.rows[1].text) == "Start Tracking");
 }
 
+TEST_CASE("on_input: cancelling Clear Data preserves a paused session",
+          "[Orchestrator][storage][tracking]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+
+  f.mock_rtos.retained_time_ms = 100'000;
+  REQUIRE(A::start_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  REQUIRE(session != 0);
+  f.mock_rtos.retained_time_ms = 110'000;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  f.mock_rtos.retained_time_ms = 130'000;
+  REQUIRE(A::pause_tracking(orch));
+  REQUIRE(A::tracking_state(orch) == TrackingState::Paused);
+  const auto timing = A::tracking_timing(orch);
+  uint32_t points = 0;
+  REQUIRE(f.storage_service.try_get_session_point_count(session, points));
+  REQUIRE(points == 1);
+  REQUIRE_FALSE(test_spy::cache_cleared);
+  REQUIRE_FALSE(test_spy::routes_cleared);
+
+  enter_settings(f, orch);
+  open_ui_row(f, orch, "Clear Data");
+  REQUIRE(f.ui_manager.current_screen() == Screen::Confirm);
+
+  SECTION("No") { open_ui_row(f, orch, "No"); }
+  SECTION("Back") { open_ui_row(f, orch, "Back"); }
+
+  REQUIRE(f.ui_manager.current_screen() == Screen::Settings);
+  const auto values = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(values.selected_row < values.row_count);
+  CHECK(std::string(values.rows[values.selected_row].text) == "Clear Data");
+  if (values.snackbar_text != nullptr) {
+    CHECK(std::string(values.snackbar_text) != "Data cleared");
+  }
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  CHECK(A::tracking_session_id(orch) == session);
+  check_tracking_timing(A::tracking_timing(orch), timing);
+  uint32_t remaining_points = 0;
+  REQUIRE(f.storage_service.try_get_session_point_count(session, remaining_points));
+  CHECK(remaining_points == points);
+  CHECK_FALSE(test_spy::cache_cleared);
+  CHECK_FALSE(test_spy::routes_cleared);
+}
+
 TEST_CASE("BLE ClearData command sends progress then reports storage clear failure",
           "[Orchestrator][storage][ble]") {
   TestFixture f;

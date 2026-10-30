@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "4a5df27",
+  "rev": "f29a366",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1777,51 +1777,6 @@
       ],
       "cleanup": [
         "Restore and confirm the three recorded settings, including after interruption. Return Home and record any restoration failure. Cleared data is intentionally not restored."
-      ],
-      "references": [
-        "products/go/docs/ui_manager.md",
-        "products/go/docs/storage_service.md"
-      ]
-    },
-    {
-      "id": "go.storage.clear-cancel",
-      "title": "Cancelling Clear Data preserves charts and the active session",
-      "objective": "Verify No and Back dismiss the confirmation without visibly clearing charts or stopping tracking.",
-      "category": "Tracking & Storage",
-      "sub_category": "Clear Data",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Portable mode. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it. Set Auto Lock Off and measurement interval 10s. Allow five minutes for warmup, then collect five chart samples over one minute. Start Tracking and wait for at least three Points, allowing 40 seconds.",
-          "expected_result": "The CO2 chart has visible history and Tracking Status shows Recording."
-        },
-        {
-          "action": "Pause Tracking. Record Points and photograph the CO2 chart. Set measurement interval 60s.",
-          "expected_result": "The test session is Paused and its point count and chart baseline are saved."
-        },
-        {
-          "action": "Open Settings > Clear Data and choose No. Reopen Clear Data and choose Back.",
-          "expected_result": "Both actions return to the Clear Data row without a Data cleared message."
-        },
-        {
-          "action": "Inspect the CO2 chart and Tracking > Status.",
-          "expected_result": "The previous chart history remains visible; Status is still Paused with the recorded point count."
-        }
-      ],
-      "cleanup": [
-        "Stop the test session.",
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore the recorded Portable/Stationary interval and Auto Lock, operating mode, lock state and USB connection state, including after interruption. Confirm each restored setting; record any remaining change."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
