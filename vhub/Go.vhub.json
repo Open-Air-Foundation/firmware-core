@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "61a9422",
+  "rev": "78c2c14",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1841,7 +1841,7 @@
       ],
       "steps": [
         {
-          "action": "Record the computer’s current Wi-Fi network. Disconnect USB from Go. Hold BOOT for at least two seconds, release, and allow 30 seconds for restart.",
+          "action": "Disconnect USB from Go. Hold BOOT for at least two seconds, release, and allow 30 seconds for restart.",
           "expected_result": "Getting Started appears."
         },
         {
@@ -1866,7 +1866,6 @@
         }
       ],
       "cleanup": [
-        "Reconnect the computer to its recorded Wi-Fi network, including after interruption.",
         "Leave Go on the test network or return it to Portable mode. Factory-reset data is intentionally not restored."
       ],
       "references": [
