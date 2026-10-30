@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "766897a",
+  "rev": "0a2121a",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2235,58 +2235,6 @@
         "products/go/docs/orchestrator.md",
         "products/go/docs/wifi_service.md",
         "products/go/docs/ble_service.md"
-      ]
-    },
-    {
-      "id": "go.modes.portable-stationary-paused",
-      "title": "Paused survives Portable to Stationary",
-      "objective": "Verify this active route state is independent of radio mode.",
-      "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Set interval 10s and Auto Lock Off. Start Tracking and record the ID from the Tracking start = <ID> snackbar. Open Status and wait for three points, allowing 40 seconds.",
-          "expected_result": "Status shows Recording and at least three Points; the start snackbar supplied a nonzero session ID."
-        },
-        {
-          "action": "Pause and reopen Status.",
-          "expected_result": "The session is Paused."
-        },
-        {
-          "action": "Record Points from Status alongside the start snackbar ID, select Stationary mode, reopen Status and observe for 30 seconds.",
-          "expected_result": "Status remains Paused. Points stays unchanged and the pause icon remains."
-        },
-        {
-          "action": "Stop Tracking and compare the Tracking stop = <ID> snackbar with the recorded start ID.",
-          "expected_result": "The mode transition preserved the session: the stop ID matches the start ID."
-        }
-      ],
-      "cleanup": [
-        "Stop the test route.",
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore only the original values captured before this case changed them: Portable/Stationary interval and Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
-      ],
-      "references": [
-        "products/go/docs/orchestrator.md",
-        "products/go/docs/storage_service.md"
       ]
     },
     {
