@@ -415,10 +415,6 @@ void GoApp::run_fast_path(const RtcAppState &state) {
     _board.display().deep_sleep();
     _board.ulp_start();
     log_heap(TAG, "boot:fast-path:before-sleep");
-    // Only this wake's early result decides whether to retry, not the deadline.
-    if (result.gps_sleep_retry_needed) {
-      prepare_gps_for_sleep(save, /*probe_receiver=*/true);
-    }
     _board.power().save_state(save);
     _board.power().enter_sleep(result.sleep_duration_ms);
     // Never returns — CPU reboots on wake.
@@ -571,7 +567,6 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
         .sleep_duration_ms = 0,
         .sensors_warm = false,
         .gps_wake_deadline_ms = gps_state.gps_wake_deadline_ms,
-        .gps_sleep_retry_needed = !gps_sleep_sent,
     };
   }
   // Broadcast raw measurements, matching Portable BLE, while the
@@ -604,9 +599,17 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     broadcast->deinit();
   }
 
-  const uint32_t final_awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
-  const auto decision =
+  uint32_t final_awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
+  auto decision =
       power.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, final_awake_ms);
+  if (!button_pressed && decision.type == PowerService::SleepType::Deep && !gps_sleep_sent) {
+    // Retry before the final sleep calculation so probing consumes this interval.
+    // Only this wake's early result decides whether to retry, not the deadline.
+    prepare_gps_for_sleep(gps_state, /*probe_receiver=*/true);
+    final_awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
+    decision =
+        power.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, final_awake_ms);
+  }
   bool warm = false;
 
   if (decision.type == PowerService::SleepType::Deep) {
@@ -631,7 +634,6 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
         .sleep_duration_ms = decision.duration_ms,
         .sensors_warm = warm,
         .gps_wake_deadline_ms = gps_state.gps_wake_deadline_ms,
-        .gps_sleep_retry_needed = !gps_sleep_sent,
     };
   }
 
@@ -664,7 +666,6 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
       .sleep_duration_ms = 0,
       .sensors_warm = false,
       .gps_wake_deadline_ms = gps_state.gps_wake_deadline_ms,
-      .gps_sleep_retry_needed = !gps_sleep_sent,
   };
 }
 

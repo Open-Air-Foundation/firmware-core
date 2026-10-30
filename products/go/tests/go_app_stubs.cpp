@@ -82,6 +82,7 @@ uint64_t gps_initial_deadline_ms = 0;
 bool gps_fast_path_sleep_probe = false;
 uint32_t gps_sleep_duration_ms = 0;
 bool gps_sleep_ok = true;
+std::function<void()> on_gps_sleep_request;
 
 // --- InputService ---
 bool input_started = false;
@@ -213,6 +214,7 @@ void reset() {
   gps_fast_path_sleep_probe = false;
   gps_sleep_duration_ms = 0;
   gps_sleep_ok = true;
+  on_gps_sleep_request = nullptr;
 
   input_started = false;
   input_stopped = false;
@@ -475,6 +477,9 @@ bool GpsService::request_sleep(uint32_t duration_ms) {
   test_spy::gps_sleep_requested = true;
   ++test_spy::gps_sleep_request_count;
   test_spy::gps_sleep_duration_ms = duration_ms;
+  if (test_spy::on_gps_sleep_request) {
+    test_spy::on_gps_sleep_request();
+  }
   if (duration_ms == 0 || _wake_deadline_ms > RTOS::get_retained_time_ms() ||
       !test_spy::gps_sleep_ok) {
     return false;

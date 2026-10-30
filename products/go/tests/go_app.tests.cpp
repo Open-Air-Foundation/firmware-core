@@ -104,6 +104,7 @@ extern bool gps_sleeping_started;
 extern uint32_t gps_sleep_duration_ms;
 extern uint32_t gps_sleep_request_count;
 extern bool gps_sleep_ok;
+extern std::function<void()> on_gps_sleep_request;
 extern uint32_t gps_remaining_ms;
 extern int gps_initial_baud;
 extern uint64_t gps_initial_deadline_ms;
@@ -2367,6 +2368,83 @@ TEST_CASE("timer wake retries failed GPS sleep before deep sleep despite a retai
                         : state.gps_wake_deadline_ms));
   CHECK(test_spy::enter_sleep_called == !promote);
   CHECK_FALSE(test_spy::gps_started);
+}
+
+TEST_CASE("fast path includes the final GPS retry in its sleep calculation", "[GoApp][gps]") {
+  test_spy::reset();
+  ScopedRetainedClock clock(200000);
+  MockBoard board;
+  board.settings.operating_mode = OperatingMode::Offline;
+  board.settings.energy_saving_measure_interval_seconds = 300;
+  RtcAppState state{};
+  state.mode = OperatingMode::Offline;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
+  constexpr uint32_t interval_ms = 300000;
+  constexpr uint32_t measurement_ms = 20000;
+  constexpr uint32_t retry_ms = 5000;
+  bool early_success = false;
+  bool retry_success = false;
+  SECTION("both attempts fail") {}
+  SECTION("final attempt succeeds") { retry_success = true; }
+  SECTION("early success needs no retry") { early_success = true; }
+
+  test_spy::gps_sleep_ok = early_success;
+  test_spy::before_sensor_measurement = [&] {
+    RTOS::delay_ms(measurement_ms);
+    test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep,
+                                          interval_ms - measurement_ms};
+  };
+  test_spy::on_gps_sleep_request = [&] {
+    if (test_spy::gps_sleep_request_count == 2) {
+      CHECK(test_spy::cache_backed_up);
+      CHECK(DisplayService::spy_init_count == 1);
+      RTOS::delay_ms(retry_ms);
+      test_spy::gps_sleep_ok = retry_success;
+      // The next sleep decision accounts for the newly elapsed retry time.
+      test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep,
+                                            interval_ms - measurement_ms - retry_ms};
+    }
+  };
+  GoApp app(board);
+  GoAppTestAccess access(app);
+  access.run_fast_path(state);
+
+  CHECK(test_spy::gps_sleep_request_count == (early_success ? 1 : 2));
+  const uint32_t awake_ms = measurement_ms + (early_success ? 0 : retry_ms);
+  REQUIRE(test_spy::enter_sleep_called);
+  CHECK(test_spy::last_sleep_awake_ms == awake_ms);
+  CHECK(test_spy::enter_sleep_duration_ms == interval_ms - awake_ms);
+  CHECK(clock.now + test_spy::enter_sleep_duration_ms == interval_ms);
+}
+
+TEST_CASE("fast path promotes when the GPS retry leaves insufficient sleep time", "[GoApp][gps]") {
+  test_spy::reset();
+  ScopedRetainedClock clock(200000);
+  MockBoard board;
+  board.settings.operating_mode = OperatingMode::Offline;
+  RtcAppState state{};
+  state.mode = OperatingMode::Offline;
+  state.set_flag(RtcAppFlag::SensorsWarm, true);
+  test_spy::gps_sleep_ok = false;
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 8000};
+  uint32_t retry_ms = 5000;
+  SECTION("remaining time falls below deep sleep threshold") {}
+  SECTION("retry overruns the remaining interval") { retry_ms = 10000; }
+  test_spy::on_gps_sleep_request = [&] {
+    if (test_spy::gps_sleep_request_count == 2) {
+      RTOS::delay_ms(retry_ms);
+      test_spy::sleep_decision_to_return = {PowerService::SleepType::None, 0};
+    }
+  };
+  GoApp app(board);
+  GoAppTestAccess access(app);
+  access.run_fast_path(state);
+
+  CHECK(test_spy::gps_sleep_request_count == 2);
+  CHECK(test_spy::last_sleep_awake_ms == retry_ms);
+  CHECK_FALSE(test_spy::enter_sleep_called);
+  CHECK(test_spy::orchestrator_init_called);
+  CHECK(test_spy::orchestrator_handoff.measurement_completed);
 }
 
 TEST_CASE("GoApp: deep-sleep wake restores GPS deadline and derives baud from application state") {

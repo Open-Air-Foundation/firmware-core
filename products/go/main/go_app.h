@@ -42,8 +42,7 @@ private:
     bool has_measures;
     uint32_t sleep_duration_ms;     ///< Valid when outcome == Sleep
     bool sensors_warm;              ///< RTC persistence before sleep
-    uint64_t gps_wake_deadline_ms;  ///< Updated by the early inactive GPS sleep request
-    bool gps_sleep_retry_needed;    ///< Early sleep request did not complete
+    uint64_t gps_wake_deadline_ms;  ///< Updated by either inactive GPS sleep request
   };
 
   FastPathResult execute_fast_path(const RtcAppState &state, const volatile bool &button_flag,
