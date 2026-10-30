@@ -9795,6 +9795,45 @@ TEST_CASE("ProvisioningEvent::Connected goes through leave_session_to_home",
   CHECK(v.snackbar_text == nullptr);
 }
 
+TEST_CASE("Cancel Setup No preserves the active provisioning session",
+          "[Orchestrator][session][confirm]") {
+  for (const auto transport : {ProvisioningTransport::BleOnly, ProvisioningTransport::WifiOnly}) {
+    CAPTURE(transport);
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    CP2_ALLOW_CONFIG_WRITES(f);
+    A::set_mode(orch, OperatingMode::Stationary);
+    test_spy::wifi_has_been_online = false;
+    A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+    A::dispatch(orch, make_provisioning_event(ProvisioningEvent::Started, transport));
+    REQUIRE(A::setup_session_active(orch));
+    REQUIRE(A::sensitive_services_paused(orch));
+    REQUIRE(f.ui_manager.current_screen() == Screen::Provisioning);
+    REQUIRE(f.ui_manager.provisioning_transport() == transport);
+
+    test_spy::wifi_start_provisioning_called = false;
+    test_spy::wifi_switch_transport_called = false;
+    test_spy::wifi_stop_provisioning_called = false;
+    A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress});
+    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+    REQUIRE(f.ui_manager.current_screen() == Screen::ProvisioningConfirm);
+    const auto confirm = f.ui_manager.build_values(A::build_context(orch));
+    REQUIRE(confirm.provisioning_confirm_kind == 1);
+    REQUIRE(confirm.provisioning_confirm_index == 0);
+
+    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+
+    CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
+    CHECK(f.ui_manager.provisioning_transport() == transport);
+    CHECK(A::mode(orch) == OperatingMode::Stationary);
+    CHECK(A::setup_session_active(orch));
+    CHECK(A::sensitive_services_paused(orch));
+    CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+    CHECK_FALSE(test_spy::wifi_switch_transport_called);
+    CHECK_FALSE(test_spy::wifi_stop_provisioning_called);
+  }
+}
+
 TEST_CASE("ConfirmCancelProvisioning routes through leave_session_to_portable",
           "[Orchestrator][session][confirm]") {
   TestFixture f;

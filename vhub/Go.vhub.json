@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "03c0f32",
+  "rev": "ae0b6c2",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1920,46 +1920,6 @@
       "references": [
         "products/go/docs/wifi_service.md",
         "products/go/docs/local_server.md"
-      ]
-    },
-    {
-      "id": "go.wifi.cancel-no",
-      "title": "Cancel Setup > No has the intended result",
-      "objective": "Verify this provisioning confirmation choice.",
-      "category": "Stationary Network",
-      "sub_category": "Provisioning",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "All routes, charts, settings and bonds on this unit are expendable.",
-        "A computer with a browser and Wi-Fi settings."
-      ],
-      "steps": [
-        {
-          "action": "Record the computer’s current Wi-Fi network before switching networks for provisioning.",
-          "expected_result": "The original computer network is recorded for cleanup."
-        },
-        {
-          "action": "Factory-reset with a BOOT hold of at least two seconds, complete onboarding with a one-second Menu hold, then select Main Menu > Operating Mode > Stationary. On app setup choose Switch to Wi-Fi and confirm Yes. Join the airgradient- network whose exact name is shown on Go, using password cleanair and open http://192.168.4.1/.",
-          "expected_result": "The Go displays portal setup and the browser shows the credential form."
-        },
-        {
-          "action": "Select Cancel Setup.",
-          "expected_result": "The confirmation initially selects No."
-        },
-        {
-          "action": "Choose No.",
-          "expected_result": "The same provisioning session remains open."
-        }
-      ],
-      "cleanup": [
-        "If still in setup, select Cancel Setup > Yes.",
-        "Reconnect the computer to its recorded original Wi-Fi network after saving evidence."
-      ],
-      "references": [
-        "products/go/docs/ui_manager.md",
-        "products/go/docs/wifi_service.md"
       ]
     },
     {

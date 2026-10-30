@@ -2378,13 +2378,20 @@ TEST_CASE("UIManager: ProvisioningConfirm question is transport- and kind-aware"
 
 TEST_CASE("UIManager: ProvisioningConfirm No returns to Provisioning with no action",
           "[UIManager][provisioning][confirm]") {
-  UIManager ui(DEFAULT_UI_CONFIG);
-  ui.open_provisioning(ProvisioningTransport::BleOnly);
-  ui.open_provisioning_confirm(0);
+  for (const auto transport : {ProvisioningTransport::BleOnly, ProvisioningTransport::WifiOnly}) {
+    for (const uint8_t kind : {0, 1}) {
+      CAPTURE(transport, kind);
+      UIManager ui(DEFAULT_UI_CONFIG);
+      ui.open_provisioning(transport);
+      ui.open_provisioning_confirm(kind);
+      REQUIRE(ui.build_values(make_default_ctx()).provisioning_confirm_index == 0);
 
-  auto result = press(ui, InputSource::TouchEnter); // No is index 0 (default)
-  CHECK(result.action == UIAction::None);
-  CHECK(ui.current_screen() == Screen::Provisioning);
+      auto result = press(ui, InputSource::TouchEnter); // No is index 0 (default)
+      CHECK(result.action == UIAction::None);
+      CHECK(ui.current_screen() == Screen::Provisioning);
+      CHECK(ui.provisioning_transport() == transport);
+    }
+  }
 }
 
 TEST_CASE("UIManager: ProvisioningConfirm Yes on switch emits ConfirmSwitch",
