@@ -165,16 +165,15 @@ interval.
 
 ## GPS Sleep and System Reset
 
-GPS sleep is independent of ESP sleep. The app sends `CFG-SLEEP` only when GPS
-is inactive; active GPS remains running during Offline deep sleep. Intervals,
-UART behavior, and the wait/reset decision are documented in
-[GPS Service](gps_service.md#sleep-policy).
+GPS sleep is independent of ESP sleep. Energy Saving disables GPS acquisition
+and requests long receiver sleep; Portable/Stationary use 30-second sleep
+intervals when GPS is inactive. See [GPS Service](gps_service.md#sleep-policy).
 
-`PowerService::request_system_power_reset()` forwards to the optional BMS
-operation. On Go, BQ reset cycles the system, including GPS, on battery power.
-The tracking-start path rechecks BMS status and avoids this reset with external
-input or unknown status. OTG is battery output, not USB input. A successful
-request means the command was accepted, not that a reset occurred.
+Persisted changes into or out of Energy Saving request
+`PowerService::request_system_power_reset()` after saving settings and cache.
+On battery this cycles the system, including GPS. USB can keep the system
+powered; a successful command does not prove a power cycle. If the system
+continues running, the selected mode takes effect with the existing GPS deadline.
 
 ## Sleep Entry
 
@@ -204,8 +203,9 @@ final remaining sleep falls below the hold threshold.
 The same decision controls sensor-producer shutdown: held sleeps stop the task
 with `sleep_pm=false`, while longer sleeps use `sleep_pm=true`. This keeps the
 SPS30's internal measurement state consistent with the persisted warm flag.
-Orchestrator preparation also stops the gas heater and sleeps touch through
-their services. Timer fast paths manage gas directly and leave touch asleep.
+Orchestrator preparation stops the gas heater and input processing. CAP1203
+sensing stays active; touch is not a deep-sleep wake source. Timer fast paths
+manage gas directly and leave touch unchanged.
 
 ### Retained Uptime
 
@@ -460,9 +460,8 @@ wake and selects `ChargingOnly` even if the input cannot be confirmed. Otherwise
 a true detection result selects `ChargingOnly` before the other boot rules;
 see [Hardware Init](hardware_init.md#boot-path-selection) for retry behavior.
 
-A pending Offline tracking start can override a non-charging-only `PowerOn`
-selection after its new session is created. See
-[tracking recovery](hardware_init.md#boot-path-selection).
+Energy Saving boot clears retained tracking state. Charging-only boot also
+requests long GPS sleep when that mode is saved.
 
 ### Fast-path (timer wake, locked)
 
@@ -485,7 +484,10 @@ Promotion happens when:
 - **Latched button press**: checked after acquisition, storage, and display.
   Unlocks, suppresses wake press, and loads the RTC snapshot for initial display.
   Conditioning light sleep is timer-only; the button does not wake it.
-- **Route storage failure**: promotes so interactive mode can retry storage.
+
+A failed early GPS sleep request is retried before the final sleep calculation.
+The retry time is subtracted from the remaining measurement interval; insufficient
+time promotes to interactive operation. No route points are written on this path.
 
 ### Button-wake path (button wake, Offline mode)
 
@@ -552,16 +554,10 @@ deep sleep, while baud is inferred from app state and checked on connection.
 The complete structure occupies 40 bytes, including alignment, enforced by a
 size assertion in host and firmware builds.
 
-The saved `tracking_state` enum and `tracking_session_id` preserve Recording or
-Paused across deep sleep. A Recording wake reopens the route for append; a
-Paused wake keeps it closed while continuing measurement, display, and configured
-GPS behavior. Only an explicit Resume returns a paused session to Recording.
-
-Timing anchors use the retained monotonic clock, not GPS/system UTC. Closing and
-reopening the writer for sleep does not change a recording segment. Timer-wake
-accepted writes update the last-record timestamp; both the Sleep and Promote
-paths persist that updated value. Inactive tracking restores invalid timing.
-No point count, GPS fix data, or UI cursor is added to app-state retention.
+The tracking fields support interactive restoration in Portable/Stationary.
+Energy Saving ignores retained sessions and clears tracking state; its timer
+fast path saves only updated PM warm state and GPS deadline. Tracking timing
+uses retained monotonic time rather than GPS/system UTC.
 The timing data is not persisted in route files and does not migrate an active
 session through a cold boot or firmware update.
 
