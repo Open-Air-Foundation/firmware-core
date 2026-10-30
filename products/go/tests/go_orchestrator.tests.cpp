@@ -9637,6 +9637,96 @@ TEST_CASE("Stationary -> Energy Saving preserves recording at the new interval",
   CHECK(std::string(stopped.snackbar_text) == "Tracking stop = " + std::to_string(session));
 }
 
+TEST_CASE("Stationary -> Energy Saving keeps tracking paused through a measurement",
+          "[Orchestrator][stationary][offline][mode_change][tracking][pause][interval]") {
+  TestFixture f;
+  f.settings.measure_interval_seconds = 10;
+  f.settings.energy_saving_measure_interval_seconds = 300;
+  uint32_t now_ms = 100'000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  test_spy::wifi_has_saved_networks = true;
+  A::change_mode(orch, OperatingMode::Stationary);
+  REQUIRE(test_spy::wifi_connect_saved_called);
+  test_spy::wifi_is_online = true;
+  A::on_wifi_connected(orch, 0x0104a8c0); // 192.168.4.1
+  REQUIRE(A::mode(orch) == OperatingMode::Stationary);
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+  REQUIRE(A::build_context(orch).wifi_connected);
+
+  f.mock_rtos.retained_time_ms = now_ms;
+  REQUIRE(A::start_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  REQUIRE(session != 0);
+  now_ms = 110'000;
+  f.mock_rtos.retained_time_ms = now_ms;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  REQUIRE(f.storage_service.current_route_point_count() == 1);
+  now_ms = 120'000;
+  f.mock_rtos.retained_time_ms = now_ms;
+  REQUIRE(A::pause_tracking(orch));
+  REQUIRE_FALSE(f.storage_service.is_route_active());
+  const auto timing = A::tracking_timing(orch);
+  test_spy::route_started = false;
+  test_spy::route_resumed = false;
+  test_spy::route_ended = false;
+  test_spy::route_point_appended = false;
+  test_spy::wifi_shutdown_called = false;
+
+  const auto check_paused = [&] {
+    CHECK(A::tracking_state(orch) == TrackingState::Paused);
+    CHECK(A::tracking_session_id(orch) == session);
+    check_tracking_timing(A::tracking_timing(orch), timing);
+    CHECK_FALSE(f.storage_service.is_route_active());
+    uint32_t points = 0;
+    REQUIRE(f.storage_service.try_get_session_point_count(session, points));
+    CHECK(points == 1);
+    CHECK_FALSE(test_spy::route_started);
+    CHECK_FALSE(test_spy::route_resumed);
+    CHECK_FALSE(test_spy::route_ended);
+    CHECK_FALSE(test_spy::route_point_appended);
+  };
+  check_paused();
+
+  now_ms = 130'000;
+  f.mock_rtos.retained_time_ms = now_ms;
+  A::change_mode(orch, OperatingMode::Offline);
+  REQUIRE(A::mode(orch) == OperatingMode::Offline);
+  CHECK(test_spy::wifi_shutdown_called);
+  check_paused();
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).tracking_state == TrackingState::Paused);
+  enter_tracking_status(f, orch); // Keep awake, matching the manual Status observation.
+  test_spy::measurement_requested = false;
+  for (const uint32_t before_due : {140'000u, 429'999u}) {
+    now_ms = before_due;
+    f.mock_rtos.retained_time_ms = now_ms;
+    A::check_timers(orch);
+    CHECK_FALSE(test_spy::measurement_requested);
+    check_paused();
+  }
+
+  now_ms = 430'000;
+  f.mock_rtos.retained_time_ms = now_ms;
+  A::check_timers(orch);
+  REQUIRE(test_spy::measurement_requested);
+  CHECK(A::last_measurement_ms(orch) == now_ms);
+  A::on_sensor_data(orch, MeasuresAGo{});
+  check_paused();
+  const auto ctx = A::build_context(orch);
+  CHECK(f.ui_manager.build_values(ctx).tracking_state == TrackingState::Paused);
+  CHECK(ctx.tracking_status.point_count_known);
+  CHECK(ctx.tracking_status.point_count == 1);
+
+  A::stop_tracking(orch);
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  CHECK(A::tracking_session_id(orch) == 0);
+  CHECK_FALSE(f.storage_service.is_route_active());
+  const auto stopped = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(stopped.snackbar_text != nullptr);
+  CHECK(std::string(stopped.snackbar_text) == "Tracking stop = " + std::to_string(session));
+}
+
 TEST_CASE("direct got-IP activates local HTTP, admission, and mDNS",
           "[Orchestrator][stationary][local_endpoint]") {
   TestFixture f;
