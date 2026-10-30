@@ -8869,6 +8869,75 @@ TEST_CASE("Portable -> Stationary tears down BLE before bringing up Wi-Fi",
   CHECK(test_spy::wifi_connect_saved_called);
 }
 
+TEST_CASE("Portable -> Stationary preserves recording and appends to the same route",
+          "[Orchestrator][stationary][mode_change][tracking]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::unlock(orch);
+  REQUIRE(A::mode(orch) == OperatingMode::Portable);
+  test_spy::wifi_has_saved_networks = true;
+
+  f.mock_rtos.retained_time_ms = 100'000;
+  REQUIRE(A::start_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  REQUIRE(session != 0);
+  f.mock_rtos.retained_time_ms = 110'000;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  REQUIRE(f.storage_service.current_route_point_count() == 1);
+  const auto timing = A::tracking_timing(orch);
+  test_spy::route_started = false;
+  test_spy::route_resumed = false;
+  test_spy::route_ended = false;
+
+  const auto check_route = [&] {
+    CHECK(A::tracking_state(orch) == TrackingState::Recording);
+    CHECK(A::tracking_session_id(orch) == session);
+    CHECK(f.storage_service.current_route_session_id() == session);
+    CHECK(f.storage_service.is_route_active());
+    CHECK(f.storage_service.current_route_point_count() == 1);
+    check_tracking_timing(A::tracking_timing(orch), timing);
+    CHECK_FALSE(test_spy::route_started);
+    CHECK_FALSE(test_spy::route_resumed);
+    CHECK_FALSE(test_spy::route_ended);
+  };
+
+  f.mock_rtos.retained_time_ms = 120'000;
+  A::change_mode(orch, OperatingMode::Stationary);
+  REQUIRE(A::mode(orch) == OperatingMode::Stationary);
+  REQUIRE(test_spy::wifi_connect_saved_called);
+  check_route();
+
+  f.mock_rtos.retained_time_ms = 130'000;
+  A::on_wifi_connected(orch, 0x0104a8c0); // 192.168.4.1
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+  check_route();
+
+  f.mock_rtos.retained_time_ms = 140'000;
+  test_spy::route_point_appended = false;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK(test_spy::route_point_appended);
+  CHECK(f.storage_service.current_route_session_id() == session);
+  CHECK(f.storage_service.current_route_point_count() == 2);
+  auto updated_timing = timing;
+  updated_timing.last_record_s = 140;
+  check_tracking_timing(A::tracking_timing(orch), updated_timing);
+
+  enter_tracking_status(f, orch);
+  const auto ctx = A::build_context(orch);
+  CHECK(f.ui_manager.build_values(ctx).tracking_state == TrackingState::Recording);
+  CHECK(ctx.tracking_status.point_count_known);
+  CHECK(ctx.tracking_status.point_count == 2);
+
+  A::stop_tracking(orch);
+  CHECK(test_spy::route_ended);
+  CHECK_FALSE(f.storage_service.is_route_active());
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  const auto stopped = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(stopped.snackbar_text != nullptr);
+  CHECK(std::string(stopped.snackbar_text) == "Tracking stop = " + std::to_string(session));
+}
+
 TEST_CASE("change_mode leaving Portable pushes a disc notice when a client is connected",
           "[Orchestrator][ble][mode_change]") {
   TestFixture f;
