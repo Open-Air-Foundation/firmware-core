@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "9d5b5fe",
+  "rev": "61a9422",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1825,112 +1825,6 @@
       ]
     },
     {
-      "id": "go.cloud.delivery",
-      "title": "Stationary sends measurements to the dashboard",
-      "objective": "Verify new measurements reach the correct device’s dashboard.",
-      "category": "Stationary Network",
-      "sub_category": "Cloud",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Go has saved credentials for a Wi-Fi network with internet access. The test computer is connected to that network.",
-        "Postman or an equivalent GUI API client is available.",
-        "Access to the registered Go in AirGradient Dashboard."
-      ],
-      "steps": [
-        {
-          "action": "Select Main Menu > Operating Mode > Stationary. Read the full serial from Settings > About Device and open the matching unit in AirGradient Dashboard.",
-          "expected_result": "Go connects to Wi-Fi, and the device and dashboard serials match."
-        },
-        {
-          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/config with No Auth and no body. Record configurationControl, cloudConnection and measurementInterval.",
-          "expected_result": "All three original values are recorded."
-        },
-        {
-          "action": "At the same URL, send PUT with No Auth, Content-Type: application/json and a raw JSON body:\n{\"configurationControl\":\"local\"}\nPoll GET config every two seconds for up to 10 seconds to confirm the setting has changed.",
-          "expected_result": "configurationControl becomes local."
-        },
-        {
-          "action": "Send PUT at the same URL with the same headers and a raw JSON body:\n{\"cloudConnection\":true,\"measurementInterval\":10}\nPoll GET config every two seconds for up to 10 seconds to confirm the settings have changed.",
-          "expected_result": "Cloud connection is enabled and the interval is 10 seconds."
-        },
-        {
-          "action": "Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings. Record the dashboard’s latest measurement timestamp, then refresh every 30 seconds for up to three minutes.",
-          "expected_result": "Home continues displaying measurements. The dashboard shows PM2.5 and CO2 readings with a timestamp newer than the baseline.",
-          "evidence": [
-            "Save the dashboard’s before/after timestamps."
-          ]
-        }
-      ],
-      "cleanup": [
-        "Using PUT at the same URL with No Auth, Content-Type: application/json and a raw JSON object containing the fields and their recorded values, restore measurementInterval and cloudConnection, then restore configurationControl last.",
-        "Poll GET config every two seconds for up to 10 seconds to confirm each restoration, including after interruption. Return Home and record any restoration failure."
-      ],
-      "references": [
-        "products/go/docs/cloud_service.md",
-        "products/go/docs/local_server.md"
-      ]
-    },
-    {
-      "id": "go.cloud.apply-persist",
-      "title": "Cloud temperature-unit changes reach Home and survive power cycling",
-      "objective": "Verify a dashboard temperature-unit change appears on Go and persists without being reapplied by the cloud.",
-      "category": "Stationary Network",
-      "sub_category": "Cloud",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Go has saved credentials for a Wi-Fi network with internet access. The test computer is connected to that network.",
-        "Postman or an equivalent GUI API client is available.",
-        "Access to change the registered Go’s temperature unit and measurement interval in AirGradient Dashboard."
-      ],
-      "steps": [
-        {
-          "action": "Select Main Menu > Operating Mode > Stationary. Read the serial from Settings > About Device and open the matching dashboard unit. Record its temperature unit and measurement interval.",
-          "expected_result": "Go connects to Wi-Fi, the serials match, and both dashboard settings are recorded."
-        },
-        {
-          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/config with No Auth and no body. Record temperatureUnit, measurementInterval, cloudConnection and configurationControl.",
-          "expected_result": "All four original device settings are recorded."
-        },
-        {
-          "action": "At the same URL, send PUT with No Auth, Content-Type: application/json and a raw JSON body:\n{\"configurationControl\":\"local\"}\nPoll GET config every two seconds for up to 10 seconds to confirm the setting has changed.",
-          "expected_result": "Configuration control becomes local."
-        },
-        {
-          "action": "Set the dashboard measurement interval to 300 seconds. On Go, set Settings > Operations > Measurement Interval to 5 minutes and Temperature Unit under Display & Touch to the recorded dashboard unit. Return Home and allow up to six minutes for a numeric temperature.",
-          "expected_result": "Home displays a temperature in the preparation unit."
-        },
-        {
-          "action": "Change the dashboard temperature unit to the opposite value and save.",
-          "expected_result": "The dashboard retains the new unit; Home still shows the preparation unit."
-        },
-        {
-          "action": "Send PUT config at the same URL with the same headers and a raw JSON body:\n{\"cloudConnection\":true,\"configurationControl\":\"both\"}\nPoll GET config every two seconds for up to 10 seconds to confirm the settings have changed. Observe Home for up to 90 seconds after the PUT.",
-          "expected_result": "Home switches to the dashboard-selected unit. Settings > Display & Touch > Temperature Unit selects that unit."
-        },
-        {
-          "action": "Send PUT config at the same URL with the same headers and a raw JSON body:\n{\"configurationControl\":\"local\"}\nPoll GET config every two seconds for up to 10 seconds to confirm the setting has changed.",
-          "expected_result": "Cloud configuration updates are disabled; the selected temperature unit remains unchanged."
-        },
-        {
-          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release and wait 10 seconds. Press and release Power. Allow up to six minutes for a numeric temperature, then inspect Home and Settings > Display & Touch > Temperature Unit.",
-          "expected_result": "The cloud-selected unit remains selected and appears correctly on Home."
-        }
-      ],
-      "cleanup": [
-        "Restore the recorded dashboard settings, including after interruption.",
-        "Using PUT config at the same URL with the same headers and a raw JSON object containing the fields and their recorded values, restore the device’s temperature unit, measurement interval and cloud connection, then configuration control last.",
-        "Poll GET config every two seconds for up to 10 seconds to confirm each restoration. Return Home and record any restoration failure."
-      ],
-      "references": [
-        "products/go/docs/cloud_service.md",
-        "products/go/docs/local_server.md"
-      ]
-    },
-    {
       "id": "go.wifi.portal-dhcp",
       "title": "Browser setup connects using DHCP and survives power cycling",
       "objective": "Verify browser provisioning connects Go to Wi-Fi and saves the network for automatic reconnection.",
@@ -2139,6 +2033,37 @@
       ]
     },
     {
+      "id": "go.wifi.no-factory-fallback",
+      "title": "Normal Stationary does not select factory credentials",
+      "objective": "Verify manufacturing credentials are confined to manufacturing entry.",
+      "category": "Stationary Network",
+      "sub_category": "Provisioning",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "All routes, charts, settings and bonds on this unit are expendable.",
+        "A controllable factory access point with SSID airgradient and WPA2 password cleanair.",
+        "Access to the factory router’s association list."
+      ],
+      "steps": [
+        {
+          "action": "Keep factory Wi-Fi available. Factory-reset, finish onboarding by holding Menu, then select Stationary.",
+          "expected_result": "With no saved networks, normal app setup opens directly; Trying default Wi-Fi... never appears."
+        },
+        {
+          "action": "Inspect the factory router association list during a 30-second observation.",
+          "expected_result": "This device does not join the factory AP."
+        }
+      ],
+      "cleanup": [
+        "Cancel Setup > Yes and leave Portable."
+      ],
+      "references": [
+        "products/go/docs/wifi_service.md"
+      ]
+    },
+    {
       "id": "go.wifi.power-saving-disabled-access",
       "title": "mDNS remains stable with Wi-Fi power saving disabled",
       "objective": "Verify the Go remains reachable by its .local hostname after idle with Wi-Fi Power Saving disabled.",
@@ -2336,34 +2261,109 @@
       ]
     },
     {
-      "id": "go.wifi.no-factory-fallback",
-      "title": "Normal Stationary does not select factory credentials",
-      "objective": "Verify manufacturing credentials are confined to manufacturing entry.",
+      "id": "go.cloud.delivery",
+      "title": "Stationary sends measurements to the dashboard",
+      "objective": "Verify new measurements reach the correct device’s dashboard.",
       "category": "Stationary Network",
-      "sub_category": "Provisioning",
+      "sub_category": "Cloud",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "All routes, charts, settings and bonds on this unit are expendable.",
-        "A controllable factory access point with SSID airgradient and WPA2 password cleanair.",
-        "Access to the factory router’s association list."
+        "Go has saved credentials for a Wi-Fi network with internet access. The test computer is connected to that network.",
+        "Postman or an equivalent GUI API client is available.",
+        "Access to the registered Go in AirGradient Dashboard."
       ],
       "steps": [
         {
-          "action": "Keep factory Wi-Fi available. Factory-reset, finish onboarding by holding Menu, then select Stationary.",
-          "expected_result": "With no saved networks, normal app setup opens directly; Trying default Wi-Fi... never appears."
+          "action": "Select Main Menu > Operating Mode > Stationary. Read the full serial from Settings > About Device and open the matching unit in AirGradient Dashboard.",
+          "expected_result": "Go connects to Wi-Fi, and the device and dashboard serials match."
         },
         {
-          "action": "Inspect the factory router association list during a 30-second observation.",
-          "expected_result": "This device does not join the factory AP."
+          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/config with No Auth and no body. Record configurationControl, cloudConnection and measurementInterval.",
+          "expected_result": "All three original values are recorded."
+        },
+        {
+          "action": "At the same URL, send PUT with No Auth, Content-Type: application/json and a raw JSON body:\n{\"configurationControl\":\"local\"}\nPoll GET config every two seconds for up to 10 seconds to confirm the setting has changed.",
+          "expected_result": "configurationControl becomes local."
+        },
+        {
+          "action": "Send PUT at the same URL with the same headers and a raw JSON body:\n{\"cloudConnection\":true,\"measurementInterval\":10}\nPoll GET config every two seconds for up to 10 seconds to confirm the settings have changed.",
+          "expected_result": "Cloud connection is enabled and the interval is 10 seconds."
+        },
+        {
+          "action": "Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings. Record the dashboard’s latest measurement timestamp, then refresh every 30 seconds for up to three minutes.",
+          "expected_result": "Home continues displaying measurements. The dashboard shows PM2.5 and CO2 readings with a timestamp newer than the baseline.",
+          "evidence": [
+            "Save the dashboard’s before/after timestamps."
+          ]
         }
       ],
       "cleanup": [
-        "Cancel Setup > Yes and leave Portable."
+        "Using PUT at the same URL with No Auth, Content-Type: application/json and a raw JSON object containing the fields and their recorded values, restore measurementInterval and cloudConnection, then restore configurationControl last.",
+        "Poll GET config every two seconds for up to 10 seconds to confirm each restoration, including after interruption. Return Home and record any restoration failure."
       ],
       "references": [
-        "products/go/docs/wifi_service.md"
+        "products/go/docs/cloud_service.md",
+        "products/go/docs/local_server.md"
+      ]
+    },
+    {
+      "id": "go.cloud.apply-persist",
+      "title": "Cloud temperature-unit changes reach Home and survive power cycling",
+      "objective": "Verify a dashboard temperature-unit change appears on Go and persists without being reapplied by the cloud.",
+      "category": "Stationary Network",
+      "sub_category": "Cloud",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "Go has saved credentials for a Wi-Fi network with internet access. The test computer is connected to that network.",
+        "Postman or an equivalent GUI API client is available.",
+        "Access to change the registered Go’s temperature unit and measurement interval in AirGradient Dashboard."
+      ],
+      "steps": [
+        {
+          "action": "Select Main Menu > Operating Mode > Stationary. Read the serial from Settings > About Device and open the matching dashboard unit. Record its temperature unit and measurement interval.",
+          "expected_result": "Go connects to Wi-Fi, the serials match, and both dashboard settings are recorded."
+        },
+        {
+          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/config with No Auth and no body. Record temperatureUnit, measurementInterval, cloudConnection and configurationControl.",
+          "expected_result": "All four original device settings are recorded."
+        },
+        {
+          "action": "At the same URL, send PUT with No Auth, Content-Type: application/json and a raw JSON body:\n{\"configurationControl\":\"local\"}\nPoll GET config every two seconds for up to 10 seconds to confirm the setting has changed.",
+          "expected_result": "Configuration control becomes local."
+        },
+        {
+          "action": "Set the dashboard measurement interval to 300 seconds. On Go, set Settings > Operations > Measurement Interval to 5 minutes and Temperature Unit under Display & Touch to the recorded dashboard unit. Return Home and allow up to six minutes for a numeric temperature.",
+          "expected_result": "Home displays a temperature in the preparation unit."
+        },
+        {
+          "action": "Change the dashboard temperature unit to the opposite value and save.",
+          "expected_result": "The dashboard retains the new unit; Home still shows the preparation unit."
+        },
+        {
+          "action": "Send PUT config at the same URL with the same headers and a raw JSON body:\n{\"cloudConnection\":true,\"configurationControl\":\"both\"}\nPoll GET config every two seconds for up to 10 seconds to confirm the settings have changed. Observe Home for up to 90 seconds after the PUT.",
+          "expected_result": "Home switches to the dashboard-selected unit. Settings > Display & Touch > Temperature Unit selects that unit."
+        },
+        {
+          "action": "Send PUT config at the same URL with the same headers and a raw JSON body:\n{\"configurationControl\":\"local\"}\nPoll GET config every two seconds for up to 10 seconds to confirm the setting has changed.",
+          "expected_result": "Cloud configuration updates are disabled; the selected temperature unit remains unchanged."
+        },
+        {
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release and wait 10 seconds. Press and release Power. Allow up to six minutes for a numeric temperature, then inspect Home and Settings > Display & Touch > Temperature Unit.",
+          "expected_result": "The cloud-selected unit remains selected and appears correctly on Home."
+        }
+      ],
+      "cleanup": [
+        "Restore the recorded dashboard settings, including after interruption.",
+        "Using PUT config at the same URL with the same headers and a raw JSON object containing the fields and their recorded values, restore the device’s temperature unit, measurement interval and cloud connection, then configuration control last.",
+        "Poll GET config every two seconds for up to 10 seconds to confirm each restoration. Return Home and record any restoration failure."
+      ],
+      "references": [
+        "products/go/docs/cloud_service.md",
+        "products/go/docs/local_server.md"
       ]
     },
     {
