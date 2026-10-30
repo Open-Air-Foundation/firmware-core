@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "5bcac82",
+  "rev": "e31aa81",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1874,79 +1874,56 @@
     },
     {
       "id": "go.cloud.apply-persist",
-      "title": "A cloud temperature-unit change reaches Home and survives restart",
-      "objective": "Verify a tester can change the device temperature unit through the cloud dashboard and see the change retained on the physical device.",
+      "title": "Cloud temperature-unit changes reach Home and survive power cycling",
+      "objective": "Verify a dashboard temperature-unit change appears on Go and persists without being reapplied by the cloud.",
       "category": "Stationary Network",
       "sub_category": "Cloud",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "The test unit is registered to AirGradient Dashboard.",
-        "Access to change this unit’s temperature-unit and measurement-interval settings in AirGradient Dashboard.",
-        "Internet connectivity for the Go and dashboard client.",
-        "A computer with Postman or an equivalent GUI API client that resolves .local names on the test LAN.",
-        "Working credentials for the test LAN are saved on the Go."
+        "Go has saved credentials for a Wi-Fi network with internet access. The test computer is connected to that network.",
+        "Postman or an equivalent GUI API client is available.",
+        "Access to change the registered Go’s temperature unit and measurement interval in AirGradient Dashboard."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings. Configuration values are captured with the API in the following steps.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Stationary. Read the serial from Settings > About Device and open the matching dashboard unit. Record its temperature unit and measurement interval.",
+          "expected_result": "Go connects to Wi-Fi, the serials match, and both dashboard settings are recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Stationary.",
-          "expected_result": "Stationary is selected."
+          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/config with No Auth and no body. Record temperatureUnit, measurementInterval, cloudConnection and configurationControl.",
+          "expected_result": "All four original device settings are recorded."
         },
         {
-          "action": "Read the full serial from About Device and replace <serial> in every request URL with that value. In the API client, set a five-second request timeout, send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body, and save the response as the original configuration before changing anything.",
-          "expected_result": "The intended unit is connected and its original settings are saved for cleanup."
+          "action": "At the same URL, send PUT with No Auth, Content-Type: application/json and a raw JSON body:\n{\"configurationControl\":\"local\"}\nPoll GET config every two seconds for up to 10 seconds to confirm the setting has changed.",
+          "expected_result": "Configuration control becomes local."
         },
         {
-          "action": "Enable local authority. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "GET Config reports configurationControl=local; cloud settings cannot replace the preparation values."
+          "action": "Set the dashboard measurement interval to 300 seconds. On Go, set Settings > Operations > Measurement Interval to 5 minutes and Temperature Unit under Display & Touch to the recorded dashboard unit. Return Home and allow up to six minutes for a numeric temperature.",
+          "expected_result": "Home displays a temperature in the preparation unit."
         },
         {
-          "action": "In AirGradient Dashboard, open the device matching the About Device serial. Record its temperature-unit and measurement-interval settings, then set its interval to 300 seconds. On Go, set Operations > Measure Int. > 5m and select the recorded dashboard unit under Display & Touch > Temperature Unit. Return Home and allow six minutes for a valid temperature reading.",
-          "expected_result": "Both original dashboard settings are saved. Home displays a valid temperature, and the prepared interval keeps that field visible when cloud configuration is enabled."
+          "action": "Change the dashboard temperature unit to the opposite value and save.",
+          "expected_result": "The dashboard retains the new unit; Home still shows the preparation unit."
         },
         {
-          "action": "In the dashboard, change this device’s temperature unit to the opposite value: Fahrenheit if it was Celsius, otherwise Celsius. Save the change while local authority is still selected on Go.",
-          "expected_result": "The dashboard retains the selected device setting; Home still displays the preparation unit before cloud configuration is enabled."
+          "action": "Send PUT config at the same URL with the same headers and a raw JSON body:\n{\"cloudConnection\":true,\"configurationControl\":\"both\"}\nPoll GET config every two seconds for up to 10 seconds to confirm the settings have changed. Observe Home for up to 90 seconds after the PUT.",
+          "expected_result": "Home switches to the dashboard-selected unit. Settings > Display & Touch > Temperature Unit selects that unit."
         },
         {
-          "action": "Enable cloud configuration delivery. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"cloudConnection\":true,\"configurationControl\":\"both\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "Cloud configuration delivery is enabled for this unit."
+          "action": "Send PUT config at the same URL with the same headers and a raw JSON body:\n{\"configurationControl\":\"local\"}\nPoll GET config every two seconds for up to 10 seconds to confirm the setting has changed.",
+          "expected_result": "Cloud configuration updates are disabled; the selected temperature unit remains unchanged."
         },
         {
-          "action": "Return to Home and observe for up to 90 seconds after enabling cloud configuration. Open Settings > Display & Touch > Temperature Unit after the display changes.",
-          "expected_result": "Home switches to the unit saved in the dashboard, and the device menu selects that unit. The value and unit are readable without leftover digits or overlapping text.",
-          "evidence": [
-            "Save the dashboard selection and the corresponding Home photo."
-          ]
-        },
-        {
-          "action": "Enable local authority. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "GET Config reports configurationControl=local and the cloud-selected temperature unit remains visible."
-        },
-        {
-          "action": "Disable cloud delivery before checking persistence. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"cloudConnection\":false}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "Cloud delivery is disabled and the selected temperature unit remains visible."
-        },
-        {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds and press Power to start. Inspect Home and Settings > Display & Touch > Temperature Unit before restoring cloud delivery. Allow up to six minutes for the temperature reading to become available.",
-          "expected_result": "The cloud-selected temperature unit remains selected and is used by Home after cold power, while cloud delivery is disabled.",
-          "evidence": [
-            "Save the post-restart Home photo."
-          ]
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release and wait 10 seconds. Press and release Power. Allow up to six minutes for a numeric temperature, then inspect Home and Settings > Display & Touch > Temperature Unit.",
+          "expected_result": "The cloud-selected unit remains selected and appears correctly on Home."
         }
       ],
       "cleanup": [
-        "Restore the recorded dashboard temperature-unit and measurement-interval settings, including after interruption.",
-        "If interrupted before the original configuration was saved, restore only the recorded UI/USB state and report the missing baseline.",
-        "With the saved original configuration available, return to Stationary. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send. Confirm configurationControl is local before restoring values.",
-        "In the API client, copy these fields and their original values from the saved configuration into a raw JSON request body: temperatureUnit, measurementInterval. Send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and Content-Type: application/json. Read back with GET at the same URL every five seconds for up to 20 seconds to confirm restoration.",
-        "Restore cloudConnection first and configurationControl last from the saved configuration. For each, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth, Content-Type: application/json and a raw JSON object containing that field and its saved value. Confirm each through GET at the same URL within 20 seconds.",
-        "Restore the recorded operating mode, lock state and USB connection. Record any value that could not be restored."
+        "Restore the recorded dashboard settings, including after interruption.",
+        "Using PUT config at the same URL with the same headers and a raw JSON object containing the fields and their recorded values, restore the device’s temperature unit, measurement interval and cloud connection, then configuration control last.",
+        "Poll GET config every two seconds for up to 10 seconds to confirm each restoration. Return Home and record any restoration failure."
       ],
       "references": [
         "products/go/docs/cloud_service.md",
