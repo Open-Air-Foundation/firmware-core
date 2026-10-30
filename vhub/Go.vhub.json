@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "c9cd229",
+  "rev": "76e0e45",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1742,7 +1742,7 @@
     {
       "id": "go.storage.clear-idle",
       "title": "Clear Data clears charts while idle",
-      "objective": "Verify the Clear Data confirmation, visible chart clearing and idle tracking state while preserving selected preferences.",
+      "objective": "Verify Clear Data removes visible chart history while preserving selected settings.",
       "category": "Tracking & Storage",
       "sub_category": "Clear Data",
       "applicability": [
@@ -1751,34 +1751,32 @@
       "setup": [
         "All routes and chart history on this unit are expendable.",
         "Tracking is idle.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
+        "The Portable/Stationary measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the lock state and USB connection. Unlock with a short Power press if needed, then record the operating mode, Auto Lock and Pinned Chart. Settings paths start at Main Menu > Settings.",
-          "expected_result": "Original settings are recorded before changes and the controls are unlocked."
+          "action": "Select Portable mode. Record Measurement Interval under Settings > Operations, and Auto Lock and Pinned Chart under Settings > Display & Touch.",
+          "expected_result": "The original settings are recorded."
         },
         {
-          "action": "Select Portable mode. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it. Set Auto Lock Off and measurement interval 10s. Allow five minutes for sensor warmup, then collect at least five CO2 samples over one minute. Open the CO2 chart and photograph its history.",
-          "expected_result": "The chart contains visible history before clearing."
+          "action": "Set Measurement Interval to 10 seconds and Auto Lock to Off. Return Home and allow up to five minutes for numeric CO2 readings, then leave the device measuring for one minute.",
+          "expected_result": "CO2 measurements continue updating."
         },
         {
-          "action": "Set Display & Touch > Pinned Chart > CO2 and return Home.",
-          "expected_result": "The overview shows the pinned chart without browsing details."
+          "action": "Set Pinned Chart to CO2. Return Home and photograph the chart.",
+          "expected_result": "Home shows the CO2 chart with multiple samples."
         },
         {
-          "action": "Set measurement interval 60s. Open Settings > Clear Data and choose Yes. Observe the confirmation and immediately inspect the CO2 chart before the next scheduled measurement.",
-          "expected_result": "Data cleared appears and the old chart history is gone. A new sample after the clear does not restore the old history."
+          "action": "Set Measurement Interval to 60 seconds. Open Settings > Clear Data and select Yes. Inspect Home immediately, then observe until the next measurement, allowing 90 seconds.",
+          "expected_result": "Data cleared appears and the previous chart history disappears. New measurements do not restore the old history."
         },
         {
-          "action": "Inspect Main Menu, Home and the Pinned Chart and Measure Int. settings.",
-          "expected_result": "Main Menu offers Start Tracking and Home has no recording/pause indicator. The CO2 pinned-chart choice and 60-second interval remain selected."
+          "action": "Inspect Main Menu and the Measurement Interval, Auto Lock, and Pinned Chart settings.",
+          "expected_result": "Main Menu offers Start Tracking. Measurement Interval remains 60 seconds, Auto Lock remains Off, and Pinned Chart remains CO2."
         }
       ],
       "cleanup": [
-        "Stop the test session if a failure left it active. Cleared data is intentionally not restored.",
-        "Exit any menu or diagnostic opened by this case.",
-        "In Portable, restore the recorded Portable/Stationary interval, Auto Lock and Pinned Chart, operating mode, lock state and USB connection state, including after interruption. Confirm each restored setting; record any remaining change."
+        "Restore and confirm the three recorded settings, including after interruption. Return Home and record any restoration failure. Cleared data is intentionally not restored."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
