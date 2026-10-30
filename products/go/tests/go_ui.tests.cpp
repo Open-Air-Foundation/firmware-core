@@ -608,16 +608,6 @@ TEST_CASE("UIManager: tracking start/stop", "[UIManager][tracking]") {
     CHECK(ui.current_screen() == Screen::Home);
   }
 
-  SECTION("Energy Saving Start Tracking has no action and stays in the menu") {
-    GoSettings settings{};
-    settings.operating_mode = OperatingMode::Offline;
-    ui.sync_settings(settings);
-    press(ui, InputSource::TouchEnter);
-    auto result = open_row(ui, "Start Tracking");
-    CHECK(result.action == UIAction::None);
-    CHECK(ui.current_screen() == Screen::MainMenu);
-  }
-
   SECTION("Stop Tracking returns UIAction::StopTracking") {
     // Synchronize Recording before opening the menu; rendering is read-only.
     auto ctx = make_default_ctx();
@@ -633,6 +623,61 @@ TEST_CASE("UIManager: tracking start/stop", "[UIManager][tracking]") {
 
     CHECK(result.action == UIAction::StopTracking);
     CHECK(ui.current_screen() == Screen::Home);
+  }
+}
+
+TEST_CASE("UIManager: Energy Saving hides tracking and keeps menu actions aligned",
+          "[UIManager][tracking][nav]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  GoSettings settings{};
+  settings.operating_mode = OperatingMode::Offline;
+  ui.sync_settings(settings);
+  press(ui, InputSource::TouchEnter);
+  check_rows(ui, {"Exit Menu", "Operating Mode", "Settings"});
+
+  SECTION("navigation skips tracking in both directions and wraps") {
+    for (uint8_t expected : {1, 2, 0}) {
+      press(ui, InputSource::TouchDown);
+      CHECK(ui.build_values(make_default_ctx()).selected_row == expected);
+    }
+    for (uint8_t expected : {2, 1, 0}) {
+      press(ui, InputSource::TouchUp);
+      CHECK(ui.build_values(make_default_ctx()).selected_row == expected);
+    }
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
+
+  SECTION("mode and settings open correctly and restore their cursor") {
+    CHECK(open_row(ui, "Operating Mode").action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::SettingsChoice);
+    double_press(ui);
+    CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
+    CHECK(open_row(ui, "Settings").action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::Settings);
+    double_press(ui);
+    CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
+  }
+
+  SECTION("mode synchronization moves selection off a newly hidden tracking row") {
+    settings.operating_mode = OperatingMode::Portable;
+    ui.sync_settings(settings);
+    select_row(ui, "Start Tracking");
+    settings.operating_mode = OperatingMode::Offline;
+    ui.sync_settings(settings);
+    CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::SettingsChoice);
+  }
+
+  SECTION("leaving Energy Saving restores tracking in either mode") {
+    for (auto mode : {OperatingMode::Portable, OperatingMode::Stationary}) {
+      settings.operating_mode = mode;
+      ui.sync_settings(settings);
+      check_rows(ui, {"Exit Menu", "Start Tracking", "Operating Mode", "Settings"});
+      CHECK(open_row(ui, "Start Tracking").action == UIAction::StartTracking);
+      press(ui, InputSource::TouchEnter);
+    }
   }
 }
 

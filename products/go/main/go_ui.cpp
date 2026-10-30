@@ -563,6 +563,9 @@ void UIManager::sync_settings(const GoSettings &s) {
   _setting_measure_interval_seconds = s.measure_interval_seconds;
   _setting_energy_saving_measure_interval_seconds = s.energy_saving_measure_interval_seconds;
   _setting_mode = s.operating_mode;
+  if (_setting_mode == OperatingMode::Offline && _menu_index == MENU_TRACKING) {
+    _menu_index = MENU_MODE;
+  }
   if (!display_temp_hum_for_interval(setting_measure_interval_seconds()) &&
       (_active_metric == Metric::Temp || _active_metric == Metric::Humidity)) {
     _active_metric = Metric::None;
@@ -803,7 +806,7 @@ void UIManager::navigate_back() {
     break;
   case Screen::TrackingMenu:
     _screen = Screen::MainMenu;
-    _menu_index = MENU_TRACKING;
+    _menu_index = _setting_mode == OperatingMode::Offline ? MENU_MODE : MENU_TRACKING;
     break;
   case Screen::TrackingStatus:
     _screen = Screen::TrackingMenu;
@@ -948,8 +951,10 @@ void UIManager::open_accel_test() { _screen = Screen::AccelTest; }
 // ---------------------------------------------------------------------------
 
 void UIManager::move_menu(int delta) {
-  // Circular navigation — all 4 rows are always enabled.
-  _menu_index = (uint8_t)wrap((int)_menu_index + delta, MAIN_MENU_TOTAL);
+  // Keep action indices stable while skipping the hidden tracking row.
+  do {
+    _menu_index = (uint8_t)wrap((int)_menu_index + delta, MAIN_MENU_TOTAL);
+  } while (_setting_mode == OperatingMode::Offline && _menu_index == MENU_TRACKING);
 }
 
 void UIManager::move_settings(int delta) {
@@ -1698,7 +1703,7 @@ void UIManager::sync_tracking_state(TrackingState state) {
       (_screen == Screen::TrackingMenu || _screen == Screen::TrackingStatus)) {
     // A finished session has no Tracking parent menu to return to.
     _screen = Screen::MainMenu;
-    _menu_index = MENU_TRACKING;
+    _menu_index = _setting_mode == OperatingMode::Offline ? MENU_MODE : MENU_TRACKING;
   }
 }
 
@@ -1850,13 +1855,17 @@ void UIManager::populate_tracking_status_rows(DisplayValues &v, const BuildConte
 }
 
 void UIManager::populate_menu_rows(DisplayValues &v) const {
-  v.row_count = MAIN_MENU_TOTAL;
-  copy_row(v, 0, "Exit Menu", false);
-  copy_row(v, MENU_TRACKING,
-           tracking_session_active(_tracking_state) ? "Tracking" : "Start Tracking", false);
-  copy_row(v, MENU_MODE, "Operating Mode", false);
-  copy_row(v, MENU_SETTINGS, "Settings", false);
-  v.selected_row = _menu_index;
+  const bool hide_tracking = _setting_mode == OperatingMode::Offline;
+  uint8_t row = 0;
+  copy_row(v, row++, "Exit Menu", false);
+  if (!hide_tracking) {
+    copy_row(v, row++, tracking_session_active(_tracking_state) ? "Tracking" : "Start Tracking",
+             false);
+  }
+  copy_row(v, row++, "Operating Mode", false);
+  copy_row(v, row++, "Settings", false);
+  v.row_count = row;
+  v.selected_row = hide_tracking && _menu_index > MENU_TRACKING ? _menu_index - 1 : _menu_index;
 }
 
 void UIManager::populate_settings_rows(DisplayValues &v) const {
