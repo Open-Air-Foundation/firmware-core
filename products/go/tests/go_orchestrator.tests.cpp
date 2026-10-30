@@ -9836,27 +9836,38 @@ TEST_CASE("Cancel Setup No preserves the active provisioning session",
 
 TEST_CASE("ConfirmCancelProvisioning routes through leave_session_to_portable",
           "[Orchestrator][session][confirm]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
-  test_spy::wifi_has_been_online = false;
-  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
-  REQUIRE(A::setup_session_active(orch));
+  for (const auto transport : {ProvisioningTransport::BleOnly, ProvisioningTransport::WifiOnly}) {
+    CAPTURE(transport);
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    CP2_ALLOW_CONFIG_WRITES(f);
+    A::set_mode(orch, OperatingMode::Stationary);
+    test_spy::wifi_has_been_online = false;
+    A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+    A::dispatch(orch, make_provisioning_event(ProvisioningEvent::Started, transport));
+    REQUIRE(A::setup_session_active(orch));
+    REQUIRE(A::sensitive_services_paused(orch));
+    REQUIRE(f.wifi_service.is_provisioning());
+    REQUIRE(f.ui_manager.provisioning_transport() == transport);
 
-  // Walk the user through: action row 1 (cancel) -> ProvisioningConfirm
-  // -> Yes (cancel).
-  f.ui_manager.open_provisioning_confirm(1); // kind=1: cancel
-  // Move cursor to Yes (index 1).
-  InputEventData touch_down{InputSource::TouchDown, InputType::ShortPress};
-  A::on_input(orch, touch_down);
-  InputEventData touch_enter{InputSource::TouchEnter, InputType::ShortPress};
-  A::on_input(orch, touch_enter);
+    test_spy::wifi_shutdown_called = false;
+    A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress});
+    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+    REQUIRE(f.ui_manager.current_screen() == Screen::ProvisioningConfirm);
+    const auto confirm = f.ui_manager.build_values(A::build_context(orch));
+    REQUIRE(confirm.provisioning_confirm_kind == 1);
+    REQUIRE(confirm.provisioning_confirm_index == 0);
 
-  // Now in Portable, on Home.
-  CHECK(A::mode(orch) == OperatingMode::Portable);
-  CHECK(f.ui_manager.current_screen() == Screen::Home);
-  CHECK_FALSE(A::setup_session_active(orch));
+    A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress}); // No -> Yes
+    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+
+    CHECK(A::mode(orch) == OperatingMode::Portable);
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+    CHECK_FALSE(A::setup_session_active(orch));
+    CHECK_FALSE(A::sensitive_services_paused(orch));
+    CHECK(test_spy::wifi_shutdown_called);
+    CHECK_FALSE(f.wifi_service.is_provisioning());
+  }
 }
 
 TEST_CASE("change_mode syncs UIManager's cached settings to the persisted mode",

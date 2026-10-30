@@ -2408,14 +2408,21 @@ TEST_CASE("UIManager: ProvisioningConfirm Yes on switch emits ConfirmSwitch",
 
 TEST_CASE("UIManager: ProvisioningConfirm Yes on cancel emits ConfirmCancel",
           "[UIManager][provisioning][confirm]") {
-  UIManager ui(DEFAULT_UI_CONFIG);
-  ui.open_provisioning(ProvisioningTransport::BleOnly);
-  ui.open_provisioning_confirm(1);
+  for (const auto transport : {ProvisioningTransport::BleOnly, ProvisioningTransport::WifiOnly}) {
+    CAPTURE(transport);
+    UIManager ui(DEFAULT_UI_CONFIG);
+    ui.open_provisioning(transport);
+    press(ui, InputSource::TouchDown); // Switch transport -> Cancel setup
+    press(ui, InputSource::TouchEnter);
+    REQUIRE(ui.current_screen() == Screen::ProvisioningConfirm);
+    REQUIRE(ui.build_values(make_default_ctx()).provisioning_confirm_index == 0);
 
-  press(ui, InputSource::TouchDown); // No -> Yes
-  auto result = press(ui, InputSource::TouchEnter);
-  CHECK(result.action == UIAction::ConfirmCancelProvisioning);
-  // Stay on ProvisioningConfirm until orchestrator tears the session down.
+    press(ui, InputSource::TouchDown); // No -> Yes
+    auto result = press(ui, InputSource::TouchEnter);
+    CHECK(result.action == UIAction::ConfirmCancelProvisioning);
+    // Stay on ProvisioningConfirm until orchestrator tears the session down.
+    CHECK(ui.current_screen() == Screen::ProvisioningConfirm);
+  }
 }
 
 TEST_CASE("UIManager: open_provisioning_confirm resets cursor to No",

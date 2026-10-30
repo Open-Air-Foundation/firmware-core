@@ -654,6 +654,32 @@ TEST_CASE("ProvisioningManager: got-IP persists the verified credential", "[prov
   f.prov.stop();
 }
 
+TEST_CASE("ProvisioningManager: stopping incomplete setup saves no network",
+          "[provisioning][creds]") {
+  for (const auto transport : {ProvisioningTransport::BleOnly, ProvisioningTransport::WifiOnly}) {
+    for (const bool connecting : {false, true}) {
+      CAPTURE(transport, connecting);
+      Fixture f;
+      auto cfg = f.basic_config();
+      cfg.transport = transport;
+      REQUIRE(f.prov.start(f.wifi, f.ble, f.http, cfg));
+      REQUIRE(f.prov.state() == ProvisioningState::WaitingForCredentials);
+      if (connecting) {
+        REQUIRE(f.prov.submit_credentials(f.creds()));
+        REQUIRE(f.prov.state() == ProvisioningState::Connecting);
+      }
+      REQUIRE_FALSE(f.wifi.has_saved_networks());
+
+      f.prov.stop();
+
+      CHECK(f.prov.state() == ProvisioningState::Idle);
+      CHECK_FALSE(f.wifi.has_saved_networks());
+      char networks[WIFI_MAX_SAVED_NETWORKS][33] = {};
+      CHECK(f.wifi.list_networks(networks, WIFI_MAX_SAVED_NETWORKS) == 0);
+    }
+  }
+}
+
 TEST_CASE("ProvisioningManager: connect failure persists nothing", "[provisioning][creds]") {
   Fixture f;
   REQUIRE(f.prov.start(f.wifi, f.ble, f.http, f.basic_config()));
