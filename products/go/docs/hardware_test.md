@@ -135,6 +135,9 @@ scheduled measurement.
 
 ### GPS Test
 
+Energy Saving leaves the GPS Test row visible but ignores selection and external
+GPS-test triggers. Changing into that mode closes an already-open GPS Test.
+
 `start_gps_test()` starts a TTFF timer from screen entry, ungates the receiver
 if settings leave GPS inactive, and speeds posting to 1 Hz. Refresh is
 event-driven: `on_gps_fix()` re-renders on each `GpsFixUpdate` while the screen

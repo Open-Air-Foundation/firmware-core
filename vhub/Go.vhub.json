@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "5c2642c",
+  "rev": "bcc4cb9",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -373,6 +373,48 @@
       "references": [
         "products/go/docs/ui_manager.md",
         "products/go/docs/input_service.md"
+      ]
+    },
+    {
+      "id": "go.ui.energy-saving-menu",
+      "title": "Energy Saving hides tracking without breaking menu navigation",
+      "objective": "Verify the reduced menu is readable and controls still select the displayed action.",
+      "category": "Display & Controls",
+      "sub_category": "Navigation",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "Tracking is idle."
+      ],
+      "steps": [
+        {
+          "action": "Record operating mode, lock state, USB connection and Auto Lock. Unlock with Power and set Auto Lock to Off.",
+          "expected_result": "Original values are recorded."
+        },
+        {
+          "action": "Select Main Menu > Operating Mode > Energy Saving. Allow one minute for startup if it restarts, then unlock and open Main Menu.",
+          "expected_result": "Only Exit Menu, Operating Mode and Settings appear, with no blank tracking row or misaligned selection."
+        },
+        {
+          "action": "Move Up and Down through a full wrap, open Operating Mode and return with Back, then open Settings and return.",
+          "expected_result": "Selection follows the visible rows; each selection opens the indicated screen and Back restores the correct row."
+        },
+        {
+          "action": "Open Settings > Hardware Test, select GPS Test, then use Back.",
+          "expected_result": "GPS Test does not open in Energy Saving; navigation remains usable."
+        },
+        {
+          "action": "Return to Portable, allowing one minute for startup. Unlock and inspect Main Menu.",
+          "expected_result": "Start Tracking is visible again and the menu remains readable."
+        }
+      ],
+      "cleanup": [
+        "Restore Auto Lock, original operating mode, lock state and USB connection. If interrupted, restore only captured values and record anything that could not be restored."
+      ],
+      "references": [
+        "products/go/docs/ui_manager.md",
+        "products/go/docs/hardware_test.md#gps-test"
       ]
     },
     {
@@ -4724,11 +4766,12 @@
         "A controllable 2.4 GHz WPA2 test LAN.",
         "Working credentials for that LAN are saved on the Go.",
         "Access to the router association list.",
-        "A Linux computer with Bluetooth enabled and a Bluetooth settings GUI."
+        "A Linux computer with Bluetooth enabled and a Bluetooth settings GUI.",
+        "Tracking is idle."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
+          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings. Disconnect USB for the mode transitions.",
           "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
         },
         {
@@ -4736,12 +4779,12 @@
           "expected_result": "The intended Go is connected, its local API responds with measurements, and its serial is recorded for the following checks."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
+          "action": "Select Main Menu > Operating Mode > Portable. Allow up to one minute for Home or the Stationary connection page, then unlock with Power if needed.",
           "expected_result": "Portable is selected."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving.",
-          "expected_result": "The selected mode reaches Home. A transition into Stationary may first show its connection page."
+          "action": "Select Main Menu > Operating Mode > Energy Saving. Allow up to one minute for Home or the Stationary connection page, then unlock with Power if needed.",
+          "expected_result": "The device restarts into the selected mode on battery. Home or the Stationary connection page is readable; the selected mode remains saved."
         },
         {
           "action": "Scan Bluetooth and Wi-Fi for 30 seconds; inspect router associations and try a GET request to http://airgradient_<serial>.local/api/v1/measures in the GUI API client with No Auth, no body and a five-second timeout.",
@@ -4756,103 +4799,112 @@
       "references": [
         "products/go/docs/orchestrator.md",
         "products/go/docs/wifi_service.md",
-        "products/go/docs/ble_service.md"
+        "products/go/docs/ble_service.md",
+        "products/go/docs/gps_service.md#settings-changes-while-gps-sleeps"
       ]
     },
     {
       "id": "go.modes.portable-offline-recording",
-      "title": "Recording survives Portable to Energy Saving (Offline)",
-      "objective": "Verify this active route state is independent of radio mode.",
+      "title": "Energy Saving ends a recording session from Portable",
+      "objective": "Verify the session indication clears through the mode-change restart and returning to the previous mode does not resume it.",
       "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
+      "sub_category": "Tracking on Mode Change",
       "applicability": [
         "V1"
       ],
       "setup": [
         "Tracking is idle.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
+        "A USB power cable.",
+        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
       ],
       "steps": [
         {
-          "action": "Record the operating mode, lock state, USB connection and Auto Lock. Unlock with Power if needed. Settings paths start at Main Menu > Settings.",
-          "expected_result": "The original device state is recorded."
+          "action": "Record operating mode, lock state, USB connection and Settings > Display & Touch > Auto Lock. Unlock with Power if needed.",
+          "expected_result": "Original values are recorded before changes."
         },
         {
-          "action": "Select Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 10s. Select Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m and Auto Lock to Off.",
-          "expected_result": "Both original intervals are recorded before changes; the test uses 10s in Portable/Stationary and 5m in Energy Saving."
+          "action": "Disconnect USB. Select Main Menu > Operating Mode > Portable; allow up to one minute to reach Home and unlock with Power if needed. Record Settings > Operations > Measurement Interval, then set it to 10s and Auto Lock to Off.",
+          "expected_result": "Portable is selected on battery; the original interval is recorded."
         },
         {
-          "action": "Select Portable. Allow five minutes for sensor warmup. Start Tracking and record the five-digit ID from its start snackbar. Open Tracking > Status and wait for at least one point, allowing 40 seconds.",
-          "expected_result": "Status shows Recording and at least one Point; the start snackbar supplied a session ID."
+          "action": "Select Start Tracking and record the start snackbar ID. Open Tracking > Status; allow two minutes for at least one point.",
+          "expected_result": "Status shows Recording and at least one point."
         },
         {
-          "action": "Record Points and the start snackbar ID. Select Energy Saving, reopen Tracking > Status and observe for six minutes.",
-          "expected_result": "Status remains Recording and Points increases."
+          "action": "Select Main Menu > Operating Mode > Energy Saving. Watch startup for up to one minute, then unlock and inspect Home and Main Menu.",
+          "expected_result": "The device restarts into Energy Saving. Recording/pause indication is absent, and Main Menu has no Tracking or Start Tracking row.",
+          "evidence": [
+            "Record a video of mode selection, restart and the resulting Home/menu."
+          ]
         },
         {
-          "action": "Stop Tracking and compare its stop snackbar ID with the recorded start ID.",
-          "expected_result": "The stop ID matches the start ID."
+          "action": "Select Portable; allow up to one minute for startup, then unlock and inspect Main Menu.",
+          "expected_result": "The device restarts into the selected mode. Start Tracking is offered; the old session does not resume."
+        },
+        {
+          "action": "Connect USB power. Start a new session in Portable, then repeat the change to Energy Saving and back to Portable, allowing one minute per transition.",
+          "expected_result": "Both mode changes remain usable with USB attached. Energy Saving removes the session indication and tracking row; returning offers Start Tracking. A power cycle is not required with USB."
         }
       ],
       "cleanup": [
-        "After completion, failure or interruption, stop only this case's session and exit its menus.",
-        "Restore each captured interval in its own mode: the normal interval in Portable, and the Energy Saving interval in Energy Saving. Then restore the original operating mode.",
-        "Restore the recorded Auto Lock, lock state and USB connection. Confirm restoration; if a baseline was not captured or restoration fails, record the remaining state."
+        "After completion or interruption, return to Portable and stop only a session started by this case if it is still active.",
+        "Restore the recorded normal interval in Portable or Stationary, then Auto Lock, original operating mode, lock state and USB connection. Confirm each restoration; record any missing baseline or remaining change."
       ],
       "references": [
-        "products/go/docs/orchestrator.md",
-        "products/go/docs/storage_service.md"
+        "products/go/docs/orchestrator.md#tracking-lifecycle",
+        "products/go/docs/gps_service.md#settings-changes-while-gps-sleeps"
       ]
     },
     {
       "id": "go.modes.portable-offline-paused",
-      "title": "Paused survives Portable to Energy Saving (Offline)",
-      "objective": "Verify this active route state is independent of radio mode.",
+      "title": "Energy Saving ends a paused session from Portable",
+      "objective": "Verify the session indication clears through the mode-change restart and returning to the previous mode does not resume it.",
       "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
+      "sub_category": "Tracking on Mode Change",
       "applicability": [
         "V1"
       ],
       "setup": [
         "Tracking is idle.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
+        "A USB power cable.",
+        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
       ],
       "steps": [
         {
-          "action": "Record the operating mode, lock state, USB connection and Auto Lock. Unlock with Power if needed. Settings paths start at Main Menu > Settings.",
-          "expected_result": "The original device state is recorded."
+          "action": "Record operating mode, lock state, USB connection and Settings > Display & Touch > Auto Lock. Unlock with Power if needed.",
+          "expected_result": "Original values are recorded before changes."
         },
         {
-          "action": "Select Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 10s. Select Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m and Auto Lock to Off.",
-          "expected_result": "Both original intervals are recorded before changes; the test uses 10s in Portable/Stationary and 5m in Energy Saving."
+          "action": "Disconnect USB. Select Main Menu > Operating Mode > Portable; allow up to one minute to reach Home and unlock with Power if needed. Record Settings > Operations > Measurement Interval, then set it to 10s and Auto Lock to Off.",
+          "expected_result": "Portable is selected on battery; the original interval is recorded."
         },
         {
-          "action": "Select Portable. Allow five minutes for sensor warmup. Start Tracking and record the five-digit ID from its start snackbar. Open Tracking > Status and wait for at least one point, allowing 40 seconds.",
-          "expected_result": "Status shows Recording and at least one Point; the start snackbar supplied a session ID."
+          "action": "Select Start Tracking and record the start snackbar ID. Open Tracking > Status; allow two minutes for at least one point. Return to Tracking, select Pause Tracking and reopen Status.",
+          "expected_result": "Status shows Paused and at least one point."
         },
         {
-          "action": "Pause Tracking and reopen Status.",
-          "expected_result": "Status shows Paused."
+          "action": "Select Main Menu > Operating Mode > Energy Saving. Watch startup for up to one minute, then unlock and inspect Home and Main Menu.",
+          "expected_result": "The device restarts into Energy Saving. Recording/pause indication is absent, and Main Menu has no Tracking or Start Tracking row.",
+          "evidence": [
+            "Record a video of mode selection, restart and the resulting Home/menu."
+          ]
         },
         {
-          "action": "Record Points and the start snackbar ID. Select Energy Saving, reopen Tracking > Status and observe for 30 seconds.",
-          "expected_result": "Status remains Paused, Points stays unchanged and the pause icon remains."
+          "action": "Select Portable; allow up to one minute for startup, then unlock and inspect Main Menu.",
+          "expected_result": "The device restarts into the selected mode. Start Tracking is offered; the old session does not resume."
         },
         {
-          "action": "Stop Tracking and compare its stop snackbar ID with the recorded start ID.",
-          "expected_result": "The stop ID matches the start ID."
+          "action": "Connect USB power. Start a new session in Portable, pause it, then repeat the change to Energy Saving and back to Portable, allowing one minute per transition.",
+          "expected_result": "Both mode changes remain usable with USB attached. Energy Saving removes the session indication and tracking row; returning offers Start Tracking. A power cycle is not required with USB."
         }
       ],
       "cleanup": [
-        "After completion, failure or interruption, stop only this case's session and exit its menus.",
-        "Restore each captured interval in its own mode: the normal interval in Portable, and the Energy Saving interval in Energy Saving. Then restore the original operating mode.",
-        "Restore the recorded Auto Lock, lock state and USB connection. Confirm restoration; if a baseline was not captured or restoration fails, record the remaining state."
+        "After completion or interruption, return to Portable and stop only a session started by this case if it is still active.",
+        "Restore the recorded normal interval in Portable or Stationary, then Auto Lock, original operating mode, lock state and USB connection. Confirm each restoration; record any missing baseline or remaining change."
       ],
       "references": [
-        "products/go/docs/orchestrator.md",
-        "products/go/docs/storage_service.md"
+        "products/go/docs/orchestrator.md#tracking-lifecycle",
+        "products/go/docs/gps_service.md#settings-changes-while-gps-sleeps"
       ]
     },
     {
@@ -4869,11 +4921,12 @@
         "A controllable 2.4 GHz WPA2 test LAN.",
         "Working credentials for that LAN are saved on the Go.",
         "Access to the router association list.",
-        "A Linux computer with Bluetooth enabled and a Bluetooth settings GUI."
+        "A Linux computer with Bluetooth enabled and a Bluetooth settings GUI.",
+        "Tracking is idle."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
+          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings. Disconnect USB for the mode transitions.",
           "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
         },
         {
@@ -4881,12 +4934,12 @@
           "expected_result": "The intended Go is connected, its local API responds with measurements, and its serial is recorded for the following checks."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving.",
+          "action": "Select Main Menu > Operating Mode > Energy Saving. Allow up to one minute for Home or the Stationary connection page, then unlock with Power if needed.",
           "expected_result": "Energy Saving is selected."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "The selected mode reaches Home. A transition into Stationary may first show its connection page."
+          "action": "Select Main Menu > Operating Mode > Portable. Allow up to one minute for Home or the Stationary connection page, then unlock with Power if needed.",
+          "expected_result": "The device restarts into the selected mode on battery. Home or the Stationary connection page is readable; the selected mode remains saved."
         },
         {
           "action": "Close BLE clients. Scan Bluetooth for 30 seconds and inspect the test router association list. Try a GET request to http://airgradient_<serial>.local/api/v1/measures in the GUI API client with No Auth, no body and a five-second timeout.",
@@ -4901,103 +4954,8 @@
       "references": [
         "products/go/docs/orchestrator.md",
         "products/go/docs/wifi_service.md",
-        "products/go/docs/ble_service.md"
-      ]
-    },
-    {
-      "id": "go.modes.offline-portable-recording",
-      "title": "Recording survives Energy Saving (Offline) to Portable",
-      "objective": "Verify this active route state is independent of radio mode.",
-      "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the operating mode, lock state, USB connection and Auto Lock. Unlock with Power if needed. Settings paths start at Main Menu > Settings.",
-          "expected_result": "The original device state is recorded."
-        },
-        {
-          "action": "Select Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 10s. Select Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m and Auto Lock to Off.",
-          "expected_result": "Both original intervals are recorded before changes; the test uses 10s in Portable/Stationary and 5m in Energy Saving."
-        },
-        {
-          "action": "Keep Energy Saving selected. Allow five minutes for sensor warmup. Start Tracking and record the five-digit ID from its start snackbar. Open Tracking > Status and wait for at least one point, allowing six minutes.",
-          "expected_result": "Status shows Recording and at least one Point; the start snackbar supplied a session ID."
-        },
-        {
-          "action": "Record Points and the start snackbar ID. Select Portable, reopen Tracking > Status and observe for 30 seconds.",
-          "expected_result": "Status remains Recording and Points increases."
-        },
-        {
-          "action": "Stop Tracking and compare its stop snackbar ID with the recorded start ID.",
-          "expected_result": "The stop ID matches the start ID."
-        }
-      ],
-      "cleanup": [
-        "After completion, failure or interruption, stop only this case's session and exit its menus.",
-        "Restore each captured interval in its own mode: the normal interval in Portable, and the Energy Saving interval in Energy Saving. Then restore the original operating mode.",
-        "Restore the recorded Auto Lock, lock state and USB connection. Confirm restoration; if a baseline was not captured or restoration fails, record the remaining state."
-      ],
-      "references": [
-        "products/go/docs/orchestrator.md",
-        "products/go/docs/storage_service.md"
-      ]
-    },
-    {
-      "id": "go.modes.offline-portable-paused",
-      "title": "Paused survives Energy Saving (Offline) to Portable",
-      "objective": "Verify this active route state is independent of radio mode.",
-      "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the operating mode, lock state, USB connection and Auto Lock. Unlock with Power if needed. Settings paths start at Main Menu > Settings.",
-          "expected_result": "The original device state is recorded."
-        },
-        {
-          "action": "Select Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 10s. Select Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m and Auto Lock to Off.",
-          "expected_result": "Both original intervals are recorded before changes; the test uses 10s in Portable/Stationary and 5m in Energy Saving."
-        },
-        {
-          "action": "Keep Energy Saving selected. Allow five minutes for sensor warmup. Start Tracking and record the five-digit ID from its start snackbar. Open Tracking > Status and wait for at least one point, allowing six minutes.",
-          "expected_result": "Status shows Recording and at least one Point; the start snackbar supplied a session ID."
-        },
-        {
-          "action": "Pause Tracking and reopen Status.",
-          "expected_result": "Status shows Paused."
-        },
-        {
-          "action": "Record Points and the start snackbar ID. Select Portable, reopen Tracking > Status and observe for 30 seconds.",
-          "expected_result": "Status remains Paused, Points stays unchanged and the pause icon remains."
-        },
-        {
-          "action": "Stop Tracking and compare its stop snackbar ID with the recorded start ID.",
-          "expected_result": "The stop ID matches the start ID."
-        }
-      ],
-      "cleanup": [
-        "After completion, failure or interruption, stop only this case's session and exit its menus.",
-        "Restore each captured interval in its own mode: the normal interval in Portable, and the Energy Saving interval in Energy Saving. Then restore the original operating mode.",
-        "Restore the recorded Auto Lock, lock state and USB connection. Confirm restoration; if a baseline was not captured or restoration fails, record the remaining state."
-      ],
-      "references": [
-        "products/go/docs/orchestrator.md",
-        "products/go/docs/storage_service.md"
+        "products/go/docs/ble_service.md",
+        "products/go/docs/gps_service.md#settings-changes-while-gps-sleeps"
       ]
     },
     {
@@ -5014,11 +4972,12 @@
         "A controllable 2.4 GHz WPA2 test LAN.",
         "Working credentials for that LAN are saved on the Go.",
         "Access to the router association list.",
-        "A Linux computer with Bluetooth enabled and a Bluetooth settings GUI."
+        "A Linux computer with Bluetooth enabled and a Bluetooth settings GUI.",
+        "Tracking is idle."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
+          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings. Disconnect USB for the mode transitions.",
           "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
         },
         {
@@ -5026,12 +4985,12 @@
           "expected_result": "The intended Go is connected, its local API responds with measurements, and its serial is recorded for the following checks."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Stationary.",
+          "action": "Select Main Menu > Operating Mode > Stationary. Allow up to one minute for Home or the Stationary connection page, then unlock with Power if needed.",
           "expected_result": "Stationary is selected."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving.",
-          "expected_result": "The selected mode reaches Home. A transition into Stationary may first show its connection page."
+          "action": "Select Main Menu > Operating Mode > Energy Saving. Allow up to one minute for Home or the Stationary connection page, then unlock with Power if needed.",
+          "expected_result": "The device restarts into the selected mode on battery. Home or the Stationary connection page is readable; the selected mode remains saved."
         },
         {
           "action": "Scan Bluetooth and Wi-Fi for 30 seconds; inspect router associations and try a GET request to http://airgradient_<serial>.local/api/v1/measures in the GUI API client with No Auth, no body and a five-second timeout.",
@@ -5046,107 +5005,112 @@
       "references": [
         "products/go/docs/orchestrator.md",
         "products/go/docs/wifi_service.md",
-        "products/go/docs/ble_service.md"
+        "products/go/docs/ble_service.md",
+        "products/go/docs/gps_service.md#settings-changes-while-gps-sleeps"
       ]
     },
     {
       "id": "go.modes.stationary-offline-recording",
-      "title": "Recording survives Stationary to Energy Saving (Offline)",
-      "objective": "Verify this active route state is independent of radio mode.",
+      "title": "Energy Saving ends a recording session from Stationary",
+      "objective": "Verify the session indication clears through the mode-change restart and returning to the previous mode does not resume it.",
       "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
+      "sub_category": "Tracking on Mode Change",
       "applicability": [
         "V1"
       ],
       "setup": [
         "Tracking is idle.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
+        "A USB power cable.",
+        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
       ],
       "steps": [
         {
-          "action": "Record the operating mode, lock state, USB connection and Auto Lock. Unlock with Power if needed. Settings paths start at Main Menu > Settings.",
-          "expected_result": "The original device state is recorded."
+          "action": "Record operating mode, lock state, USB connection and Settings > Display & Touch > Auto Lock. Unlock with Power if needed.",
+          "expected_result": "Original values are recorded before changes."
         },
         {
-          "action": "Select Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 10s. Select Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m and Auto Lock to Off.",
-          "expected_result": "Both original intervals are recorded before changes; the test uses 10s in Portable/Stationary and 5m in Energy Saving."
+          "action": "Disconnect USB. Select Main Menu > Operating Mode > Stationary; allow up to one minute to reach Home and unlock with Power if needed. Record Settings > Operations > Measurement Interval, then set it to 10s and Auto Lock to Off.",
+          "expected_result": "Stationary is selected on battery; the original interval is recorded."
         },
         {
-          "action": "Select Stationary. Allow five minutes for sensor warmup. Start Tracking and record the five-digit ID from its start snackbar. Open Tracking > Status and wait for at least one point, allowing 40 seconds.",
-          "expected_result": "Status shows Recording and at least one Point; the start snackbar supplied a session ID."
+          "action": "Select Start Tracking and record the start snackbar ID. Open Tracking > Status; allow two minutes for at least one point.",
+          "expected_result": "Status shows Recording and at least one point."
         },
         {
-          "action": "Record Points and the start snackbar ID. Select Energy Saving, reopen Tracking > Status and observe for six minutes.",
-          "expected_result": "Status remains Recording and Points increases."
+          "action": "Select Main Menu > Operating Mode > Energy Saving. Watch startup for up to one minute, then unlock and inspect Home and Main Menu.",
+          "expected_result": "The device restarts into Energy Saving. Recording/pause indication is absent, and Main Menu has no Tracking or Start Tracking row.",
+          "evidence": [
+            "Record a video of mode selection, restart and the resulting Home/menu."
+          ]
         },
         {
-          "action": "Stop Tracking and compare its stop snackbar ID with the recorded start ID.",
-          "expected_result": "The stop ID matches the start ID."
+          "action": "Select Stationary; allow up to one minute for startup, then unlock and inspect Main Menu.",
+          "expected_result": "The device restarts into the selected mode. Start Tracking is offered; the old session does not resume."
+        },
+        {
+          "action": "Connect USB power. Start a new session in Stationary, then repeat the change to Energy Saving and back to Stationary, allowing one minute per transition.",
+          "expected_result": "Both mode changes remain usable with USB attached. Energy Saving removes the session indication and tracking row; returning offers Start Tracking. A power cycle is not required with USB."
         }
       ],
       "cleanup": [
-        "After completion, failure or interruption, stop only this case's session and exit its menus.",
-        "Restore each captured interval in its own mode: the normal interval in Portable, and the Energy Saving interval in Energy Saving. Then restore the original operating mode.",
-        "Restore the recorded Auto Lock, lock state and USB connection. Confirm restoration; if a baseline was not captured or restoration fails, record the remaining state."
+        "After completion or interruption, return to Stationary and stop only a session started by this case if it is still active.",
+        "Restore the recorded normal interval in Portable or Stationary, then Auto Lock, original operating mode, lock state and USB connection. Confirm each restoration; record any missing baseline or remaining change."
       ],
       "references": [
-        "products/go/docs/orchestrator.md",
-        "products/go/docs/storage_service.md"
+        "products/go/docs/orchestrator.md#tracking-lifecycle",
+        "products/go/docs/gps_service.md#settings-changes-while-gps-sleeps"
       ]
     },
     {
       "id": "go.modes.stationary-offline-paused",
-      "title": "Paused survives Stationary to Energy Saving (Offline)",
-      "objective": "Verify this active route state is independent of radio mode.",
+      "title": "Energy Saving ends a paused session from Stationary",
+      "objective": "Verify the session indication clears through the mode-change restart and returning to the previous mode does not resume it.",
       "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
+      "sub_category": "Tracking on Mode Change",
       "applicability": [
         "V1"
       ],
       "setup": [
         "Tracking is idle.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
+        "A USB power cable.",
+        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h."
       ],
       "steps": [
         {
-          "action": "Record the operating mode, lock state, USB connection and Auto Lock. Unlock with Power if needed. Settings paths start at Main Menu > Settings.",
-          "expected_result": "The original device state is recorded."
+          "action": "Record operating mode, lock state, USB connection and Settings > Display & Touch > Auto Lock. Unlock with Power if needed.",
+          "expected_result": "Original values are recorded before changes."
         },
         {
-          "action": "Select Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 10s. Select Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m and Auto Lock to Off.",
-          "expected_result": "Both original intervals are recorded before changes; the test uses 10s in Portable/Stationary and 5m in Energy Saving."
+          "action": "Disconnect USB. Select Main Menu > Operating Mode > Stationary; allow up to one minute to reach Home and unlock with Power if needed. Record Settings > Operations > Measurement Interval, then set it to 10s and Auto Lock to Off.",
+          "expected_result": "Stationary is selected on battery; the original interval is recorded."
         },
         {
-          "action": "Select Stationary. Allow five minutes for sensor warmup. Start Tracking and record the five-digit ID from its start snackbar. Open Tracking > Status and wait for at least one point, allowing 40 seconds.",
-          "expected_result": "Status shows Recording and at least one Point; the start snackbar supplied a session ID."
+          "action": "Select Start Tracking and record the start snackbar ID. Open Tracking > Status; allow two minutes for at least one point. Return to Tracking, select Pause Tracking and reopen Status.",
+          "expected_result": "Status shows Paused and at least one point."
         },
         {
-          "action": "Pause Tracking and reopen Status.",
-          "expected_result": "Status shows Paused."
+          "action": "Select Main Menu > Operating Mode > Energy Saving. Watch startup for up to one minute, then unlock and inspect Home and Main Menu.",
+          "expected_result": "The device restarts into Energy Saving. Recording/pause indication is absent, and Main Menu has no Tracking or Start Tracking row.",
+          "evidence": [
+            "Record a video of mode selection, restart and the resulting Home/menu."
+          ]
         },
         {
-          "action": "Record Points and the start snackbar ID. Select Energy Saving, reopen Tracking > Status and observe for 30 seconds.",
-          "expected_result": "Status remains Paused, Points stays unchanged and the pause icon remains."
+          "action": "Select Stationary; allow up to one minute for startup, then unlock and inspect Main Menu.",
+          "expected_result": "The device restarts into the selected mode. Start Tracking is offered; the old session does not resume."
         },
         {
-          "action": "Stop Tracking and compare its stop snackbar ID with the recorded start ID.",
-          "expected_result": "The stop ID matches the start ID."
+          "action": "Connect USB power. Start a new session in Stationary, pause it, then repeat the change to Energy Saving and back to Stationary, allowing one minute per transition.",
+          "expected_result": "Both mode changes remain usable with USB attached. Energy Saving removes the session indication and tracking row; returning offers Start Tracking. A power cycle is not required with USB."
         }
       ],
       "cleanup": [
-        "After completion, failure or interruption, stop only this case's session and exit its menus.",
-        "Restore each captured interval in its own mode: the normal interval in Portable, and the Energy Saving interval in Energy Saving. Then restore the original operating mode.",
-        "Restore the recorded Auto Lock, lock state and USB connection. Confirm restoration; if a baseline was not captured or restoration fails, record the remaining state."
+        "After completion or interruption, return to Stationary and stop only a session started by this case if it is still active.",
+        "Restore the recorded normal interval in Portable or Stationary, then Auto Lock, original operating mode, lock state and USB connection. Confirm each restoration; record any missing baseline or remaining change."
       ],
       "references": [
-        "products/go/docs/orchestrator.md",
-        "products/go/docs/storage_service.md"
+        "products/go/docs/orchestrator.md#tracking-lifecycle",
+        "products/go/docs/gps_service.md#settings-changes-while-gps-sleeps"
       ]
     },
     {
@@ -5163,11 +5127,12 @@
         "A controllable 2.4 GHz WPA2 test LAN.",
         "Working credentials for that LAN are saved on the Go.",
         "Access to the router association list.",
-        "A Linux computer with Bluetooth enabled and a Bluetooth settings GUI."
+        "A Linux computer with Bluetooth enabled and a Bluetooth settings GUI.",
+        "Tracking is idle."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
+          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings. Disconnect USB for the mode transitions.",
           "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
         },
         {
@@ -5175,12 +5140,12 @@
           "expected_result": "The intended Go is connected, its local API responds with measurements, and its serial is recorded for the following checks."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving.",
+          "action": "Select Main Menu > Operating Mode > Energy Saving. Allow up to one minute for Home or the Stationary connection page, then unlock with Power if needed.",
           "expected_result": "Energy Saving is selected."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Stationary.",
-          "expected_result": "The selected mode reaches Home. A transition into Stationary may first show its connection page."
+          "action": "Select Main Menu > Operating Mode > Stationary. Allow up to one minute for Home or the Stationary connection page, then unlock with Power if needed.",
+          "expected_result": "The device restarts into the selected mode on battery. Home or the Stationary connection page is readable; the selected mode remains saved."
         },
         {
           "action": "Within 30 seconds, confirm this unit’s connection in the router association list. On the test LAN, send GET http://airgradient_<serial>.local/api/v1/measures in the API client with No Auth, no body and a five-second timeout. Scan Bluetooth with clients disconnected.",
@@ -5195,107 +5160,8 @@
       "references": [
         "products/go/docs/orchestrator.md",
         "products/go/docs/wifi_service.md",
-        "products/go/docs/ble_service.md"
-      ]
-    },
-    {
-      "id": "go.modes.offline-stationary-recording",
-      "title": "Recording survives Energy Saving (Offline) to Stationary",
-      "objective": "Verify this active route state is independent of radio mode.",
-      "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the operating mode, lock state, USB connection and Auto Lock. Unlock with Power if needed. Settings paths start at Main Menu > Settings.",
-          "expected_result": "The original device state is recorded."
-        },
-        {
-          "action": "Select Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 10s. Select Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m and Auto Lock to Off.",
-          "expected_result": "Both original intervals are recorded before changes; the test uses 10s in Portable/Stationary and 5m in Energy Saving."
-        },
-        {
-          "action": "Keep Energy Saving selected. Allow five minutes for sensor warmup. Start Tracking and record the five-digit ID from its start snackbar. Open Tracking > Status and wait for at least one point, allowing six minutes.",
-          "expected_result": "Status shows Recording and at least one Point; the start snackbar supplied a session ID."
-        },
-        {
-          "action": "Record Points and the start snackbar ID. Select Stationary, reopen Tracking > Status and observe for 30 seconds.",
-          "expected_result": "Status remains Recording and Points increases."
-        },
-        {
-          "action": "Stop Tracking and compare its stop snackbar ID with the recorded start ID.",
-          "expected_result": "The stop ID matches the start ID."
-        }
-      ],
-      "cleanup": [
-        "After completion, failure or interruption, stop only this case's session and exit its menus.",
-        "Restore each captured interval in its own mode: the normal interval in Portable, and the Energy Saving interval in Energy Saving. Then restore the original operating mode.",
-        "Restore the recorded Auto Lock, lock state and USB connection. Confirm restoration; if a baseline was not captured or restoration fails, record the remaining state."
-      ],
-      "references": [
-        "products/go/docs/orchestrator.md",
-        "products/go/docs/storage_service.md"
-      ]
-    },
-    {
-      "id": "go.modes.offline-stationary-paused",
-      "title": "Paused survives Energy Saving (Offline) to Stationary",
-      "objective": "Verify this active route state is independent of radio mode.",
-      "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the operating mode, lock state, USB connection and Auto Lock. Unlock with Power if needed. Settings paths start at Main Menu > Settings.",
-          "expected_result": "The original device state is recorded."
-        },
-        {
-          "action": "Select Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 10s. Select Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m and Auto Lock to Off.",
-          "expected_result": "Both original intervals are recorded before changes; the test uses 10s in Portable/Stationary and 5m in Energy Saving."
-        },
-        {
-          "action": "Keep Energy Saving selected. Allow five minutes for sensor warmup. Start Tracking and record the five-digit ID from its start snackbar. Open Tracking > Status and wait for at least one point, allowing six minutes.",
-          "expected_result": "Status shows Recording and at least one Point; the start snackbar supplied a session ID."
-        },
-        {
-          "action": "Pause Tracking and reopen Status.",
-          "expected_result": "Status shows Paused."
-        },
-        {
-          "action": "Record Points and the start snackbar ID. Select Stationary, reopen Tracking > Status and observe for 30 seconds.",
-          "expected_result": "Status remains Paused, Points stays unchanged and the pause icon remains."
-        },
-        {
-          "action": "Stop Tracking and compare its stop snackbar ID with the recorded start ID.",
-          "expected_result": "The stop ID matches the start ID."
-        }
-      ],
-      "cleanup": [
-        "After completion, failure or interruption, stop only this case's session and exit its menus.",
-        "Restore each captured interval in its own mode: the normal interval in Portable, and the Energy Saving interval in Energy Saving. Then restore the original operating mode.",
-        "Restore the recorded Auto Lock, lock state and USB connection. Confirm restoration; if a baseline was not captured or restoration fails, record the remaining state."
-      ],
-      "references": [
-        "products/go/docs/orchestrator.md",
-        "products/go/docs/storage_service.md"
+        "products/go/docs/ble_service.md",
+        "products/go/docs/gps_service.md#settings-changes-while-gps-sleeps"
       ]
     },
     {
@@ -5494,8 +5360,6 @@
         "V1"
       ],
       "setup": [
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
         "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
       ],
       "steps": [
@@ -5504,18 +5368,14 @@
           "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
         },
         {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
           "action": "Select Main Menu > Operating Mode > Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it.",
           "expected_result": "Energy Saving is selected."
         },
         {
-          "action": "Set Settings > Operations > Measurement Interval to 5m and Auto Lock to 10s. Return Home and lock with Power. Capture two complete sleep/wake/measurement cycles, allowing 11 minutes from locking. Inspect Home after each refresh and sleep entry, and retain each measurement log; reconnect the AirGradient logging tool after wake if needed.",
-          "expected_result": "Both timer wakes return valid PM2.5 and CO2 readings and complete, readable Home frames. The frame retained during sleep has no snackbar text or rectangle. No panic, I2C timeout, stuck frame or unexpected cold startup interrupts either cycle. Missing cycle evidence leaves the run incomplete.",
+          "action": "Set Settings > Operations > Measurement Interval to 5m and Auto Lock to 10s. Return Home and lock with Power. Observe three scheduled measurement refreshes, allowing 16 minutes from locking. Photograph each completed Home frame with phone time.",
+          "expected_result": "Each wake returns valid PM2.5 and CO2 readings and a complete, readable Home frame. The retained sleep frame has no snackbar text or rectangle. No stuck display or unexpected cold startup interrupts the cycles.",
           "evidence": [
-            "Save a Home photo during sleep after locking and after each timer wake, with the corresponding measurement logs."
+            "Save the three Home photos and their times."
           ]
         }
       ],
@@ -5523,13 +5383,57 @@
         "Wake with Power.",
         "Exit any menu or diagnostic opened by this case.",
         "In Energy Saving, restore only the original values captured before this case changed them: Energy Saving interval and Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
+        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
       ],
       "references": [
         "products/go/docs/power_management.md",
         "products/go/docs/sensor_producer.md",
         "products/go/docs/orchestrator.md#prepare_for_sleep"
+      ]
+    },
+    {
+      "id": "go.sleep.energy-saving-current",
+      "title": "Energy Saving returns to its initial sleep current after timer wakes",
+      "objective": "Detect a sustained increase in sleep current after repeated measurement wakes.",
+      "category": "Modes & Sleep",
+      "sub_category": "Timer Wake",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "A test unit with accessible battery power connections.",
+        "A 3.9 V battery simulator or bench supply capable of normal startup and measurement peaks.",
+        "A current logger or ammeter that resolves sleep current without dropping supply voltage during measurement peaks.",
+        "Tracking is idle."
+      ],
+      "steps": [
+        {
+          "action": "Record operating mode, lock state, USB connection, GPS mode and Auto Lock. Select Energy Saving, allow one minute for startup, unlock and record its measurement interval. Set interval to 5m, GPS to Always On and Auto Lock to 10s.",
+          "expected_result": "Original settings are captured and the test settings are saved."
+        },
+        {
+          "action": "Power off, disconnect USB and the battery, then power the unit from the 3.9 V supply through the current meter. Start with Power and leave USB disconnected for the measurement.",
+          "expected_result": "The device starts in Energy Saving without supply collapse or repeated resets."
+        },
+        {
+          "action": "Return Home and lock. Within six minutes, identify the first sustained low-current plateau after measurement. Record its 30-second current range and the meter accuracy.",
+          "expected_result": "An initial stable sleep-current baseline is available; absent stability or supply collapse blocks comparison."
+        },
+        {
+          "action": "Observe three timer measurement wakes and their return to sleep, allowing 16 minutes after the baseline. For each completed Home refresh, wait 60 seconds and record the next 30-second current range.",
+          "expected_result": "Each wake refreshes Home and returns to the initial sleep-current range within meter accuracy. There is no sustained higher-current plateau after a wake.",
+          "evidence": [
+            "Save the current trace or readings, supply voltage, initial baseline and three post-wake ranges. Do not infer GPS state from the display icon alone."
+          ]
+        }
+      ],
+      "cleanup": [
+        "Power off, remove the measurement supply and restore the original battery connection.",
+        "Restore the Energy Saving interval in that mode, GPS mode, Auto Lock, original operating mode, lock state and USB connection. Record any interrupted test or setting that could not be restored."
+      ],
+      "references": [
+        "products/go/docs/gps_service.md#fast-path-sleep-probing",
+        "products/go/docs/input_service.md#deep-sleep"
       ]
     },
     {
@@ -5619,277 +5523,45 @@
     },
     {
       "id": "go.sleep.button-wake",
-      "title": "Power wakes Energy Saving (Offline) without immediately locking again",
-      "objective": "Verify wake-button suppression and the cached first display.",
+      "title": "Power wake restores usable touch controls after repeated sleeps",
+      "objective": "Verify wake-press suppression, cached first display and touch response with CAP1203 left active during sleep.",
       "category": "Modes & Sleep",
       "sub_category": "Button Wake",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
         "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
+          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings. Disconnect USB for the wake checks.",
           "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
         },
         {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it.",
+          "action": "Select Main Menu > Operating Mode > Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Allow up to one minute for the battery-powered restart, then unlock with Power.",
           "expected_result": "Energy Saving is selected."
         },
         {
-          "action": "Set Settings > Operations > Measurement Interval to 5m and Auto Lock to 10s. Return Home, lock and allow six minutes for a deep-sleep entry in the AirGradient logging tool. Short-press Power once during sleep and allow 30 seconds for Home.",
+          "action": "Set Settings > Operations > Measurement Interval to 5m and Auto Lock to 10s. Return Home and lock. After the next completed Home refresh, wait 60 seconds without input, then short-press Power once. Allow 30 seconds for unlocked Home.",
           "expected_result": "The device returns to unlocked Home with cached readings or dashes for unavailable fields; it does not show an empty intermediate screen or immediately relock."
         },
         {
-          "action": "Do not press anything for 10 seconds, then use the touch controls after unlocking if the normal timeout expired.",
-          "expected_result": "The wake press caused no extra navigation/lock action and normal input remains usable."
+          "action": "After waking, open Main Menu, move Up and Down through every row and select Settings. Double-tap Menu to go Back, then hold Menu for one second to return Home. Repeat locking and Power wake three times, waiting 60 seconds after each completed Home refresh before Power. On the second cycle, touch and release each pad during that wait. Allow six minutes for a measurement refresh and 30 seconds for each Power wake.",
+          "expected_result": "Touch alone does not wake the sleeping ESP. After every Power wake, all pads navigate correctly, gestures work and the wake press causes no immediate relock or extra action.",
+          "evidence": [
+            "Record any unresponsive pad and the cycle when it occurred."
+          ]
         }
       ],
       "cleanup": [
         "Exit any menu or diagnostic opened by this case.",
         "In Energy Saving, restore only the original values captured before this case changed them: Energy Saving interval and Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
+        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
       ],
       "references": [
         "products/go/docs/power_management.md",
         "products/go/docs/input_service.md"
-      ]
-    },
-    {
-      "id": "go.sleep.gps-tracking-restart",
-      "title": "Energy Saving (Offline) tracking start resets a sleeping GPS and confirms the session",
-      "objective": "Verify the battery-powered reset and visible acknowledgement when tracking starts during a long Offline GPS sleep, then recording at the next scheduled wake.",
-      "category": "Modes & Sleep",
-      "sub_category": "GPS Sleep",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "A USB data connection with VBUS disconnected, so logging does not power Go.",
-        "A computer with access to the AirGradient logging tool.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the operating mode, lock state, USB connection state, Auto Lock and GPS mode. Unlock with a short Power press if needed.",
-          "expected_result": "The original settings are recorded for cleanup."
-        },
-        {
-          "action": "Connect the USB data connection without VBUS and start the AirGradient logging tool. Observe a power-status log, allowing 40 seconds.",
-          "expected_result": "Logs are visible and the power source is None or OTG, not USB input. If battery power cannot be confirmed, the case is blocked."
-        },
-        {
-          "action": "Select Energy Saving mode. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. In Settings, set measurement interval 5m (300 seconds), Auto Lock 10s and GPS On When Tracking. Lock and capture the first sleep, timer wake and return to sleep, allowing six minutes from locking. Reconnect the logging tool after wake if needed.",
-          "expected_result": "Go completes an idle Offline measurement cycle and returns to deep sleep. The long interval leaves time to start tracking well before the next GPS wake.",
-          "evidence": [
-            "Save the sleep-duration and timer-wake log entries. Missing cycle logs make this observation incomplete."
-          ]
-        },
-        {
-          "action": "Within 30 seconds of that return to sleep, short-press Power to wake Go and select Start Tracking. Watch the display through the restart, allowing one minute from selection; reconnect logging when the device returns.",
-          "expected_result": "The display paints Starting tracking... before one system restart, then shows Started with a five-digit session ID. The reset-request log reports more than 30000 ms of GPS sleep remaining. Go continues into Offline measurement and sleep without another Start Tracking action.",
-          "evidence": [
-            "Record the display sequence and session ID. Save the reset-request log with remaining GPS sleep time."
-          ]
-        },
-        {
-          "action": "Leave Go untouched through the next scheduled timer wake, allowing six minutes from its post-restart sleep entry. Observe the Home refresh and route append logs, reconnecting logging after wake if needed.",
-          "expected_result": "The next wake refreshes Home and records another point in the session ID shown by Started, without another system power reset. A GPS position is not required for this acknowledgement check.",
-          "evidence": [
-            "Save the matching session ID and point counts from the first post-restart cycle and the next timer-wake cycle."
-          ]
-        }
-      ],
-      "cleanup": [
-        "Wake Go and stop the tracking session created by this case, including after interruption. Leave pre-existing routes untouched.",
-        "In Energy Saving, restore the recorded Energy Saving interval, Auto Lock, GPS mode, operating mode, lock state and USB connection state. Record any setting that cannot be restored.",
-        "Save the required logs and disconnect the AirGradient logging tool."
-      ],
-      "references": [
-        "products/go/docs/gps_service.md",
-        "products/go/docs/hardware_init.md",
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
-      "id": "go.sleep.route-recording",
-      "title": "Recording survives Energy Saving (Offline) timer wakes",
-      "objective": "Verify retained route state and timing across CPU sleep resets.",
-      "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "A phone displaying the current time.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state, Auto Lock and GPS mode. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Set interval 30s, Auto Lock 10s and GPS On When Tracking. Start Tracking, record the ID from the Tracking start = <ID> snackbar, and wait for three points, allowing two minutes.",
-          "expected_result": "The session is Recording."
-        },
-        {
-          "action": "Photograph Status Points/Active/Elapsed/Last with phone time. Select Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m, return Home and lock. Capture two complete timer-wake measurements, allowing 11 minutes from locking. Reconnect the logging tool after a wake if needed; if required cycle logs were missed, record the observation as incomplete.",
-          "expected_result": "Both timer wake cycles complete without an unexpected cold reset."
-        },
-        {
-          "action": "Wake with Power and immediately reopen Status.",
-          "expected_result": "Status remains Recording. Points increases and Active/Elapsed include time asleep; Last reflects the latest recorded point. Allow six seconds for status refresh/rounding."
-        },
-        {
-          "action": "Stop Tracking and compare the Tracking stop = <ID> snackbar with the recorded start ID.",
-          "expected_result": "Timer wakes preserved the session: the stop ID matches the start ID."
-        }
-      ],
-      "cleanup": [
-        "Wake and stop test tracking.",
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: both intervals in their respective modes, Auto Lock and GPS mode, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
-      ],
-      "references": [
-        "products/go/docs/storage_service.md",
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
-      "id": "go.sleep.route-paused",
-      "title": "Paused survives Energy Saving (Offline) timer wakes",
-      "objective": "Verify retained route state and timing across CPU sleep resets.",
-      "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "A phone displaying the current time.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state, Auto Lock and GPS mode. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Set interval 30s, Auto Lock 10s and GPS On When Tracking. Start Tracking, record the ID from the Tracking start = <ID> snackbar, and wait for three points, allowing two minutes.",
-          "expected_result": "The session is Recording."
-        },
-        {
-          "action": "Pause Tracking.",
-          "expected_result": "The session is Paused."
-        },
-        {
-          "action": "Photograph Status Points/Active/Elapsed/Last with phone time. Select Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m, return Home and lock. Capture two complete timer-wake measurements, allowing 11 minutes from locking. Reconnect the logging tool after a wake if needed; if required cycle logs were missed, record the observation as incomplete.",
-          "expected_result": "Both timer wake cycles complete without an unexpected cold reset."
-        },
-        {
-          "action": "Wake with Power and immediately reopen Status.",
-          "expected_result": "Status remains Paused. Points and Active stay fixed; Elapsed and Last include time asleep. Allow six seconds for status refresh/rounding."
-        },
-        {
-          "action": "Stop Tracking and compare the Tracking stop = <ID> snackbar with the recorded start ID.",
-          "expected_result": "Timer wakes preserved the session: the stop ID matches the start ID."
-        }
-      ],
-      "cleanup": [
-        "Wake and stop test tracking.",
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: both intervals in their respective modes, Auto Lock and GPS mode, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
-      ],
-      "references": [
-        "products/go/docs/storage_service.md",
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
-      "id": "go.sleep.status-awake",
-      "title": "Tracking Status prevents Energy Saving (Offline) sleep until manual lock",
-      "objective": "Verify the live status page intentionally keeps the device awake.",
-      "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Energy Saving is selected."
-        },
-        {
-          "action": "Set Settings > Operations > Measurement Interval to 5m and Auto Lock to 10s. Start Tracking and leave Status open for 30 seconds while capturing logs.",
-          "expected_result": "Status remains unlocked and there is no deep-sleep entry."
-        },
-        {
-          "action": "Short-press Power to lock and observe Home and the logs for up to six minutes from locking.",
-          "expected_result": "Home shows the locked state and a deep-sleep entry appears in the AirGradient logging tool."
-        }
-      ],
-      "cleanup": [
-        "Wake and stop the test route.",
-        "Exit any menu or diagnostic opened by this case.",
-        "In Energy Saving, restore only the original values captured before this case changed them: Energy Saving interval and Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
-      ],
-      "references": [
-        "products/go/docs/ui_manager.md",
-        "products/go/docs/power_management.md"
       ]
     },
     {

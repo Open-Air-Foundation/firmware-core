@@ -626,6 +626,61 @@ TEST_CASE("UIManager: tracking start/stop", "[UIManager][tracking]") {
   }
 }
 
+TEST_CASE("UIManager: Energy Saving hides tracking and keeps menu actions aligned",
+          "[UIManager][tracking][nav]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  GoSettings settings{};
+  settings.operating_mode = OperatingMode::Offline;
+  ui.sync_settings(settings);
+  press(ui, InputSource::TouchEnter);
+  check_rows(ui, {"Exit Menu", "Operating Mode", "Settings"});
+
+  SECTION("navigation skips tracking in both directions and wraps") {
+    for (uint8_t expected : {1, 2, 0}) {
+      press(ui, InputSource::TouchDown);
+      CHECK(ui.build_values(make_default_ctx()).selected_row == expected);
+    }
+    for (uint8_t expected : {2, 1, 0}) {
+      press(ui, InputSource::TouchUp);
+      CHECK(ui.build_values(make_default_ctx()).selected_row == expected);
+    }
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::Home);
+  }
+
+  SECTION("mode and settings open correctly and restore their cursor") {
+    CHECK(open_row(ui, "Operating Mode").action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::SettingsChoice);
+    double_press(ui);
+    CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
+    CHECK(open_row(ui, "Settings").action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::Settings);
+    double_press(ui);
+    CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
+  }
+
+  SECTION("mode synchronization moves selection off a newly hidden tracking row") {
+    settings.operating_mode = OperatingMode::Portable;
+    ui.sync_settings(settings);
+    select_row(ui, "Start Tracking");
+    settings.operating_mode = OperatingMode::Offline;
+    ui.sync_settings(settings);
+    CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
+    press(ui, InputSource::TouchEnter);
+    CHECK(ui.current_screen() == Screen::SettingsChoice);
+  }
+
+  SECTION("leaving Energy Saving restores tracking in either mode") {
+    for (auto mode : {OperatingMode::Portable, OperatingMode::Stationary}) {
+      settings.operating_mode = mode;
+      ui.sync_settings(settings);
+      check_rows(ui, {"Exit Menu", "Start Tracking", "Operating Mode", "Settings"});
+      CHECK(open_row(ui, "Start Tracking").action == UIAction::StartTracking);
+      press(ui, InputSource::TouchEnter);
+    }
+  }
+}
+
 TEST_CASE("UIManager: tracking submenu preserves four main rows and pause navigation",
           "[UIManager][tracking][pause]") {
   UIManager ui(DEFAULT_UI_CONFIG);
@@ -1898,6 +1953,15 @@ TEST_CASE("UIManager: GPS Test screen", "[UIManager][hwtest][gps]") {
     go_to_group(ui, "Hardware Test");
     return open_row(ui, "GPS Test");
   };
+
+  SECTION("Energy Saving GPS Test has no action") {
+    GoSettings settings{};
+    settings.operating_mode = OperatingMode::Offline;
+    ui.sync_settings(settings);
+    auto result = open_gps();
+    CHECK(result.action == UIAction::None);
+    CHECK(ui.current_screen() == Screen::HardwareTest);
+  }
 
   SECTION("selecting the row opens the live screen and emits OpenGpsTest") {
     auto result = open_gps();
