@@ -37,7 +37,6 @@
 static constexpr const char *TAG = "Orchestrator";
 
 static constexpr uint32_t MAX_SHAKE_EVENT_AGE_MS = 500;
-static constexpr uint32_t MODE_RESET_CONFIRM_MS = 1000;
 
 // Portable BLE is_ble_active() start-edge poll cadence (2 s), gated on an
 // authenticated client or a still-latched is_ble_active().
@@ -203,17 +202,13 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
 
   // --- Restore RTC state for wake-from-sleep cases ---
   _tracking_timing = TrackingTiming{};
-  if (cause != WakeCause::PowerOn && _mode != OperatingMode::Offline) {
+  if (cause != WakeCause::PowerOn) {
     RtcAppState state = _svc.power_service.load_state();
     _behavior = tracking_session_active(state.tracking_state) ? Behavior::Tracking : Behavior::Idle;
     _gps_enabled = state.has_flag(RtcAppFlag::GpsEnabled);
     _tracking_state = state.tracking_state;
     _tracking_session_id = state.tracking_session_id;
     _tracking_timing = tracking_timing_for_state(state.tracking_timing, _tracking_state);
-  }
-
-  if (_mode == OperatingMode::Offline) {
-    _gps_enabled = false;
   }
 
   // --- Apply initial lock state ---
@@ -1594,6 +1589,42 @@ bool Orchestrator::start_tracking() {
   AG_LOGI(TAG, "start_tracking");
 
   const bool starting_gps = !is_gps_active() && _settings.gps_mode != GpsMode::AlwaysOff;
+  if (starting_gps) {
+    // Finish any sleep command in flight before deciding whether to wait/reset.
+    _svc.gps_service.stop();
+  }
+
+  const uint32_t gps_wait_ms = _svc.gps_service.sleep_remaining_ms();
+  if (_mode == OperatingMode::Offline && _settings.gps_mode != GpsMode::AlwaysOff &&
+      gps_wait_ms > GPS_RESET_THRESHOLD_MS) {
+    BmsStatus status{};
+    // Re-read immediately; a cached status can miss a newly attached USB cable.
+    if (_svc.power_service.poll_status(status) && status.is_power_source_valid() &&
+        (status.power_source == BmsPowerSource::None ||
+         status.power_source == BmsPowerSource::OtgMode)) {
+      if (save_pending_tracking_start(_config_store, true)) {
+        _svc.ui_manager.show_snackbar("Starting tracking...");
+        update_display(/*wait=*/true);
+        _svc.display_service.flush();
+        AG_LOGI(TAG, "GPS wake in %lu ms: requesting battery-powered tracking restart",
+                static_cast<unsigned long>(gps_wait_ms));
+        if (_svc.power_service.request_system_power_reset()) {
+          RTOS::delay_ms(GPS_RESET_CONFIRM_MS); // Successful power cut never returns here.
+        }
+        AG_LOGW(TAG, "System still running; waiting for GPS instead");
+        if (!save_pending_tracking_start(_config_store, false)) {
+          // Reset the tracking state, so next boot not continue tracking
+          if (starting_gps) {
+            deactivate_gps();
+          }
+          _svc.ui_manager.show_snackbar("Tracking start could not be saved");
+          update_display();
+          return false;
+        }
+      }
+    }
+  }
+
   const uint32_t session_id = generate_tracking_session_id(_svc.storage_service);
   if (session_id == 0 || !_svc.storage_service.create_route(session_id)) {
     if (starting_gps) {
@@ -1936,9 +1967,6 @@ void Orchestrator::finish_peripheral_test() {
 // ---------------------------------------------------------------------------
 
 void Orchestrator::start_gps_test() {
-  if (_mode == OperatingMode::Offline) {
-    return;
-  }
   AG_LOGI(TAG, "gps test: start");
   _gps_test_entry_ms = static_cast<uint32_t>(RTOS::get_time_ms());
   _gps_ttff_ms = GPS_TTFF_PENDING;
@@ -1954,9 +1982,6 @@ void Orchestrator::start_gps_test() {
 }
 
 void Orchestrator::trigger_gps_test() {
-  if (_mode == OperatingMode::Offline) {
-    return;
-  }
   const Screen current_screen = _svc.ui_manager.current_screen();
   if (current_screen == Screen::PeripheralTest || current_screen == Screen::AccelTest) {
     AG_LOGW(TAG, "GPS test trigger ignored: another hardware test is active");
@@ -2075,8 +2100,7 @@ void Orchestrator::change_mode(OperatingMode new_mode, bool persist) {
   }
 }
 
-void Orchestrator::apply_mode_transition(OperatingMode old_mode, OperatingMode new_mode,
-                                         bool persisted) {
+void Orchestrator::apply_mode_transition(OperatingMode old_mode, OperatingMode new_mode) {
   log_heap(TAG, "mode.change:enter");
 
   // Two-phase: tear down outgoing mode, then bring up incoming.
@@ -2111,18 +2135,6 @@ void Orchestrator::apply_mode_transition(OperatingMode old_mode, OperatingMode n
     _cloud_first_post_pending = false;
   }
   log_heap(TAG, "mode.change:after-teardown");
-
-  if (persisted && (old_mode == OperatingMode::Offline || new_mode == OperatingMode::Offline)) {
-    _svc.storage_service.backup_cache();
-    _svc.ui_manager.show_snackbar("Mode changed");
-    update_display(/*wait=*/true);
-    _svc.display_service.flush();
-    AG_LOGI(TAG, "Energy Saving transition: requesting system power reset");
-    if (_svc.power_service.request_system_power_reset()) {
-      RTOS::delay_ms(MODE_RESET_CONFIRM_MS); // A successful power cut does not return.
-    }
-    AG_LOGW(TAG, "System still running after mode-change reset request");
-  }
 
   if (new_mode == OperatingMode::Portable && old_mode != OperatingMode::Portable) {
     init_ble_if_portable();
@@ -2182,31 +2194,22 @@ bool Orchestrator::activate_settings_candidate(const GoSettings &candidate, bool
   const GoSettings previous_settings = _settings;
   _settings = candidate;
   _mode = _settings.operating_mode;
-  apply_settings_runtime_delta(previous_settings, previous_mode, persist);
+  apply_settings_runtime_delta(previous_settings, previous_mode);
   publish_local_snapshots();
   return true;
 }
 
 void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_settings,
-                                                OperatingMode previous_mode, bool persisted) {
+                                                OperatingMode previous_mode) {
   const bool mode_changing = previous_mode != _settings.operating_mode;
 
   if (!previous_settings.onboarding_done && _settings.onboarding_done && !_manufacturing_mode) {
     _svc.serial_command.stop_receiving();
   }
 
-  const bool was_gps_active = previous_mode != OperatingMode::Offline &&
-                              (previous_settings.gps_mode == GpsMode::AlwaysOn ||
-                               (previous_settings.gps_mode == GpsMode::OnWhenTracking &&
-                                tracking_session_active(_tracking_state)));
-
-  if (mode_changing && _mode == OperatingMode::Offline) {
-    stop_tracking();
-    if (_svc.ui_manager.current_screen() == Screen::GpsTest) {
-      _svc.ui_manager.reset_to_home();
-      finish_gps_test();
-    }
-  }
+  const bool was_gps_active = previous_settings.gps_mode == GpsMode::AlwaysOn ||
+                              (previous_settings.gps_mode == GpsMode::OnWhenTracking &&
+                               tracking_session_active(_tracking_state));
 
   reschedule_sensor_timer(previous_settings);
 
@@ -2216,7 +2219,7 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
   } else if (!is_gps_active_now && _svc.ui_manager.current_screen() != Screen::GpsTest) {
     deactivate_gps();
   }
-  _gps_enabled = _mode != OperatingMode::Offline && _settings.gps_mode != GpsMode::AlwaysOff;
+  _gps_enabled = (_settings.gps_mode != GpsMode::AlwaysOff);
 
   // Recompute before the mode transition renders, even without a new sensor sample.
   if (mode_changing ||
@@ -2267,7 +2270,7 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
   }
 
   if (mode_changing) {
-    apply_mode_transition(previous_mode, _settings.operating_mode, persisted);
+    apply_mode_transition(previous_mode, _settings.operating_mode);
   } else {
     request_background_display_update();
   }
@@ -3515,7 +3518,7 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   _svc.storage_service.backup_cache();
 
   if (!is_gps_active()) {
-    (void)_svc.gps_service.request_sleep(gps_inactive_sleep_ms(_mode));
+    (void)_svc.gps_service.request_sleep(gps_inactive_sleep_ms(_mode, sleep_duration_ms));
   }
 
   // Persist RTC state with the warm-sensor flag for the next wake cycle.
@@ -3541,14 +3544,18 @@ void Orchestrator::deactivate_gps() {
     _latest_gps = GpsData{};
     return;
   }
-  if (!_svc.gps_service.start_sleeping(gps_inactive_sleep_ms(_mode))) {
+  const uint32_t interval =
+      static_cast<uint32_t>(_settings.active_measure_interval_seconds()) * 1000;
+  const uint32_t elapsed = static_cast<uint32_t>(RTOS::get_time_ms()) - _last_measurement_ms;
+  const uint32_t next_wake = elapsed < interval ? interval - elapsed : interval;
+  if (!_svc.gps_service.start_sleeping(gps_inactive_sleep_ms(_mode, next_wake))) {
     AG_LOGE(TAG, "Failed to start GPS sleep maintenance");
   }
   _latest_gps = GpsData{};
 }
 
 bool Orchestrator::is_gps_active() const {
-  if (_mode == OperatingMode::Offline || _settings.gps_mode == GpsMode::AlwaysOff) {
+  if (_settings.gps_mode == GpsMode::AlwaysOff) {
     return false;
   }
   if (_settings.gps_mode == GpsMode::AlwaysOn) {

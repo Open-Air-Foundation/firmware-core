@@ -1014,17 +1014,24 @@ TEST_CASE("CH1 gesture queue timeout", "[InputService][touch][gesture][timeout]"
   }
 }
 
-TEST_CASE("input stop disables ISRs and restart leaves touch sensing active",
+TEST_CASE("input stop suspends touch after disabling ISRs and start restores sensing",
           "[InputService][sleep]") {
   MockCapTouchSensor touch;
   FreeRTOS rtos;
   RTOS::set_instance(&rtos);
   TestableInputService service(touch, make_config());
   disabled_interrupts = 0;
-  FORBID_CALL(touch, set_sleep(trompeloeil::_));
+  bool sleep_ok = true;
+  SECTION("sleep succeeds") {}
+  SECTION("sleep fails but sensing is still restored") { sleep_ok = false; }
+  trompeloeil::sequence seq;
+  REQUIRE_CALL(touch, set_sleep(true))
+      .IN_SEQUENCE(seq)
+      .SIDE_EFFECT(CHECK(disabled_interrupts == 3))
+      .LR_RETURN(sleep_ok);
+  REQUIRE_CALL(touch, set_sleep(false)).IN_SEQUENCE(seq).RETURN(true);
   service.stop();
-  CHECK(disabled_interrupts == 3);
-  // Host task_create intentionally returns false.
+  // Host task_create intentionally returns false, after resume has run.
   CHECK_FALSE(service.start());
   RTOS::set_instance(nullptr);
 }

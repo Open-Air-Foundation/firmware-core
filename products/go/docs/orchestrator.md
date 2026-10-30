@@ -90,10 +90,19 @@ each dimension of boot state.
 
 ### RTC State Restoration
 
-In Portable/Stationary, non-PowerOn boot restores GPS and tracking state from
-RTC; Recording and Paused imply `Behavior::Tracking`. Energy Saving skips this
-restoration and keeps GPS inactive. The handoff still controls lock state,
-cached display and completed measurements on button wake or timer promotion.
+RTC state (`_gps_enabled`, `_tracking_state`, `_tracking_session_id`) is restored
+for all non-PowerOn wake causes. `_behavior` is derived from the restored
+tracking state: Recording and Paused both use `Behavior::Tracking`.
+
+```cpp
+if (cause != WakeCause::PowerOn) {
+    // Restore from RTC — both Timer and Button wakes have valid state
+}
+```
+
+Previously, RTC state was only restored for `WakeCause::Button`. The
+generalization is needed because fast-path promotion sends `WakeCause::Timer`
+to the orchestrator, and the device was in a sleep cycle with persisted state.
 
 ### Lock State and Display
 
@@ -182,8 +191,22 @@ A restored Paused session keeps its ID and leaves the route closed. Sensor
 readings, display, and GPS continue according to their existing settings; route
 writes resume only after an explicit Resume action.
 
-The Energy Saving fast path caches measurements without opening a route.
-There is no route-storage failure promotion path.
+### Fast-path storage-failure promotion
+
+The fast path (`go_app.cpp`) uses `storage.resume_route()` only — it never
+starts a new session. It reopens and appends only when the saved
+`state.tracking_state` is `Recording`; Paused keeps the route closed.
+On `resume_route()` or
+`append_route_point()` failure the fast path forces a promotion to
+interactive mode rather than handling the failure itself: there is no UI or
+BLE service active in the fast path to surface the error, and the
+orchestrator's `init()` resume retry already handles persistent faults
+through the same inline snackbar / BLE notify path described above.
+
+The promotion handoff records the storage-failure reason so the orchestrator
+knows the display block was skipped (`handoff.display_painted = false`) and
+will paint the frame itself rather than assume the fast path already
+painted a stale one.
 
 ### Mode Entry (Portable / Stationary)
 
@@ -218,8 +241,9 @@ The orchestrator owns the authoritative application state:
 | `_last_ota_check_ms` | `uint32_t` | `0` | 2 s BLE `is_ble_active()` poll baseline (Portable). Cloud owns Wi-Fi check timing. See [Firmware Update (OTA)](#firmware-update-ota) |
 | `_ota_committed` | `bool` | `false` | True once a transfer committed (full quiesce + "Updating firmware…" paint ran). Gates `exit_ota()`'s full-resume + queue-drain vs the lightweight cloud re-arm |
 
-Fresh boot uses default session state. Non-PowerOn boot restores RTC session
-state only outside Energy Saving.
+On fresh boot (`PowerOn`), defaults are used. On wake from deep sleep (`Timer`
+or `Button`), state is restored from RTC memory via
+`PowerService::load_state()`.
 
 ## Event Loop
 
@@ -383,15 +407,30 @@ Manages route lifecycle through `StorageService`. `start_tracking()`
 returns `bool` so the BLE `StartTracking` command-result reports the real
 outcome instead of the pre-spec "was-idle" heuristic.
 
-`start_tracking()` rejects an existing session, generates a unique five-digit
-ID, and opens its route. Failure leaves Idle and reports a storage error.
-Success sets Recording, starts GPS if required, shows
-`"Tracking start = NNNNN"`, and publishes the new BLE status. Acquisition may
-wait for an existing GPS sleep deadline; route creation does not require a fix.
+`start_tracking()`:
 
-Energy Saving hides Start Tracking. Entering it ends either Recording or Paused
-sessions, and boot never restores them in that mode. Persisted mode transitions
-request the charger reset described under [change_mode()](#change_mode).
+1. Returns `false` immediately if a session is Recording or Paused.
+2. If Offline, GPS is enabled, and its remaining sleep exceeds the reset
+   threshold, rechecks power through `PowerService::poll_status()`. On battery
+   (`None` or `OtgMode`), commits the pending-start flag, paints and flushes
+   “Starting tracking...”, then requests a system power reset. USB input or
+   unknown power status uses the wait path. See [GPS Sleep Policy](gps_service.md#starting-tracking-while-gps-sleeps).
+3. If no reset occurs, generates a 5-digit session ID (10000–99999) via
+   `generate_tracking_session_id()`. The shared helper checks existing routes
+   and tries up to five candidates before returning 0.
+4. Calls `storage.create_route(session_id)`. On `session_id == 0` or
+   open-failure, shows the `"Storage error — can't track"` snackbar
+   inline, pushes a BLE Status notify with `tracking=false`, `session=0`,
+   `trk=0`, and returns `false` while remaining Idle.
+5. On success sets `_tracking_state = Recording`, `_behavior = Tracking`,
+   brings up GPS if the `GpsMode` requires it, shows the
+   `"Tracking start = NNNNN"` snackbar, and pushes a BLE Status notify
+   with `tracking=true`, the new session ID, and `trk=1`.
+
+After a successful power reset, GoApp creates the session and confirms it before
+entering the Offline fast path. Only the pending-start boolean survives this
+transition in NVS; no route or point exists before reset. Portable/Stationary
+never reset to start tracking. A session can start before a valid GPS fix.
 
 `pause_tracking()` changes Recording to Paused, flushes/closes the route with
 `end_route()`, and retains the session ID. It shows `"Tracking paused"` on success
@@ -431,9 +470,9 @@ use `trk` to distinguish the three states.
 `on_sensor_data()` calls `storage.append_route_point()` but discards the
 return — the storage layer logs the underlying error, and the session
 keeps running so subsequent appends can retry against a recovered NAND.
-A failed Recording restore clears the session; a failed explicit Resume keeps
-it Paused so the user can retry or Stop. Entering Energy Saving ends the session
-before its normal deep-sleep cycle.
+Deep sleep closes an open file but preserves the session state and ID. A failed
+Recording restore on wake clears the session; a failed explicit Resume keeps
+the session Paused so the user can retry or Stop.
 
 #### Tracking Timing Helpers
 
@@ -480,12 +519,17 @@ the existing writer count immediately before and after append. Count advancement
 timestamps an accepted record even when append subsequently reports a sync
 failure. Rejected writes, manual Refresh measurements, and paused measurements
 do not update the timestamp. These counts are temporary observations, not a
-second persistent counter. The Energy Saving fast path writes no route points.
+second persistent counter. The boot fast path uses the same acceptance rule.
 
-Interactive restoration reconciles timing against the retained tracking state.
-Inactive timing is discarded; a mismatched segment makes recording duration
-unknown without discarding usable session-start or last-record anchors.
-Power-on, Energy Saving entry, and failed Recording reopen clear session timing.
+Normal deep sleep copies the timing value without a Pause/Resume transition, so
+recording time includes sleep while Recording and remains frozen while Paused.
+Both interactive and fast-path restore reconcile the active-segment marker with
+the authoritative tracking state using `tracking_timing_for_state()`. Inactive
+RTC timing is discarded; a mismatched segment makes recording duration unknown
+without discarding independently usable session-start or last-record anchors.
+Power-on starts with invalid timing, and a failed Recording reopen clears timing
+alongside the existing transition to Idle. The fast path saves updated timing
+before returning to sleep or promoting to the interactive orchestrator.
 
 The caller must supply nondecreasing timestamps and own the actual tracking
 lifecycle. Helpers reject invalid or inconsistent inputs without changing the
@@ -518,7 +562,7 @@ updates; Pause/Resume preserve the Status view, and Stop returns it to Main Menu
 handling. Status is exempt, but manual locking and safety shutdowns remain
 available. Leaving Status starts a fresh configured timeout once, including
 after remote Stop; repaints and Pause/Resume do not extend it. The saved setting
-is unchanged. Tracking Status is unavailable in Energy Saving.
+is unchanged. Keeping Status open also keeps Offline mode awake.
 
 Entry, input, and tracking changes repaint immediately. The timer loop observes
 page entry/exit through `sync_tracking_status_lifecycle()`: entry arms a
@@ -540,11 +584,6 @@ Portable, `enter_stationary()` on entry to Stationary). The PM bus is
 re-connected and the sensor woken (`set_pm_power(true)` + `request_prepare()`)
 before any mode-specific entry so a previous session that slept the SPS30
 does not leave it asleep across the transition.
-
-Persisted transitions into or out of Energy Saving save settings, stop any
-session on entry, back up cache, paint "Mode changed", and request a charger
-system reset. If power stays on, mode bring-up continues. GPS Test is closed on
-entry; the saved GPS preference is retained but cannot activate GPS in this mode.
 
 The Stationary entry branch returns before the generic
 `"Mode changed"` snackbar fires — `enter_stationary()` opens
@@ -1073,7 +1112,7 @@ device is locked and the first measurement is complete:
 3. Stop services: BLE, sensor producer, GPS, input, display worker
 4. display_service.deep_sleep() — put SSD1680 into sleep mode 1 (<1 µA)
 5. Close the route and backup chart data to RTC memory
-6. If GPS is inactive, request the mode-specific GPS sleep interval
+6. If GPS is inactive, request its sleep interval for the planned ESP sleep
 7. power_service.save_state(snapshot_state()) — includes the GPS wake deadline
 8. power_service.reset_ext_watchdog() — maximize timeout window during sleep
 ```
@@ -1089,7 +1128,7 @@ after `stop()` to ensure the worker task is no longer using the SPI bus.
 
 ## GPS Active Logic
 
-`is_gps_active()` always returns false in Energy Saving. In Portable/Stationary:
+`is_gps_active()` determines whether GPS data should be used:
 
 | GpsMode | Result |
 |---|---|
@@ -1099,7 +1138,8 @@ after `stop()` to ensure the worker task is no longer using the SPI bus.
 
 This method gates cached GPS updates and the start/stop decisions for the
 receiver. Pause and Resume leave the receiver and cached fix intact. Inactive
-GPS uses `start_sleeping()` to maintain timed sleep. See [GPS Service](gps_service.md#sleep-policy).
+GPS uses `start_sleeping()` to maintain timed sleep; active GPS stays running
+through ESP sleep. See [GPS Service](gps_service.md#sleep-policy).
 
 ## Sensor Scheduling
 

@@ -9,9 +9,9 @@ worker, wake deadline, latest fix, clock sync, and `GpsFixUpdate` events.
 | File | Purpose |
 |---|---|
 | [`gps_driver.h`](../main/gps/gps_driver.h) / [`gps_driver.cpp`](../main/gps/gps_driver.cpp) | UART, CASIC commands, NMEA parsing |
-| [`gps_service.h`](../main/gps/gps_service.h) / [`gps_service.cpp`](../main/gps/gps_service.cpp) | Acquisition and sleep maintenance |
+| [`gps_service.h`](../main/gps/gps_service.h) / [`gps_service.cpp`](../main/gps/gps_service.cpp) | Acquisition, sleep maintenance, synchronous fast-path read |
 | [`gps_types.h`](../main/gps/gps_types.h) | Data types, invalid sentinels, field validation |
-| [`gps_power_policy.h`](../main/gps/gps_power_policy.h) | Sleep intervals by operating mode |
+| [`gps_power_policy.h`](../main/gps/gps_power_policy.h) | Sleep intervals and tracking reset threshold |
 
 ## Dependencies
 
@@ -47,12 +47,12 @@ calls have one owning caller; `stop()` interrupts a pending wake wait.
 | `Config::baud_rate` | `115200` | Baud used for active acquisition |
 | `Config::expected_baud` | `9600` | First baud tried when connecting |
 | `Config::wake_deadline_ms` | `0` | Restore a scheduled wake from `RtcAppState` |
-| `Config::fast_path_sleep_probe` | `false` | Use the repeated 9600-only probe for fast-path sleep requests |
 | `Config::posting_interval_ms` | `5000` | Fix event interval |
 | `Config::task_stack_size` | `4096` | Worker stack bytes |
 | `Config::task_priority` | `3` | Worker priority, below display |
-| `GPS_IDLE_SLEEP_MS` | `30000` | Inactive GPS interval in Portable/Stationary |
-| `GPS_ENERGY_SAVING_SLEEP_MS` | `UINT32_MAX` | Energy Saving sleep duration in milliseconds |
+| `GPS_IDLE_SLEEP_MS` | `30000` | Inactive GPS interval in Portable/Stationary; Offline fallback when no next wake interval is supplied |
+| `GPS_RESET_THRESHOLD_MS` | `30000` | Offline tracking wait/reset threshold (30 seconds); provisional pending boot-time measurement |
+| `GPS_RESET_CONFIRM_MS` | `1000` | Wait after an accepted reset request before falling back |
 
 ## Behavior
 
@@ -63,20 +63,22 @@ Inactive GPS uses CASIC `CFG-SLEEP`, rather than only stopping the GNSS engine.
 | GPS State | Policy |
 |---|---|
 | Inactive in Portable/Stationary: Always Off, or On When Tracking without a session | Repeated 30-second sleep intervals |
-| Energy Saving (Offline), any GPS setting | Request maximum-duration sleep; tracking and GPS Test are unavailable |
-| Active in Portable/Stationary: Always On, or On When Tracking with a Recording/Paused session | Keep the receiver running |
+| Inactive in Offline: Always Off, or On When Tracking without a session | Interactive maintenance uses time until the next measurement; fast-path boot requests one full measurement interval before gas conditioning |
+| Active: Always On, or On When Tracking with a Recording/Paused session | Keep the receiver running, including throughout ESP deep sleep |
 
-The service owns wake waiting and repeated sleep commands. Interactive callers
-preserve an existing deadline; Energy Saving timer wakes explicitly probe again
-because the receiver may have reset or woken independently. Failed probes retain
-the old deadline and do not prevent ESP sleep. Charging-only boot also requests
-long GPS sleep when Energy Saving is saved. Shutdown sends no GPS sleep command.
+The service owns wake waiting and repeated sleep commands. Before ESP deep
+sleep, the app requests one sleep interval only if GPS is inactive. An existing
+GPS deadline is preserved: it does not shorten ESP sleep or make the ESP wait
+for GPS to wake. The fast path makes a final request using the ESP sleep duration
+only if the earlier deadline has expired. Successful transmission records an
+expected wake deadline; it does not confirm physical receiver sleep.
+Charging-only boot does not manage GPS; shutdown does not send a GPS sleep command.
+When Offline has no next wake interval, the policy falls back to `GPS_IDLE_SLEEP_MS`.
 
 The wake deadline uses `RTOS::get_retained_time_ms()` and is stored as a
 `uint64_t` in `RtcAppState::gps_wake_deadline_ms`. It is an absolute monotonic
 time, not UTC or a sleep duration. Baud is not stored in RTC: boot infers it
-from GPS mode and tracking state. Normal connection probing permits an alternate
-baud; the Energy Saving timer path uses only 9600.
+from GPS mode and tracking state, with a fallback to the other baud.
 
 ### Settings Changes While GPS Sleeps
 
@@ -86,15 +88,15 @@ when a tracking session is recording or paused. Selecting On When Tracking
 without a session leaves GPS inactive. Selecting Always Off stops acquisition,
 clears the cached fix, and starts sleep maintenance without ending tracking.
 
-Entering Energy Saving ends Recording or Paused sessions and disables GPS
-regardless of the saved GPS setting. Persisted transitions into or out of this
-mode request a charger system reset after saving settings and backing up cache.
-Battery power permits the reset; USB can keep the system powered. If execution
-continues, the new mode runs with the existing GPS deadline.
+Changing operating mode also preserves any existing GPS sleep deadline. On
+leaving Offline for Portable or Stationary, the remaining Offline interval can
+therefore exceed 30 seconds. Subsequent inactive sleep requests use the new
+mode's policy. The battery-powered reset described below applies only to
+starting a new tracking session.
 
 ### Connection and Acquisition
 
-A fresh or sleep-woken receiver is expected at 9600 baud. Normal connection tries the
+A fresh or sleep-woken receiver is expected at 9600 baud. Connecting tries the
 expected baud, then the other supported baud, using a MON-VER response to
 identify the module. Sending sleep does not switch the module to 115200.
 Active acquisition switches to 115200 when needed, including Always On without
@@ -111,24 +113,31 @@ A-GNSS data can be supplied before or during acquisition. The worker copies
 pending aiding data under its mutex, then sends CASIC AID-POS/AID-TIME outside
 the lock. Aiding time can seed the system clock until GPS supplies valid time.
 
-### Fast-Path Sleep Probing
+### Fast-Path Read
 
-The Energy Saving timer path does no GPS acquisition or route recording.
-After sensor initialization it probes at 9600 baud, sending MON-VER every 300 ms
-for up to five seconds. A response ends probing and triggers the long sleep
-command; 115200 is never tried on this path.
-
-If the early request fails and deep sleep is still planned, the app repeats
-this sequence after measurement, storage, and display. It calculates remaining
-ESP sleep time after that retry, so probing is included in the measurement
-interval. A successful early request skips the retry. Normal interactive probing
-still tries the expected baud and then the alternate baud.
+`GoApp` calls `gps_read_once()` after sensor initialization, before gas
+conditioning, so UART work overlaps PM warmup without starting a GPS task.
+A receiver whose wake deadline is still in the future is left alone. Otherwise, the helper connects, switches/configures the receiver
+if needed, and reads until both fix and position are valid, the timeout expires,
+or the power-button abort flag is set. It closes UART on return and leaves
+GPS running. The normal read window is three seconds; lack of a position does
+not stop the tracking session.
 
 ### Starting Tracking While GPS Sleeps
 
-Portable and Stationary start the route without resetting; GPS acquisition waits
-for its existing deadline. Sensor points can be recorded before a valid GPS fix.
-Energy Saving hides the tracking menu and does not resume retained sessions.
+Portable and Stationary wait for the remaining interval without rebooting.
+Offline may use a BQ system power reset when the remaining wait exceeds the
+threshold and a fresh BMS status confirms battery power (`None` or `OtgMode`).
+External input, unknown power status, or a shorter wait uses the normal wait
+path. USB serial connectivity alone does not mean external power is present.
+
+Before reset, the app commits only the `trk_start` intent flag and fully paints
+“Starting tracking...”. No route exists yet. After reboot, it clears the flag,
+creates the session, shows “Started” with its ID, and enters the cold
+Offline fast path. Recovery failure enters interactive boot with “Tracking not
+started”. Confirmation means the session exists, not that GPS has a position.
+See [Tracking Lifecycle](orchestrator.md#tracking-lifecycle) and
+[Boot Path Selection](hardware_init.md#boot-path-selection).
 
 ## Edge Cases / Errors
 
@@ -140,6 +149,5 @@ Energy Saving hides the tracking menu and does not resume retained sessions.
   A wake deadline alone does not prove the receiver is awake or tracking.
 - `stop: task only (GNSS keeps tracking)` logs worker shutdown, not a receiver
   status check. The module may already be asleep or acquisition may have failed.
-- A failed or ineffective mode-change reset leaves the existing GPS deadline
-  in force. Leaving Energy Saving can therefore leave GPS unavailable until
-  its long sleep ends or receiver power is cycled.
+- If the reset request fails or power does not cycle, the app clears the intent
+  and starts tracking while waiting. If clearing fails, tracking start fails.

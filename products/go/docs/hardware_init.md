@@ -69,12 +69,16 @@ selects the charging-only path even when external power cannot be confirmed.
 GoApp consumes the request and uses the existing charging-only display and
 polling loop.
 
-Before path selection, Energy Saving clears retained tracking state and the
-GPS-enabled flag. It never recovers a pending tracking start.
+After selection, a non-charging-only `PowerOn` with pending `trk_start` and
+Offline settings attempts tracking recovery. GoApp clears the NVS flag, creates
+and closes a new route, initializes Recording state, then shows “Started”
+with the session ID before entering the cold fast path. Failure falls
+back to interactive boot with “Tracking not started” as the splash. The fast
+path still permits button promotion; recovery does not rerun the reset decision.
 
 `run_charging_only()` initializes the fuel gauge and display, disables PM power,
-requests long GPS sleep when Energy Saving is saved, and uses the detection
-status to show Charging or Battery Full. It feeds the external watchdog from the main CPU, sleeps in two-second light-sleep intervals,
+and uses the detection status to show Charging or Battery Full. It feeds the
+external watchdog from the main CPU, sleeps in two-second light-sleep intervals,
 and polls the initialized
 charger after timer wake. It starts no sensor, radio, storage, orchestrator, or
 LP-core task. Button wake restarts the ESP into normal startup. A valid unplug
@@ -236,12 +240,12 @@ tasks, no input handling. Returns a `FastPathResult` for testability.
 | Step | Behavior |
 |---|---|
 | Initialize | Initialize core, battery devices, and sensors; release GPIO holds and enable PM. BMS gets two attempts before continuing degraded. |
-| GPS | Probe at 9600 baud and request long sleep, even with a retained deadline. This overlaps PM warmup. |
+| GPS | Read active GPS or request inactive GPS sleep for one measurement interval; preserve an existing sleep deadline. This work overlaps PM warmup. |
 | Gas | Start SGP41 conditioning, use timer-only light sleep, discard the first raw sample, wait 500 ms, retain the second, then turn the heater off. |
 | Measure | Wait out any remaining cold PM warmup, then read PM and other sensors once. No PM discard reads run during fast-path warmup. |
-| Store and display | Sleep PM early if a long sleep is expected; cache measurements without route points, poll battery, and paint the dashboard. |
+| Store and display | Sleep PM early if a long sleep is expected; cache measurements, append only while Recording, poll battery, and paint the dashboard. |
 | BLE during display | If deep sleep is expected with no latched button or shutdown request, broadcast raw measurements during refresh, then stop and deinitialize BLE. See [broadcast lifecycle](ble_service.md#offline-broadcast-lifecycle). |
-| Decide | If sleep is planned and the early GPS request failed, retry it. Recalculate remaining sleep afterward, then check the latched button and return Sleep or Promote. Thermal Shutdown returns before this step. |
+| Decide | Recalculate sleep duration, check the latched button once, and return Sleep, Promote, or thermal Shutdown. |
 
 GoApp owns acquisition timing. The gas window is 10 s, with wake scheduled
 100 ms before its end; it normally covers the cold PM warmup too. Warm PM
@@ -249,18 +253,46 @@ skips only the PM wait, not gas conditioning. Any remaining PM wait below
 1 s uses an RTOS delay; longer waits use timer-only light sleep. Light-sleep
 failure falls back to a delay without promoting to interactive mode.
 
-The caller (`run_fast_path`) manages the button ISR and saves PM warm state
-and the GPS wake deadline. Before deep sleep it stops the display and starts
-the watchdog ULP. Timer wakes leave CAP1203 active and untouched. Before
+The caller (`run_fast_path`) manages the button ISR and saves tracking timing,
+PM warm state, and the GPS wake deadline. Before deep sleep it stops the
+display, starts the watchdog ULP, and requests inactive GPS sleep only if its
+previous deadline has expired. Timer wakes leave CAP1203 untouched. Before
 interactive promotion, missing BMS initialization is retried; failure restarts
-the device. See [GPS sleep probing](gps_service.md#fast-path-sleep-probing).
+the device.
+
+### Retained Tracking Timing
+
+`FastPathResult` carries updated tracking timing, PM warm state, and the GPS
+wake deadline rather than a replacement app state. The core derives tracking
+timing from the input and normalizes it against the actual tracking state: inactive
+tracking clears timing, while a live-segment marker that disagrees with Recording or
+Paused invalidates only accumulated duration and the segment anchor. Session
+and last-record anchors remain independently usable. Paused appends no point.
+Recording samples retained-clock seconds at append using
+`tracking_seconds_from_ms(RTOS::get_retained_time_ms())`. The existing writer's
+`current_route_point_count()` is compared before and after the append, before
+`end_route()` resets it. Only an advancing count timestamps an accepted record,
+including an accepted write whose subsequent sync fails. Append and reopen
+errors retain their existing promotion behavior.
+
+Unknown active duration does not block a valid accepted-record timestamp.
+The helper checks actual Recording state, session elapsed time, and the prior
+last-record anchor independently of duration. If it rejects the accepted
+record's time, only `last_record_s` is invalidated. Reopen failure carries the
+normalized timing without timestamping a record.
+The caller copies the original `RtcAppState`, updates tracking timing,
+`SensorsWarm`, and the GPS wake deadline, then saves it before sleep or
+interactive promotion. Promotion clears `SensorsWarm` so interactive startup
+prepares the sensors again; unrelated state is preserved. A temperature Shutdown
+result clears its timing; the wrapper continues
+directly to shutdown without saving that result or changing the route lifecycle.
 
 ### Button detection during fast path
 
 GoBoard's `install_button_isr()` / `remove_button_isr()` manage a
 falling-edge ISR that latches presses while the CPU is awake. Gas and PM
 light sleep use timer wake only. Acquisition, storage, and display finish
-before the final promotion check, including any final GPS sleep retry.
+before the final promotion check; the GPS read also accepts the abort flag.
 The ISR is removed before `InputService` construction.
 
 ### Promotion handoff

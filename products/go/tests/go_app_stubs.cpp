@@ -54,6 +54,7 @@ int gas_cancel_count = 0;
 bool light_sleep_failure = false;
 int light_sleep_fallback_count = 0;
 bool fast_path_timer_only = true;
+uint32_t gps_read_duration_ms = 0;
 bool pm_sleep_ok = true;
 std::function<void()> after_pm_sleep;
 std::function<void()> after_cache;
@@ -79,10 +80,10 @@ uint32_t gps_sleep_request_count = 0;
 uint32_t gps_remaining_ms = 0;
 int gps_initial_baud = 0;
 uint64_t gps_initial_deadline_ms = 0;
-bool gps_fast_path_sleep_probe = false;
 uint32_t gps_sleep_duration_ms = 0;
 bool gps_sleep_ok = true;
-std::function<void()> on_gps_sleep_request;
+GpsData gps_data_to_return{};
+bool gps_read_called = false;
 
 // --- InputService ---
 bool input_started = false;
@@ -188,6 +189,7 @@ void reset() {
   light_sleep_failure = false;
   light_sleep_fallback_count = 0;
   fast_path_timer_only = true;
+  gps_read_duration_ms = 0;
   pm_sleep_ok = true;
   after_pm_sleep = nullptr;
   after_cache = nullptr;
@@ -211,10 +213,10 @@ void reset() {
   gps_remaining_ms = 0;
   gps_initial_baud = 0;
   gps_initial_deadline_ms = 0;
-  gps_fast_path_sleep_probe = false;
   gps_sleep_duration_ms = 0;
   gps_sleep_ok = true;
-  on_gps_sleep_request = nullptr;
+  gps_data_to_return = GpsData{};
+  gps_read_called = false;
 
   input_started = false;
   input_stopped = false;
@@ -454,7 +456,6 @@ GpsService::GpsService(GpsDriver &driver, RtosQueueHandle event_queue, const Con
       _wake_deadline_ms(config.wake_deadline_ms) {
   test_spy::gps_initial_baud = config.expected_baud;
   test_spy::gps_initial_deadline_ms = config.wake_deadline_ms;
-  test_spy::gps_fast_path_sleep_probe = config.fast_path_sleep_probe;
 }
 
 GpsService::~GpsService() = default;
@@ -477,11 +478,7 @@ bool GpsService::request_sleep(uint32_t duration_ms) {
   test_spy::gps_sleep_requested = true;
   ++test_spy::gps_sleep_request_count;
   test_spy::gps_sleep_duration_ms = duration_ms;
-  if (test_spy::on_gps_sleep_request) {
-    test_spy::on_gps_sleep_request();
-  }
-  if (duration_ms == 0 || _wake_deadline_ms > RTOS::get_retained_time_ms() ||
-      !test_spy::gps_sleep_ok) {
+  if (duration_ms == 0 || test_spy::gps_remaining_ms != 0 || !test_spy::gps_sleep_ok) {
     return false;
   }
   test_spy::gps_remaining_ms = duration_ms;
@@ -496,6 +493,14 @@ GpsData GpsService::get_latest_fix() const { return GpsData{}; }
 void GpsService::set_posting_interval_ms(int /*interval_ms*/) {}
 
 void GpsService::set_aiding_data(const GpsAidingData & /*data*/) {}
+
+GpsData gps_read_once(GpsDriver & /*driver*/, int /*baud_rate*/, uint32_t /*timeout_ms*/,
+                      const volatile bool & /*abort*/, uint64_t /*wake_deadline_ms*/) {
+  test_spy::gps_read_called = true;
+  test_spy::fast_path_events.push_back("gps");
+  RTOS::delay_ms(test_spy::gps_read_duration_ms);
+  return test_spy::gps_data_to_return;
+}
 
 // ============================================================================
 // InputService stubs

@@ -85,8 +85,6 @@ static constexpr uint32_t CASIC_ACK_POLL_MS = 20;
 /// Maximum total time to wait for the TAU1113 ACK/NAK response (ms).
 /// The module typically responds within 50–100 ms; 300 ms provides margin.
 static constexpr uint32_t CASIC_ACK_TIMEOUT_MS = 300;
-static constexpr uint32_t FAST_PATH_PROBE_INTERVAL_MS = 300;
-static constexpr uint32_t FAST_PATH_PROBE_TIMEOUT_MS = 5000;
 
 /// ACK/NAK packet length: header(2) + group(1) + sub(1) + len(2) + payload(2) + ck(2) = 10.
 static constexpr size_t CASIC_ACK_PACKET_LEN = 10;
@@ -259,19 +257,16 @@ static bool send_cfg_with_ack(AirgradientSerial &serial, uint8_t group, uint8_t 
 /// poll packet before calling this function.
 static bool wait_for_casic_poll_response(AirgradientSerial &serial, uint8_t group, uint8_t sub,
                                          uint16_t expected_payload_len, uint8_t *out_payload,
-                                         const char *name,
-                                         uint32_t timeout_ms = CASIC_ACK_TIMEOUT_MS) {
+                                         const char *name) {
   const size_t packet_len =
       2 + 2 + 2 + static_cast<size_t>(expected_payload_len) + 2; // header+id+len+payload+ck
   uint8_t buf[CASIC_POLL_BUF_SIZE];
   size_t buf_len = 0;
   uint32_t elapsed_ms = 0;
 
-  while (elapsed_ms < timeout_ms) {
-    const uint32_t remaining_ms = timeout_ms - elapsed_ms;
-    const uint32_t delay_ms = remaining_ms < CASIC_ACK_POLL_MS ? remaining_ms : CASIC_ACK_POLL_MS;
-    RTOS::delay_ms(delay_ms);
-    elapsed_ms += delay_ms;
+  while (elapsed_ms < CASIC_ACK_TIMEOUT_MS) {
+    RTOS::delay_ms(CASIC_ACK_POLL_MS);
+    elapsed_ms += CASIC_ACK_POLL_MS;
 
     const int avail = serial.available();
     if (avail <= 0) {
@@ -333,7 +328,7 @@ bool GpsDriver::begin(int baud_rate) {
 }
 
 void GpsDriver::configure_receiver() {
-  _poll_mon_ver(CASIC_ACK_TIMEOUT_MS);
+  _poll_mon_ver();
   _send_cfg_ephsave();
   _send_cfg_navsat();
 }
@@ -354,40 +349,11 @@ int GpsDriver::connect(int expected_baud) {
       expected_baud == MODULE_DEFAULT_BAUD ? MODULE_ACTIVE_BAUD : MODULE_DEFAULT_BAUD;
   const int bauds[] = {expected_baud, alternate};
   for (const int baud : bauds) {
-    if (open_uart(baud) && _poll_mon_ver(CASIC_ACK_TIMEOUT_MS)) {
+    if (open_uart(baud) && _poll_mon_ver()) {
       return baud;
     }
     end();
   }
-  return 0;
-}
-
-int GpsDriver::connect_fast_path() {
-  if (!open_uart(MODULE_DEFAULT_BAUD)) {
-    end();
-    return 0;
-  }
-  const uint64_t deadline_ms = RTOS::get_time_ms() + FAST_PATH_PROBE_TIMEOUT_MS;
-  while (true) {
-    const uint64_t now_ms = RTOS::get_time_ms();
-    if (now_ms >= deadline_ms) {
-      break;
-    }
-    const uint64_t remaining_ms = deadline_ms - now_ms;
-    const uint32_t wait_ms = remaining_ms < FAST_PATH_PROBE_INTERVAL_MS
-                                 ? static_cast<uint32_t>(remaining_ms)
-                                 : FAST_PATH_PROBE_INTERVAL_MS;
-    if (_poll_mon_ver(wait_ms)) {
-      return MODULE_DEFAULT_BAUD;
-    }
-    // Failed writes/full RX buffers may return early; keep the probe cadence.
-    const uint64_t next_probe_ms = now_ms + wait_ms;
-    const uint64_t after_poll_ms = RTOS::get_time_ms();
-    if (after_poll_ms < next_probe_ms) {
-      RTOS::delay_ms(static_cast<uint32_t>(next_probe_ms - after_poll_ms));
-    }
-  }
-  end();
   return 0;
 }
 
@@ -690,7 +656,7 @@ void GpsDriver::_send_aid_time(int64_t epoch_s, uint32_t time_acc_ms) {
   send_casic_packet(_serial, 0x0B, 0x11, payload, sizeof(payload));
 }
 
-bool GpsDriver::_poll_mon_ver(uint32_t timeout_ms) {
+bool GpsDriver::_poll_mon_ver() {
   // Poll MON-VER and log the module's software/hardware version strings.
   drain_serial_rx(_serial);
   uint8_t unused = 0;
@@ -700,7 +666,7 @@ bool GpsDriver::_poll_mon_ver(uint32_t timeout_ms) {
 
   uint8_t payload[MON_VER_PAYLOAD_LEN];
   if (!wait_for_casic_poll_response(_serial, CASIC_GROUP_MON, CASIC_SUB_VER, MON_VER_PAYLOAD_LEN,
-                                    payload, "mon_ver", timeout_ms)) {
+                                    payload, "mon_ver")) {
     return false;
   }
 

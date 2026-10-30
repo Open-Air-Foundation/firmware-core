@@ -113,6 +113,9 @@ struct GoBoard {
   /// charger is available. A failed call may be retried.
   virtual bool init_bms() = 0;
 
+  /// Suspend touch sensing when no InputService owns the device.
+  virtual bool sleep_touch() = 0;
+
   /// Initialise the Wi-Fi subsystem (NVS, netif, event loop, esp_wifi_init,
   /// event handlers, single-shot timers).  Idempotent.  **Not** called by
   /// init_core() — mode-conditional callers (Stationary entry) invoke it

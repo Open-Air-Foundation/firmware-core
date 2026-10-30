@@ -69,7 +69,7 @@ on-screen password line agree.
 | `build_values(ctx)` | Render a snapshot without changing tracking state or navigation. |
 | `set_screen(screen)` | Assign the screen without initializing its view or cursor. |
 | `open_tracking_status()` | Open Session with Back selected; requires an active session. |
-| `sync_tracking_state(state)` | Update tracking state; on Idle, dismiss tracking menus to MainMenu; select Operating Mode in Energy Saving, otherwise Tracking. |
+| `sync_tracking_state(state)` | Update tracking state; on Idle, dismiss tracking menus to MainMenu with the tracking row selected. |
 | `current_screen()` | Read current screen. |
 | `is_on_menu_screen()` | Identify screens that suppress background renders: menus, diagnostics, and GettingStarted. |
 | `show_snackbar(text, persistent = false)` | Show a 3-second message, or persistent text until explicitly cleared. A persistent message ignores ordinary replacement and clear calls. |
@@ -96,7 +96,7 @@ orchestrator what happened:
 
 | UIAction | Trigger | Notes |
 |---|---|---|
-| `StartTracking` | Main Menu: "Start Tracking" | Shown when Idle in Portable/Stationary |
+| `StartTracking` | Main Menu: "Start Tracking" | Shown when Idle |
 | `PauseTracking` | Tracking: "Pause Tracking" | Retains the session |
 | `ResumeTracking` | Tracking: "Resume Tracking" | Continues the retained session |
 | `StopTracking` | Tracking: "Stop Tracking" | Ends a Recording or Paused session |
@@ -158,11 +158,8 @@ flowchart TD
     GettingStarted -- Back --> Settings
 ```
 
-Energy Saving shows only Exit Menu, Operating Mode, and Settings. Navigation
-skips the hidden tracking row; GPS Test remains visible but has no action.
-
-In Portable/Stationary, MainMenu rows are Exit Menu (0), Start Tracking /
-Tracking (1), Operating Mode (2), and Settings (3). When Idle, Start Tracking starts a session and returns
+MainMenu rows are Exit Menu (0), Start Tracking / Tracking (1), Operating Mode
+(2), and Settings (3). When Idle, Start Tracking starts a session and returns
 Home. When Recording or Paused, Tracking opens `Screen::TrackingMenu` with Exit,
 Back, Status, Pause Tracking / Resume Tracking, and Stop Tracking. Status is
 selected on entry. Back returns to MainMenu with Tracking selected; Exit and
@@ -170,9 +167,8 @@ the action rows return Home.
 
 `sync_tracking_state()` keeps the menu aligned with BLE and other state changes.
 If a remote Stop ends the session while TrackingMenu or TrackingStatus is open,
-it returns directly to MainMenu with Start Tracking selected (Operating Mode in
-Energy Saving). The paused state uses a two-bar icon in the recording dot's
-position.
+it returns directly to MainMenu with Start Tracking selected. The paused state
+uses a two-bar icon in the recording dot's position.
 
 Operating Mode lists Portable, Stationary, and Energy Saving in
 that order. Selecting a mode returns Home and emits `ChangeMode`; the existing

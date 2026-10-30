@@ -22,10 +22,6 @@
 > `update_status` / `notify_status` split, `TEST_HOST`-only
 > `StorageTestSeam`.
 >
-> **Superseded:** Energy Saving no longer supports tracking. Its fast-path
-> route append, recovery and timing behavior below is historical; use the living
-> docs for the current mode and GPS sleep policy.
->
 > **Deferred (not implemented):** repeated-append-failure auto-stop and
 > everything that fed it — `_tracking_append_streak_failures` /
 > `_tracking_append_first_failure_ms` state, the

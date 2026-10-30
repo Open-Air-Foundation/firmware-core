@@ -70,8 +70,8 @@ Change frequently — driven by user interaction or shutdown.
 
 The default operating mode on fresh boot is **Portable**.
 
-Tracking is available in Portable and Stationary. Entering Energy Saving
-(Offline) stops the session and keeps GPS asleep; measurements and charts continue.
+All three modes can enter any behavior. Tracking in Offline mode means
+GPS plus sensor logging with no radio transmission.
 
 ## High-Level Architecture
 
@@ -394,12 +394,17 @@ The product's `GpsService` uses `GpsDriver` for UART, CASIC commands, and NMEA
 parsing. It maintains a mutex-protected fix, synchronizes time from GPS, and
 posts `GpsFixUpdate` at the configured interval, including `NoFix` updates.
 
-Inactive GPS uses 30-second sleep in Portable/Stationary and maximum-duration
-sleep in Energy Saving. Energy Saving suppresses GPS acquisition regardless of
-its saved preference. Its timer fast path probes at 9600 baud and includes any
-final retry in the awake-time budget. Persisted transitions into or out of Energy
-Saving request a charger power reset; USB may prevent the power cycle. See
-[GPS Service](docs/gps_service.md) for connection and deadline handling.
+Inactive GPS uses timed `CFG-SLEEP`: 30-second intervals in Portable/Stationary,
+or the next ESP wake interval in Offline. This also applies to Always Off.
+Active GPS remains running through ESP deep sleep; stopping its worker only
+closes UART. The expected wake deadline is retained in `RtcAppState`.
+GPS settings changes wait for an existing sleep deadline without resetting
+the system or ending a tracking session.
+
+Offline tracking start can reset the system on battery to avoid a long GPS
+wait. Only a pending-start boolean is saved to NVS; GoApp creates the route after
+reset and confirms it before entering the fast path. See
+[GPS Service](docs/gps_service.md) for the policy, UART behavior, and failures.
 
 ### Input Producer
 
@@ -551,8 +556,10 @@ charging_only_eligible)` function:
 | `Button` + non-Offline | -- | `Interactive` |
 | `PowerOn` | Not charging-only eligible, including software reset | `Interactive` |
 
-Energy Saving clears retained tracking state before path selection. Its
-charging-only boot also requests long GPS sleep.
+After selection, a pending Offline tracking start can override a
+non-charging-only `PowerOn` path. GoApp creates the session, shows its
+confirmation, and enters the cold fast path; failures return to interactive
+boot. See [Hardware Init](docs/hardware_init.md#boot-path-selection).
 
 Charging-only boot shows a static battery-and-bolt icon with "Charging" and
 "Hold power button / to turn on". Charge completion shows a filled battery
@@ -710,8 +717,8 @@ detailed implementation notes, see [Service Documentation](#service-documentatio
 - `request_sleep()` sends one sleep interval; it cannot replace an existing one.
 - `get_latest_fix()` returns a protected snapshot; `set_aiding_data()` queues
   approximate position/time for the receiver.
-- The Energy Saving fast path probes for long sleep before gas conditioning;
-  failed requests get one final attempt before calculating remaining ESP sleep.
+- `gps_read_once()` runs before fast-path gas conditioning, overlapping PM
+  warmup; it skips a sleeping receiver and supports power-button abort.
 
 See [GPS Service](docs/gps_service.md) for the API and wake-deadline handling.
 
@@ -1019,8 +1026,8 @@ sequenceDiagram
 and reads raw gas, reads the remaining sensors, stores data, and paints the
 locked dashboard through `build_fast_path_display()` without UIManager.
 It returns a sleep, promotion, or thermal shutdown result; the wrapper saves
-retained state before sleep or interactive promotion. It writes no route points.
-Timer wakes leave CAP1203 sensing active without initializing touch.
+retained state before sleep or interactive promotion. Timer wakes preserve
+CAP1203 sleep without initializing touch.
 
 See [Fast-Path Boot](docs/hardware_init.md#fast-path-boot-goappexecute_fast_path)
 for sequencing, timing, and promotion handoff.

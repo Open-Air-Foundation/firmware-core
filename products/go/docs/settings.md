@@ -242,11 +242,16 @@ calls are no-ops. Because the guide gate is evaluated on the `Interactive`
 does not need an `RtcAppState` mirror. Factory reset clears it (default
 `false`) so refurbished / returned units re-show the guide.
 
-## Legacy Tracking Intent
+## Pending Tracking Start
 
-The legacy `trk_start` NVS boolean and its accessors remain for compatibility.
-Boot no longer consumes it or creates an Energy Saving route; factory reset
-clears it. Operating mode is controlled by the existing `GoSettings` setting.
+| NVS Key | Type | Default | Purpose |
+|---|---|---|---|
+| `trk_start` | Boolean | `false` | Resume a requested tracking start after the Offline GPS power-reset path |
+
+`pending_tracking_start()` reads the flag; `save_pending_tracking_start()`
+writes and commits it separately from `GoSettings`. Recovery clears it before
+creating a new route. No session ID or points are persisted for this transition
+because recording has not started. See [Boot Path Selection](hardware_init.md#boot-path-selection).
 
 ## Factory Settings
 

@@ -54,7 +54,7 @@ and connectivity features are active.
 |---|---|---|---|
 | Portable | Carrying the device with a phone | BLE | Streams live readings to the app and supports route history export |
 | Stationary | Leaving the device in one place | Wi-Fi | Supports local-network integrations and optional AirGradient cloud services |
-| Energy Saving | Long battery operation | Brief BLE measurement broadcasts; no connectable BLE or Wi-Fi | Measures locally with GPS asleep and tracking unavailable |
+| Offline / Airplane Mode | Use without radios | No BLE or Wi-Fi | Measures locally and can still track routes without transmitting data |
 
 The default mode on a fresh device is Portable.
 
@@ -69,6 +69,7 @@ Tracking supports:
 - The same commands through the existing BLE Config characteristic.
 - GPS plus sensor data stored together as route points.
 - A unique session ID for each tracking session.
+- Continuing the same session across deep sleep wake-ups.
 - Exporting stored route history to the phone over BLE.
 
 Pause stops new sensor/GPS route points while retaining the session. Resume
@@ -77,10 +78,12 @@ charts, GPS, and existing data export continue; Stationary cloud upload and
 configuration polling also continue. The display replaces the recording dot
 with a pause icon. A paused route must be stopped before it can be deleted.
 
-Tracking is available in Portable and Stationary. Starting a route can wait for
-GPS to wake while sensor points are already recorded. Always Off keeps GPS asleep.
-Entering Energy Saving ends Recording or Paused sessions. Entering or leaving
-Energy Saving restarts the system on battery; USB may prevent that power cycle.
+Starting tracking may wait for a sleeping GPS. Portable and Stationary do not
+reboot for this; Offline on battery may restart to shorten the wait. The display
+shows “Starting tracking...” before reset, then “Started” with the new
+session ID, or “Tracking not started” on recovery failure. A started session can
+record sensor data before GPS has a position. Always Off still keeps GPS asleep
+while tracking.
 
 The device also keeps a short temporary measurement history for on-device charts.
 This chart data is separate from the persistent route log.
@@ -244,15 +247,16 @@ cloud measurement upload can continue. When the source is `cloud`, normal local
 writes are blocked, but a control-only local change to `local` or `both` remains
 possible so LAN administration cannot be permanently locked out.
 
-## Energy Saving Operation
+## Offline Operation
 
-Energy Saving is the UI name for Offline mode. It sleeps between measurements
-and briefly broadcasts readings over BLE during timer wakes.
+Offline mode is for local use with no active BLE or Wi-Fi radio. This can be
+useful for users who want radio silence, airplane-style operation, or local-only
+tracking.
 
-In Energy Saving:
+In Offline mode:
 
 - The device continues measuring locally.
-- Tracking and GPS Test are unavailable; GPS receives a long sleep request.
+- Tracking can still combine sensor readings with GPS data.
 - No BLE data stream is active.
 - No Wi-Fi cloud posting is active.
 - Firmware update is not available until the user changes to Portable or
@@ -326,9 +330,9 @@ reset or refurbished unit.
 ## Configurable Settings
 
 The main menu offers Exit Menu, Start Tracking / Tracking, Operating Mode, and
-Settings. Energy Saving hides the tracking row. During a session, Tracking opens
-Exit, Back, Status, Pause Tracking / Resume Tracking, and Stop Tracking. Operating Mode lists Portable, Stationary, and
-Energy Saving. Settings contains Operations, Display & Touch, Hardware Test, Clear
+Settings. During a session, Tracking opens Exit, Back, Status, Pause Tracking /
+Resume Tracking, and Stop Tracking. Operating Mode lists Portable, Stationary, and
+Offline. Settings contains Operations, Display & Touch, Hardware Test, Clear
 Data, Setup Guide, and the existing About Device page.
 
 Operations groups measurement interval, CO2 calibration, GPS mode, and buzzer.
