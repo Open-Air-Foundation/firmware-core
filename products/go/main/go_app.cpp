@@ -64,6 +64,7 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "services/local_server.h"
 #include "services/sensor_manager.h"
 
+static constexpr uint32_t V2_TOUCH_POLL_MS = 20;
 static constexpr const char *TAG = "app";
 
 // HTTP host for WiFi pull OTA. Mirrors AgClient's (private) default cloud
@@ -193,7 +194,12 @@ void GoApp::run() {
   FactorySettings fs{};
   load_factory_settings(_board.config_store(), fs);
   if (is_factory_learning_stage_active(fs.fg_learning_stage)) {
-    run_factory_learning_path(load_rtc_app_state()); // never returns
+    _board.init_buses();
+    if (_board.variant() != BoardVariant::V2) {
+      run_factory_learning_path(load_rtc_app_state()); // never returns
+    } else {
+      AG_LOGW(TAG, "BQ27427 factory learning is unavailable on V2; continuing normal boot");
+    }
   }
 
   WakeCause cause = PowerService::get_wake_cause();
@@ -677,9 +683,12 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   AG_LOGI(TAG, "run_button_wake_path: entering button-wake boot");
 
   // -----------------------------------------------------------------------
-  // Phase 1: Early paint (~10 ms)
+  // Phase 1: Detect board wiring, then start the early paint
   // -----------------------------------------------------------------------
 
+  // V2 display D/C lives on I2C. Detect the board and initialize its expander
+  // before the display factory selects a GPIO backend.
+  _board.init_buses();
   _board.init_spi();
   DisplayService &disp = _board.display();
 
@@ -701,7 +710,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // Returns in ~10 ms.  Worker task handles the SPI full refresh (~3 s).
   disp.init(wake_values, /* defer_refresh= */ true);
 
-  // Stop LP Core after SPI/display init, before I2C init.
+  // Keep the LP watchdog feeder running through early bus/display init.
   _board.ulp_stop();
 
   // -----------------------------------------------------------------------
@@ -754,13 +763,21 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       });
 
   // InputService: suppress the first ButtonPower event (the wake press)
-  auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue,
-                                         {
-                                             .pin_cap_int = PIN_CAP_INT,
-                                             .pin_button_power = PIN_BUTTON_POWER,
-                                             .pin_button_boot = PIN_BUTTON_BOOT,
-                                             .suppress_button_wake = true,
-                                         });
+  auto *input_service = new InputService(
+      *touch, _board.gpio_hal(), event_queue,
+      {
+          .pin_cap_int = PIN_CAP_INT,
+          .pin_button_power = PIN_BUTTON_POWER,
+          .pin_button_boot = PIN_BUTTON_BOOT,
+          .suppress_button_wake = true,
+          .touch_poll_ms = _board.variant() == BoardVariant::V2 ? V2_TOUCH_POLL_MS : 0u,
+          .touch_enter_channel =
+              _board.variant() == BoardVariant::V2 ? TouchChannel::CH3 : TouchChannel::CH1,
+          .touch_up_channel =
+              _board.variant() == BoardVariant::V2 ? TouchChannel::CH1 : TouchChannel::CH2,
+          .touch_down_channel =
+              _board.variant() == BoardVariant::V2 ? TouchChannel::CH2 : TouchChannel::CH3,
+      });
 
   auto *accel_service = new AccelService(_board.new_accel_sensor(), _board.gpio_hal(), event_queue,
                                          {.pin_int = PIN_ACCEL_INT});
@@ -894,11 +911,13 @@ void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff
                             const char *boot_message) {
   const char *splash_text = boot_message != nullptr ? boot_message : BOOT_SPLASH_TEXT;
   // --- Early display paint ---
-  // Start the e-paper refresh before the slower I2C, BMS, sensor, and NAND
+  // Detect board wiring before creating the display: V2 D/C uses I2C.
+  // Start the e-paper refresh before slower BMS, sensor, and NAND
   // initialization. The display worker owns SPI while it refreshes; NAND
   // initialization naturally waits for that refresh before using the bus.
   bool boot_splash_requested = false;
   if (!handoff.display_painted) {
+    _board.init_buses();
     _board.init_spi();
     DisplayService &early_display = _board.display();
 
@@ -1011,11 +1030,19 @@ void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff
                       .expected_baud = expected_gps_baud_at_boot(cause, settings, boot_state),
                       .wake_deadline_ms = boot_state.gps_wake_deadline_ms});
 
-  auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue,
-                                         {.pin_cap_int = PIN_CAP_INT,
-                                          .pin_button_power = PIN_BUTTON_POWER,
-                                          .pin_button_boot = PIN_BUTTON_BOOT,
-                                          .suppress_button_wake = handoff.suppress_wake_press});
+  auto *input_service = new InputService(
+      *touch, _board.gpio_hal(), event_queue,
+      {.pin_cap_int = PIN_CAP_INT,
+       .pin_button_power = PIN_BUTTON_POWER,
+       .pin_button_boot = PIN_BUTTON_BOOT,
+       .suppress_button_wake = handoff.suppress_wake_press,
+       .touch_poll_ms = _board.variant() == BoardVariant::V2 ? V2_TOUCH_POLL_MS : 0u,
+       .touch_enter_channel =
+           _board.variant() == BoardVariant::V2 ? TouchChannel::CH3 : TouchChannel::CH1,
+       .touch_up_channel =
+           _board.variant() == BoardVariant::V2 ? TouchChannel::CH1 : TouchChannel::CH2,
+       .touch_down_channel =
+           _board.variant() == BoardVariant::V2 ? TouchChannel::CH2 : TouchChannel::CH3});
 
   auto *accel_service = new AccelService(_board.new_accel_sensor(), _board.gpio_hal(), event_queue,
                                          {.pin_int = PIN_ACCEL_INT});

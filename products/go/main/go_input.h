@@ -33,8 +33,8 @@ public:
                                                // re-assertion time to prevent duplicate
                                                // events while finger is held on pad)
     uint32_t long_press_ms = 2000;             // long-press threshold (physical only)
-    uint32_t touch_long_press_ms = 1000;       // CH1 (TouchEnter) long-press threshold
-    uint32_t touch_double_tap_window_ms = 100; // max gap between CH1 taps for double-press
+    uint32_t touch_long_press_ms = 1000;       // TouchEnter long-press threshold
+    uint32_t touch_double_tap_window_ms = 100; // max gap between Enter taps for double-press
     uint32_t touch_watchdog_ms = 5000;         // periodic touch health check interval
     uint16_t task_stack_size = 3072;           // RTOS task stack words
     uint8_t task_priority = 6;                 // RTOS task priority
@@ -42,6 +42,10 @@ public:
                                                // ButtonPower press event (the
                                                // button wake press that started
                                                // this boot cycle)
+    uint32_t touch_poll_ms = 0;                // Nonzero: poll INT instead of registering an ISR
+    uint8_t touch_enter_channel = TouchChannel::CH1;
+    uint8_t touch_up_channel = TouchChannel::CH2;
+    uint8_t touch_down_channel = TouchChannel::CH3;
   };
 
   /// Construct the service.  Does not start the task.
@@ -82,14 +86,14 @@ private:
   RtosTaskHandle _task_handle = nullptr;
   RtosBinarySemaphore _done_sem; // signalled by task before self-delete
 
-  // Touch debounce: ignore CH2/CH3 touch interrupts arriving within debounce_ms
+  // Touch debounce: ignore directional touch interrupts arriving within debounce_ms
   // of the previous accepted touch.  Prevents the CAP1203 INT re-assertion
   // (after clear_interrupt) from generating a duplicate event while the finger
-  // is still on the pad.  CH1 is exempt — it uses the gesture FSM below.
+  // is still on the pad.  Enter is exempt — it uses the gesture FSM below.
   uint64_t _last_touch_time_ms = 0;
 
-  // CH1 (TouchEnter) gesture FSM: long-press fires at the threshold while held;
-  // a quick second tap within the double-tap window emits a double-press.  CH1
+  // TouchEnter gesture FSM (the _ch1 names refer to legacy wiring): long-press fires at the threshold while held;
+  // a quick second tap within the double-tap window emits a double-press.  Enter
   // has its repeat rate disabled at the chip, so it produces only press/release
   // edges; gesture resolution is timer-driven via check_pending_touch_gesture().
   bool _ch1_down = false;           // between a press-down and its release edge
@@ -118,15 +122,16 @@ private:
   bool _pending_long_press[2] = {false, false};
 
 protected:
-  /// Read CAP1203 status, clear interrupt, drive the CH1 gesture FSM, and post
-  /// ShortPress events for valid (non-noisy) CH2/CH3 channels.
+  void poll_touch_interrupt();
+  /// Read CAP1203 status, clear interrupt, drive the Enter gesture FSM, and post
+  /// ShortPress events for valid (non-noisy) directional channels.
   void process_touch_interrupt();
 
-  /// Advance the CH1 (TouchEnter) gesture FSM for one read.  ch1_now is the
-  /// current debounced CH1 touch state; now_ms is the read timestamp.
+  /// Advance the TouchEnter gesture FSM for one read.  ch1_now is the
+  /// current debounced Enter touch state; now_ms is the read timestamp.
   void update_ch1_gesture(bool ch1_now, uint64_t now_ms);
 
-  /// Resolve pending CH1 gestures: fire LongPress at the threshold (confirmed
+  /// Resolve pending Enter gestures: fire LongPress at the threshold (confirmed
   /// via peek()), or a single ShortPress once the double-tap window expires.
   void check_pending_touch_gesture();
 

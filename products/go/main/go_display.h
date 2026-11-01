@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "go_display_geometry.h"
+#include "airgradient_gpio.h"
 #include "go_types.h"
 #include "measures_types.h"
 #include "rtos.h"
@@ -292,6 +293,7 @@ public:
     int pin_dc;
     int pin_rst;
     int pin_busy;
+    const gpio::Hal *dc_gpio = nullptr; // Optional task-context D/C backend
     int clock_hz = 4000000;
 
     // Worker task

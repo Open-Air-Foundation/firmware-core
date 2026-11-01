@@ -18,10 +18,18 @@
 enum class BoardVariant : uint8_t {
   Prototype, ///< Legacy board: no BQ27427, PM enable active-high
   V1,        ///< New board: BQ27427 at 0x55, PM enable active-low
+  V2,        ///< TCA6408A GPIO expander and BQ27742 fuel gauge
 };
 
 inline const char *board_variant_str(BoardVariant v) {
-  return v == BoardVariant::V1 ? "V1" : "Prototype";
+  switch (v) {
+  case BoardVariant::V1:
+    return "V1";
+  case BoardVariant::V2:
+    return "V2";
+  default:
+    return "Prototype";
+  }
 }
 
 /// GPIO level interpreted as "PM ON" for the given variant.
@@ -29,7 +37,7 @@ inline const char *board_variant_str(BoardVariant v) {
 /// Literals duplicated from board_config.h on purpose — board_config.h
 /// is target-only and cannot be included here.
 inline constexpr uint8_t pm_power_on_level(BoardVariant v) {
-  return (v == BoardVariant::V1) ? 0 : 1;
+  return (v == BoardVariant::Prototype) ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +148,7 @@ struct GoBoard {
   virtual BmsDevice *bms() = 0;
   virtual SensorManager &sensors(bool warm = false) = 0;
   virtual StorageService &storage() = 0;
+  /// Requires init_buses() and init_spi(): V2 display D/C uses the I2C expander.
   virtual DisplayService &display() = 0;
   virtual LedService &led_service() = 0;
   virtual BuzzerService &buzzer_service() = 0;

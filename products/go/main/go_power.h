@@ -173,6 +173,7 @@ public:
                                                ///<   v1:        0 (active-low)
     uint32_t sensor_hold_max_sleep_ms = 20000; ///< Max sleep (ms) to hold PM sensor powered
     uint32_t pm_sleep_threshold_ms = 20000;    ///< Min measure interval (ms) to power-cycle PM
+    bool pm_bus_isolation_only = false;        ///< V2: expander gates I2C; no native GPIO hold
   };
 
   // -------------------------------------------------------------------------

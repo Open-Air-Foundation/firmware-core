@@ -102,6 +102,7 @@ struct DriverState {
   gpio_num_t pin_dc = GPIO_NUM_NC;
   gpio_num_t pin_rst = GPIO_NUM_NC;
   gpio_num_t pin_busy = GPIO_NUM_NC;
+  const gpio::Hal *dc_gpio = nullptr;
 
   spi_device_handle_t spi = nullptr;
   uint8_t *tx_bounce = nullptr;
@@ -112,7 +113,12 @@ DriverState g_driver;
 // --- Low-level GPIO helpers ---
 
 inline void set_cs(int level) { gpio_set_level(g_driver.pin_cs, level); }
-inline void set_dc(int level) { gpio_set_level(g_driver.pin_dc, level); }
+inline esp_err_t set_dc(int level) {
+  if (g_driver.dc_gpio != nullptr) {
+    return g_driver.dc_gpio->set_level(g_driver.pin_dc, level) ? ESP_OK : ESP_FAIL;
+  }
+  return gpio_set_level(g_driver.pin_dc, level);
+}
 inline void set_rst(int level) { gpio_set_level(g_driver.pin_rst, level); }
 
 void delay_ms(uint32_t ms) {
@@ -124,12 +130,20 @@ void delay_ms(uint32_t ms) {
 // Poll cadence must be >= 1 tick; a sub-tick delay degrades to vTaskDelay(0)
 // (bare yield), starving the lower-priority LED/buzzer tasks during refresh.
 static constexpr uint32_t BUSY_POLL_MS = 10;
+static constexpr uint32_t BUSY_TIMEOUT_MS = 30000;
 
 // BUSY=1 means controller processing; BUSY=0 means ready.
-void wait_busy_low() {
+esp_err_t wait_busy_low() {
+  const uint64_t started_ms = RTOS::get_time_ms();
   while (gpio_get_level(g_driver.pin_busy) != 0) {
+    if (RTOS::get_time_ms() - started_ms >= BUSY_TIMEOUT_MS) {
+      ESP_LOGE(TAG, "EPD BUSY stayed high for %lu ms (GPIO %d)",
+               static_cast<unsigned long>(BUSY_TIMEOUT_MS), g_driver.pin_busy);
+      return ESP_ERR_TIMEOUT;
+    }
     RTOS::delay_ms(BUSY_POLL_MS);
   }
+  return ESP_OK;
 }
 
 // --- SPI transfer primitives ---
@@ -159,24 +173,24 @@ esp_err_t spi_write_bulk(const uint8_t *data, size_t len) {
 // --- SSD1680 command/data protocol ---
 
 esp_err_t write_cmd(uint8_t command) {
+  DISP_RETURN_ON_ERR(set_dc(0));
   set_cs(0);
-  set_dc(0);
   const esp_err_t err = spi_write_byte(command);
   set_cs(1);
   return err;
 }
 
 esp_err_t write_data(uint8_t data) {
+  DISP_RETURN_ON_ERR(set_dc(1));
   set_cs(0);
-  set_dc(1);
   const esp_err_t err = spi_write_byte(data);
   set_cs(1);
   return err;
 }
 
 esp_err_t write_data_bytes(const uint8_t *data, size_t len) {
+  DISP_RETURN_ON_ERR(set_dc(1));
   set_cs(0);
-  set_dc(1);
   const esp_err_t err = spi_write_bulk(data, len);
   set_cs(1);
   return err;
@@ -194,10 +208,13 @@ esp_err_t driver_init(const DisplayService::Config &cfg) {
   g_driver.pin_dc = static_cast<gpio_num_t>(cfg.pin_dc);
   g_driver.pin_rst = static_cast<gpio_num_t>(cfg.pin_rst);
   g_driver.pin_busy = static_cast<gpio_num_t>(cfg.pin_busy);
+  g_driver.dc_gpio = cfg.dc_gpio;
 
   // Configure output GPIOs (CS, DC, RST)
   gpio_config_t out_cfg = {};
-  out_cfg.pin_bit_mask = (1ULL << cfg.pin_cs) | (1ULL << cfg.pin_dc) | (1ULL << cfg.pin_rst);
+  out_cfg.pin_bit_mask = (1ULL << cfg.pin_cs) | (1ULL << cfg.pin_rst);
+  if (cfg.dc_gpio == nullptr)
+    out_cfg.pin_bit_mask |= 1ULL << cfg.pin_dc;
   out_cfg.mode = GPIO_MODE_OUTPUT;
   out_cfg.pull_up_en = GPIO_PULLUP_DISABLE;
   out_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -214,7 +231,7 @@ esp_err_t driver_init(const DisplayService::Config &cfg) {
   DISP_RETURN_ON_ERR(gpio_config(&in_cfg));
 
   set_cs(1);
-  set_dc(1);
+  DISP_RETURN_ON_ERR(set_dc(1));
   set_rst(1);
 
   // Attach SPI device (CS managed manually, not by ESP-IDF driver)
@@ -266,11 +283,11 @@ esp_err_t driver_hw_init_full() {
   delay_ms(10);
   set_rst(1);
   delay_ms(10);
-  wait_busy_low();
+  DISP_RETURN_ON_ERR(wait_busy_low());
 
   // Software reset
   DISP_RETURN_ON_ERR(write_cmd(0x12));
-  wait_busy_low();
+  DISP_RETURN_ON_ERR(wait_busy_low());
 
   // Driver output control: gate lines = HEIGHT_PX - 1
   DISP_RETURN_ON_ERR(write_cmd(0x01));
@@ -315,7 +332,7 @@ esp_err_t driver_hw_init_full() {
   DISP_RETURN_ON_ERR(write_cmd(0x4F));
   DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) % 256)));
   DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>((HEIGHT_PX - 1) / 256)));
-  wait_busy_low();
+  DISP_RETURN_ON_ERR(wait_busy_low());
 
   return ESP_OK;
 }
@@ -331,7 +348,7 @@ esp_err_t driver_set_basemap(const uint8_t *data) {
   DISP_RETURN_ON_ERR(write_cmd(0x22));
   DISP_RETURN_ON_ERR(write_data(0xF7));
   DISP_RETURN_ON_ERR(write_cmd(0x20));
-  wait_busy_low();
+  DISP_RETURN_ON_ERR(wait_busy_low());
   return ESP_OK;
 }
 
@@ -342,7 +359,7 @@ esp_err_t driver_part_begin() {
   delay_ms(10);
   set_rst(1);
   delay_ms(10);
-  wait_busy_low();
+  DISP_RETURN_ON_ERR(wait_busy_low());
 
   // Re-establish Y mapping after reset
   DISP_RETURN_ON_ERR(write_cmd(0x01));
@@ -402,7 +419,7 @@ esp_err_t driver_part_commit() {
   DISP_RETURN_ON_ERR(write_cmd(0x22));
   DISP_RETURN_ON_ERR(write_data(0xFF));
   DISP_RETURN_ON_ERR(write_cmd(0x20));
-  wait_busy_low();
+  DISP_RETURN_ON_ERR(wait_busy_low());
   return ESP_OK;
 }
 
@@ -424,7 +441,7 @@ esp_err_t driver_hw_init_fast() {
 
   // Software reset (clears all registers to defaults)
   DISP_RETURN_ON_ERR(write_cmd(0x12));
-  wait_busy_low();
+  DISP_RETURN_ON_ERR(wait_busy_low());
 
   // Select built-in temperature sensor
   DISP_RETURN_ON_ERR(write_cmd(0x18));
@@ -434,7 +451,7 @@ esp_err_t driver_hw_init_fast() {
   DISP_RETURN_ON_ERR(write_cmd(0x22));
   DISP_RETURN_ON_ERR(write_data(0xB1));
   DISP_RETURN_ON_ERR(write_cmd(0x20));
-  wait_busy_low();
+  DISP_RETURN_ON_ERR(wait_busy_low());
 
   // Override temperature register to 100 °C → selects faster OTP LUT
   DISP_RETURN_ON_ERR(write_cmd(0x1A));
@@ -445,7 +462,7 @@ esp_err_t driver_hw_init_fast() {
   DISP_RETURN_ON_ERR(write_cmd(0x22));
   DISP_RETURN_ON_ERR(write_data(0x91));
   DISP_RETURN_ON_ERR(write_cmd(0x20));
-  wait_busy_low();
+  DISP_RETURN_ON_ERR(wait_busy_low());
 
   // Re-establish display geometry (SW reset cleared these).
   // Must match driver_hw_init_full() for our frame buffer layout.
@@ -509,7 +526,7 @@ esp_err_t driver_fast_commit() {
   DISP_RETURN_ON_ERR(write_cmd(0x22));
   DISP_RETURN_ON_ERR(write_data(0xC7));
   DISP_RETURN_ON_ERR(write_cmd(0x20));
-  wait_busy_low();
+  DISP_RETURN_ON_ERR(wait_busy_low());
   return ESP_OK;
 }
 

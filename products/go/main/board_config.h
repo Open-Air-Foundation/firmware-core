@@ -76,6 +76,7 @@ inline constexpr uint8_t I2C_ADDR_STCC4 = 0x64;    // Sensirion STCC4 CO2 + T/RH
 inline constexpr uint8_t I2C_ADDR_SHT40 = 0x44;    // Dedicated temp/humidity (V1)
 inline constexpr uint8_t I2C_ADDR_SGP41 = 0x59;    // TVOC & NOx
 inline constexpr uint8_t I2C_ADDR_DPS368 = 0x77;   // Pressure + altitude
+inline constexpr uint8_t I2C_ADDR_SPL07 = 0x77;    // V2 pressure + altitude
 inline constexpr uint8_t I2C_ADDR_BMS = 0x6A;      // BQ25629 battery charger
 inline constexpr uint8_t I2C_ADDR_CAP1203 = 0x28;  // Capacitive touch
 inline constexpr uint8_t I2C_ADDR_LIS2DH12 = 0x18; // ST accelerometer (SA0 = GND)

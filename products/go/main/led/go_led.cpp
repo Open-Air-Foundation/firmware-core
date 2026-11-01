@@ -24,20 +24,11 @@ static constexpr const char *TAG = "Led";
 // Named constants -- no magic numbers
 // ===========================================================================
 
-// --- Back LED groups (blue-channel base per RGB group) ---
-static constexpr uint8_t NUM_BACK_LEDS = 5;
-static constexpr uint8_t BACK_B_CHANNELS[NUM_BACK_LEDS] = {6, 12, 15, 18, 24};
-
 // --- Back brightness scale (output = effect_value * scale / 255) ---
 static constexpr uint8_t BACK_SCALE_OFF = 0;
 static constexpr uint8_t BACK_SCALE_DIM = 64;
 static constexpr uint8_t BACK_SCALE_MID = 128;
 static constexpr uint8_t BACK_SCALE_BRIGHT = 255;
-
-// --- Touch LED groups (blue-channel base per RGB group) ---
-static constexpr uint8_t TOUCH_CH_SELECT = 27; // LED10: OUT27/28/29
-static constexpr uint8_t TOUCH_CH_LEFT = 3;    // LED2: OUT3/4/5
-static constexpr uint8_t TOUCH_CH_RIGHT = 0;   // LED1: OUT0/1/2
 
 // --- Touch PWM levels ---
 static constexpr uint8_t TOUCH_PWM_OFF = 0;
@@ -561,7 +552,7 @@ bool LedService::_is_back_static() const {
       return true;
     }
     uint32_t elapsed = _now_ms - _back_effect.started_at_ms;
-    uint32_t total = static_cast<uint32_t>(NUM_BACK_LEDS) * _back_effect.param_ms;
+    uint32_t total = static_cast<uint32_t>(_config.back_channel_count) * _back_effect.param_ms;
     return elapsed >= total;
   }
   case BackEffectState::Type::Sequence:
@@ -581,7 +572,7 @@ uint32_t LedService::_sequence_step_duration(const BackStep &step) const {
   case BackStep::Effect::Fade:
     return step.param_ms;
   case BackStep::Effect::Chase:
-    return static_cast<uint32_t>(NUM_BACK_LEDS) * step.param_ms;
+    return static_cast<uint32_t>(_config.back_channel_count) * step.param_ms;
   }
   return 0;
 }
@@ -636,7 +627,7 @@ void LedService::_tick_back(uint32_t now_ms) {
   }
 
   if (_back_effect.type == BackEffectState::Type::Chase) {
-    uint32_t total = static_cast<uint32_t>(NUM_BACK_LEDS) * _back_effect.param_ms;
+    uint32_t total = static_cast<uint32_t>(_config.back_channel_count) * _back_effect.param_ms;
     if (elapsed >= total) {
       // Chase complete -- transition to Solid so subsequent ticks are no-ops
       Rgb final_color = _back_effect.color;
@@ -775,7 +766,7 @@ bool LedService::_is_primitive_done(BackEffectState::Type type, uint32_t param_m
   case BackEffectState::Type::Fade:
     return param_ms == 0 || elapsed_ms >= param_ms;
   case BackEffectState::Type::Chase:
-    return elapsed_ms >= static_cast<uint32_t>(NUM_BACK_LEDS) * param_ms;
+    return elapsed_ms >= static_cast<uint32_t>(_config.back_channel_count) * param_ms;
   case BackEffectState::Type::Sequence:
     return false;
   }
@@ -834,7 +825,7 @@ void LedService::_render_back() {
   if (_back_brightness != LedBrightness::Off && chase_active) {
     _uniform_back_output.reset();
     uint32_t elapsed = _now_ms - _back_effect.started_at_ms;
-    for (uint8_t i = 0; i < NUM_BACK_LEDS; ++i) {
+    for (uint8_t i = 0; i < _config.back_channel_count; ++i) {
       uint32_t threshold = static_cast<uint32_t>(i) * _back_effect.param_ms;
       Rgb led_color;
       if (_back_effect.param_ms == 0 || elapsed >= threshold) {
@@ -842,7 +833,9 @@ void LedService::_render_back() {
       } else {
         led_color = {0, 0, 0};
       }
-      ok = _config.driver->set_rgb(BACK_B_CHANNELS[i], led_color.r, led_color.g, led_color.b) && ok;
+      ok = _config.driver->set_rgb(_config.back_channels[i], led_color.r, led_color.g,
+                                   led_color.b) &&
+           ok;
     }
   } else {
     const Rgb output = scale_rgb(_last_rendered_back, scale);
@@ -850,8 +843,8 @@ void LedService::_render_back() {
       return;
     }
 
-    for (uint8_t i = 0; i < NUM_BACK_LEDS; ++i) {
-      ok = _config.driver->set_rgb(BACK_B_CHANNELS[i], output.r, output.g, output.b) && ok;
+    for (uint8_t i = 0; i < _config.back_channel_count; ++i) {
+      ok = _config.driver->set_rgb(_config.back_channels[i], output.r, output.g, output.b) && ok;
     }
     if (ok) {
       _uniform_back_output = output;
@@ -876,7 +869,6 @@ void LedService::_render_touch() {
   _touch_dirty = false;
 
   // Write all three touch pads: active pad gets PWM, others get off.
-  static constexpr uint8_t ALL_TOUCH_CHANNELS[] = {TOUCH_CH_SELECT, TOUCH_CH_LEFT, TOUCH_CH_RIGHT};
   static constexpr TouchPad ALL_TOUCH_PADS[] = {TouchPad::Select, TouchPad::Left, TouchPad::Right};
 
   bool ok = true;
@@ -885,9 +877,9 @@ void LedService::_render_touch() {
     const bool lit = _touch_steady || (_touch_active && ALL_TOUCH_PADS[i] == _touch_active_pad);
     if (lit) {
       uint8_t pwm = touch_pwm_for(_touch_intensity);
-      ok = _config.driver->set_rgb(ALL_TOUCH_CHANNELS[i], pwm, pwm, pwm) && ok;
+      ok = _config.driver->set_rgb(_config.touch_channels[i], pwm, pwm, pwm) && ok;
     } else {
-      ok = _config.driver->set_rgb(ALL_TOUCH_CHANNELS[i], 0, 0, 0) && ok;
+      ok = _config.driver->set_rgb(_config.touch_channels[i], 0, 0, 0) && ok;
     }
   }
 

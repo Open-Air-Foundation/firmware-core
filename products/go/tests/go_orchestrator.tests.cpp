@@ -7485,13 +7485,14 @@ TEST_CASE("on_bms_status_timer: charging transition to plugged calls ensure_pmid
 }
 
 // ============================================================================
-// PM sensor recovery: time-based trigger on persistent PM failure (V1 only)
+// PM sensor recovery: time-based trigger on persistent PM failure (V1/V2)
 // ============================================================================
 
-TEST_CASE("on_sensor_data: persistent PM failure triggers recover_pm_sensor on V1",
+TEST_CASE("on_sensor_data: persistent PM failure triggers recovery on V1 and V2",
           "[Orchestrator][pmid][pm_recovery]") {
   TestFixture f;
-  f.stub_board.variant_value = BoardVariant::V1;
+  SECTION("V1") { f.stub_board.variant_value = BoardVariant::V1; }
+  SECTION("V2") { f.stub_board.variant_value = BoardVariant::V2; }
   auto orch = f.make_orchestrator();
   A::set_first_measurement_done(orch, true);
 

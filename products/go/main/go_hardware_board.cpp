@@ -29,6 +29,9 @@
 #include "common.h"
 #include "drivers/bq25629/bq25629_bms.h"
 #include "drivers/bq27427/bq27427.h"
+#include "drivers/bq27742/bq27742.h"
+#include "drivers/spl07/spl07.h"
+#include "tca6408a.h"
 #include "drivers/dps368/dps368.h"
 #include "drivers/s12/s12.h"
 #include "drivers/scd4x/scd4x.h"
@@ -61,6 +64,66 @@
 #include "services/wifi_manager.h"
 
 static constexpr const char *TAG = "board";
+
+namespace {
+// The board HAL keeps the existing logical signal numbers. On V2 these
+// signals are expander ports, never ESP GPIOs. Native buttons/WDT stay native.
+TCA6408A *v2_gpio = nullptr;
+constexpr uint8_t V2_PM_PORT = 1;
+constexpr uint8_t V2_NAND_PORT = 2;
+constexpr uint8_t V2_DISPLAY_DC_PORT = 3;
+constexpr uint8_t V2_TOUCH_PORT = 4;
+constexpr uint8_t V2_OUTPUTS_HIGH = 0xFF;
+constexpr uint8_t V2_INPUTS =
+    static_cast<uint8_t>(~((1u << V2_PM_PORT) | (1u << V2_NAND_PORT) | (1u << V2_DISPLAY_DC_PORT)));
+
+int expander_port(int pin) {
+  switch (pin) {
+  case PIN_PM_POWER:
+    return V2_PM_PORT;
+  case PIN_NAND_CS:
+    return V2_NAND_PORT;
+  case PIN_DISPLAY_DC:
+    return V2_DISPLAY_DC_PORT;
+  case PIN_CAP_INT:
+    return V2_TOUCH_PORT;
+  default:
+    return -1;
+  }
+}
+
+bool v2_configure(int pin, gpio::Mode mode, gpio::PullMode pull, gpio::InterruptType interrupt) {
+  if (expander_port(pin) < 0)
+    return gpio::native::hal.configure(pin, mode, pull, interrupt);
+  // Directions were set atomically at bring-up. There is no MCU interrupt
+  // connection or programmable pull-up on this expander.
+  return interrupt == gpio::InterruptType::Disabled &&
+         mode == (pin == PIN_CAP_INT ? gpio::Mode::Input : gpio::Mode::Output);
+}
+int v2_get_level(int pin) {
+  const int port = expander_port(pin);
+  return port < 0 ? gpio::native::hal.get_level(pin) : v2_gpio->get_level(port);
+}
+bool v2_set_level(int pin, int level) {
+  const int port = expander_port(pin);
+  return port < 0 ? gpio::native::hal.set_level(pin, level) : v2_gpio->set_level(port, level != 0);
+}
+bool v2_add_interrupt(int pin, gpio::InterruptHandler handler, void *arg) {
+  return expander_port(pin) < 0 && gpio::native::hal.add_interrupt_handler(pin, handler, arg);
+}
+bool v2_remove_interrupt(int pin) {
+  return expander_port(pin) < 0 && gpio::native::hal.remove_interrupt_handler(pin);
+}
+bool v2_enable_interrupt(int pin) {
+  return expander_port(pin) < 0 && gpio::native::hal.enable_interrupt(pin);
+}
+bool v2_disable_interrupt(int pin) {
+  return expander_port(pin) < 0 && gpio::native::hal.disable_interrupt(pin);
+}
+const gpio::Hal V2_GPIO_HAL = {v2_configure,        v2_get_level,        v2_set_level,
+                               v2_add_interrupt,    v2_remove_interrupt, v2_enable_interrupt,
+                               v2_disable_interrupt};
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Fuel-gauge cell configuration — validated on hardware against AGo's
@@ -169,16 +232,29 @@ void GoHardwareBoard::init_buses() {
 
   RTOS::delay_ms(100);
 
-  // Board variant detection — probe BQ27427 fuel gauge at 0x55.
-  // ACK = v1 board; NACK / transport error = prototype (fail-safe).
+  // V2 has a TCA6408A at 0x20. Both V1 and V2 gauges use 0x55, so
+  // gauge presence alone only distinguishes V1 from the prototype.
   constexpr uint8_t BQ27427_PROBE_ADDR = 0x55;
   constexpr int BQ27427_PROBE_TIMEOUT_MS = 100;
 
   const bool fg_present =
       i2c_device_present(_i2c_bus, BQ27427_PROBE_ADDR, BQ27427_PROBE_TIMEOUT_MS);
-  _variant = fg_present ? BoardVariant::V1 : BoardVariant::Prototype;
-  AG_LOGI(TAG, "board variant: %s (BQ27427 @ 0x55 %s)", board_variant_str(_variant),
+  const bool expander_present =
+      i2c_device_present(_i2c_bus, TCA6408A::DEFAULT_ADDRESS, BQ27427_PROBE_TIMEOUT_MS);
+  _variant = expander_present ? BoardVariant::V2
+                              : (fg_present ? BoardVariant::V1 : BoardVariant::Prototype);
+  AG_LOGI(TAG, "board variant: %s (gauge @ 0x55 %s)", board_variant_str(_variant),
           fg_present ? "ACK" : "NACK");
+
+  if (_variant == BoardVariant::V2) {
+    v2_gpio = new TCA6408A(_i2c_bus);
+    // A working expander is mandatory: unknown NAND CS/DC levels cannot be
+    // tolerated on the shared SPI bus. Fail boot rather than run miswired.
+    ESP_ERROR_CHECK(v2_gpio->init(V2_OUTPUTS_HIGH, V2_INPUTS) ? ESP_OK : ESP_FAIL);
+    ESP_ERROR_CHECK(v2_gpio->set_level(V2_PM_PORT, false) ? ESP_OK : ESP_FAIL);
+    hal.configure(PIN_PM_POWER, gpio::Mode::Input, gpio::PullMode::Floating,
+                  gpio::InterruptType::Disabled);
+  }
 
   // Drive PM_POWER to the variant-appropriate "ON" level.
   // Prototype: already at 1 (safe-default above), no write needed.
@@ -245,10 +321,22 @@ void GoHardwareBoard::init_fuel_gauge() {
   }
   _fuel_gauge_init_attempted = true;
 
+  if (_variant == BoardVariant::V2) {
+    auto *gauge = new BQ27742(_i2c_bus);
+    if (gauge->init()) {
+      _fuel_gauge = gauge;
+    } else {
+      AG_LOGE(TAG, "BQ27742 unavailable; using charger battery estimate");
+      delete gauge;
+    }
+    return;
+  }
+
   // --- V1 fuel-gauge bring-up ---
   if (_variant == BoardVariant::V1) {
-    _fuel_gauge = new BQ27427(_i2c_bus);
-    if (!_fuel_gauge->init()) {
+    auto *gauge = new BQ27427(_i2c_bus);
+    _fuel_gauge = gauge;
+    if (!gauge->init()) {
       AG_LOGE(TAG, "BQ27427 init failed — FG offline");
       // Continue: _fuel_gauge stays non-null but ready() == false.
     } else {
@@ -258,7 +346,7 @@ void GoHardwareBoard::init_fuel_gauge() {
       FgCellConfig current{};
       const bool dc_ok = _fuel_gauge->read_design_capacity_mah(dc);
       const bool fcc_ok = _fuel_gauge->read_full_charge_capacity_mah(fcc);
-      const bool cfg_ok = _fuel_gauge->read_cell_config(current);
+      const bool cfg_ok = gauge->read_cell_config(current);
 
       FgRecoveryDecision decision =
           evaluate_fg_state(dc, dc_ok, fcc, fcc_ok, current, cfg_ok, AGO_CELL_CONFIG,
@@ -270,7 +358,7 @@ void GoHardwareBoard::init_fuel_gauge() {
       if (decision.needs_factory_reset) {
         AG_LOGW(TAG, "BQ27427 corrupted state (dc=%u fcc=%u dc_ok=%d fcc_ok=%d) — resetting", dc,
                 fcc, dc_ok, fcc_ok);
-        if (!_fuel_gauge->reset_to_factory_defaults()) {
+        if (!gauge->reset_to_factory_defaults()) {
           AG_LOGE(TAG, "BQ27427 reset_to_factory_defaults() failed — "
                        "FG may be in inconsistent state; skipping config write");
           decision = {false, false};
@@ -278,7 +366,7 @@ void GoHardwareBoard::init_fuel_gauge() {
           // Pass 2: post-reset, re-read to drive needs_config_write.
           const bool dc2_ok = _fuel_gauge->read_design_capacity_mah(dc);
           const bool fcc2_ok = _fuel_gauge->read_full_charge_capacity_mah(fcc);
-          const bool cfg2_ok = _fuel_gauge->read_cell_config(current);
+          const bool cfg2_ok = gauge->read_cell_config(current);
           cfg_current_ok = cfg2_ok;
           decision =
               evaluate_fg_state(dc, dc2_ok, fcc, fcc2_ok, current, cfg2_ok, AGO_CELL_CONFIG,
@@ -288,7 +376,7 @@ void GoHardwareBoard::init_fuel_gauge() {
 
       if (decision.needs_config_write) {
         AG_LOGI(TAG, "BQ27427 applying cell config");
-        if (!_fuel_gauge->write_cell_config(AGO_CELL_CONFIG)) {
+        if (!gauge->write_cell_config(AGO_CELL_CONFIG)) {
           AG_LOGW(TAG, "BQ27427 write_cell_config() failed — cell parameters "
                        "not updated; runtime polling continues with whatever "
                        "the chip currently has");
@@ -416,7 +504,10 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
   if (!_sensor_manager) {
     auto *sgp41 = new SGP41(_i2c_bus, I2C_ADDR_SGP41);
     auto *sps30 = new SPS30(_i2c_bus);
-    auto *dps368 = new DPS368(_i2c_bus, I2C_ADDR_DPS368);
+    PressureSensor *pressure =
+        _variant == BoardVariant::V2
+            ? static_cast<PressureSensor *>(new SPL07(_i2c_bus, I2C_ADDR_SPL07))
+            : static_cast<PressureSensor *>(new DPS368(_i2c_bus, I2C_ADDR_DPS368));
 
     auto *s = new Sensors{};
 
@@ -428,17 +519,18 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
     } else {
       AG_LOGE(TAG, "SPS30 init failed");
     }
-    // Init DPS368 before the remaining sensors: continuous mode starts immediately, giving the
+    // Init pressure before the remaining sensors: continuous mode starts immediately, giving the
     // pressure sensor time to produce its first measurement (~120 ms)
-    if (dps368->init()) {
-      s->pressure = dps368;
+    if (pressure->init()) {
+      s->pressure = pressure;
     } else {
-      AG_LOGE(TAG, "DPS368 init failed");
+      AG_LOGE(TAG, "pressure sensor init failed");
+      delete pressure;
     }
 
     s->co2 = init_co2_sensor(_i2c_bus, warm);
 
-    if (_variant == BoardVariant::V1) {
+    if (_variant != BoardVariant::Prototype) {
       auto *sht40 = new SHT40(_i2c_bus, I2C_ADDR_SHT40);
       if (sht40->init()) {
         s->temp_hum = sht40;
@@ -472,6 +564,8 @@ StorageService &GoHardwareBoard::storage() {
     SpiNandStorage::Config nand_config{};
     nand_config.spi_host = SPI_HOST;
     nand_config.cs_pin = PIN_NAND_CS;
+    if (_variant == BoardVariant::V2)
+      nand_config.cs_gpio = &V2_GPIO_HAL;
     auto *nand = new SpiNandStorage(nand_config);
 
     _storage = new StorageService(*cache, *nand);
@@ -484,6 +578,7 @@ StorageService &GoHardwareBoard::storage() {
 }
 
 DisplayService &GoHardwareBoard::display() {
+  assert(_buses_ready && "display() requires init_buses() for board detection and V2 D/C");
   assert(_spi_ready && "display() requires init_spi()");
   if (!_display) {
     _display = new DisplayService({
@@ -492,6 +587,7 @@ DisplayService &GoHardwareBoard::display() {
         .pin_dc = PIN_DISPLAY_DC,
         .pin_rst = PIN_DISPLAY_RST,
         .pin_busy = PIN_DISPLAY_BUSY,
+        .dc_gpio = _variant == BoardVariant::V2 ? &V2_GPIO_HAL : nullptr,
     });
   }
   return *_display;
@@ -501,9 +597,14 @@ LedService &GoHardwareBoard::led_service() {
   assert(_buses_ready && "led_service() requires init_buses()");
   if (!_led_service) {
     LedService::Config cfg{};
-    if (_variant == BoardVariant::V1) {
+    if (_variant != BoardVariant::Prototype) {
       _lp5036 = new LP5036(_i2c_bus, {});
       cfg.driver = _lp5036;
+    }
+    if (_variant == BoardVariant::V2) {
+      // Four populated LEDs: preserve Left/Right and AQI; LED4 is Select.
+      cfg.back_channel_count = 1;
+      cfg.touch_channels[0] = 9;
     }
     // Prototype: cfg.driver stays nullptr → inert mode
     _led_service = new LedService(cfg);
@@ -515,7 +616,7 @@ BuzzerService &GoHardwareBoard::buzzer_service() {
   assert(_buses_ready && "buzzer_service() requires init_buses()");
   if (!_buzzer_service) {
     BuzzerService::Config cfg{};
-    if (_variant == BoardVariant::V1) {
+    if (_variant != BoardVariant::Prototype) {
       _ledc_buzzer = new LedcBuzzer({
           .pin = static_cast<int>(PIN_BUZZER),
           .default_freq_hz = BUZZER_FREQ_HZ,
@@ -589,7 +690,7 @@ PowerService &GoHardwareBoard::power() {
   assert(_fuel_gauge_init_attempted && "power() requires init_fuel_gauge()");
   assert(_bms_init_attempted && "power() requires init_bms()");
   if (!_power) {
-    _power = new PowerService(_bms_driver, gpio::native::hal,
+    _power = new PowerService(_bms_driver, gpio_hal(),
                               {
                                   .pin_wake_button_power = PIN_BUTTON_POWER,
                                   .pin_wake_button_boot = -1,
@@ -598,6 +699,7 @@ PowerService &GoHardwareBoard::power() {
                                   .pin_pm_power = PIN_PM_POWER,
                                   .pm_power_on_level = pm_power_on_level(_variant),
                                   .sensor_hold_max_sleep_ms = 20000,
+                                  .pm_bus_isolation_only = _variant == BoardVariant::V2,
                               });
     _power->init_ext_watchdog();
     _power->reset_ext_watchdog();
@@ -622,7 +724,9 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
   assert(_buses_ready && "new_touch_sensor() requires init_buses()");
   CAP1203::Config cfg;
   cfg.delta_sense = TOUCH_DELTA_SENSE;
-  cfg.repeat_rate_channels = TouchChannel::CH2 | TouchChannel::CH3;
+  // Directional pads repeat; Enter uses press/release edges for gestures.
+  cfg.repeat_rate_channels = _variant == BoardVariant::V2 ? TouchChannel::CH1 | TouchChannel::CH2
+                                                          : TouchChannel::CH2 | TouchChannel::CH3;
   auto *touch = new CAP1203(_i2c_bus, I2C_ADDR_CAP1203, cfg);
   if (!touch->init()) {
     AG_LOGE(TAG, "CAP1203 touch init failed");
@@ -632,6 +736,8 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
 
 AccelSensor *GoHardwareBoard::new_accel_sensor() {
   assert(_buses_ready && "new_accel_sensor() requires init_buses()");
+  if (_variant == BoardVariant::V2)
+    return nullptr;
   LIS2DH12::Config cfg;
   cfg.address = I2C_ADDR_LIS2DH12;
   auto *accel = new LIS2DH12(_i2c_bus, cfg);
@@ -658,7 +764,9 @@ std::string GoHardwareBoard::serial_number() { return build_serial_number(); }
 
 const char *GoHardwareBoard::firmware_version() { return esp_app_get_description()->version; }
 
-const gpio::Hal &GoHardwareBoard::gpio_hal() { return gpio::native::hal; }
+const gpio::Hal &GoHardwareBoard::gpio_hal() {
+  return _variant == BoardVariant::V2 ? V2_GPIO_HAL : gpio::native::hal;
+}
 
 // ===========================================================================
 // Hardware operations

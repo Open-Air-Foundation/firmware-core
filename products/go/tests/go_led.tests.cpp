@@ -1054,3 +1054,24 @@ TEST_CASE("LedService: auto-restore from Off", "[LedService][back][restore]") {
   REQUIRE_CALL(f.driver, set_rgb(24, 0, 0, 0)).RETURN(true);
   f.svc->pump_for_test(200);
 }
+
+TEST_CASE("V2 uses only four populated RGB LEDs", "[LedService][v2]") {
+  TestFixture f;
+  f.config.back_channel_count = 1;
+  f.config.touch_channels[0] = 9;
+  f.build();
+  SECTION("AQI drives LED3 only") {
+    f.svc->back_set_brightness(LedBrightness::Bright);
+    f.svc->back_solid({0, 255, 0});
+    REQUIRE_CALL(f.driver, set_rgb(6, 0, 255, 0)).RETURN(true);
+    f.svc->pump_for_test(0);
+  }
+  SECTION("Select uses LED4 while Left and Right retain LED2 and LED1") {
+    f.svc->touch_set_intensity(TouchLedIntensity::Bright);
+    f.svc->touch_set_all(true);
+    REQUIRE_CALL(f.driver, set_rgb(9, 255, 255, 255)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(3, 255, 255, 255)).RETURN(true);
+    REQUIRE_CALL(f.driver, set_rgb(0, 255, 255, 255)).RETURN(true);
+    f.svc->pump_for_test(0);
+  }
+}

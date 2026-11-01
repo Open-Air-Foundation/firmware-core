@@ -529,7 +529,8 @@ public:
     return nullptr;
   }
 
-  BoardVariant variant() const override { return BoardVariant::Prototype; }
+  BoardVariant board_variant = BoardVariant::Prototype;
+  BoardVariant variant() const override { return board_variant; }
   std::string serial_number() override { return "test-serial"; }
   const char *firmware_version() override { return "0.0.0-test"; }
   const gpio::Hal &gpio_hal() override {
@@ -2115,6 +2116,24 @@ TEST_CASE("run_interactive wires a valid local API with shared identity and queu
   Event event{};
   REQUIRE(RTOS::queue_receive(test_spy::orchestrator_event_queue, &event, 0));
   CHECK(event.type == EventType::LocalApiRequestReady);
+}
+
+TEST_CASE("V2 early display waits for board detection and expander initialization", "[GoApp][v2]") {
+  test_spy::reset();
+  MockBoard board;
+  board.board_variant = BoardVariant::V2;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  SECTION("cold boot") { access.run_interactive(WakeCause::PowerOn); }
+  SECTION("button wake") { access.run_button_wake_path(RtcAppState{}); }
+
+  REQUIRE(board.call_index("init_buses") >= 0);
+  REQUIRE(board.call_index("display") >= 0);
+  CHECK(board.call_index("init_buses") < board.call_index("display"));
+  CHECK(board.call_index("init_spi") < board.call_index("display"));
+  // Slow charger/sensor initialization can still overlap the display refresh.
+  CHECK(board.call_index("display") < board.call_index("init_bms"));
 }
 
 TEST_CASE("run_interactive: exhausted BMS retries restart before orchestrator") {

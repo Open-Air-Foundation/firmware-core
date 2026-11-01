@@ -14,6 +14,7 @@
  */
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <trompeloeil.hpp>
 #include <trompeloeil/mock.hpp>
 
@@ -124,6 +125,7 @@ public:
   using InputService::check_pending_touch_gesture;
   using InputService::check_touch_health;
   using InputService::compute_queue_timeout_ms;
+  using InputService::poll_touch_interrupt;
   using InputService::process_button_event;
   using InputService::process_touch_interrupt;
 
@@ -803,23 +805,42 @@ void touch_edge(MockCapTouchSensor &mock_touch, MockRTOS &mock_rtos, TestableInp
 
 } // namespace
 
-TEST_CASE("CH1 gesture FSM", "[InputService][touch][gesture]") {
+TEST_CASE("Enter gesture FSM on legacy and V2 wiring", "[InputService][touch][gesture]") {
   MockCapTouchSensor mock_touch;
   MockRTOS mock_rtos;
   RTOS::set_instance(&mock_rtos);
 
-  TestableInputService svc(mock_touch, make_config());
+  const bool v2 = GENERATE(false, true);
+  CAPTURE(v2);
+  auto cfg = make_config();
+  if (v2) {
+    cfg.touch_enter_channel = TouchChannel::CH3;
+    cfg.touch_up_channel = TouchChannel::CH1;
+    cfg.touch_down_channel = TouchChannel::CH2;
+  }
+  const uint8_t enter_channel = cfg.touch_enter_channel;
+  TestableInputService svc(mock_touch, cfg);
+
+  SECTION("Top and bottom emit directional short presses") {
+    touch_edge(mock_touch, mock_rtos, svc, 1000, cfg.touch_up_channel);
+    touch_edge(mock_touch, mock_rtos, svc, 1100, cfg.touch_down_channel);
+    REQUIRE(svc.events.size() == 2);
+    CHECK(svc.events[0].source == InputSource::TouchUp);
+    CHECK(svc.events[0].type == InputType::ShortPress);
+    CHECK(svc.events[1].source == InputSource::TouchDown);
+    CHECK(svc.events[1].type == InputType::ShortPress);
+  }
 
   SECTION("Release detected via settled read even when latched read is stale CH1") {
     // Hardware: the CAP1203 holds SENSOR_INPUT_STATUS at CH1 from press through
     // release, so the latched read() reports stale CH1 on the release interrupt;
     // only the post-clear read() reports the cleared state.
-    touch_edge(mock_touch, mock_rtos, svc, 1000, TouchChannel::CH1); // press
+    touch_edge(mock_touch, mock_rtos, svc, 1000, enter_channel); // press
 
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1100);
     trompeloeil::sequence seq;
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0}) // latched: stale CH1
+        .LR_SIDE_EFFECT(_1 = TouchData{enter_channel, 0}) // latched: stale CH1
         .RETURN(true)
         .IN_SEQUENCE(seq);
     REQUIRE_CALL(mock_touch, clear_interrupt()).RETURN(true).IN_SEQUENCE(seq);
@@ -839,7 +860,7 @@ TEST_CASE("CH1 gesture FSM", "[InputService][touch][gesture]") {
   }
 
   SECTION("Single tap → ShortPress after the double-tap window expires") {
-    touch_edge(mock_touch, mock_rtos, svc, 1000, TouchChannel::CH1); // press
+    touch_edge(mock_touch, mock_rtos, svc, 1000, enter_channel);     // press
     touch_edge(mock_touch, mock_rtos, svc, 1050, 0);                 // release
     CHECK(svc.events.empty());                                       // deferred
 
@@ -858,7 +879,7 @@ TEST_CASE("CH1 gesture FSM", "[InputService][touch][gesture]") {
   }
 
   SECTION("Hold past threshold → LongPress at the threshold, release consumed") {
-    touch_edge(mock_touch, mock_rtos, svc, 1000, TouchChannel::CH1); // press
+    touch_edge(mock_touch, mock_rtos, svc, 1000, enter_channel); // press
 
     // Before threshold (1000 + 800 = 1800): nothing.
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1799);
@@ -868,7 +889,7 @@ TEST_CASE("CH1 gesture FSM", "[InputService][touch][gesture]") {
     // At threshold: read confirms still held → LongPress.
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1800);
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{enter_channel, 0})
         .RETURN(true);
     svc.check_pending_touch_gesture();
 
@@ -882,9 +903,9 @@ TEST_CASE("CH1 gesture FSM", "[InputService][touch][gesture]") {
   }
 
   SECTION("Two quick taps → DoublePress, no single ShortPress") {
-    touch_edge(mock_touch, mock_rtos, svc, 1000, TouchChannel::CH1); // tap 1 press
+    touch_edge(mock_touch, mock_rtos, svc, 1000, enter_channel);     // tap 1 press
     touch_edge(mock_touch, mock_rtos, svc, 1050, 0);                 // tap 1 release
-    touch_edge(mock_touch, mock_rtos, svc, 1200, TouchChannel::CH1); // tap 2 press (within window)
+    touch_edge(mock_touch, mock_rtos, svc, 1200, enter_channel);     // tap 2 press (within window)
     touch_edge(mock_touch, mock_rtos, svc, 1250, 0);                 // tap 2 release
 
     REQUIRE(svc.events.size() == 1);
@@ -898,7 +919,7 @@ TEST_CASE("CH1 gesture FSM", "[InputService][touch][gesture]") {
   }
 
   SECTION("Second tap outside the window → two separate ShortPress events") {
-    touch_edge(mock_touch, mock_rtos, svc, 1000, TouchChannel::CH1); // tap 1 press
+    touch_edge(mock_touch, mock_rtos, svc, 1000, enter_channel);     // tap 1 press
     touch_edge(mock_touch, mock_rtos, svc, 1050, 0);                 // tap 1 release
 
     // Window expires → tap 1 resolves to ShortPress.
@@ -908,7 +929,7 @@ TEST_CASE("CH1 gesture FSM", "[InputService][touch][gesture]") {
     CHECK(svc.events[0].type == InputType::ShortPress);
 
     // A later tap is independent.
-    touch_edge(mock_touch, mock_rtos, svc, 2000, TouchChannel::CH1); // tap 2 press
+    touch_edge(mock_touch, mock_rtos, svc, 2000, enter_channel);     // tap 2 press
     touch_edge(mock_touch, mock_rtos, svc, 2050, 0);                 // tap 2 release
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(2401);
     svc.check_pending_touch_gesture();
@@ -918,14 +939,14 @@ TEST_CASE("CH1 gesture FSM", "[InputService][touch][gesture]") {
   }
 
   SECTION("Tap then hold → LongPress only, buffered tap cancelled") {
-    touch_edge(mock_touch, mock_rtos, svc, 1000, TouchChannel::CH1); // tap 1 press
+    touch_edge(mock_touch, mock_rtos, svc, 1000, enter_channel);     // tap 1 press
     touch_edge(mock_touch, mock_rtos, svc, 1050, 0);                 // tap 1 release
-    touch_edge(mock_touch, mock_rtos, svc, 1200, TouchChannel::CH1); // tap 2 press (within window)
+    touch_edge(mock_touch, mock_rtos, svc, 1200, enter_channel);     // tap 2 press (within window)
 
     // Hold past threshold (1200 + 800 = 2000): read confirms held → LongPress.
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(2000);
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{enter_channel, 0})
         .RETURN(true);
     svc.check_pending_touch_gesture();
 
@@ -940,7 +961,7 @@ TEST_CASE("CH1 gesture FSM", "[InputService][touch][gesture]") {
   }
 
   SECTION("Threshold reached but finger already lifted → resolves as tap") {
-    touch_edge(mock_touch, mock_rtos, svc, 1000, TouchChannel::CH1); // press (release edge dropped)
+    touch_edge(mock_touch, mock_rtos, svc, 1000, enter_channel); // press (release edge dropped)
 
     // At threshold, read reports not held → resolve as a (deferred) tap.
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1800);
@@ -958,11 +979,11 @@ TEST_CASE("CH1 gesture FSM", "[InputService][touch][gesture]") {
   }
 
   SECTION("Missed release after LongPress → safety read clears stuck state") {
-    touch_edge(mock_touch, mock_rtos, svc, 1000, TouchChannel::CH1); // press
+    touch_edge(mock_touch, mock_rtos, svc, 1000, enter_channel); // press
 
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(1800);
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{enter_channel, 0})
         .RETURN(true);
     svc.check_pending_touch_gesture(); // LongPress, _ch1_down still true
     REQUIRE(svc.events.size() == 1);
@@ -976,10 +997,10 @@ TEST_CASE("CH1 gesture FSM", "[InputService][touch][gesture]") {
     CHECK(svc.events.size() == 1); // no new event
 
     // FSM is no longer stuck: a fresh press arms a new gesture.
-    touch_edge(mock_touch, mock_rtos, svc, 2100, TouchChannel::CH1);
+    touch_edge(mock_touch, mock_rtos, svc, 2100, enter_channel);
     ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(2100 + 800);
     REQUIRE_CALL(mock_touch, read(trompeloeil::_))
-        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH1, 0})
+        .LR_SIDE_EFFECT(_1 = TouchData{enter_channel, 0})
         .RETURN(true);
     svc.check_pending_touch_gesture();
     REQUIRE(svc.events.size() == 2);
@@ -1026,5 +1047,45 @@ TEST_CASE("input stop disables ISRs and restart leaves touch sensing active",
   CHECK(disabled_interrupts == 3);
   // Host task_create intentionally returns false.
   CHECK_FALSE(service.start());
+  RTOS::set_instance(nullptr);
+}
+
+TEST_CASE("V2 touch polling reads asserted INT and ignores bus errors", "[InputService][v2]") {
+  MockCapTouchSensor touch;
+  MockRTOS rtos;
+  RTOS::set_instance(&rtos);
+  ALLOW_CALL(rtos, get_time_ms_impl()).RETURN(10000);
+  auto cfg = make_config();
+  cfg.touch_poll_ms = 20;
+  TestableInputService svc(touch, cfg);
+  CHECK(svc.compute_queue_timeout_ms() == 20);
+
+  SECTION("deasserted INT") {
+    test_gpio_level[PIN_CAP_INT] = 1;
+    FORBID_CALL(touch, read(trompeloeil::_));
+    svc.poll_touch_interrupt();
+    CHECK(svc.events.empty());
+  }
+  SECTION("I2C error") {
+    test_gpio_level[PIN_CAP_INT] = -1;
+    FORBID_CALL(touch, read(trompeloeil::_));
+    svc.poll_touch_interrupt();
+    CHECK(svc.events.empty());
+  }
+  SECTION("asserted INT delivers touch") {
+    test_gpio_level[PIN_CAP_INT] = 0;
+    REQUIRE_CALL(touch, read(trompeloeil::_))
+        .LR_SIDE_EFFECT(_1 = TouchData{TouchChannel::CH2, 0})
+        .RETURN(true);
+    REQUIRE_CALL(touch, clear_interrupt()).RETURN(true);
+    svc.poll_touch_interrupt();
+    REQUIRE(svc.events.size() == 1);
+    CHECK(svc.events[0].type == InputType::ShortPress);
+  }
+  SECTION("only physical button ISRs are removed") {
+    disabled_interrupts = 0;
+    svc.stop();
+    CHECK(disabled_interrupts == 2);
+  }
   RTOS::set_instance(nullptr);
 }

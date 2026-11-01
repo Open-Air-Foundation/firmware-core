@@ -25,6 +25,9 @@ class LedService {
 public:
   struct Config {
     LedDriver *driver = nullptr;
+    uint8_t back_channels[5] = {6, 12, 15, 18, 24};
+    uint8_t back_channel_count = 5;
+    uint8_t touch_channels[3] = {27, 3, 0}; // Select, Left, Right (B channel)
     uint16_t task_stack_size = 2048;
     uint8_t task_priority = 3;
     uint8_t queue_depth = 8;

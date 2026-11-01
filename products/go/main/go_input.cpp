@@ -104,8 +104,10 @@ void InputService::stop() {
   }
 
   // Unregister ISR handlers.
-  _gpio.disable_interrupt(_config.pin_cap_int);
-  _gpio.remove_interrupt_handler(_config.pin_cap_int);
+  if (_config.touch_poll_ms == 0) {
+    _gpio.disable_interrupt(_config.pin_cap_int);
+    _gpio.remove_interrupt_handler(_config.pin_cap_int);
+  }
   _gpio.disable_interrupt(_config.pin_button_power);
   _gpio.remove_interrupt_handler(_config.pin_button_power);
   _gpio.disable_interrupt(_config.pin_button_boot);
@@ -174,17 +176,20 @@ void InputService::run() {
 
   // Configure GPIO pins as inputs with pull-ups, falling-edge interrupts.
   _gpio.configure(_config.pin_cap_int, gpio::Mode::Input, gpio::PullMode::PullUp,
-                  gpio::InterruptType::FallingEdge);
+                  _config.touch_poll_ms == 0 ? gpio::InterruptType::FallingEdge
+                                             : gpio::InterruptType::Disabled);
   _gpio.configure(_config.pin_button_power, gpio::Mode::Input, gpio::PullMode::PullUp,
                   gpio::InterruptType::AnyEdge);
   _gpio.configure(_config.pin_button_boot, gpio::Mode::Input, gpio::PullMode::PullUp,
                   gpio::InterruptType::AnyEdge);
 
   // Register and enable ISR handlers.
-  _gpio.add_interrupt_handler(_config.pin_cap_int, cap_int_isr, this);
+  if (_config.touch_poll_ms == 0) {
+    _gpio.add_interrupt_handler(_config.pin_cap_int, cap_int_isr, this);
+    _gpio.enable_interrupt(_config.pin_cap_int);
+  }
   _gpio.add_interrupt_handler(_config.pin_button_power, button_power_isr, this);
   _gpio.add_interrupt_handler(_config.pin_button_boot, button_boot_isr, this);
-  _gpio.enable_interrupt(_config.pin_cap_int);
   _gpio.enable_interrupt(_config.pin_button_power);
   _gpio.enable_interrupt(_config.pin_button_boot);
 
@@ -227,11 +232,13 @@ void InputService::run() {
       }
     }
 
+    poll_touch_interrupt();
+
     // Always check pending long-press timers (covers both the timeout and the
     // event-received paths — a button release does not generate an interrupt).
     check_pending_long_press();
 
-    // Resolve pending CH1 touch gestures (long-press threshold, double-tap
+    // Resolve pending Enter touch gestures (long-press threshold, double-tap
     // window) — timer-driven, independent of new interrupts arriving.
     check_pending_touch_gesture();
 
@@ -252,6 +259,13 @@ void InputService::run() {
 // ---------------------------------------------------------------------------
 // Touch processing
 // ---------------------------------------------------------------------------
+
+void InputService::poll_touch_interrupt() {
+  // An I2C read failure returns -1, never a synthetic touch event.
+  if (_config.touch_poll_ms != 0 && _gpio.get_level(_config.pin_cap_int) == 0) {
+    process_touch_interrupt();
+  }
+}
 
 void InputService::process_touch_interrupt() {
   TouchData data{};
@@ -274,29 +288,29 @@ void InputService::process_touch_interrupt() {
 
   const uint64_t now = RTOS::get_time_ms();
 
-  // CH1 = TouchEnter: edge-driven gesture FSM (long-press + double-press), not
+  // TouchEnter: edge-driven gesture FSM (long-press + double-press), not
   // time-debounced so a quick double tap survives.  The first read() is the
-  // latched status, which stays CH1 from press through release; a second read()
+  // latched status, which stays Enter from press through release; a second read()
   // after clear gives the settled state so the release edge is seen instead of
-  // stale CH1.  Only re-read when CH1 is involved (or a press is in flight).
+  // stale Enter.  Only re-read when Enter is involved (or a press is in flight).
   uint8_t ch1_valid = valid_touches; // fall back to latched read
-  if ((valid_touches & TouchChannel::CH1) || _ch1_down) {
+  if ((valid_touches & _config.touch_enter_channel) || _ch1_down) {
     TouchData settled{};
     if (_touch.read(settled)) {
       ch1_valid = settled.touched & static_cast<uint8_t>(~settled.noise);
     }
   }
-  update_ch1_gesture((ch1_valid & TouchChannel::CH1) != 0, now);
+  update_ch1_gesture((ch1_valid & _config.touch_enter_channel) != 0, now);
 
-  // CH2 = TouchUp, CH3 = TouchDown: immediate short press.  Time debounce
+  // TouchUp and TouchDown: immediate short press.  Time debounce
   // rejects the CAP1203 INT re-assertion while the finger is held on the pad.
   if ((now - _last_touch_time_ms) >= static_cast<uint64_t>(_config.debounce_ms)) {
     bool posted = false;
-    if (valid_touches & TouchChannel::CH2) {
+    if (valid_touches & _config.touch_up_channel) {
       post_input_event(InputSource::TouchUp, InputType::ShortPress);
       posted = true;
     }
-    if (valid_touches & TouchChannel::CH3) {
+    if (valid_touches & _config.touch_down_channel) {
       post_input_event(InputSource::TouchDown, InputType::ShortPress);
       posted = true;
     }
@@ -348,13 +362,13 @@ void InputService::check_pending_touch_gesture() {
   const uint64_t now_ms = RTOS::get_time_ms();
 
   // Long-press: fires at the threshold while still held.  Confirm the finger is
-  // still on CH1 with a read() (no clear) before emitting — guards against a
+  // still on Enter with a read() (no clear) before emitting — guards against a
   // dropped release edge that would otherwise leave the FSM stuck "pressed".
   if (_ch1_down && !_ch1_long_fired &&
       (now_ms - _ch1_press_start_ms) >= static_cast<uint64_t>(_config.touch_long_press_ms)) {
     TouchData data{};
-    const bool held = _touch.read(data) &&
-                      (data.touched & static_cast<uint8_t>(~data.noise) & TouchChannel::CH1) != 0;
+    const bool held = _touch.read(data) && (data.touched & static_cast<uint8_t>(~data.noise) &
+                                            _config.touch_enter_channel) != 0;
     if (held) {
       post_input_event(InputSource::TouchEnter, InputType::LongPress);
       _ch1_long_fired = true;
@@ -375,7 +389,7 @@ void InputService::check_pending_touch_gesture() {
     // Detect the lifted finger via read() so the FSM cannot stay stuck.
     TouchData data{};
     if (_touch.read(data) &&
-        (data.touched & static_cast<uint8_t>(~data.noise) & TouchChannel::CH1) == 0) {
+        (data.touched & static_cast<uint8_t>(~data.noise) & _config.touch_enter_channel) == 0) {
       _ch1_down = false;
       _ch1_long_fired = false;
     }
@@ -502,6 +516,9 @@ uint32_t InputService::compute_queue_timeout_ms() const {
   // Start with the touch watchdog interval as the upper bound so the task
   // wakes periodically even when no buttons are pressed.
   uint32_t min_remaining_ms = _config.touch_watchdog_ms;
+  if (_config.touch_poll_ms != 0) {
+    min_remaining_ms = std::min(min_remaining_ms, _config.touch_poll_ms);
+  }
 
   for (int idx = 0; idx < 2; ++idx) {
     if (!_pending_long_press[idx]) {
@@ -516,7 +533,7 @@ uint32_t InputService::compute_queue_timeout_ms() const {
     min_remaining_ms = std::min(min_remaining_ms, remaining_ms);
   }
 
-  // CH1 long-press threshold: wake to fire LongPress while the finger is held.
+  // Enter long-press threshold: wake to fire LongPress while the finger is held.
   if (_ch1_down && !_ch1_long_fired) {
     const uint64_t elapsed_ms = now_ms - _ch1_press_start_ms;
     if (elapsed_ms >= static_cast<uint64_t>(_config.touch_long_press_ms)) {
@@ -526,7 +543,7 @@ uint32_t InputService::compute_queue_timeout_ms() const {
         std::min(min_remaining_ms, static_cast<uint32_t>(_config.touch_long_press_ms - elapsed_ms));
   }
 
-  // CH1 double-tap window: wake to resolve a buffered single tap once expired.
+  // Enter double-tap window: wake to resolve a buffered single tap once expired.
   if (_ch1_tap_pending && !_ch1_down) {
     const uint64_t elapsed_ms = now_ms - _ch1_first_tap_ms;
     if (elapsed_ms > static_cast<uint64_t>(_config.touch_double_tap_window_ms)) {

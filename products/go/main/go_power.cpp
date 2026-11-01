@@ -696,7 +696,8 @@ bool PowerService::should_sleep_pm_sensor(uint32_t measure_interval_ms) const {
 }
 
 void PowerService::set_pm_power(bool on) {
-  // EN_PM load switch only — cuts SPS30 fan current between measurements.
+  // The sensor producer sleeps SPS30 before disconnecting it. On V2 this
+  // signal isolates I2C only; it does not remove the sensor's 5 V supply.
   // PMID (EN_OTG) is armed once in BQ25629Bms::init() and never toggled
   // here; per-cycle boost cold-starts can trip 1S cell-protection OCP.
   if (_config.pin_pm_power < 0) {
@@ -704,8 +705,12 @@ void PowerService::set_pm_power(bool on) {
   }
   const uint8_t on_level = _config.pm_power_on_level;
   const uint8_t off_level = on_level ? 0 : 1;
-  _gpio.set_level(_config.pin_pm_power, on ? on_level : off_level);
-  AG_LOGI(TAG, "set_pm_power: %s", on ? "ON" : "OFF");
+  if (!_gpio.set_level(_config.pin_pm_power, on ? on_level : off_level)) {
+    AG_LOGE(TAG, "PM control failed");
+    return;
+  }
+  AG_LOGI(TAG, "%s: %s", _config.pm_bus_isolation_only ? "PM I2C connection" : "PM power",
+          on ? "ON" : "OFF");
 }
 
 // ---------------------------------------------------------------------------
@@ -721,7 +726,7 @@ void PowerService::enter_sleep(uint32_t sleep_duration_ms) {
 #ifndef TEST_HOST
   // Hold PM sensor power GPIO during short sleeps so the sensor stays warm
   // and the next fast-path boot can skip the 10 s warmup.
-  if (should_hold_pm_sensor(sleep_duration_ms)) {
+  if (should_hold_pm_sensor(sleep_duration_ms) && !_config.pm_bus_isolation_only) {
     auto pin = static_cast<gpio_num_t>(_config.pin_pm_power);
     gpio_hold_en(pin);
     AG_LOGI(TAG, "enter_sleep: holding PM power GPIO %d for warm wake", _config.pin_pm_power);

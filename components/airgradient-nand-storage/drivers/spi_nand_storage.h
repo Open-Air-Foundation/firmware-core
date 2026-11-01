@@ -9,6 +9,7 @@
 #define SPI_NAND_STORAGE_H
 
 #include "nand_storage.h"
+#include "airgradient_gpio.h"
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -30,6 +31,7 @@ public:
     // SPI bus. The bus must be initialised by the caller before init().
     spi_host_device_t spi_host = SPI2_HOST;
     gpio_num_t cs_pin = GPIO_NUM_MAX;
+    const gpio::Hal *cs_gpio = nullptr; // Optional task-context software CS
     int clock_speed_hz = 10 * 1000 * 1000;
     uint8_t spi_device_flags = SPI_DEVICE_HALFDUPLEX;
 
