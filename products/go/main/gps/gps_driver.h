@@ -57,14 +57,10 @@ public:
   /// Call end() before changing baud. Use MODULE_DEFAULT_BAUD after timed wake.
   [[nodiscard]] bool open_uart(int baud_rate);
 
-  /// Poll at the expected baud, then try the other supported baud if silent.
+  /// Listen for valid NMEA at the expected baud, then try the other baud.
   /// Returns the responding baud, or zero if neither responds. Leaves UART open
   /// on success. Does not change receiver configuration or baud.
   int connect(int expected_baud);
-
-  /// Fast-path sleep probe: MON-VER every 300 ms at 9600 only, for up to 5 s.
-  /// Returns 9600 with UART open on response, or zero with UART closed.
-  int connect_fast_path();
 
   /// Send the 115200 command over the currently open UART, drain TX, allow
   /// processing, then reopen the host UART at MODULE_ACTIVE_BAUD. Requires an
@@ -151,9 +147,6 @@ private:
 
   /// Send AID-TIME (0x0B 0x11) with UTC time from epoch.
   void _send_aid_time(int64_t epoch_s, uint32_t time_acc_ms);
-
-  /// Poll MON-VER (0x0A 0x04) and log the module software/hardware version.
-  bool _poll_mon_ver(uint32_t timeout_ms);
 
   /// Send CFG-EPHSAVE (0x06 0x10) to enable ephemeris persistence.
   void _send_cfg_ephsave();
