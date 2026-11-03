@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "688e59c",
+  "rev": "e30a5aa",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -3148,8 +3148,8 @@
     },
     {
       "id": "go.manufacturing.wifi-missing",
-      "title": "Manufacturing startup restarts when its AP is absent",
-      "objective": "Verify this manufacturing-only initial connection outcome.",
+      "title": "Manufacturing mode returns to Getting Started when factory Wi-Fi is unavailable",
+      "objective": "Verify Go displays a connection failure and restarts when the factory network is unavailable.",
       "category": "Manufacturing",
       "sub_category": "Wi-Fi",
       "applicability": [
@@ -3157,25 +3157,20 @@
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
-        "A controllable factory access point with SSID airgradient and WPA2 password cleanair."
+        "A factory access point with SSID airgradient that can be switched off."
       ],
       "steps": [
         {
-          "action": "Record the test access point’s power state and configuration before changing either. For two access points, record both.",
-          "expected_result": "The access point baseline is available for cleanup."
+          "action": "Switch the factory access point off. Disconnect USB from Go. Hold BOOT for at least two seconds, release and allow 30 seconds for restart.",
+          "expected_result": "Getting Started appears."
         },
         {
-          "action": "Factory-reset and leave Getting Started open. Turn the factory AP off.",
-          "expected_result": "The unit is un-onboarded and the AP condition is established."
-        },
-        {
-          "action": "Short-press BOOT once and observe the 15-second connection window and following display refresh.",
-          "expected_result": "After the 15-second attempt window, Wi-Fi connection failed is painted for one second, then the unit restarts at Getting Started."
+          "action": "Press and release BOOT once. Observe for up to 30 seconds.",
+          "expected_result": "Trying default Wi-Fi... appears, followed by Wi-Fi connection failed, then Go restarts to Getting Started. No network setup page appears."
         }
       ],
       "cleanup": [
-        "Restore factory AP power/password and cold-start out of manufacturing.",
-        "Restore each changed access point to its recorded power state and configuration, including after interruption."
+        "Switch the factory access point back on, including after interruption. On Getting Started, hold Menu for one second to complete onboarding. Record any failure to return Home. Erased data is not restored."
       ],
       "references": [
         "products/go/docs/wifi_service.md",
