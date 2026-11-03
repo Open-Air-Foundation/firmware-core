@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "fc75ab9",
+  "rev": "4544c82",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2491,45 +2491,40 @@
     {
       "id": "go.modes.persist-stationary",
       "title": "Stationary survives a cold restart",
-      "objective": "Verify saved operating mode at normal startup.",
+      "objective": "Verify Stationary remains selected and local Wi-Fi access works after a full power-off and startup.",
       "category": "Modes & Sleep",
       "sub_category": "Mode Persistence",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "A computer with Postman or an equivalent GUI API client that resolves .local names on the test LAN.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go.",
-        "Access to the router association list.",
-        "A Linux computer with Bluetooth enabled and a Bluetooth settings GUI."
+        "Go has saved credentials for a Wi-Fi network. The test computer is connected to that network.",
+        "Postman or an equivalent GUI API client supporting .local addresses is available."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Stationary. Read and record the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
+          "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Stationary. Allow the saved Wi-Fi connection up to 30 seconds. Read the full serial from About Device and replace <serial> in every request URL with that value. Use its last four characters to identify AirGradient Go <last4> during Bluetooth scans. Confirm this unit’s router association and send GET http://airgradient_<serial>.local/api/v1/measures in the API client with No Auth, no body and a five-second timeout.",
-          "expected_result": "The intended Go is connected, its local API responds with measurements, and its serial is recorded for the following checks."
+          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout.",
+          "expected_result": "HTTP 200 is returned with the matching serialNumber."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Stationary.",
-          "expected_result": "Stationary is selected."
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
+          "expected_result": "Powered off remains displayed; Go does not restart by itself."
         },
         {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start. Open Main Menu > Operating Mode.",
-          "expected_result": "The saved selection is Stationary."
+          "action": "Press and release Power. Allow up to five minutes for Home, then open Main Menu > Operating Mode.",
+          "expected_result": "Home shows the connected Wi-Fi icon and Stationary remains selected."
         },
         {
-          "action": "Within 30 seconds, confirm this unit’s connection in the router association list. On the test LAN, send GET http://airgradient_<serial>.local/api/v1/measures in the API client with No Auth, no body and a five-second timeout. Scan Bluetooth with clients disconnected.",
-          "expected_result": "Saved Wi-Fi is connected and HTTP returns 200; the Portable Go data service no longer advertises."
+          "action": "Return Home and repeat the GET request using the five-second timeout.",
+          "expected_result": "HTTP 200 is returned with the matching serialNumber."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Return Go Home, including after interruption. Record any failure."
       ],
       "references": [
         "products/go/docs/settings.md",
