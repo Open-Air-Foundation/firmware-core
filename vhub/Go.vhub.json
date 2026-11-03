@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "7c48290",
+  "rev": "fc75ab9",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2453,45 +2453,35 @@
     {
       "id": "go.modes.persist-portable",
       "title": "Portable survives a cold restart",
-      "objective": "Verify saved operating mode at normal startup.",
+      "objective": "Verify Portable remains selected and Bluetooth works after a full power-off and startup.",
       "category": "Modes & Sleep",
       "sub_category": "Mode Persistence",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "A computer with Postman or an equivalent GUI API client that resolves .local names on the test LAN.",
-        "A controllable 2.4 GHz WPA2 test LAN.",
-        "Working credentials for that LAN are saved on the Go.",
-        "Access to the router association list.",
-        "A Linux computer with Bluetooth enabled and a Bluetooth settings GUI."
+        "An Android phone with nRF Connect and Bluetooth enabled."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state and USB connection state. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Read and record the serial from Settings > About Device and return Home.",
+          "expected_result": "Portable is selected and the serial is recorded."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Stationary. Allow the saved Wi-Fi connection up to 30 seconds. Read the full serial from About Device and replace <serial> in every request URL with that value. Use its last four characters to identify AirGradient Go <last4> during Bluetooth scans. Confirm this unit’s router association and send GET http://airgradient_<serial>.local/api/v1/measures in the API client with No Auth, no body and a five-second timeout.",
-          "expected_result": "The intended Go is connected, its local API responds with measurements, and its serial is recorded for the following checks."
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
+          "expected_result": "Powered off remains displayed; Go does not restart by itself."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Press and release Power. Allow up to five minutes for Home, then open Main Menu > Operating Mode.",
+          "expected_result": "Home appears and Portable remains selected."
         },
         {
-          "action": "Disconnect USB, hold Power until Powered off is painted, release Power, wait 10 seconds, then press Power to start. Open Main Menu > Operating Mode.",
-          "expected_result": "The saved selection is Portable."
-        },
-        {
-          "action": "Close BLE clients. Scan Bluetooth for 30 seconds and inspect the test router association list. Try a GET request to http://airgradient_<serial>.local/api/v1/measures in the GUI API client with No Auth, no body and a five-second timeout.",
-          "expected_result": "AirGradient Go <last4> advertises; this device has no Wi-Fi association. This device’s local API is unavailable."
+          "action": "Return Home. Clear previous scan results in nRF Connect, scan for up to 30 seconds and connect to AirGradient Go <last4>, matching the last four characters of the recorded serial. Read Serial Number String (0x2A25) under Device Information (0x180A), entering the displayed pairing passkey if prompted.",
+          "expected_result": "The connection succeeds and the read serial matches Go."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "Disconnect nRF Connect and return Go Home, including after interruption. Record any failure."
       ],
       "references": [
         "products/go/docs/settings.md",
