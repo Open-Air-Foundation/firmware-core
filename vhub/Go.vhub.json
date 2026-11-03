@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "5d1e94c",
+  "rev": "b39ea94",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -23,7 +23,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable, then disconnect USB.",
+          "action": "Select Portable mode, then disconnect USB.",
           "expected_result": "Portable mode is selected and USB is disconnected."
         },
         {
@@ -205,7 +205,7 @@
       "setup": [],
       "steps": [
         {
-          "action": "Unlock with a short Power press if needed. Select Main Menu > Operating Mode > Portable, then return Home.",
+          "action": "Unlock with a short Power press if needed. Select Portable mode, then return Home.",
           "expected_result": "Home is displayed in Portable mode."
         },
         {
@@ -241,7 +241,7 @@
       "setup": [],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
+          "action": "Select Portable mode.",
           "expected_result": "Portable mode is selected."
         },
         {
@@ -273,7 +273,7 @@
       "setup": [],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
+          "action": "Select Portable mode.",
           "expected_result": "Portable mode is selected."
         },
         {
@@ -309,7 +309,7 @@
       "setup": [],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
+          "action": "Select Portable mode.",
           "expected_result": "Portable mode is selected."
         },
         {
@@ -350,7 +350,7 @@
       "setup": [],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
+          "action": "Select Portable mode.",
           "expected_result": "Portable mode is selected."
         },
         {
@@ -454,7 +454,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the current Temperature Unit under Settings > Display & Touch and measurement interval under Settings > Operations.",
+          "action": "Select Portable mode. Record the current Temperature Unit under Settings > Display & Touch and measurement interval under Settings > Operations.",
           "expected_result": "Both original values are recorded."
         },
         {
@@ -494,7 +494,7 @@
       "setup": [],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Display & Touch > Altitude Unit and record the current unit.",
+          "action": "Select Portable mode. Open Settings > Display & Touch > Altitude Unit and record the current unit.",
           "expected_result": "The current unit, m or ft, is identified."
         },
         {
@@ -534,7 +534,7 @@
       "setup": [],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Display & Touch > PM Display and record the current choice.",
+          "action": "Select Portable mode. Open Settings > Display & Touch > PM Display and record the current choice.",
           "expected_result": "The current choice, ug/m3 or USAQI, is identified."
         },
         {
@@ -576,7 +576,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Display & Touch > Auto Lock and record the current choice.",
+          "action": "Select Portable mode. Open Settings > Display & Touch > Auto Lock and record the current choice.",
           "expected_result": "The original Auto Lock setting is recorded."
         },
         {
@@ -614,7 +614,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Display & Touch > Auto Lock and record the current choice.",
+          "action": "Select Portable mode. Open Settings > Display & Touch > Auto Lock and record the current choice.",
           "expected_result": "The original Auto Lock setting is recorded."
         },
         {
@@ -651,7 +651,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Display & Touch > AQI LED and record the current choice.",
+          "action": "Select Portable mode. Open Settings > Display & Touch > AQI LED and record the current choice.",
           "expected_result": "The original brightness setting is recorded."
         },
         {
@@ -693,7 +693,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Display & Touch > Touch LED and record the current choice.",
+          "action": "Select Portable mode. Open Settings > Display & Touch > Touch LED and record the current choice.",
           "expected_result": "The original Touch LED setting is recorded."
         },
         {
@@ -732,7 +732,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Operations > Buzzer, record the current choice, then select On.",
+          "action": "Select Portable mode. Open Settings > Operations > Buzzer, record the current choice, then select On.",
           "expected_result": "Buzzer is set to On."
         },
         {
@@ -771,7 +771,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record Buzzer under Settings > Operations and AQI LED under Settings > Display & Touch. Set both to Off.",
+          "action": "Select Portable mode. Record Buzzer under Settings > Operations and AQI LED under Settings > Display & Touch. Set both to Off.",
           "expected_result": "Both settings show Off, and the rear LEDs are dark."
         },
         {
@@ -816,7 +816,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Measurement Interval under Settings > Operations and select 10s. Disconnect USB and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
+          "action": "Select Portable mode. Record the Measurement Interval under Settings > Operations and select 10s. Disconnect USB and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
           "expected_result": "Home shows readings and a battery icon without a charging bolt."
         },
         {
@@ -851,7 +851,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Measurement Interval under Settings > Operations and select 10s. Connect USB and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings and the charging bolt.",
+          "action": "Select Portable mode. Record the Measurement Interval under Settings > Operations and select 10s. Connect USB and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings and the charging bolt.",
           "expected_result": "Home shows readings and the charging bolt."
         },
         {
@@ -885,7 +885,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
+          "action": "Select Portable mode. Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
           "expected_result": "Powered off remains displayed; Go does not restart by itself."
         },
         {
@@ -919,7 +919,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
+          "action": "Select Portable mode. Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
           "expected_result": "Powered off remains displayed; Go does not restart by itself."
         },
         {
@@ -983,7 +983,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Connect Go to the computer using USB and open the AirGradient logging tool. Return Home.",
+          "action": "Select Portable mode. Connect Go to the computer using USB and open the AirGradient logging tool. Return Home.",
           "expected_result": "Home and device logs are visible."
         },
         {
@@ -1011,7 +1011,7 @@
       "setup": [],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Disconnect USB and return Home.",
+          "action": "Select Portable mode. Disconnect USB and return Home.",
           "expected_result": "Home is displayed with USB disconnected."
         },
         {
@@ -1044,7 +1044,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Connect USB and return Home. Observe for up to 10 seconds.",
+          "action": "Select Portable mode. Connect USB and return Home. Observe for up to 10 seconds.",
           "expected_result": "Home shows a charging bolt or external-power plug icon."
         },
         {
@@ -1081,7 +1081,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the measurement interval under Settings > Operations and Auto Lock under Settings > Display & Touch.",
+          "action": "Select Portable mode. Record the measurement interval under Settings > Operations and Auto Lock under Settings > Display & Touch.",
           "expected_result": "Both original settings are recorded."
         },
         {
@@ -1120,7 +1120,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the measurement interval under Settings > Operations, and Auto Lock and Pinned Chart under Settings > Display & Touch.",
+          "action": "Select Portable mode. Record the measurement interval under Settings > Operations, and Auto Lock and Pinned Chart under Settings > Display & Touch.",
           "expected_result": "All three original settings are recorded."
         },
         {
@@ -1162,7 +1162,7 @@
       "setup": [],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Open Settings > Display & Touch > Pinned Chart and record the current choice.",
+          "action": "Select Portable mode. Open Settings > Display & Touch > Pinned Chart and record the current choice.",
           "expected_result": "The original Pinned Chart setting is recorded."
         },
         {
@@ -1196,7 +1196,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the measurement interval under Settings > Operations, and Auto Lock and Temperature Unit under Settings > Display & Touch.",
+          "action": "Select Portable mode. Record the measurement interval under Settings > Operations, and Auto Lock and Temperature Unit under Settings > Display & Touch.",
           "expected_result": "All three original settings are recorded."
         },
         {
@@ -1234,7 +1234,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the measurement interval under Settings > Operations, and Auto Lock and Pinned Chart under Settings > Display & Touch.",
+          "action": "Select Portable mode. Record the measurement interval under Settings > Operations, and Auto Lock and Pinned Chart under Settings > Display & Touch.",
           "expected_result": "All three original settings are recorded."
         },
         {
@@ -1283,7 +1283,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the measurement interval under Settings > Operations. Connect USB and open the AirGradient logging tool.",
+          "action": "Select Portable mode. Record the measurement interval under Settings > Operations. Connect USB and open the AirGradient logging tool.",
           "expected_result": "The original interval is recorded and device logs are visible."
         },
         {
@@ -1324,7 +1324,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the measurement interval under Settings > Operations. Connect USB and open the AirGradient logging tool.",
+          "action": "Select Portable mode. Record the measurement interval under Settings > Operations. Connect USB and open the AirGradient logging tool.",
           "expected_result": "The original interval is recorded and device logs are visible."
         },
         {
@@ -1366,7 +1366,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record Measure Int. and Buzzer under Settings > Operations, and Auto Lock under Settings > Display & Touch. Connect USB and open the AirGradient logging tool.",
+          "action": "Select Portable mode. Record Measure Int. and Buzzer under Settings > Operations, and Auto Lock under Settings > Display & Touch. Connect USB and open the AirGradient logging tool.",
           "expected_result": "All three original settings are recorded and device logs are visible."
         },
         {
@@ -1413,7 +1413,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record Measure Int. under Settings > Operations and Auto Lock under Settings > Display & Touch. Connect USB and open the AirGradient logging tool.",
+          "action": "Select Portable mode. Record Measure Int. under Settings > Operations and Auto Lock under Settings > Display & Touch. Connect USB and open the AirGradient logging tool.",
           "expected_result": "Both original settings are recorded and device logs are visible."
         },
         {
@@ -1454,7 +1454,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record Buzzer under Settings > Operations, and AQI LED and Touch LED under Settings > Display & Touch.",
+          "action": "Select Portable mode. Record Buzzer under Settings > Operations, and AQI LED and Touch LED under Settings > Display & Touch.",
           "expected_result": "All three original settings are recorded."
         },
         {
@@ -1506,7 +1506,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record GPS under Settings > Operations.",
+          "action": "Select Portable mode. Record GPS under Settings > Operations.",
           "expected_result": "The original GPS setting is recorded."
         },
         {
@@ -1547,7 +1547,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record Buzzer under Settings > Operations and AQI LED under Settings > Display & Touch.",
+          "action": "Select Portable mode. Record Buzzer under Settings > Operations and AQI LED under Settings > Display & Touch.",
           "expected_result": "Both original settings are recorded."
         },
         {
@@ -1675,7 +1675,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Read the serial from About Device, then return Home.",
+          "action": "Select Portable mode. Read the serial from About Device, then return Home.",
           "expected_result": "The device is in Portable mode and its serial is identified."
         },
         {
@@ -1721,7 +1721,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the interval under Settings > Operations > Measurement Interval.",
+          "action": "Select Portable mode. Record the interval under Settings > Operations > Measurement Interval.",
           "expected_result": "Portable is selected and the original interval is recorded."
         },
         {
@@ -1761,7 +1761,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the interval under Settings > Operations > Measurement Interval.",
+          "action": "Select Portable mode. Record the interval under Settings > Operations > Measurement Interval.",
           "expected_result": "Portable is selected and the original interval is recorded."
         },
         {
@@ -1805,7 +1805,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the interval under Settings > Operations > Measurement Interval.",
+          "action": "Select Portable mode. Record the interval under Settings > Operations > Measurement Interval.",
           "expected_result": "Portable is selected and the original interval is recorded."
         },
         {
@@ -1852,7 +1852,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable, then Start Tracking. Record the ID from Tracking start = <ID>.",
+          "action": "Select Portable mode, then Start Tracking. Record the ID from Tracking start = <ID>.",
           "expected_result": "Home shows the recording dot."
         },
         {
@@ -1982,7 +1982,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record GPS Mode in Settings > Operations.",
+          "action": "Select Portable mode. Record GPS Mode in Settings > Operations.",
           "expected_result": "Portable is selected and the original GPS setting is recorded."
         },
         {
@@ -2028,7 +2028,7 @@
           "expected_result": "Getting Started appears."
         },
         {
-          "action": "Hold Menu for one second to complete onboarding. Select Main Menu > Operating Mode > Stationary. Select Use portal and confirm Yes.",
+          "action": "Hold Menu for one second to complete onboarding. Select Stationary mode. Select Use portal and confirm Yes.",
           "expected_result": "Go displays the setup network name and password."
         },
         {
@@ -2077,7 +2077,7 @@
           "expected_result": "Getting Started appears."
         },
         {
-          "action": "Hold Menu for one second to complete onboarding. Select Main Menu > Operating Mode > Stationary. Select Use portal and confirm Yes.",
+          "action": "Hold Menu for one second to complete onboarding. Select Stationary mode. Select Use portal and confirm Yes.",
           "expected_result": "Go displays the setup network name and password."
         },
         {
@@ -2120,7 +2120,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Stationary. Record Wi-Fi Power Saving under Settings > Power Saving and the serial from Settings > About Device.",
+          "action": "Select Stationary mode. Record Wi-Fi Power Saving under Settings > Power Saving and the serial from Settings > About Device.",
           "expected_result": "The original setting and serial are recorded."
         },
         {
@@ -2162,7 +2162,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Stationary. Read the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
+          "action": "Select Stationary mode. Read the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
           "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
@@ -2200,7 +2200,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Stationary. Return Home and allow up to 30 seconds for connection.",
+          "action": "Select Stationary mode. Return Home and allow up to 30 seconds for connection.",
           "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
@@ -2241,7 +2241,7 @@
           "expected_result": "Getting Started appears."
         },
         {
-          "action": "Hold Menu for one second to complete onboarding. Read the serial from Settings > About Device to identify Go in the routers’ connected-device lists. Select Main Menu > Operating Mode > Stationary, then Use portal and confirm Yes.",
+          "action": "Hold Menu for one second to complete onboarding. Read the serial from Settings > About Device to identify Go in the routers’ connected-device lists. Select Stationary mode, then Use portal and confirm Yes.",
           "expected_result": "Go displays the setup network name and password."
         },
         {
@@ -2257,7 +2257,7 @@
           "expected_result": "Connected! shows an IP address, followed by Home with the connected Wi-Fi icon."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Switch A on and B off. Once A’s Wi-Fi network is available, select Stationary and allow up to 30 seconds for connection. Connect the computer to A and inspect router A’s connected-device list.",
+          "action": "Select Portable mode. Switch A on and B off. Once A’s Wi-Fi network is available, select Stationary mode and allow up to 30 seconds for connection. Connect the computer to A and inspect router A’s connected-device list.",
           "expected_result": "Go reconnects to A without entering credentials. Router A lists Go as connected, and Home shows the connected Wi-Fi icon."
         },
         {
@@ -2289,7 +2289,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Stationary. Read the full serial from Settings > About Device and open the matching unit in AirGradient Dashboard.",
+          "action": "Select Stationary mode. Read the full serial from Settings > About Device and open the matching unit in AirGradient Dashboard.",
           "expected_result": "Go connects to Wi-Fi, and the device and dashboard serials match."
         },
         {
@@ -2337,7 +2337,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Stationary. Read the serial from Settings > About Device and open the matching dashboard unit. Record its temperature unit and measurement interval.",
+          "action": "Select Stationary mode. Read the serial from Settings > About Device and open the matching dashboard unit. Record its temperature unit and measurement interval.",
           "expected_result": "Go connects to Wi-Fi, the serials match, and both dashboard settings are recorded."
         },
         {
@@ -2395,7 +2395,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Read the serial from Settings > About Device and return Home.",
+          "action": "Select Portable mode. Read the serial from Settings > About Device and return Home.",
           "expected_result": "Portable is selected and the serial is recorded."
         },
         {
@@ -2403,7 +2403,7 @@
           "expected_result": "The read serial matches Go."
         },
         {
-          "action": "Keep the Bluetooth connection open and select Main Menu > Operating Mode > Stationary. Allow up to 30 seconds for Wi-Fi connection.",
+          "action": "Keep the Bluetooth connection open and select Stationary mode. Allow up to 30 seconds for Wi-Fi connection.",
           "expected_result": "nRF Connect reports disconnection. Go reaches Home with the connected Wi-Fi icon."
         },
         {
@@ -2436,7 +2436,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Stationary. Read the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
+          "action": "Select Stationary mode. Read the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
           "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
@@ -2444,7 +2444,7 @@
           "expected_result": "HTTP 200 is returned with the matching serialNumber."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
+          "action": "Select Portable mode.",
           "expected_result": "Go returns Home and the Wi-Fi icon disappears."
         },
         {
@@ -2479,7 +2479,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Read the serial from Settings > About Device and return Home.",
+          "action": "Select Portable mode. Read the serial from Settings > About Device and return Home.",
           "expected_result": "Portable is selected and the serial is recorded."
         },
         {
@@ -2487,7 +2487,7 @@
           "expected_result": "The read serial matches Go."
         },
         {
-          "action": "Keep the Bluetooth connection open and select Main Menu > Operating Mode > Energy Saving.",
+          "action": "Keep the Bluetooth connection open and select Energy Saving mode.",
           "expected_result": "nRF Connect reports disconnection and Go returns Home."
         },
         {
@@ -2518,7 +2518,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Read the serial from Settings > About Device and return Home.",
+          "action": "Select Energy Saving mode. Read the serial from Settings > About Device and return Home.",
           "expected_result": "Energy Saving is selected and the serial is recorded."
         },
         {
@@ -2526,7 +2526,7 @@
           "expected_result": "No connectable Go advertisement appears. Brief, non-connectable measurement broadcasts are allowed."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
+          "action": "Select Portable mode.",
           "expected_result": "Go returns Home."
         },
         {
@@ -2559,7 +2559,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Stationary. Read and record the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
+          "action": "Select Stationary mode. Read and record the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
           "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
@@ -2567,7 +2567,7 @@
           "expected_result": "HTTP 200 is returned with the matching serialNumber."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving.",
+          "action": "Select Energy Saving mode.",
           "expected_result": "Go returns Home and the Wi-Fi icon disappears."
         },
         {
@@ -2604,7 +2604,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Read and record the serial from Settings > About Device and return Home.",
+          "action": "Select Energy Saving mode. Read and record the serial from Settings > About Device and return Home.",
           "expected_result": "Energy Saving is selected."
         },
         {
@@ -2612,7 +2612,7 @@
           "expected_result": "Go’s local API is unreachable; no HTTP response is received."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Stationary. Allow up to 30 seconds for connection.",
+          "action": "Select Stationary mode. Allow up to 30 seconds for connection.",
           "expected_result": "Go reaches Home with the connected Wi-Fi icon."
         },
         {
@@ -2647,7 +2647,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Read and record the serial from Settings > About Device and return Home.",
+          "action": "Select Portable mode. Read and record the serial from Settings > About Device and return Home.",
           "expected_result": "Portable is selected and the serial is recorded."
         },
         {
@@ -2686,7 +2686,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Stationary. Read and record the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
+          "action": "Select Stationary mode. Read and record the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
           "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
@@ -2728,7 +2728,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Read and record the serial from Settings > About Device and return Home.",
+          "action": "Select Energy Saving mode. Read and record the serial from Settings > About Device and return Home.",
           "expected_result": "Energy Saving is selected and the serial is recorded."
         },
         {
@@ -2771,7 +2771,7 @@
           "expected_result": "Device logs are visible."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Open Settings > Operations > Measurement Interval, record the current choice and select 5m. Return Home.",
+          "action": "Select Energy Saving mode. Open Settings > Operations > Measurement Interval, record the current choice and select 5m. Return Home.",
           "expected_result": "Energy Saving uses the five-minute interval."
         },
         {
@@ -2810,7 +2810,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Open Settings > Operations > Measurement Interval, record the current choice and select 5m. Return Home.",
+          "action": "Select Energy Saving mode. Open Settings > Operations > Measurement Interval, record the current choice and select 5m. Return Home.",
           "expected_result": "Energy Saving uses the five-minute interval."
         },
         {
@@ -2848,7 +2848,7 @@
           "expected_result": "Device logs are visible."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Record the current Measurement Interval under Settings > Operations and Auto Lock under Settings > Display & Touch. Set them to 5m and Off respectively. Return Home and allow up to six minutes for numeric PM2.5 and CO2 readings. Save a Home photo.",
+          "action": "Select Energy Saving mode. Record the current Measurement Interval under Settings > Operations and Auto Lock under Settings > Display & Touch. Set them to 5m and Off respectively. Return Home and allow up to six minutes for numeric PM2.5 and CO2 readings. Save a Home photo.",
           "expected_result": "Home shows readings to compare after waking."
         },
         {
@@ -2893,7 +2893,7 @@
           "expected_result": "Logs are visible and the line contains pwr=None or pwr=OTG, confirming battery operation."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Record Measurement Interval and GPS under Settings > Operations, and Auto Lock under Settings > Display & Touch. Set them to 5m, On When Tracking and Off respectively. Return Home and short-press Power to lock.",
+          "action": "Select Energy Saving mode. Record Measurement Interval and GPS under Settings > Operations, and Auto Lock under Settings > Display & Touch. Set them to 5m, On When Tracking and Off respectively. Return Home and short-press Power to lock.",
           "expected_result": "Go is ready for the sleep cycle."
         },
         {
@@ -2945,11 +2945,11 @@
           "expected_result": "Device logs are visible."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Measurement Interval under Settings > Operations and select 10s. Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings. Start Tracking, record the session ID, then open Tracking > Status and allow 40 seconds for at least one point. Record Points.",
+          "action": "Select Portable mode. Record the Measurement Interval under Settings > Operations and select 10s. Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings. Start Tracking, record the session ID, then open Tracking > Status and allow 40 seconds for at least one point. Record Points.",
           "expected_result": "Status shows Recording with at least one point."
         },
         {
-          "action": "Select Energy Saving. Record its Measurement Interval and select 5m. Return Home and, if unlocked, short-press Power to lock.",
+          "action": "Select Energy Saving mode. Record its Measurement Interval and select 5m. Return Home and, if unlocked, short-press Power to lock.",
           "expected_result": "The log shows PowerService: enter_sleep: entering deep sleep for <duration> ms."
         },
         {
@@ -2996,7 +2996,7 @@
           "expected_result": "Device logs are visible."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Measurement Interval under Settings > Operations and select 10s. Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings. Start Tracking, record the session ID, then open Tracking > Status and allow 40 seconds for at least one point.",
+          "action": "Select Portable mode. Record the Measurement Interval under Settings > Operations and select 10s. Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings. Start Tracking, record the session ID, then open Tracking > Status and allow 40 seconds for at least one point.",
           "expected_result": "Status shows Recording with at least one point."
         },
         {
@@ -3004,7 +3004,7 @@
           "expected_result": "Status shows Paused."
         },
         {
-          "action": "Select Energy Saving. Record its Measurement Interval and select 5m. Return Home and, if unlocked, short-press Power to lock.",
+          "action": "Select Energy Saving mode. Record its Measurement Interval and select 5m. Return Home and, if unlocked, short-press Power to lock.",
           "expected_result": "The log shows PowerService: enter_sleep: entering deep sleep for <duration> ms."
         },
         {
@@ -3108,7 +3108,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable and connect USB power.",
+          "action": "Select Portable mode and connect USB power.",
           "expected_result": "Portable is selected and external power is indicated."
         },
         {
@@ -3157,7 +3157,7 @@
           "expected_result": "Device logs are visible."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Leave the device stationary in the outdoor calibration location, measuring for at least three minutes.",
+          "action": "Select Portable mode. Leave the device stationary in the outdoor calibration location, measuring for at least three minutes.",
           "expected_result": "The device remains powered and measuring in the calibration environment."
         },
         {
@@ -3192,7 +3192,7 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Stationary. Return Home and allow up to 30 seconds for connection.",
+          "action": "Select Stationary mode. Return Home and allow up to 30 seconds for connection.",
           "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
@@ -3208,7 +3208,7 @@
           "expected_result": "Home opens. Portable, C and 10s are selected."
         },
         {
-          "action": "Select Stationary while the previously saved network remains available. Observe for up to 30 seconds.",
+          "action": "Select Stationary mode while the previously saved network remains available. Observe for up to 30 seconds.",
           "expected_result": "Wi-Fi setup opens instead of reconnecting to the saved network."
         }
       ],
@@ -3239,11 +3239,11 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the serial and installed version from Settings > About Device, and Temperature Unit from Settings > Display & Touch. Open the matching device in AirGradient Dashboard and record its firmware assignment.",
+          "action": "Select Portable mode. Record the serial and installed version from Settings > About Device, and Temperature Unit from Settings > Display & Touch. Open the matching device in AirGradient Dashboard and record its firmware assignment.",
           "expected_result": "The device and dashboard serials match."
         },
         {
-          "action": "Assign the installed version in the dashboard during preparation. Connect USB and keep it connected through the update. Select Stationary and allow up to 30 seconds for connection.",
+          "action": "Assign the installed version in the dashboard during preparation. Connect USB and keep it connected through the update. Select Stationary mode and allow up to 30 seconds for connection.",
           "expected_result": "Home shows connected Wi-Fi and a charging bolt or external-power plug icon."
         },
         {
@@ -3259,7 +3259,7 @@
           "expected_result": "Cloud connection is enabled, the interval is 10 seconds and configuration control remains local."
         },
         {
-          "action": "Select Portable. Assign the approved newer version to Go in the dashboard, then select Stationary. Observe the update and restart, allowing up to 65 minutes.",
+          "action": "Select Portable mode. Assign the approved newer version to Go in the dashboard, then select Stationary mode. Observe the update and restart, allowing up to 65 minutes.",
           "expected_result": "Updating firmware appears, followed by Restarting and Home. No Update failed message or repeated restart occurs."
         },
         {
@@ -3273,7 +3273,7 @@
       "cleanup": [
         "After the update finishes or fails, keep the installed version assigned during restoration.",
         "Restore the recorded measurement interval, then cloud connection, then configuration control using PUT config. Poll GET config every two seconds for up to 10 seconds to confirm each restoration.",
-        "Select Portable, restore the original dashboard assignment and disconnect USB. Record the installed version and any failure. Restoring the assignment does not restore the previous firmware."
+        "Select Portable mode, restore the original dashboard assignment and disconnect USB. Record the installed version and any failure. Restoring the assignment does not restore the previous firmware."
       ],
       "references": [
         "products/go/docs/ota_service.md",
@@ -3299,11 +3299,11 @@
       ],
       "steps": [
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the serial and installed version from Settings > About Device, and Temperature Unit from Settings > Display & Touch. Open the matching device in AirGradient Dashboard and record its firmware assignment.",
+          "action": "Select Portable mode. Record the serial and installed version from Settings > About Device, and Temperature Unit from Settings > Display & Touch. Open the matching device in AirGradient Dashboard and record its firmware assignment.",
           "expected_result": "The device and dashboard serials match."
         },
         {
-          "action": "Assign the installed version in the dashboard during preparation. Connect USB and keep it connected through the update. Select Stationary and allow up to 30 seconds for connection.",
+          "action": "Assign the installed version in the dashboard during preparation. Connect USB and keep it connected through the update. Select Stationary mode and allow up to 30 seconds for connection.",
           "expected_result": "Home shows connected Wi-Fi and a charging bolt or external-power plug icon."
         },
         {
@@ -3319,7 +3319,7 @@
           "expected_result": "Cloud connection is enabled, the interval is 10 seconds and configuration control remains local."
         },
         {
-          "action": "Select Portable. Assign the approved older version to Go in the dashboard, then select Stationary. Observe the update and restart, allowing up to 65 minutes.",
+          "action": "Select Portable mode. Assign the approved older version to Go in the dashboard, then select Stationary mode. Observe the update and restart, allowing up to 65 minutes.",
           "expected_result": "Updating firmware appears, followed by Restarting and Home. No Update failed message or repeated restart occurs."
         },
         {
@@ -3333,7 +3333,7 @@
       "cleanup": [
         "After the update finishes or fails, keep the installed version assigned during restoration.",
         "Restore the recorded measurement interval, then cloud connection, then configuration control using PUT config. Poll GET config every two seconds for up to 10 seconds to confirm each restoration.",
-        "Select Portable, restore the original dashboard assignment and disconnect USB. Record the installed version and any failure. Restoring the assignment does not restore the previous firmware."
+        "Select Portable mode, restore the original dashboard assignment and disconnect USB. Record the installed version and any failure. Restoring the assignment does not restore the previous firmware."
       ],
       "references": [
         "products/go/docs/ota_service.md",
