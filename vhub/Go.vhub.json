@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "4c2b402",
+  "rev": "1282415",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2648,45 +2648,41 @@
     },
     {
       "id": "go.sleep.button-wake",
-      "title": "Power wakes Energy Saving (Offline) without immediately locking again",
-      "objective": "Verify wake-button suppression and the cached first display.",
+      "title": "Power wakes Energy Saving without immediately locking again",
+      "objective": "Verify one Power press wakes Go to an unlocked, usable Home screen showing its saved readings.",
       "category": "Modes & Sleep",
       "sub_category": "Button Wake",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
+        "A USB data cable and computer with the AirGradient logging tool.",
+        "The saved Energy Saving measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Connect USB and start the AirGradient logging tool.",
+          "expected_result": "Device logs are visible."
         },
         {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
+          "action": "Select Main Menu > Operating Mode > Energy Saving. Record the current Measurement Interval under Settings > Operations and Auto Lock under Settings > Display & Touch. Set them to 5m and Off respectively. Return Home and allow up to six minutes for numeric PM2.5 and CO2 readings. Save a Home photo.",
+          "expected_result": "Home shows readings to compare after waking."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Energy Saving is selected."
+          "action": "Short-press Power to lock Go. Allow up to six minutes for PowerService: enter_sleep: entering deep sleep for <duration> ms.",
+          "expected_result": "The sleep marker appears; no specific duration value is required."
         },
         {
-          "action": "Set Settings > Operations > Measurement Interval to 5m and Auto Lock to 10s. Return Home, lock and allow six minutes for a deep-sleep entry in the AirGradient logging tool. Short-press Power once during sleep and allow 30 seconds for Home.",
-          "expected_result": "The device returns to unlocked Home with cached readings or dashes for unavailable fields; it does not show an empty intermediate screen or immediately relock."
+          "action": "Press and release Power once while Go is asleep. Reconnect the logging tool after wake if needed.",
+          "expected_result": "The Unlocked snackbar appears promptly over the retained Home readings. Go stays on Home without an extra lock or navigation action. The log shows app: run_button_wake_path: entering button-wake boot."
         },
         {
-          "action": "Do not press anything for 10 seconds, then use the touch controls after unlocking if the normal timeout expired.",
-          "expected_result": "The wake press caused no extra navigation/lock action and normal input remains usable."
+          "action": "Without pressing Power again, use the touch controls to open Main Menu > Settings.",
+          "expected_result": "Navigation works and Go remains unlocked."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "In Energy Saving, restore only the original values captured before this case changed them: Energy Saving interval and Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
+        "Restore the recorded Energy Saving interval and Auto Lock settings, including after interruption. Confirm both selections, return Home, download the logs and disconnect the logging tool. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/power_management.md",
