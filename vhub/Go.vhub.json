@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "1520119",
+  "rev": "83f8f33",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2920,29 +2920,33 @@
     },
     {
       "id": "go.power.charging-only-power",
-      "title": "Charging-only starts Home on Power",
-      "objective": "Verify this exit from a stable charging-only page.",
+      "title": "Power starts Go from the charging screen",
+      "objective": "Verify USB connection shows the charging screen and pressing Power starts normal operation.",
       "category": "Power",
       "sub_category": "Charging-Only",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "The battery charge shown on Home is above 5% and at most 95%.",
-        "A USB power source."
+        "Home shows battery charge above 5% and at most 95%.",
+        "A USB power source and compatible cable."
       ],
       "steps": [
         {
-          "action": "Record initial USB state. Disconnect USB, shut down with Power and release after Powered off. Wait 10 seconds and plug USB in. Observe for 30 seconds.",
-          "expected_result": "Charging, battery/bolt and Hold power button / to turn on remain visible without repeated refresh or starting Home."
+          "action": "Select Main Menu > Operating Mode > Portable. Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
+          "expected_result": "Powered off remains displayed; Go does not restart by itself."
         },
         {
-          "action": "Press and release Power.",
-          "expected_result": "Getting Ready then normal Home appears."
+          "action": "Connect USB and observe for 30 seconds without pressing any buttons.",
+          "expected_result": "Charging, the battery-and-bolt icon and Hold power button / to turn on remain visible. The screen does not repeatedly refresh or advance to Home."
+        },
+        {
+          "action": "Press and release Power. Allow up to five minutes for Home.",
+          "expected_result": "Getting Ready appears, followed by Home with numeric PM2.5 and CO2 readings."
         }
       ],
       "cleanup": [
-        "Start Home with Power if needed and restore the initial USB state."
+        "If interrupted on the charging screen, press and release Power to start Go. Disconnect USB and return Home. Record any failure."
       ],
       "references": [
         "products/go/docs/power_management.md"
