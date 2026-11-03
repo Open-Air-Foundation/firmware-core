@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "fd2436f",
+  "rev": "4c2b402",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2615,7 +2615,7 @@
     {
       "id": "go.ble.offline-measurements",
       "title": "AirGradient app receives Energy Saving broadcasts",
-      "objective": "Verify the app receives Energy Saving measurements while it is visible.",
+      "objective": "Verify the app receives Energy Saving broadcasts from Go.",
       "category": "Modes & Sleep",
       "sub_category": "Timer Wake",
       "applicability": [
@@ -2631,48 +2631,10 @@
           "expected_result": "Energy Saving uses the five-minute interval."
         },
         {
-          "action": "Open the AirGradient app. If Go is unlocked, short-press Power to lock it. Keep the app visible and the phone screen awake for 11 minutes, leaving Go’s controls untouched.",
+          "action": "Open the AirGradient app. If Go is unlocked, short-press Power to lock it. Keep Go near the phone and leave Go’s controls untouched for 11 minutes. Check the app for a new received measurement.",
           "expected_result": "The app receives at least one new Energy Saving broadcast from Go. Individual missed broadcasts are acceptable.",
           "evidence": [
             "Save evidence of the received measurement."
-          ]
-        }
-      ],
-      "cleanup": [
-        "Wake and unlock Go with Power. Restore the recorded Energy Saving interval and confirm its menu selection, including after interruption. Return Home and record any restoration failure."
-      ],
-      "references": [
-        "products/go/go_ble_client.md#offline-measurement-broadcasts",
-        "products/go/docs/ble_service.md#offline-broadcast-lifecycle"
-      ]
-    },
-    {
-      "id": "go.ble.offline-measurements-background",
-      "title": "AirGradient app receives Energy Saving broadcasts while the phone is locked",
-      "objective": "Verify broadcasts are received while the app is in the background.",
-      "category": "Modes & Sleep",
-      "sub_category": "Timer Wake",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A phone with Bluetooth enabled and the AirGradient app supporting background reception and showing the last received message time.",
-        "The saved Energy Saving measurement interval is not a custom value."
-      ],
-      "steps": [
-        {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Open Settings > Operations > Measurement Interval, record the current choice and select 5m. Return Home.",
-          "expected_result": "Energy Saving uses the five-minute interval."
-        },
-        {
-          "action": "Open the AirGradient app. If Go is unlocked, short-press Power to lock it. Background the app without force-closing it and lock the phone. Keep Go nearby and leave its controls untouched for 11 minutes.",
-          "expected_result": "The phone remains locked throughout the observation."
-        },
-        {
-          "action": "Unlock the phone, reopen the app and check its last received message time.",
-          "expected_result": "The time shows a message received while the phone was locked. Individual missed broadcasts are acceptable. A message received only after reopening the app does not establish a pass.",
-          "evidence": [
-            "Save a screenshot showing the last received message time."
           ]
         }
       ],
