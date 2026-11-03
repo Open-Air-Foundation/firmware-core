@@ -4991,22 +4991,56 @@ TEST_CASE("Energy Saving interval edits reschedule only after successful persist
   CHECK(displayed.energy_saving_measure_interval_seconds == (save_ok ? 900 : 300));
 }
 
-TEST_CASE("Energy Saving schedules measurements using its own interval",
-          "[Orchestrator][timers][interval]") {
+TEST_CASE("Unlocked Energy Saving keeps sensing and menus usable with Auto Lock Off",
+          "[Orchestrator][timers][interval][lock]") {
   TestFixture f;
   f.settings.operating_mode = OperatingMode::Offline;
   f.settings.measure_interval_seconds = 10;
+  f.settings.energy_saving_measure_interval_seconds = 300;
   f.settings.auto_lock_seconds = 0;
+  uint32_t now = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
   auto orch = f.make_orchestrator();
   A::set_mode(orch, OperatingMode::Offline);
-  uint32_t now = 299999;
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  A::unlock(orch);
+
+  const auto navigate_settings = [&] {
+    enter_settings(f, orch);
+    open_ui_row(f, orch, "Back");
+    REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
+    open_ui_row(f, orch, "Exit");
+    REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+    CHECK(A::lock_state(orch) == LockState::Unlocked);
+  };
+  navigate_settings();
+
+  now = 299'999;
   A::check_timers(orch);
   CHECK_FALSE(test_spy::measurement_requested);
-  now = 300000;
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  now = 300'000;
   A::check_timers(orch);
-  CHECK(test_spy::measurement_requested);
-  CHECK(A::last_measurement_ms(orch) == 300000);
+  REQUIRE(test_spy::measurement_requested);
+  CHECK(A::last_measurement_ms(orch) == now);
+
+  MeasuresAGo data{};
+  data.pm_a.pm_25 = 12.0f;
+  data.co2.co2 = 650;
+  const auto display_updates = DisplayService::spy_update_count;
+  A::on_sensor_data(orch, data);
+  CHECK(DisplayService::spy_update_count > display_updates);
+  CHECK(DisplayService::spy_last_screen == Screen::Home);
+  const auto values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(values.pm25_ugm3 == 12.0f);
+  CHECK(values.co2_ppm == 650);
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+
+  now = 360'000;
+  test_spy::measurement_requested = false;
+  A::check_timers(orch);
+  CHECK_FALSE(test_spy::measurement_requested);
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  navigate_settings();
 }
 
 TEST_CASE("apply_settings_change: leaves GPS service cadence alone", "[Orchestrator][settings]") {
