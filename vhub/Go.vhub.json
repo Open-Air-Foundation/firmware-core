@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "e30a5aa",
+  "rev": "8a7685c",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -3171,42 +3171,6 @@
       ],
       "cleanup": [
         "Switch the factory access point back on, including after interruption. On Getting Started, hold Menu for one second to complete onboarding. Record any failure to return Home. Erased data is not restored."
-      ],
-      "references": [
-        "products/go/docs/wifi_service.md",
-        "products/go/README.md"
-      ]
-    },
-    {
-      "id": "go.manufacturing.wifi-password",
-      "title": "Manufacturing startup restarts on wrong factory credentials",
-      "objective": "Verify this manufacturing-only initial connection outcome.",
-      "category": "Manufacturing",
-      "sub_category": "Wi-Fi",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "All routes, charts, settings and bonds on this unit are expendable.",
-        "A controllable factory access point with SSID airgradient and WPA2 password cleanair."
-      ],
-      "steps": [
-        {
-          "action": "Record the test access point’s power state and configuration before changing either. For two access points, record both.",
-          "expected_result": "The access point baseline is available for cleanup."
-        },
-        {
-          "action": "Factory-reset and leave Getting Started open. Set the factory AP password to wrongpass123 for this attempt.",
-          "expected_result": "The unit is un-onboarded and the AP condition is established."
-        },
-        {
-          "action": "Short-press BOOT once and observe the 15-second connection window and following display refresh.",
-          "expected_result": "The failed attempt ends with Wi-Fi connection failed for one second and a restart at Getting Started; normal provisioning never opens."
-        }
-      ],
-      "cleanup": [
-        "Restore factory AP power/password and cold-start out of manufacturing.",
-        "Restore each changed access point to its recorded power state and configuration, including after interruption."
       ],
       "references": [
         "products/go/docs/wifi_service.md",
