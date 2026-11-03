@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "8a7685c",
+  "rev": "0f3c593",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -3175,53 +3175,6 @@
       "references": [
         "products/go/docs/wifi_service.md",
         "products/go/README.md"
-      ]
-    },
-    {
-      "id": "go.manufacturing.wifi-runtime",
-      "title": "A manufacturing runtime outage retries without startup reset",
-      "objective": "Verify the post-connection reconnect policy in manufacturing.",
-      "category": "Manufacturing",
-      "sub_category": "Wi-Fi",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "All routes, charts, settings and bonds on this unit are expendable.",
-        "A controllable factory access point with SSID airgradient and WPA2 password cleanair.",
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool."
-      ],
-      "steps": [
-        {
-          "action": "Record the test access point’s power state and configuration before changing either. For two access points, record both.",
-          "expected_result": "The access point baseline is available for cleanup."
-        },
-        {
-          "action": "Record whether USB is initially connected.",
-          "expected_result": "The initial USB state is recorded."
-        },
-        {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Factory-reset, leave the factory AP on and short-press BOOT at Getting Started. Observe the 15-second connection window and following display refresh.",
-          "expected_result": "Manufacturing connects during the 15-second window and reaches Home."
-        },
-        {
-          "action": "Turn the factory AP off for 30 seconds, then restore it. Observe for up to 90 seconds.",
-          "expected_result": "The unit reconnects without rebooting or opening provisioning."
-        }
-      ],
-      "cleanup": [
-        "Restore the AP and cold-start out of manufacturing.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool.",
-        "Restore the recorded USB connection state.",
-        "Restore each changed access point to its recorded power state and configuration, including after interruption."
-      ],
-      "references": [
-        "products/go/docs/wifi_service.md"
       ]
     },
     {
