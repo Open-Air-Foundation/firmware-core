@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "73069ec",
+  "rev": "b805717",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -28,7 +28,7 @@
         },
         {
           "action": "Hold Power until Powered off is fully displayed, release Power, and wait 10 seconds.",
-          "expected_result": "Powered off remains displayed; the device does not restart by itself."
+          "expected_result": "Powered off and Hold power button / to turn on are fully visible and remain displayed; Go does not restart by itself."
         },
         {
           "action": "Press and release Power. Observe startup for up to five minutes from the Power press.",
@@ -3045,40 +3045,6 @@
       "references": [
         "products/go/docs/power_management.md",
         "products/go/docs/display_service.md"
-      ]
-    },
-    {
-      "id": "go.power.battery-shutdown",
-      "title": "Releasing Power after shutdown leaves the unit off",
-      "objective": "Verify the physical button outcome on battery.",
-      "category": "Power",
-      "sub_category": "Shutdown",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Disconnect USB. Hold Power at least two seconds until Powered off, then release and observe for 10 seconds.",
-          "expected_result": "Powered off and its power-button hint remain; the device stays off until Power is pressed."
-        }
-      ],
-      "cleanup": [
-        "Release Power; return to Home.",
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
-      ],
-      "references": [
-        "products/go/docs/power_management.md"
       ]
     },
     {
