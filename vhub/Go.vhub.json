@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "0f3c593",
+  "rev": "936d4e2",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -3179,8 +3179,8 @@
     },
     {
       "id": "go.reset.factory-button",
-      "title": "Physical factory reset restores first use and visible defaults",
-      "objective": "Verify the BOOT reset gesture restores onboarding, menu defaults and Wi-Fi setup while clearing visible history and tracking state.",
+      "title": "Factory reset restores defaults and forgets Wi-Fi",
+      "objective": "Verify holding BOOT restores onboarding, visible defaults and Wi-Fi setup.",
       "category": "Reset & Update",
       "sub_category": "Factory Reset",
       "applicability": [
@@ -3188,43 +3188,32 @@
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
-        "A controllable WPA2 test access point.",
-        "The test access point’s SSID and password.",
-        "A computer with a browser and Wi-Fi settings."
+        "Go has saved credentials for an available Wi-Fi network."
       ],
       "steps": [
         {
-          "action": "Record the initial USB connection state and the computer’s Wi-Fi network.",
-          "expected_result": "Both are recorded for cleanup."
+          "action": "Select Main Menu > Operating Mode > Stationary. Return Home and allow up to 30 seconds for connection.",
+          "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
-          "action": "Hold BOOT for at least two seconds. After restart, complete Getting Started with a one-second Menu hold. Record the factory Temperature Unit and Portable measurement interval through Settings. Select Energy Saving and record its measurement interval, then return to Portable.",
-          "expected_result": "The dedicated unit is onboarded. The factory Temperature Unit and both intervals are recorded; Energy Saving defaults to 5m."
+          "action": "Set Temperature Unit under Settings > Display & Touch to F, and Measurement Interval under Settings > Operations to 30s.",
+          "expected_result": "Both menus show the selected values."
         },
         {
-          "action": "Select Stationary, choose Switch to Wi-Fi and confirm Yes. Join the setup network shown on Go with password cleanair, open http://192.168.4.1/ in the browser, and enter the test network credentials. Allow 30 seconds after submitting.",
-          "expected_result": "Connected! and then Home appear, establishing saved Wi-Fi credentials before reset."
+          "action": "Disconnect USB. Hold BOOT for at least two seconds, release and allow 30 seconds for restart.",
+          "expected_result": "Getting Started appears."
         },
         {
-          "action": "Select Portable. Change Temperature Unit to the opposite of the factory value and set interval 10s. Allow five minutes for warmup, then collect five CO2 chart samples over one minute. Set interval 30s, or 60s if the factory interval was 30s. Select Energy Saving, set interval 15m, then return to Portable and Start Tracking.",
-          "expected_result": "The unit has nondefault settings, chart history, saved Wi-Fi and an active recording indicator."
+          "action": "Hold Menu for one second to complete onboarding. Inspect Operating Mode, Temperature Unit and Measurement Interval.",
+          "expected_result": "Home opens. Portable, C and 10s are selected."
         },
         {
-          "action": "Hold BOOT for at least two seconds and observe through restart, allowing 30 seconds.",
-          "expected_result": "The device restarts into Getting Started instead of returning directly to its previous Home state."
-        },
-        {
-          "action": "Finish onboarding. Inspect the CO2 chart, Main Menu, Operating Mode, Temperature Unit and Measure Int. Then select Energy Saving and inspect Measure Int.",
-          "expected_result": "Previous chart history is absent; new post-reset samples may appear. Main Menu offers Start Tracking and Portable is initially selected. The recorded factory Temperature Unit and both intervals are restored, including Energy Saving at 5m."
-        },
-        {
-          "action": "Select Stationary while the test access point is still available.",
-          "expected_result": "Wi-Fi setup opens because the previously saved network was erased."
+          "action": "Select Stationary while the previously saved network remains available. Observe for up to 30 seconds.",
+          "expected_result": "Wi-Fi setup opens instead of reconnecting to the saved network."
         }
       ],
       "cleanup": [
-        "Cancel Wi-Fi setup if still open and leave the dedicated unit onboarded in Portable mode.",
-        "Restore the recorded USB connection and computer Wi-Fi network. The erased user data and settings are intentionally not restored."
+        "Cancel Wi-Fi setup with Cancel setup > Yes if open, including after interruption. Leave Go onboarded in Portable mode and record any failure. Erased data and settings are not restored."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
