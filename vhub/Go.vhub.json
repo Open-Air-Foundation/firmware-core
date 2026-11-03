@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "8ecc631",
+  "rev": "fd2436f",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2648,45 +2648,36 @@
     },
     {
       "id": "go.ble.offline-measurements-background",
-      "title": "AirGradient app receives Offline measurements while the phone is locked",
-      "objective": "Verify the AirGradient app receives new Offline broadcasts while backgrounded, before the phone is unlocked.",
+      "title": "AirGradient app receives Energy Saving broadcasts while the phone is locked",
+      "objective": "Verify broadcasts are received while the app is in the background.",
       "category": "Modes & Sleep",
       "sub_category": "Timer Wake",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "Phone with BLE and the AirGradient app supporting Offline v1 broadcasts and background reception.",
-        "A documented AirGradient app view of per-reading phone receipt times, including background receipts.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
+        "A phone with Bluetooth enabled and the AirGradient app supporting background reception and showing the last received message time.",
+        "The saved Energy Saving measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Record the current Go operating mode and lock state. Unlock Go if needed.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Energy Saving. Open Settings > Operations > Measurement Interval, record the current choice and select 5m. Return Home.",
+          "expected_result": "Energy Saving uses the five-minute interval."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m, return Home and lock Go.",
-          "expected_result": "Go is locked in Energy Saving with a five-minute measurement interval."
+          "action": "Open the AirGradient app. If Go is unlocked, short-press Power to lock it. Background the app without force-closing it and lock the phone. Keep Go nearby and leave its controls untouched for 11 minutes.",
+          "expected_result": "The phone remains locked throughout the observation."
         },
         {
-          "action": "Start receiving this Go's measurements in the AirGradient app. Allow 11 minutes from starting reception and record the latest reading's receipt time.",
-          "expected_result": "A new reading arrives from the intended Go and its phone receipt time is available as a baseline."
-        },
-        {
-          "action": "Record the phone time, background the AirGradient app without force-closing it, and lock the phone. Keep Go nearby and locked for 11 minutes. Record the phone time at the end of the locked period before reopening the app.",
-          "expected_result": "The phone remains locked with the app backgrounded for the observation period; its start and end times are recorded."
-        },
-        {
-          "action": "Unlock the phone, reopen the AirGradient app and inspect the phone receipt times of readings from this Go.",
-          "expected_result": "New readings have receipt times after the baseline and within the recorded locked period. Missed individual wakeups are acceptable. Readings received only after reopening the app do not establish a pass.",
+          "action": "Unlock the phone, reopen the app and check its last received message time.",
+          "expected_result": "The time shows a message received while the phone was locked. Individual missed broadcasts are acceptable. A message received only after reopening the app does not establish a pass.",
           "evidence": [
-            "Save the baseline receipt time, locked-period start and end times, and app evidence of readings received within that period."
+            "Save a screenshot showing the last received message time."
           ]
         }
       ],
       "cleanup": [
-        "Unlock the phone and Go if needed. In Energy Saving, restore its recorded interval before restoring the original Go operating mode and lock state. Confirm restoration after completion or interruption; record any missing baseline or remaining change."
+        "Wake and unlock Go with Power. Restore the recorded Energy Saving interval and confirm its menu selection, including after interruption. Return Home and record any restoration failure."
       ],
       "references": [
         "products/go/go_ble_client.md#offline-measurement-broadcasts",
