@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "5b82065",
+  "rev": "5d1e94c",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -801,6 +801,273 @@
       ]
     },
     {
+      "id": "go.power.usb-insert",
+      "title": "Connecting USB starts charging without interrupting measurements",
+      "objective": "Verify Go shows charging and continues measuring when USB power is connected.",
+      "category": "Power",
+      "sub_category": "USB",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "Home shows battery charge above 5% and at most 95%.",
+        "A USB power source and compatible cable.",
+        "The saved Portable measurement interval is not a custom value."
+      ],
+      "steps": [
+        {
+          "action": "Select Main Menu > Operating Mode > Portable. Record the Measurement Interval under Settings > Operations and select 10s. Disconnect USB and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
+          "expected_result": "Home shows readings and a battery icon without a charging bolt."
+        },
+        {
+          "action": "Connect USB power and observe Home for up to 40 seconds.",
+          "expected_result": "The charging bolt appears without Go showing a startup screen."
+        },
+        {
+          "action": "Observe Home for another 30 seconds.",
+          "expected_result": "At least two measurement refreshes complete, PM2.5 and CO2 remain numeric, and Go does not restart."
+        }
+      ],
+      "cleanup": [
+        "Restore the recorded Portable measurement interval and confirm its selection, including after interruption. Disconnect USB and return Home. Record any restoration failure."
+      ],
+      "references": [
+        "products/go/docs/power_management.md"
+      ]
+    },
+    {
+      "id": "go.power.usb-remove",
+      "title": "Disconnecting USB restores battery operation without interrupting measurements",
+      "objective": "Verify Go continues measuring on battery power after USB is disconnected.",
+      "category": "Power",
+      "sub_category": "USB",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "Home shows battery charge above 5% and at most 95%.",
+        "A USB power source and compatible cable.",
+        "The saved Portable measurement interval is not a custom value."
+      ],
+      "steps": [
+        {
+          "action": "Select Main Menu > Operating Mode > Portable. Record the Measurement Interval under Settings > Operations and select 10s. Connect USB and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings and the charging bolt.",
+          "expected_result": "Home shows readings and the charging bolt."
+        },
+        {
+          "action": "Disconnect USB and observe Home for up to 10 seconds.",
+          "expected_result": "The charging bolt disappears and the battery icon remains, without Go showing a startup screen."
+        },
+        {
+          "action": "Observe Home for another 30 seconds.",
+          "expected_result": "At least two measurement refreshes complete, PM2.5 and CO2 remain numeric, and Go does not restart."
+        }
+      ],
+      "cleanup": [
+        "Restore the recorded Portable measurement interval and confirm its selection, including after interruption. Disconnect USB and return Home. Record any restoration failure."
+      ],
+      "references": [
+        "products/go/docs/power_management.md"
+      ]
+    },
+    {
+      "id": "go.power.charging-only-power",
+      "title": "Power starts Go from the charging screen",
+      "objective": "Verify USB connection shows the charging screen and pressing Power starts normal operation.",
+      "category": "Power",
+      "sub_category": "Charging-Only",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "Home shows battery charge above 5% and at most 95%.",
+        "A USB power source and compatible cable."
+      ],
+      "steps": [
+        {
+          "action": "Select Main Menu > Operating Mode > Portable. Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
+          "expected_result": "Powered off remains displayed; Go does not restart by itself."
+        },
+        {
+          "action": "Connect USB and observe for 30 seconds without pressing any buttons.",
+          "expected_result": "Charging, the battery-and-bolt icon and Hold power button / to turn on remain visible. The screen does not repeatedly refresh or advance to Home."
+        },
+        {
+          "action": "Press and release Power. Allow up to five minutes for Home.",
+          "expected_result": "Getting Ready appears, followed by Home with numeric PM2.5 and CO2 readings."
+        }
+      ],
+      "cleanup": [
+        "If interrupted on the charging screen, press and release Power to start Go. Disconnect USB and return Home. Record any failure."
+      ],
+      "references": [
+        "products/go/docs/power_management.md"
+      ]
+    },
+    {
+      "id": "go.power.charging-only-unplug",
+      "title": "Disconnecting USB from the charging screen powers Go off",
+      "objective": "Verify Go powers off when USB is removed from the charging screen.",
+      "category": "Power",
+      "sub_category": "Charging-Only",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "Home shows battery charge above 5% and at most 95%.",
+        "A USB power source and compatible cable."
+      ],
+      "steps": [
+        {
+          "action": "Select Main Menu > Operating Mode > Portable. Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
+          "expected_result": "Powered off remains displayed; Go does not restart by itself."
+        },
+        {
+          "action": "Connect USB and observe for 30 seconds without pressing any buttons.",
+          "expected_result": "Charging, the battery-and-bolt icon and Hold power button / to turn on remain visible. The screen does not repeatedly refresh or advance to Home."
+        },
+        {
+          "action": "Disconnect USB and observe for 10 seconds without pressing any buttons.",
+          "expected_result": "Powered off appears and remains displayed. Go does not show Getting Ready or Home."
+        }
+      ],
+      "cleanup": [
+        "After completion or interruption, disconnect USB and start Go with Power if needed. Return Home and record any failure."
+      ],
+      "references": [
+        "products/go/docs/power_management.md"
+      ]
+    },
+    {
+      "id": "go.power.charging-only-full",
+      "title": "Battery Full screen remains readable and stable",
+      "objective": "Verify the full-charge screen’s layout and stability while Go is off.",
+      "category": "Power",
+      "sub_category": "Charging-Only",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "Go is powered off with USB connected, and the charging screen shows Battery Full."
+      ],
+      "steps": [
+        {
+          "action": "Inspect the screen.",
+          "expected_result": "Battery Full, a filled-battery icon and Hold power button / to turn on are fully visible without clipped or overlapping text."
+        },
+        {
+          "action": "Observe for 30 seconds without pressing any buttons or disconnecting USB.",
+          "expected_result": "Battery Full remains visible without repeated refresh or advancing to Home."
+        }
+      ],
+      "cleanup": [
+        "After completion or interruption, press and release Power to start Go. Disconnect USB, return Home and record any failure."
+      ],
+      "references": [
+        "products/go/docs/power_management.md"
+      ]
+    },
+    {
+      "id": "go.power.full-plug-icon",
+      "title": "Home shows a plug icon when the battery is full",
+      "objective": "Verify Home distinguishes external power from active charging.",
+      "category": "Power",
+      "sub_category": "USB",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "Home shows 100% battery charge.",
+        "A USB data cable.",
+        "A computer with access to the AirGradient logging tool."
+      ],
+      "steps": [
+        {
+          "action": "Select Main Menu > Operating Mode > Portable. Connect Go to the computer using USB and open the AirGradient logging tool. Return Home.",
+          "expected_result": "Home and device logs are visible."
+        },
+        {
+          "action": "Observe for up to 40 seconds. Look for full_chg_paused=1 and charge=NotCharging or charge=Done in the PowerService logs.",
+          "expected_result": "Home shows a full battery and a plug icon without the charging bolt. The icons are readable and do not overlap."
+        }
+      ],
+      "cleanup": [
+        "After completion or interruption, save the relevant logs, disconnect the logging tool and USB, and return Home. Record any failure."
+      ],
+      "references": [
+        "products/go/docs/power_management.md",
+        "products/go/docs/display_service.md"
+      ]
+    },
+    {
+      "id": "go.power.battery-restart",
+      "title": "Holding Power through shutdown restarts Go",
+      "objective": "Verify continuously holding Power restarts Go on battery power.",
+      "category": "Power",
+      "sub_category": "Shutdown",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [],
+      "steps": [
+        {
+          "action": "Select Main Menu > Operating Mode > Portable. Disconnect USB and return Home.",
+          "expected_result": "Home is displayed with USB disconnected."
+        },
+        {
+          "action": "Hold Power until Powered off is fully displayed. Keep holding until Getting Ready appears, allowing up to 30 seconds, then release Power.",
+          "expected_result": "Go shows Powered off followed by Getting Ready without releasing and pressing Power again."
+        },
+        {
+          "action": "Observe startup for up to five minutes.",
+          "expected_result": "Home appears with numeric PM2.5 and CO2 readings."
+        }
+      ],
+      "cleanup": [
+        "After completion or interruption, release Power, start Go if needed and return Home. Record any failure."
+      ],
+      "references": [
+        "products/go/docs/power_management.md"
+      ]
+    },
+    {
+      "id": "go.power.usb-shutdown",
+      "title": "Powering off with USB connected shows the charging screen",
+      "objective": "Verify Go enters the charging screen after shutdown and stays there until Power is pressed.",
+      "category": "Power",
+      "sub_category": "Shutdown",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "A USB power source."
+      ],
+      "steps": [
+        {
+          "action": "Select Main Menu > Operating Mode > Portable. Connect USB and return Home. Observe for up to 10 seconds.",
+          "expected_result": "Home shows a charging bolt or external-power plug icon."
+        },
+        {
+          "action": "Hold Power until Powered off is fully displayed, then release. Observe for 10 seconds.",
+          "expected_result": "Charging or Battery Full appears without showing Getting Ready or Home."
+        },
+        {
+          "action": "Leave USB connected and observe for seven minutes without pressing any buttons.",
+          "expected_result": "The charging screen remains visible without repeated refresh or restarting. Charging may change to Battery Full."
+        },
+        {
+          "action": "Press and release Power. Observe startup for up to five minutes.",
+          "expected_result": "Getting Ready appears, followed by Home with numeric PM2.5 and CO2 readings."
+        }
+      ],
+      "cleanup": [
+        "After completion or interruption, release Power and start Go if needed. Disconnect USB, return Home and record any failure."
+      ],
+      "references": [
+        "products/go/docs/power_management.md"
+      ]
+    },
+    {
       "id": "go.display.chart-navigation",
       "title": "All charts remain readable during touch browsing",
       "objective": "Verify that the touch controls browse charts with readable values, statistics and plots.",
@@ -1302,90 +1569,6 @@
       ],
       "references": [
         "products/go/docs/hardware_test.md"
-      ]
-    },
-    {
-      "id": "go.diagnostics.learning-abort",
-      "title": "Battery Calibration can be aborted",
-      "objective": "Verify Battery Calibration opens its dashboard and a short Power press returns the device to normal operation.",
-      "category": "Diagnostics",
-      "sub_category": "Fuel Gauge",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A unit whose fuel-gauge learning data may be changed.",
-        "A USB power source."
-      ],
-      "steps": [
-        {
-          "action": "Select Main Menu > Operating Mode > Portable and connect USB power.",
-          "expected_result": "Portable is selected and external power is indicated."
-        },
-        {
-          "action": "Open Main Menu > Settings > Hardware Test > Battery Calibration and select Yes. Allow up to five minutes.",
-          "expected_result": "The device reboots into the learning dashboard. The stage, cycle number, and battery information are readable without overlapping text."
-        },
-        {
-          "action": "Short-press Power during the run. Allow up to five minutes.",
-          "expected_result": "The device exits calibration, reboots, and returns Home."
-        },
-        {
-          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release it, wait ten seconds, then press and release Power. Allow up to five minutes.",
-          "expected_result": "Home returns; the learning dashboard does not reappear."
-        }
-      ],
-      "cleanup": [
-        "If interrupted during calibration, short-press Power to abort. Confirm Home returns and record any failure to exit."
-      ],
-      "references": [
-        "products/go/docs/fg_learning.md"
-      ]
-    },
-    {
-      "id": "go.calibration.ui",
-      "title": "CO2 calibration displays the sensor outcome",
-      "objective": "Verify calibration started from the menu reaches the sensor and displays its result.",
-      "category": "Diagnostics",
-      "sub_category": "CO2 Calibration",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A unit whose CO2 calibration may be changed.",
-        "An outdoor location away from people, vehicles, and combustion.",
-        "A USB data cable.",
-        "A computer with the AirGradient logging tool.",
-        "A unit record or startup log identifying the fitted CO2 sensor."
-      ],
-      "steps": [
-        {
-          "action": "Identify the fitted sensor and record the expected outcome: success for S12/SCD4x; unsupported for STCC4.",
-          "expected_result": "The expected outcome is established before calibration. An unknown sensor blocks the test."
-        },
-        {
-          "action": "Connect USB and start the AirGradient logging tool.",
-          "expected_result": "Device logs are visible."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Leave the device stationary in the outdoor calibration location, measuring for at least three minutes.",
-          "expected_result": "The device remains powered and measuring in the calibration environment."
-        },
-        {
-          "action": "Open Main Menu > Settings > Operations > CO2 Calibration and select Yes. Watch the display and logs for up to 90 seconds.",
-          "expected_result": "S12/SCD4x displays Calibrating CO2... followed by CO2 cal. done, with success reported in the logs. STCC4 displays CO2 cal. unsupported, with unsupported reported in the logs. Completion text is readable. CO2 cal. failed or no completion within 90 seconds fails the test.",
-          "evidence": [
-            "Record the displayed result and save the matching completion log."
-          ]
-        }
-      ],
-      "cleanup": [
-        "Allow calibration to finish before moving the device, including after interruption.",
-        "Return Home, save the relevant logs, and disconnect the logging tool. Successful calibration changes the sensor baseline; restoring settings does not undo it."
-      ],
-      "references": [
-        "products/go/docs/sensor_producer.md",
-        "products/go/docs/ui_manager.md"
       ]
     },
     {
@@ -2849,273 +3032,6 @@
       ]
     },
     {
-      "id": "go.power.usb-insert",
-      "title": "Connecting USB starts charging without interrupting measurements",
-      "objective": "Verify Go shows charging and continues measuring when USB power is connected.",
-      "category": "Power",
-      "sub_category": "USB",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Home shows battery charge above 5% and at most 95%.",
-        "A USB power source and compatible cable.",
-        "The saved Portable measurement interval is not a custom value."
-      ],
-      "steps": [
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Measurement Interval under Settings > Operations and select 10s. Disconnect USB and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
-          "expected_result": "Home shows readings and a battery icon without a charging bolt."
-        },
-        {
-          "action": "Connect USB power and observe Home for up to 40 seconds.",
-          "expected_result": "The charging bolt appears without Go showing a startup screen."
-        },
-        {
-          "action": "Observe Home for another 30 seconds.",
-          "expected_result": "At least two measurement refreshes complete, PM2.5 and CO2 remain numeric, and Go does not restart."
-        }
-      ],
-      "cleanup": [
-        "Restore the recorded Portable measurement interval and confirm its selection, including after interruption. Disconnect USB and return Home. Record any restoration failure."
-      ],
-      "references": [
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
-      "id": "go.power.usb-remove",
-      "title": "Disconnecting USB restores battery operation without interrupting measurements",
-      "objective": "Verify Go continues measuring on battery power after USB is disconnected.",
-      "category": "Power",
-      "sub_category": "USB",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Home shows battery charge above 5% and at most 95%.",
-        "A USB power source and compatible cable.",
-        "The saved Portable measurement interval is not a custom value."
-      ],
-      "steps": [
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Measurement Interval under Settings > Operations and select 10s. Connect USB and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings and the charging bolt.",
-          "expected_result": "Home shows readings and the charging bolt."
-        },
-        {
-          "action": "Disconnect USB and observe Home for up to 10 seconds.",
-          "expected_result": "The charging bolt disappears and the battery icon remains, without Go showing a startup screen."
-        },
-        {
-          "action": "Observe Home for another 30 seconds.",
-          "expected_result": "At least two measurement refreshes complete, PM2.5 and CO2 remain numeric, and Go does not restart."
-        }
-      ],
-      "cleanup": [
-        "Restore the recorded Portable measurement interval and confirm its selection, including after interruption. Disconnect USB and return Home. Record any restoration failure."
-      ],
-      "references": [
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
-      "id": "go.power.charging-only-power",
-      "title": "Power starts Go from the charging screen",
-      "objective": "Verify USB connection shows the charging screen and pressing Power starts normal operation.",
-      "category": "Power",
-      "sub_category": "Charging-Only",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Home shows battery charge above 5% and at most 95%.",
-        "A USB power source and compatible cable."
-      ],
-      "steps": [
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
-          "expected_result": "Powered off remains displayed; Go does not restart by itself."
-        },
-        {
-          "action": "Connect USB and observe for 30 seconds without pressing any buttons.",
-          "expected_result": "Charging, the battery-and-bolt icon and Hold power button / to turn on remain visible. The screen does not repeatedly refresh or advance to Home."
-        },
-        {
-          "action": "Press and release Power. Allow up to five minutes for Home.",
-          "expected_result": "Getting Ready appears, followed by Home with numeric PM2.5 and CO2 readings."
-        }
-      ],
-      "cleanup": [
-        "If interrupted on the charging screen, press and release Power to start Go. Disconnect USB and return Home. Record any failure."
-      ],
-      "references": [
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
-      "id": "go.power.charging-only-unplug",
-      "title": "Disconnecting USB from the charging screen powers Go off",
-      "objective": "Verify Go powers off when USB is removed from the charging screen.",
-      "category": "Power",
-      "sub_category": "Charging-Only",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Home shows battery charge above 5% and at most 95%.",
-        "A USB power source and compatible cable."
-      ],
-      "steps": [
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
-          "expected_result": "Powered off remains displayed; Go does not restart by itself."
-        },
-        {
-          "action": "Connect USB and observe for 30 seconds without pressing any buttons.",
-          "expected_result": "Charging, the battery-and-bolt icon and Hold power button / to turn on remain visible. The screen does not repeatedly refresh or advance to Home."
-        },
-        {
-          "action": "Disconnect USB and observe for 10 seconds without pressing any buttons.",
-          "expected_result": "Powered off appears and remains displayed. Go does not show Getting Ready or Home."
-        }
-      ],
-      "cleanup": [
-        "After completion or interruption, disconnect USB and start Go with Power if needed. Return Home and record any failure."
-      ],
-      "references": [
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
-      "id": "go.power.charging-only-full",
-      "title": "Battery Full screen remains readable and stable",
-      "objective": "Verify the full-charge screen’s layout and stability while Go is off.",
-      "category": "Power",
-      "sub_category": "Charging-Only",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Go is powered off with USB connected, and the charging screen shows Battery Full."
-      ],
-      "steps": [
-        {
-          "action": "Inspect the screen.",
-          "expected_result": "Battery Full, a filled-battery icon and Hold power button / to turn on are fully visible without clipped or overlapping text."
-        },
-        {
-          "action": "Observe for 30 seconds without pressing any buttons or disconnecting USB.",
-          "expected_result": "Battery Full remains visible without repeated refresh or advancing to Home."
-        }
-      ],
-      "cleanup": [
-        "After completion or interruption, press and release Power to start Go. Disconnect USB, return Home and record any failure."
-      ],
-      "references": [
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
-      "id": "go.power.full-plug-icon",
-      "title": "Home shows a plug icon when the battery is full",
-      "objective": "Verify Home distinguishes external power from active charging.",
-      "category": "Power",
-      "sub_category": "USB",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Home shows 100% battery charge.",
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool."
-      ],
-      "steps": [
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Connect Go to the computer using USB and open the AirGradient logging tool. Return Home.",
-          "expected_result": "Home and device logs are visible."
-        },
-        {
-          "action": "Observe for up to 40 seconds. Look for full_chg_paused=1 and charge=NotCharging or charge=Done in the PowerService logs.",
-          "expected_result": "Home shows a full battery and a plug icon without the charging bolt. The icons are readable and do not overlap."
-        }
-      ],
-      "cleanup": [
-        "After completion or interruption, save the relevant logs, disconnect the logging tool and USB, and return Home. Record any failure."
-      ],
-      "references": [
-        "products/go/docs/power_management.md",
-        "products/go/docs/display_service.md"
-      ]
-    },
-    {
-      "id": "go.power.battery-restart",
-      "title": "Holding Power through shutdown restarts Go",
-      "objective": "Verify continuously holding Power restarts Go on battery power.",
-      "category": "Power",
-      "sub_category": "Shutdown",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [],
-      "steps": [
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Disconnect USB and return Home.",
-          "expected_result": "Home is displayed with USB disconnected."
-        },
-        {
-          "action": "Hold Power until Powered off is fully displayed. Keep holding until Getting Ready appears, allowing up to 30 seconds, then release Power.",
-          "expected_result": "Go shows Powered off followed by Getting Ready without releasing and pressing Power again."
-        },
-        {
-          "action": "Observe startup for up to five minutes.",
-          "expected_result": "Home appears with numeric PM2.5 and CO2 readings."
-        }
-      ],
-      "cleanup": [
-        "After completion or interruption, release Power, start Go if needed and return Home. Record any failure."
-      ],
-      "references": [
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
-      "id": "go.power.usb-shutdown",
-      "title": "Powering off with USB connected shows the charging screen",
-      "objective": "Verify Go enters the charging screen after shutdown and stays there until Power is pressed.",
-      "category": "Power",
-      "sub_category": "Shutdown",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A USB power source."
-      ],
-      "steps": [
-        {
-          "action": "Select Main Menu > Operating Mode > Portable. Connect USB and return Home. Observe for up to 10 seconds.",
-          "expected_result": "Home shows a charging bolt or external-power plug icon."
-        },
-        {
-          "action": "Hold Power until Powered off is fully displayed, then release. Observe for 10 seconds.",
-          "expected_result": "Charging or Battery Full appears without showing Getting Ready or Home."
-        },
-        {
-          "action": "Leave USB connected and observe for seven minutes without pressing any buttons.",
-          "expected_result": "The charging screen remains visible without repeated refresh or restarting. Charging may change to Battery Full."
-        },
-        {
-          "action": "Press and release Power. Observe startup for up to five minutes.",
-          "expected_result": "Getting Ready appears, followed by Home with numeric PM2.5 and CO2 readings."
-        }
-      ],
-      "cleanup": [
-        "After completion or interruption, release Power and start Go if needed. Disconnect USB, return Home and record any failure."
-      ],
-      "references": [
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
       "id": "go.manufacturing.wifi-connect",
       "title": "Manufacturing mode connects to the factory Wi-Fi",
       "objective": "Verify the BOOT shortcut connects Go to factory Wi-Fi and displays Home.",
@@ -3175,6 +3091,90 @@
       "references": [
         "products/go/docs/wifi_service.md",
         "products/go/README.md"
+      ]
+    },
+    {
+      "id": "go.diagnostics.learning-abort",
+      "title": "Battery Calibration can be aborted",
+      "objective": "Verify Battery Calibration opens its dashboard and a short Power press returns the device to normal operation.",
+      "category": "Calibration",
+      "sub_category": "Fuel Gauge",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "A unit whose fuel-gauge learning data may be changed.",
+        "A USB power source."
+      ],
+      "steps": [
+        {
+          "action": "Select Main Menu > Operating Mode > Portable and connect USB power.",
+          "expected_result": "Portable is selected and external power is indicated."
+        },
+        {
+          "action": "Open Main Menu > Settings > Hardware Test > Battery Calibration and select Yes. Allow up to five minutes.",
+          "expected_result": "The device reboots into the learning dashboard. The stage, cycle number, and battery information are readable without overlapping text."
+        },
+        {
+          "action": "Short-press Power during the run. Allow up to five minutes.",
+          "expected_result": "The device exits calibration, reboots, and returns Home."
+        },
+        {
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release it, wait ten seconds, then press and release Power. Allow up to five minutes.",
+          "expected_result": "Home returns; the learning dashboard does not reappear."
+        }
+      ],
+      "cleanup": [
+        "If interrupted during calibration, short-press Power to abort. Confirm Home returns and record any failure to exit."
+      ],
+      "references": [
+        "products/go/docs/fg_learning.md"
+      ]
+    },
+    {
+      "id": "go.calibration.ui",
+      "title": "CO2 calibration displays the sensor outcome",
+      "objective": "Verify calibration started from the menu reaches the sensor and displays its result.",
+      "category": "Calibration",
+      "sub_category": "CO2 Calibration",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "A unit whose CO2 calibration may be changed.",
+        "An outdoor location away from people, vehicles, and combustion.",
+        "A USB data cable.",
+        "A computer with the AirGradient logging tool.",
+        "A unit record or startup log identifying the fitted CO2 sensor."
+      ],
+      "steps": [
+        {
+          "action": "Identify the fitted sensor and record the expected outcome: success for S12/SCD4x; unsupported for STCC4.",
+          "expected_result": "The expected outcome is established before calibration. An unknown sensor blocks the test."
+        },
+        {
+          "action": "Connect USB and start the AirGradient logging tool.",
+          "expected_result": "Device logs are visible."
+        },
+        {
+          "action": "Select Main Menu > Operating Mode > Portable. Leave the device stationary in the outdoor calibration location, measuring for at least three minutes.",
+          "expected_result": "The device remains powered and measuring in the calibration environment."
+        },
+        {
+          "action": "Open Main Menu > Settings > Operations > CO2 Calibration and select Yes. Watch the display and logs for up to 90 seconds.",
+          "expected_result": "S12/SCD4x displays Calibrating CO2... followed by CO2 cal. done, with success reported in the logs. STCC4 displays CO2 cal. unsupported, with unsupported reported in the logs. Completion text is readable. CO2 cal. failed or no completion within 90 seconds fails the test.",
+          "evidence": [
+            "Record the displayed result and save the matching completion log."
+          ]
+        }
+      ],
+      "cleanup": [
+        "Allow calibration to finish before moving the device, including after interruption.",
+        "Return Home, save the relevant logs, and disconnect the logging tool. Successful calibration changes the sensor baseline; restoring settings does not undo it."
+      ],
+      "references": [
+        "products/go/docs/sensor_producer.md",
+        "products/go/docs/ui_manager.md"
       ]
     },
     {
