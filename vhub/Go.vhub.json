@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "ea4871f",
+  "rev": "73069ec",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -3017,42 +3017,30 @@
     },
     {
       "id": "go.power.full-plug-icon",
-      "title": "A full non-charging unit shows external power on Home",
-      "objective": "Verify plugged-in indication differs from active charging.",
+      "title": "Home shows a plug icon when the battery is full",
+      "objective": "Verify Home distinguishes external power from active charging.",
       "category": "Power",
       "sub_category": "USB",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "A USB power source.",
-        "The battery is fully charged, confirmed by the device.",
+        "Home shows 100% battery charge.",
         "A USB data cable.",
         "A computer with access to the AirGradient logging tool."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Connect Go to the computer using USB and open the AirGradient logging tool. Return Home.",
+          "expected_result": "Home and device logs are visible."
         },
         {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
-        },
-        {
-          "action": "Connect USB and allow the five-second status poll plus display refresh. Confirm non-charging/full state in serial.",
-          "expected_result": "Home shows the full battery and external-power plug icon without the charging bolt."
+          "action": "Observe for up to 40 seconds. Look for full_chg_paused=1 and charge=NotCharging or charge=Done in the PowerService logs.",
+          "expected_result": "Home shows a full battery and a plug icon without the charging bolt. The icons are readable and do not overlap."
         }
       ],
       "cleanup": [
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
+        "After completion or interruption, save the relevant logs, disconnect the logging tool and USB, and return Home. Record any failure."
       ],
       "references": [
         "products/go/docs/power_management.md",
