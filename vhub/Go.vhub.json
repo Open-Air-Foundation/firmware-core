@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "b805717",
+  "rev": "0e5186a",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -3049,8 +3049,8 @@
     },
     {
       "id": "go.power.battery-restart",
-      "title": "Holding Power through shutdown restarts cold",
-      "objective": "Verify the physical button outcome on battery.",
+      "title": "Holding Power through shutdown restarts Go",
+      "objective": "Verify continuously holding Power restarts Go on battery power.",
       "category": "Power",
       "sub_category": "Shutdown",
       "applicability": [
@@ -3059,23 +3059,20 @@
       "setup": [],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Select Main Menu > Operating Mode > Portable. Disconnect USB and return Home.",
+          "expected_result": "Home is displayed with USB disconnected."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable.",
-          "expected_result": "Portable is selected."
+          "action": "Hold Power until Powered off is fully displayed. Keep holding until Getting Ready appears, allowing up to 30 seconds, then release Power.",
+          "expected_result": "Go shows Powered off followed by Getting Ready without releasing and pressing Power again."
         },
         {
-          "action": "Disconnect USB. Hold Power at least two seconds until Powered off, then keep holding for up to 30 seconds.",
-          "expected_result": "The unit performs a full Getting Ready cold startup while Power stays held."
+          "action": "Observe startup for up to five minutes.",
+          "expected_result": "Home appears with numeric PM2.5 and CO2 readings."
         }
       ],
       "cleanup": [
-        "Release Power; return to Home.",
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state."
+        "After completion or interruption, release Power, start Go if needed and return Home. Record any failure."
       ],
       "references": [
         "products/go/docs/power_management.md"
