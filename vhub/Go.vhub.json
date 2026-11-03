@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "936d4e2",
+  "rev": "eebdf18",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -3223,8 +3223,8 @@
     },
     {
       "id": "go.ota.wifi-success",
-      "title": "Wi-Fi OTA upgrades to the selected newer firmware",
-      "objective": "Verify a normal Wi-Fi firmware upgrade installs the selected newer version, returns to usable Home and retains device preferences.",
+      "title": "Wi-Fi update installs the selected firmware and retains settings",
+      "objective": "Verify the selected newer firmware installs successfully, preserves settings and resumes measurements.",
       "category": "Reset & Update",
       "sub_category": "Wi-Fi OTA",
       "applicability": [
@@ -3232,66 +3232,48 @@
       ],
       "setup": [
         "Tracking is idle.",
-        "A test unit approved for firmware changes.",
-        "Access to AirGradient Dashboard for this unit.",
-        "An approved, compatible Go firmware version newer than the installed source version, available through AirGradient Dashboard.",
-        "Internet access on the test Wi-Fi network.",
-        "Working credentials for the test Wi-Fi network are saved on Go.",
-        "A computer with Postman or an equivalent GUI API client that resolves .local names on the test LAN.",
-        "A USB power source.",
-        "A compatible USB cable."
+        "Go has saved credentials for a Wi-Fi network with internet access. The test computer is connected to that network.",
+        "Postman or an equivalent GUI API client supporting .local addresses is available.",
+        "Access to the registered Go in AirGradient Dashboard, with its installed firmware and an approved newer Go version available for assignment.",
+        "A USB power source."
       ],
       "steps": [
         {
-          "action": "Record the operating mode, lock state and USB connection. Unlock if needed. Record Temperature Unit from Settings > Display & Touch. Open About Device and record the serial and installed source version. In AirGradient Dashboard, record the unit’s current firmware assignment and the approved newer target version.",
-          "expected_result": "The device and deployment record refer to the same serial, and the target version is newer than the installed source.",
+          "action": "Select Main Menu > Operating Mode > Portable. Record the serial and installed version from Settings > About Device, and Temperature Unit from Settings > Display & Touch. Open the matching device in AirGradient Dashboard and record its firmware assignment.",
+          "expected_result": "The device and dashboard serials match."
+        },
+        {
+          "action": "Assign the installed version in the dashboard during preparation. Connect USB and keep it connected through the update. Select Stationary and allow up to 30 seconds for connection.",
+          "expected_result": "Home shows connected Wi-Fi and a charging bolt or external-power plug icon."
+        },
+        {
+          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/config with No Auth and no body. Record configurationControl, cloudConnection and measurementInterval.",
+          "expected_result": "All three original values are recorded."
+        },
+        {
+          "action": "At the same URL, send PUT with No Auth, Content-Type: application/json and raw JSON body {\"configurationControl\":\"local\"}. Poll GET config every two seconds for up to 10 seconds to confirm the setting has changed.",
+          "expected_result": "configurationControl becomes local."
+        },
+        {
+          "action": "Send PUT at the same URL with the same headers and raw JSON body {\"cloudConnection\":true,\"measurementInterval\":10}. Poll GET config every two seconds for up to 10 seconds to confirm the settings have changed.",
+          "expected_result": "Cloud connection is enabled, the interval is 10 seconds and configuration control remains local."
+        },
+        {
+          "action": "Select Portable. Assign the approved newer version to Go in the dashboard, then select Stationary. Observe the update and restart, allowing up to 65 minutes.",
+          "expected_result": "Updating firmware appears, followed by Restarting and Home. No Update failed message or repeated restart occurs."
+        },
+        {
+          "action": "Open About Device and check Temperature Unit and Measurement Interval. Return Home, allow up to five minutes for numeric PM2.5 and CO2 readings, then observe for another 40 seconds.",
+          "expected_result": "The installed version matches the target. The recorded temperature unit and 10-second interval remain selected. At least three measurement updates complete.",
           "evidence": [
-            "Record the source version, target version and original deployment assignment."
-          ]
-        },
-        {
-          "action": "Before entering Stationary for preparation, assign the currently installed source version to this serial in AirGradient Dashboard.",
-          "expected_result": "The source version remains selected during preparation, so no unrelated firmware change starts before the target is assigned."
-        },
-        {
-          "action": "Connect USB power and keep it connected through the upgrade. Select Main Menu > Operating Mode > Stationary. Allow up to 90 seconds for saved Wi-Fi to connect.",
-          "expected_result": "Home shows external power or charging and the router lists this unit on its saved network."
-        },
-        {
-          "action": "Read the full serial from About Device and replace <serial> in every request URL with that value. In the API client, set a five-second request timeout, send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body, and save the response as the original configuration before changing anything.",
-          "expected_result": "The intended unit is connected and its original settings are saved for cleanup."
-        },
-        {
-          "action": "Enable local authority. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "GET Config reports configurationControl=local; cloud settings cannot replace the preparation values."
-        },
-        {
-          "action": "Enable the normal OTA service while keeping cloud configuration changes disabled. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"cloudConnection\":true,\"measurementInterval\":10}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send.",
-          "expected_result": "The GET response confirms cloudConnection=true, configurationControl=local and measurementInterval=10. The recorded temperature unit remains unchanged."
-        },
-        {
-          "action": "Select Portable on Go. In AirGradient Dashboard, assign the approved newer target to this unit’s recorded serial. Select Stationary again and leave power and Wi-Fi connected. Observe the display through download and restart, allowing up to 65 minutes from selecting Stationary.",
-          "expected_result": "Updating firmware appears, followed by Restarting and a reboot into Home. There is no Update failed message or repeated reboot.",
-          "evidence": [
-            "Record the deployment selection, start/completion times and display sequence; capture a stalled or failed update."
-          ]
-        },
-        {
-          "action": "After Home returns, open About Device and Settings. Allow up to five minutes for sensor warmup, then observe three Home updates, allowing 40 seconds at the selected 10-second interval.",
-          "expected_result": "About Device reports the selected newer target version. The 10-second interval and recorded temperature unit are retained, Home shows usable readings and continues updating.",
-          "evidence": [
-            "Save the installed version and a Home photo after the upgrade."
+            "Save the installed version and a Home photo; capture any stalled or failed update."
           ]
         }
       ],
       "cleanup": [
-        "When the unit responds after the transfer, record its installed version and keep that version assigned in AirGradient Dashboard during configuration restoration.",
-        "If interrupted before the original configuration was saved, restore only the recorded UI/USB state and report the missing baseline.",
-        "With the saved original configuration available, return to Stationary. In the API client, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and header Content-Type: application/json. Select a raw JSON body and paste:\n{\"configurationControl\":\"local\"}\nThen send GET http://airgradient_<serial>.local/api/v1/config in the API client with No Auth and no body every five seconds for at most 20 seconds after Send. Confirm configurationControl is local before restoring values.",
-        "In the API client, copy these fields and their original values from the saved configuration into a raw JSON request body: measurementInterval. Send PUT http://airgradient_<serial>.local/api/v1/config with No Auth and Content-Type: application/json. Read back with GET at the same URL every five seconds for up to 20 seconds to confirm restoration.",
-        "Restore cloudConnection first and configurationControl last from the saved configuration. For each, send PUT http://airgradient_<serial>.local/api/v1/config with No Auth, Content-Type: application/json and a raw JSON object containing that field and its saved value. Confirm each through GET at the same URL within 20 seconds.",
-        "Restore the recorded operating mode, lock state and USB connection. Record any value that could not be restored.",
-        "Restore the recorded original firmware deployment assignment after device settings are restored. Record the installed version separately; changing the assignment alone does not restore the source image. Coordinate any subsequent firmware change with the next release case."
+        "After the update finishes or fails, keep the installed version assigned during restoration.",
+        "Restore the recorded measurement interval, then cloud connection, then configuration control using PUT config. Poll GET config every two seconds for up to 10 seconds to confirm each restoration.",
+        "Select Portable, restore the original dashboard assignment and disconnect USB. Record the installed version and any failure. Restoring the assignment does not restore the previous firmware."
       ],
       "references": [
         "products/go/docs/ota_service.md",
