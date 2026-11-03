@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "b39ea94",
+  "rev": "2eb68e6",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -454,11 +454,11 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record the current Temperature Unit under Settings > Display & Touch and measurement interval under Settings > Operations.",
+          "action": "Select Portable mode. Record the current measurement interval. Record Temperature Unit under Settings > Display & Touch.",
           "expected_result": "Both original values are recorded."
         },
         {
-          "action": "Set Operations > Measure Int. to 5m. Return Home and allow up to six minutes for a numeric temperature reading.",
+          "action": "Set the measurement interval to 5 minutes. Return Home and allow up to six minutes for a numeric temperature reading.",
           "expected_result": "Home displays temperature in the recorded unit, with readable values and no clipping."
         },
         {
@@ -816,7 +816,7 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record the Measurement Interval under Settings > Operations and select 10s. Disconnect USB and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
+          "action": "Select Portable mode. Record the current measurement interval, then set it to 10 seconds. Disconnect USB and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
           "expected_result": "Home shows readings and a battery icon without a charging bolt."
         },
         {
@@ -851,7 +851,7 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record the Measurement Interval under Settings > Operations and select 10s. Connect USB and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings and the charging bolt.",
+          "action": "Select Portable mode. Record the current measurement interval, then set it to 10 seconds. Connect USB and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings and the charging bolt.",
           "expected_result": "Home shows readings and the charging bolt."
         },
         {
@@ -1081,15 +1081,15 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record the measurement interval under Settings > Operations and Auto Lock under Settings > Display & Touch.",
+          "action": "Select Portable mode. Record the current measurement interval. Record Auto Lock under Settings > Display & Touch.",
           "expected_result": "Both original settings are recorded."
         },
         {
-          "action": "Set Auto Lock to Off and Operations > Measure Int. to 10s. Allow five minutes for warmup, then one minute to collect history.",
+          "action": "Set Auto Lock to Off and the measurement interval to 10 seconds. Allow five minutes for warmup, then one minute to collect history.",
           "expected_result": "Recent measurements are available for the charts."
         },
         {
-          "action": "Set Measure Int. to 5m and return Home. Tap right (Down) to browse each chart, letting each refresh finish.",
+          "action": "Set the measurement interval to 5 minutes and return Home. Tap right (Down) to browse each chart, letting each refresh finish.",
           "expected_result": "PM2.5, CO2, Temperature, Humidity, TVOC, NOx, Pressure and Altitude appear before returning to the overview. Each chart's name, value, applicable unit, Min/Max and plot are readable without clipping, overlap or leftover content."
         },
         {
@@ -1120,11 +1120,11 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record the measurement interval under Settings > Operations, and Auto Lock and Pinned Chart under Settings > Display & Touch.",
+          "action": "Select Portable mode. Record the current measurement interval. Record Auto Lock and Pinned Chart under Settings > Display & Touch.",
           "expected_result": "All three original settings are recorded."
         },
         {
-          "action": "Set Auto Lock to Off, Measure Int. to 10s and Pinned Chart to CO2. Allow five minutes for warmup, then one minute to collect history. Return Home and browse to CO2 using the left/right touch controls.",
+          "action": "Set Auto Lock to Off, the measurement interval to 10 seconds and Pinned Chart to CO2. Allow five minutes for warmup, then one minute to collect history. Return Home and browse to CO2 using the left/right touch controls.",
           "expected_result": "The CO2 chart displays a readable header, Min/Max and plot."
         },
         {
@@ -1196,15 +1196,15 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record the measurement interval under Settings > Operations, and Auto Lock and Temperature Unit under Settings > Display & Touch.",
+          "action": "Select Portable mode. Record the current measurement interval. Record Auto Lock and Temperature Unit under Settings > Display & Touch.",
           "expected_result": "All three original settings are recorded."
         },
         {
-          "action": "Set Auto Lock to Off and Measure Int. to 10s. Allow five minutes for warmup, then one minute to collect history.",
+          "action": "Set Auto Lock to Off and the measurement interval to 10 seconds. Allow five minutes for warmup, then one minute to collect history.",
           "expected_result": "Recent measurements are available for the chart."
         },
         {
-          "action": "Set Measure Int. to 5m. Return Home and browse to Temperature using the left/right touch controls.",
+          "action": "Set the measurement interval to 5 minutes. Return Home and browse to Temperature using the left/right touch controls.",
           "expected_result": "The chart shows a plot, with the header and Min/Max displaying numeric values in the recorded unit, °C or °F."
         },
         {
@@ -1234,15 +1234,15 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record the measurement interval under Settings > Operations, and Auto Lock and Pinned Chart under Settings > Display & Touch.",
+          "action": "Select Portable mode. Record the current measurement interval. Record Auto Lock and Pinned Chart under Settings > Display & Touch.",
           "expected_result": "All three original settings are recorded."
         },
         {
-          "action": "Set Auto Lock to Off, Pinned Chart to None and Measure Int. to 5m. Return Home.",
+          "action": "Set Auto Lock to Off, Pinned Chart to None and the measurement interval to 5 minutes. Return Home.",
           "expected_result": "Temperature/humidity, TVOC/NOx and pressure/altitude appear below PM2.5 and CO2. No chart or chart hint appears."
         },
         {
-          "action": "Set Measure Int. to 60s and return Home. Lock, then unlock with short Power presses, inspecting each completed refresh.",
+          "action": "Set the measurement interval to 60 seconds and return Home. Lock, then unlock with short Power presses, inspecting each completed refresh.",
           "expected_result": "Temperature/humidity disappear and the remaining rows move up. “Pin a chart here” appears centered in the bottom row in both lock states, without clipping or leftover values."
         },
         {
@@ -1250,7 +1250,7 @@
           "expected_result": "Browsing skips Temperature and Humidity. The hint disappears during browsing and returns on the overview without leftover content."
         },
         {
-          "action": "Select Temperature as Pinned Chart. Inspect Home at 60s while locked and unlocked, then change the interval to 5m and inspect again. Repeat with Humidity.",
+          "action": "Select Temperature as Pinned Chart. Inspect Home with a 60-second measurement interval while locked and unlocked, then change it to 5 minutes and inspect again. Repeat with Humidity.",
           "expected_result": "At 60s, “Not available” appears centered instead of the chart in both lock states. At 5m, the hint disappears and the temperature/humidity row and pinned chart area return cleanly. The plot may be empty until history is available."
         },
         {
@@ -1283,11 +1283,11 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record the measurement interval under Settings > Operations. Connect USB and open the AirGradient logging tool.",
+          "action": "Select Portable mode. Record the current measurement interval. Connect USB and open the AirGradient logging tool.",
           "expected_result": "The original interval is recorded and device logs are visible."
         },
         {
-          "action": "Set Operations > Measure Int. to 3s and return Home. Keep the device still and allow five minutes for warmup.",
+          "action": "Set the measurement interval to 3 seconds and return Home. Keep the device still and allow five minutes for warmup.",
           "expected_result": "Home displays measurements and MeasuresAGo entries appear in the logs."
         },
         {
@@ -1324,11 +1324,11 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record the measurement interval under Settings > Operations. Connect USB and open the AirGradient logging tool.",
+          "action": "Select Portable mode. Record the current measurement interval. Connect USB and open the AirGradient logging tool.",
           "expected_result": "The original interval is recorded and device logs are visible."
         },
         {
-          "action": "Set Operations > Measure Int. to 30s and return Home. Keep the device still and allow five minutes for warmup.",
+          "action": "Set the measurement interval to 30 seconds and return Home. Keep the device still and allow five minutes for warmup.",
           "expected_result": "MeasuresAGo entries contain numeric PM1, PM2.5 and PM10 readings."
         },
         {
@@ -1366,11 +1366,11 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record Measure Int. and Buzzer under Settings > Operations, and Auto Lock under Settings > Display & Touch. Connect USB and open the AirGradient logging tool.",
+          "action": "Select Portable mode. Record the current measurement interval. Record Buzzer under Settings > Operations, and Auto Lock under Settings > Display & Touch. Connect USB and open the AirGradient logging tool.",
           "expected_result": "All three original settings are recorded and device logs are visible."
         },
         {
-          "action": "Set Measure Int. to 60s, Auto Lock to Off and Buzzer to On. Return Home and allow five minutes for warmup.",
+          "action": "Set the measurement interval to 60 seconds, Auto Lock to Off and Buzzer to On. Return Home and allow five minutes for warmup.",
           "expected_result": "Home displays measurements."
         },
         {
@@ -1413,11 +1413,11 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record Measure Int. under Settings > Operations and Auto Lock under Settings > Display & Touch. Connect USB and open the AirGradient logging tool.",
+          "action": "Select Portable mode. Record the current measurement interval. Record Auto Lock under Settings > Display & Touch. Connect USB and open the AirGradient logging tool.",
           "expected_result": "Both original settings are recorded and device logs are visible."
         },
         {
-          "action": "Set Measure Int. to 60s and Auto Lock to Off. Return Home and allow five minutes for warmup.",
+          "action": "Set the measurement interval to 60 seconds and Auto Lock to Off. Return Home and allow five minutes for warmup.",
           "expected_result": "Home displays measurements."
         },
         {
@@ -1721,11 +1721,11 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record the interval under Settings > Operations > Measurement Interval.",
+          "action": "Select Portable mode. Record the current measurement interval.",
           "expected_result": "Portable is selected and the original interval is recorded."
         },
         {
-          "action": "Set the interval to 10 seconds and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
+          "action": "Set the measurement interval to 10 seconds and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
           "expected_result": "Home displays measurements."
         },
         {
@@ -1761,11 +1761,11 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record the interval under Settings > Operations > Measurement Interval.",
+          "action": "Select Portable mode. Record the current measurement interval.",
           "expected_result": "Portable is selected and the original interval is recorded."
         },
         {
-          "action": "Set the interval to 10 seconds and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
+          "action": "Set the measurement interval to 10 seconds and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
           "expected_result": "Home displays measurements."
         },
         {
@@ -1805,11 +1805,11 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record the interval under Settings > Operations > Measurement Interval.",
+          "action": "Select Portable mode. Record the current measurement interval.",
           "expected_result": "Portable is selected and the original interval is recorded."
         },
         {
-          "action": "Set the interval to 10 seconds and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
+          "action": "Set the measurement interval to 10 seconds and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
           "expected_result": "Home displays measurements."
         },
         {
@@ -1895,11 +1895,11 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record Measurement Interval under Settings > Operations and Auto Lock under Settings > Display & Touch.",
+          "action": "Select Portable mode. Record the current measurement interval. Record Auto Lock under Settings > Display & Touch.",
           "expected_result": "The original settings are recorded."
         },
         {
-          "action": "Set Measurement Interval to 10 seconds and Auto Lock to Off. Return Home and allow up to five minutes for numeric CO2 readings, then leave the device measuring for one minute.",
+          "action": "Set the measurement interval to 10 seconds and Auto Lock to Off. Return Home and allow up to five minutes for numeric CO2 readings, then leave the device measuring for one minute.",
           "expected_result": "CO2 measurements continue updating."
         },
         {
@@ -1907,7 +1907,7 @@
           "expected_result": "The chart contains multiple samples before power-off."
         },
         {
-          "action": "Set Measurement Interval to 60 seconds. Disconnect USB. Hold Power until Powered off is fully displayed, release it, and wait ten seconds. Press and release Power; allow up to five minutes for the first Home measurement.",
+          "action": "Set the measurement interval to 60 seconds. Disconnect USB. Hold Power until Powered off is fully displayed, release it, and wait ten seconds. Press and release Power; allow up to five minutes for the first Home measurement.",
           "expected_result": "Home returns with a new measurement."
         },
         {
@@ -1916,7 +1916,7 @@
         }
       ],
       "cleanup": [
-        "Restore and confirm the recorded Measurement Interval and Auto Lock, including after interruption. Return Home and record any restoration failure. Cleared chart history is not restored."
+        "Restore and confirm the recorded measurement interval and Auto Lock, including after interruption. Return Home and record any restoration failure. Cleared chart history is not restored."
       ],
       "references": [
         "products/go/docs/storage_service.md"
@@ -1938,11 +1938,11 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record Measurement Interval under Settings > Operations, and Auto Lock and Pinned Chart under Settings > Display & Touch.",
+          "action": "Select Portable mode. Record the current measurement interval. Record Auto Lock and Pinned Chart under Settings > Display & Touch.",
           "expected_result": "The original settings are recorded."
         },
         {
-          "action": "Set Measurement Interval to 10 seconds and Auto Lock to Off. Return Home and allow up to five minutes for numeric CO2 readings, then leave the device measuring for one minute.",
+          "action": "Set the measurement interval to 10 seconds and Auto Lock to Off. Return Home and allow up to five minutes for numeric CO2 readings, then leave the device measuring for one minute.",
           "expected_result": "CO2 measurements continue updating."
         },
         {
@@ -1950,12 +1950,12 @@
           "expected_result": "Home shows the CO2 chart with multiple samples."
         },
         {
-          "action": "Set Measurement Interval to 60 seconds. Open Settings > Clear Data and select Yes. Inspect Home immediately, then observe until the next measurement, allowing 90 seconds.",
+          "action": "Set the measurement interval to 60 seconds. Open Settings > Clear Data and select Yes. Inspect Home immediately, then observe until the next measurement, allowing 90 seconds.",
           "expected_result": "Data cleared appears and the previous chart history disappears. New measurements do not restore the old history."
         },
         {
-          "action": "Inspect Main Menu and the Measurement Interval, Auto Lock, and Pinned Chart settings.",
-          "expected_result": "Main Menu offers Start Tracking. Measurement Interval remains 60 seconds, Auto Lock remains Off, and Pinned Chart remains CO2."
+          "action": "Inspect Main Menu and the measurement interval, Auto Lock, and Pinned Chart settings.",
+          "expected_result": "Main Menu offers Start Tracking. The measurement interval remains 60 seconds, Auto Lock remains Off, and Pinned Chart remains CO2."
         }
       ],
       "cleanup": [
@@ -2349,7 +2349,7 @@
           "expected_result": "Configuration control becomes local."
         },
         {
-          "action": "Set the dashboard measurement interval to 300 seconds. On Go, set Settings > Operations > Measurement Interval to 5 minutes and Temperature Unit under Display & Touch to the recorded dashboard unit. Return Home and allow up to six minutes for a numeric temperature.",
+          "action": "Set the dashboard measurement interval to 300 seconds. On Go, set the measurement interval to 5 minutes and Temperature Unit under Display & Touch to the recorded dashboard unit. Return Home and allow up to six minutes for a numeric temperature.",
           "expected_result": "Home displays a temperature in the preparation unit."
         },
         {
@@ -2771,7 +2771,7 @@
           "expected_result": "Device logs are visible."
         },
         {
-          "action": "Select Energy Saving mode. Open Settings > Operations > Measurement Interval, record the current choice and select 5m. Return Home.",
+          "action": "Select Energy Saving mode. Record the current measurement interval, then set it to 5 minutes. Return Home.",
           "expected_result": "Energy Saving uses the five-minute interval."
         },
         {
@@ -2787,7 +2787,7 @@
         }
       ],
       "cleanup": [
-        "Wake and unlock with Power. Restore the recorded Energy Saving interval and confirm its menu selection, including after interruption. Return Home, download the logs and disconnect the logging tool. Record any restoration failure."
+        "Wake and unlock with Power. Restore the recorded Energy Saving measurement interval and confirm its menu selection, including after interruption. Return Home, download the logs and disconnect the logging tool. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/power_management.md",
@@ -2810,7 +2810,7 @@
       ],
       "steps": [
         {
-          "action": "Select Energy Saving mode. Open Settings > Operations > Measurement Interval, record the current choice and select 5m. Return Home.",
+          "action": "Select Energy Saving mode. Record the current measurement interval, then set it to 5 minutes. Return Home.",
           "expected_result": "Energy Saving uses the five-minute interval."
         },
         {
@@ -2822,7 +2822,7 @@
         }
       ],
       "cleanup": [
-        "Wake and unlock Go with Power. Restore the recorded Energy Saving interval and confirm its menu selection, including after interruption. Return Home and record any restoration failure."
+        "Wake and unlock Go with Power. Restore the recorded Energy Saving measurement interval and confirm its menu selection, including after interruption. Return Home and record any restoration failure."
       ],
       "references": [
         "products/go/go_ble_client.md#offline-measurement-broadcasts",
@@ -2848,7 +2848,7 @@
           "expected_result": "Device logs are visible."
         },
         {
-          "action": "Select Energy Saving mode. Record the current Measurement Interval under Settings > Operations and Auto Lock under Settings > Display & Touch. Set them to 5m and Off respectively. Return Home and allow up to six minutes for numeric PM2.5 and CO2 readings. Save a Home photo.",
+          "action": "Select Energy Saving mode. Record the current measurement interval. Record Auto Lock under Settings > Display & Touch. Set them to 5 minutes and Off respectively. Return Home and allow up to six minutes for numeric PM2.5 and CO2 readings. Save a Home photo.",
           "expected_result": "Home shows readings to compare after waking."
         },
         {
@@ -2865,7 +2865,7 @@
         }
       ],
       "cleanup": [
-        "Restore the recorded Energy Saving interval and Auto Lock settings, including after interruption. Confirm both selections, return Home, download the logs and disconnect the logging tool. Record any restoration failure."
+        "Restore the recorded Energy Saving measurement interval and Auto Lock settings, including after interruption. Confirm both selections, return Home, download the logs and disconnect the logging tool. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/power_management.md",
@@ -2893,7 +2893,7 @@
           "expected_result": "Logs are visible and the line contains pwr=None or pwr=OTG, confirming battery operation."
         },
         {
-          "action": "Select Energy Saving mode. Record Measurement Interval and GPS under Settings > Operations, and Auto Lock under Settings > Display & Touch. Set them to 5m, On When Tracking and Off respectively. Return Home and short-press Power to lock.",
+          "action": "Select Energy Saving mode. Record the current measurement interval. Record GPS under Settings > Operations, and Auto Lock under Settings > Display & Touch. Set them to 5 minutes, On When Tracking and Off respectively. Return Home and short-press Power to lock.",
           "expected_result": "Go is ready for the sleep cycle."
         },
         {
@@ -2917,7 +2917,7 @@
         }
       ],
       "cleanup": [
-        "Stop the session created by this case. Restore the recorded Energy Saving interval, GPS and Auto Lock settings, including after interruption. Confirm the selections, return Home, save the logs and disconnect logging. Record any restoration failure."
+        "Stop the session created by this case. Restore the recorded Energy Saving measurement interval, GPS and Auto Lock settings, including after interruption. Confirm the selections, return Home, save the logs and disconnect logging. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/gps_service.md",
@@ -2945,11 +2945,11 @@
           "expected_result": "Device logs are visible."
         },
         {
-          "action": "Select Portable mode. Record the Measurement Interval under Settings > Operations and select 10s. Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings. Start Tracking, record the session ID, then open Tracking > Status and allow 40 seconds for at least one point. Record Points.",
+          "action": "Select Portable mode. Record the current measurement interval, then set it to 10 seconds. Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings. Start Tracking, record the session ID, then open Tracking > Status and allow 40 seconds for at least one point. Record Points.",
           "expected_result": "Status shows Recording with at least one point."
         },
         {
-          "action": "Select Energy Saving mode. Record its Measurement Interval and select 5m. Return Home and, if unlocked, short-press Power to lock.",
+          "action": "Select Energy Saving mode. Record its current measurement interval, then set it to 5 minutes. Return Home and, if unlocked, short-press Power to lock.",
           "expected_result": "The log shows PowerService: enter_sleep: entering deep sleep for <duration> ms."
         },
         {
@@ -2996,7 +2996,7 @@
           "expected_result": "Device logs are visible."
         },
         {
-          "action": "Select Portable mode. Record the Measurement Interval under Settings > Operations and select 10s. Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings. Start Tracking, record the session ID, then open Tracking > Status and allow 40 seconds for at least one point.",
+          "action": "Select Portable mode. Record the current measurement interval, then set it to 10 seconds. Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings. Start Tracking, record the session ID, then open Tracking > Status and allow 40 seconds for at least one point.",
           "expected_result": "Status shows Recording with at least one point."
         },
         {
@@ -3004,7 +3004,7 @@
           "expected_result": "Status shows Paused."
         },
         {
-          "action": "Select Energy Saving mode. Record its Measurement Interval and select 5m. Return Home and, if unlocked, short-press Power to lock.",
+          "action": "Select Energy Saving mode. Record its current measurement interval, then set it to 5 minutes. Return Home and, if unlocked, short-press Power to lock.",
           "expected_result": "The log shows PowerService: enter_sleep: entering deep sleep for <duration> ms."
         },
         {
@@ -3196,7 +3196,7 @@
           "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
-          "action": "Set Temperature Unit under Settings > Display & Touch to F, and Measurement Interval under Settings > Operations to 30s.",
+          "action": "Set Temperature Unit under Settings > Display & Touch to F, and the measurement interval to 30 seconds.",
           "expected_result": "Both menus show the selected values."
         },
         {
@@ -3204,7 +3204,7 @@
           "expected_result": "Getting Started appears."
         },
         {
-          "action": "Hold Menu for one second to complete onboarding. Inspect Operating Mode, Temperature Unit and Measurement Interval.",
+          "action": "Hold Menu for one second to complete onboarding. Inspect Operating Mode, Temperature Unit and measurement interval.",
           "expected_result": "Home opens. Portable, C and 10s are selected."
         },
         {
@@ -3263,7 +3263,7 @@
           "expected_result": "Updating firmware appears, followed by Restarting and Home. No Update failed message or repeated restart occurs."
         },
         {
-          "action": "Open About Device and check Temperature Unit and Measurement Interval. Return Home, allow up to five minutes for numeric PM2.5 and CO2 readings, then observe for another 40 seconds.",
+          "action": "Open About Device and check Temperature Unit and measurement interval. Return Home, allow up to five minutes for numeric PM2.5 and CO2 readings, then observe for another 40 seconds.",
           "expected_result": "The installed version matches the target. The recorded temperature unit and 10-second interval remain selected. At least three measurement updates complete.",
           "evidence": [
             "Save the installed version and a Home photo; capture any stalled or failed update."
@@ -3323,7 +3323,7 @@
           "expected_result": "Updating firmware appears, followed by Restarting and Home. No Update failed message or repeated restart occurs."
         },
         {
-          "action": "Open About Device and check Temperature Unit and Measurement Interval. Return Home, allow up to five minutes for numeric PM2.5 and CO2 readings, then observe for another 40 seconds.",
+          "action": "Open About Device and check Temperature Unit and measurement interval. Return Home, allow up to five minutes for numeric PM2.5 and CO2 readings, then observe for another 40 seconds.",
           "expected_result": "About Device reports the selected older version. The recorded temperature unit and 10-second interval remain selected. At least three measurement updates complete.",
           "evidence": [
             "Save the installed version and a Home photo; capture any stalled or failed update."
