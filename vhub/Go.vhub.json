@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "7389e42",
+  "rev": "cf13c17",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2795,8 +2795,8 @@
     },
     {
       "id": "go.sleep.route-paused",
-      "title": "Paused survives Energy Saving (Offline) timer wakes",
-      "objective": "Verify retained route state and timing across CPU sleep resets.",
+      "title": "Paused tracking stays paused across Energy Saving timer wakes",
+      "objective": "Verify two timer wakes preserve the paused session without adding points.",
       "category": "Modes & Sleep",
       "sub_category": "Route Continuity",
       "applicability": [
@@ -2804,52 +2804,44 @@
       ],
       "setup": [
         "Tracking is idle.",
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "A phone displaying the current time.",
-        "The saved Portable/Stationary measurement interval is one of the fixed UI choices: 3s, 10s, 30s, 60s, 5m, 15m or 1h.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
+        "A USB data cable and computer with the AirGradient logging tool.",
+        "The saved Portable and Energy Saving measurement intervals are not custom values."
       ],
       "steps": [
         {
-          "action": "Record the current operating mode, lock state, USB connection state, Auto Lock and GPS mode. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
+          "action": "Connect USB and start logging.",
+          "expected_result": "Device logs are visible."
         },
         {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
+          "action": "Select Main Menu > Operating Mode > Portable. Record the Measurement Interval under Settings > Operations and select 10s. Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings. Start Tracking, record the session ID, then open Tracking > Status and allow 40 seconds for at least one point.",
+          "expected_result": "Status shows Recording with at least one point."
         },
         {
-          "action": "Select Main Menu > Operating Mode > Portable. Record the Portable/Stationary interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Portable is selected."
+          "action": "Pause Tracking, reopen Status and record Points.",
+          "expected_result": "Status shows Paused."
         },
         {
-          "action": "Set interval 30s, Auto Lock 10s and GPS On When Tracking. Start Tracking, record the ID from the Tracking start = <ID> snackbar, and wait for three points, allowing two minutes.",
-          "expected_result": "The session is Recording."
+          "action": "Select Energy Saving. Record its Measurement Interval and select 5m. Return Home and, if unlocked, short-press Power to lock.",
+          "expected_result": "The log shows PowerService: enter_sleep: entering deep sleep for <duration> ms."
         },
         {
-          "action": "Pause Tracking.",
-          "expected_result": "The session is Paused."
+          "action": "Leave Go untouched for two timer-wake cycles, allowing 11 minutes. Reconnect logging after wake if needed. For each cycle, look for app: run_fast_path: entering fast-path boot (sensors_warm=<value>), followed by the sleep marker.",
+          "expected_result": "Both cycles refresh Home and return to sleep.",
+          "evidence": [
+            "Save both cycles’ logs."
+          ]
         },
         {
-          "action": "Photograph Status Points/Active/Elapsed/Last with phone time. Select Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it. Set its interval to 5m, return Home and lock. Capture two complete timer-wake measurements, allowing 11 minutes from locking. Reconnect the logging tool after a wake if needed; if required cycle logs were missed, record the observation as incomplete.",
-          "expected_result": "Both timer wake cycles complete without an unexpected cold reset."
+          "action": "Wake Go with Power and open Tracking > Status.",
+          "expected_result": "Status shows Paused and Points matches the recorded count."
         },
         {
-          "action": "Wake with Power and immediately reopen Status.",
-          "expected_result": "Status remains Paused. Points and Active stay fixed; Elapsed and Last include time asleep. Allow six seconds for status refresh/rounding."
-        },
-        {
-          "action": "Stop Tracking and compare the Tracking stop = <ID> snackbar with the recorded start ID.",
-          "expected_result": "Timer wakes preserved the session: the stop ID matches the start ID."
+          "action": "Stop Tracking and compare the stop snackbar’s ID with the recorded start ID.",
+          "expected_result": "The IDs match."
         }
       ],
       "cleanup": [
-        "Wake and stop test tracking.",
-        "Exit any menu or diagnostic opened by this case.",
-        "Restore only the original values captured before this case changed them: both intervals in their respective modes, Auto Lock and GPS mode, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
+        "Stop this case’s session if still active. Restore both recorded intervals in their respective modes, including after interruption. Confirm the selections, return Home, save the logs and disconnect logging. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/storage_service.md",
