@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "6904750",
+  "rev": "688e59c",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -3117,8 +3117,8 @@
     },
     {
       "id": "go.manufacturing.wifi-connect",
-      "title": "Manufacturing joins the factory AP",
-      "objective": "Verify this manufacturing-only initial connection outcome.",
+      "title": "Manufacturing mode connects to the factory Wi-Fi",
+      "objective": "Verify the BOOT shortcut connects Go to factory Wi-Fi and displays Home.",
       "category": "Manufacturing",
       "sub_category": "Wi-Fi",
       "applicability": [
@@ -3126,20 +3126,20 @@
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
-        "A controllable factory access point with SSID airgradient and WPA2 password cleanair."
+        "A 2.4 GHz WPA2 network with SSID airgradient, password cleanair and DHCP enabled."
       ],
       "steps": [
         {
-          "action": "Factory-reset and leave Getting Started open. Keep the factory AP available.",
-          "expected_result": "The unit is un-onboarded and the AP condition is established."
+          "action": "Disconnect USB. Hold BOOT for at least two seconds, release and allow 30 seconds for restart.",
+          "expected_result": "Getting Started appears."
         },
         {
-          "action": "Short-press BOOT once and observe the 15-second connection window and following display refresh.",
-          "expected_result": "Trying default Wi-Fi... is followed by Connected! and Home."
+          "action": "With the factory network available, press and release BOOT once. Observe for up to 30 seconds.",
+          "expected_result": "Trying default Wi-Fi... appears, followed by Connected! with an IP address, then Home with the connected Wi-Fi icon. No network setup is required."
         }
       ],
       "cleanup": [
-        "Restore factory AP power/password and cold-start out of manufacturing."
+        "After completion or interruption, hold Power until Powered off is fully displayed, release and wait 10 seconds. Press and release Power to start Go. On Getting Started, hold Menu for one second to complete onboarding. Record any failure to return Home. Erased data is not restored."
       ],
       "references": [
         "products/go/docs/wifi_service.md",
