@@ -2712,32 +2712,43 @@ TEST_CASE("Tracking Status: Auto Lock Off remains disabled after leaving",
 
 TEST_CASE("Tracking Status: manual Power and safety shutdown remain available",
           "[Orchestrator][tracking][status]") {
-  TestFixture f;
-  f.settings.auto_lock_seconds = 10;
-  auto orch = f.make_orchestrator();
-  uint32_t now_ms = 1000;
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
-  A::unlock(orch);
-  REQUIRE(A::start_tracking(orch));
-  enter_tracking_status(f, orch);
-  now_ms = 70'000;
+  for (const auto mode : {OperatingMode::Portable, OperatingMode::Offline}) {
+    DYNAMIC_SECTION("Operating mode " << static_cast<int>(mode)) {
+      TestFixture f;
+      f.settings.auto_lock_seconds = 10;
+      f.settings.energy_saving_measure_interval_seconds = 300;
+      auto orch = f.make_orchestrator();
+      A::set_mode(orch, mode);
+      uint32_t now_ms = 1000;
+      ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+      A::unlock(orch);
+      REQUIRE(A::start_tracking(orch));
+      enter_tracking_status(f, orch);
+      now_ms = 70'000;
 
-  SECTION("Power short press still locks") {
-    A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
-    CHECK(A::lock_state(orch) == LockState::Locked);
-    CHECK(f.ui_manager.current_screen() == Screen::Home);
-  }
-  SECTION("Power long press still shuts down") {
-    A::on_input(orch, {InputSource::ButtonPower, InputType::LongPress});
-    CHECK(test_spy::shutdown_called);
-    CHECK(f.ui_manager.current_screen() == Screen::ShutdownUser);
-  }
-  SECTION("BMS timer still handles thermal shutdown") {
-    test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverTemperature;
-    A::check_timers(orch);
-    CHECK(test_spy::bms_polled);
-    CHECK(test_spy::shutdown_called);
-    CHECK(f.ui_manager.current_screen() == Screen::ShutdownTemperature);
+      SECTION("Power short press still locks") {
+        A::check_timers(orch);
+        REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+        REQUIRE(f.ui_manager.current_screen() == Screen::TrackingStatus);
+        A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
+        CHECK(A::lock_state(orch) == LockState::Locked);
+        CHECK(f.ui_manager.current_screen() == Screen::Home);
+        CHECK(A::tracking_state(orch) == TrackingState::Recording);
+        CHECK(A::settings(orch).auto_lock_seconds == 10);
+      }
+      SECTION("Power long press still shuts down") {
+        A::on_input(orch, {InputSource::ButtonPower, InputType::LongPress});
+        CHECK(test_spy::shutdown_called);
+        CHECK(f.ui_manager.current_screen() == Screen::ShutdownUser);
+      }
+      SECTION("BMS timer still handles thermal shutdown") {
+        test_spy::snapshot_to_return.ship_mode_request = ShipModeRequest::OverTemperature;
+        A::check_timers(orch);
+        CHECK(test_spy::bms_polled);
+        CHECK(test_spy::shutdown_called);
+        CHECK(f.ui_manager.current_screen() == Screen::ShutdownTemperature);
+      }
+    }
   }
 }
 

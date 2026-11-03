@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "cf13c17",
+  "rev": "333626f",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2845,55 +2845,6 @@
       ],
       "references": [
         "products/go/docs/storage_service.md",
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
-      "id": "go.sleep.status-awake",
-      "title": "Tracking Status prevents Energy Saving (Offline) sleep until manual lock",
-      "objective": "Verify the live status page intentionally keeps the device awake.",
-      "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "The saved Energy Saving measurement interval is one of the fixed UI choices: 5m, 15m or 1h."
-      ],
-      "steps": [
-        {
-          "action": "Record the current operating mode, lock state, USB connection state and Auto Lock. Unlock with a short Power press if needed. Settings paths below start at Main Menu > Settings.",
-          "expected_result": "The original values are recorded for cleanup and the controls are unlocked."
-        },
-        {
-          "action": "Connect the USB data cable and start the AirGradient logging tool. Keep logging during the observations below; reconnect if the connection is lost.",
-          "expected_result": "The device logs are visible before the observations that use them."
-        },
-        {
-          "action": "Select Main Menu > Operating Mode > Energy Saving. Record the Energy Saving interval in Settings > Operations > Measurement Interval before changing it.",
-          "expected_result": "Energy Saving is selected."
-        },
-        {
-          "action": "Set Settings > Operations > Measurement Interval to 5m and Auto Lock to 10s. Start Tracking and leave Status open for 30 seconds while capturing logs.",
-          "expected_result": "Status remains unlocked and there is no deep-sleep entry."
-        },
-        {
-          "action": "Short-press Power to lock and observe Home and the logs for up to six minutes from locking.",
-          "expected_result": "Home shows the locked state and a deep-sleep entry appears in the AirGradient logging tool."
-        }
-      ],
-      "cleanup": [
-        "Wake and stop the test route.",
-        "Exit any menu or diagnostic opened by this case.",
-        "In Energy Saving, restore only the original values captured before this case changed them: Energy Saving interval and Auto Lock, operating mode, lock state and USB connection state.",
-        "Verify the restored settings. If restoration fails or a required baseline was not captured, record the remaining state.",
-        "Download the required logs from the AirGradient logging tool and disconnect the tool."
-      ],
-      "references": [
-        "products/go/docs/ui_manager.md",
         "products/go/docs/power_management.md"
       ]
     },
