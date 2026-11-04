@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "74ec512",
+  "rev": "dc7ea80",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -62,11 +62,11 @@
           "expected_result": "Getting Started is visible after restart."
         },
         {
-          "action": "On Getting Started, tap Menu once, quickly double-tap Menu, then hold Menu for about half a second and release. Pause and inspect the screen after each gesture.",
+          "action": "On Getting Started, tap Menu once, quickly double-tap Menu, then hold Menu for about half a second and release. Observe the screen for five seconds after each gesture.",
           "expected_result": "Getting Started remains open after each gesture."
         },
         {
-          "action": "Hold Menu for at least one second, keeping it held until Home appears; then release.",
+          "action": "Hold Menu for at least one second. Release when Home appears, or after 10 seconds from first touching Menu if Home has not appeared. Observe for five seconds after release.",
           "expected_result": "Home appears unlocked while Menu is still held. Releasing Menu leaves Home open."
         },
         {
@@ -75,11 +75,13 @@
         }
       ],
       "cleanup": [
-        "If interrupted, complete onboarding by holding Menu on Getting Started. If this fails, record that the device remains on Getting Started."
+        "Release Menu if still held. If Getting Started remains open, try holding Menu for up to 10 seconds to complete onboarding, releasing when Home appears or the time limit is reached. Record any failure to reach Home."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
-        "products/go/docs/settings.md"
+        "products/go/docs/settings.md",
+        "products/go/docs/input_service.md",
+        "products/go/docs/display_service.md"
       ]
     },
     {
@@ -281,20 +283,17 @@
           "expected_result": "The Buzzer choice screen is displayed."
         },
         {
-          "action": "Hold Menu for at least one second and keep holding until Home appears.",
-          "expected_result": "Home appears while Menu is still held, without stopping at an intermediate menu."
-        },
-        {
-          "action": "Release Menu and inspect the screen after any refresh finishes.",
-          "expected_result": "Home remains displayed; releasing Menu does not reopen a menu."
+          "action": "Hold Menu for at least one second. Release when Home appears, or after 10 seconds from first touching Menu if Home has not appeared. Observe for five seconds after release.",
+          "expected_result": "Home appears while Menu is still held, without stopping at an intermediate menu. After release, Home remains displayed without reopening a menu."
         }
       ],
       "cleanup": [
-        "Return to Home if interrupted before completing the gesture."
+        "Release Menu if still held. Use the on-screen Back or Exit options to return Home if needed after interruption. Record any failure to return Home."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
-        "products/go/docs/input_service.md"
+        "products/go/docs/input_service.md",
+        "products/go/docs/display_service.md"
       ]
     },
     {
@@ -708,16 +707,12 @@
           "expected_result": "Both settings show Off, and the rear LEDs are dark."
         },
         {
-          "action": "Open Settings > Hardware Test > Play Melody > Chime. Watch the rear LEDs and listen throughout playback.",
-          "expected_result": "A short chime of three rising notes plays despite Buzzer being Off. Rear LED colors change with the notes despite AQI LED being Off."
+          "action": "Select Settings > Hardware Test > Play Melody > Chime. Watch the screen and rear LEDs and listen for 10 seconds from selection.",
+          "expected_result": "A short chime of three rising notes plays despite Buzzer being Off, with rear LED colors changing alongside the notes despite AQI LED being Off. Within the observation window, playback finishes, the LEDs turn off and Hardware Test appears with Play Melody highlighted. Playback does not repeat during the remaining observation time."
         },
         {
-          "action": "Inspect the device after playback and the screen refresh finish.",
-          "expected_result": "Hardware Test appears with Play Melody highlighted. The rear LEDs turn off, and the chime does not repeat."
-        },
-        {
-          "action": "Open Hardware Test > Play Melody > Tetris. Watch and listen through the complete playback.",
-          "expected_result": "The Tetris melody plays with rear LED colors changing alongside the notes. After playback, Hardware Test returns with Play Melody highlighted, the LEDs turn off, and playback does not repeat."
+          "action": "Select Hardware Test > Play Melody > Tetris. Watch the screen and rear LEDs and listen for 30 seconds from selection.",
+          "expected_result": "The Tetris melody plays with rear LED colors changing alongside the notes. Within the observation window, playback finishes, the LEDs turn off and Hardware Test appears with Play Melody highlighted. Playback does not repeat during the remaining observation time."
         },
         {
           "action": "Reopen the Buzzer and AQI LED settings.",
@@ -725,12 +720,14 @@
         }
       ],
       "cleanup": [
-        "Restore the recorded Buzzer and AQI LED settings, including after interruption.",
-        "Confirm the restored choices and return Home. Record any restoration failure."
+        "If interrupted during playback, allow only the remainder of its 10-second Chime or 30-second Tetris observation window before checking the controls. Record a failure if playback or the return to Hardware Test remains incomplete.",
+        "Restore the recorded Buzzer and AQI LED settings. Confirm the restored choices and return Home. Record any restoration failure, including unresponsive controls."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
-        "products/go/docs/led_service.md"
+        "products/go/docs/led_service.md",
+        "products/go/docs/display_service.md",
+        "products/go/main/go_melody.h"
       ]
     },
     {
