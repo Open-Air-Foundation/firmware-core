@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "ff3fa9d",
+  "rev": "dca0082",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -3263,7 +3263,7 @@
           "expected_result": "Updating firmware appears, followed by Restarting and Home. No Update failed message or repeated restart occurs."
         },
         {
-          "action": "Open About Device and check Temperature Unit and measurement interval. Return Home, allow up to five minutes for numeric PM2.5 and CO2 readings, then observe for another 40 seconds.",
+          "action": "Check the installed firmware version in About Device. Then check Temperature Unit and the measurement interval in Settings. Return Home, allow up to five minutes for numeric PM2.5 and CO2 readings, then observe for another 40 seconds.",
           "expected_result": "The installed version matches the target. The recorded temperature unit and 10-second interval remain selected. At least three measurement updates complete.",
           "evidence": [
             "Save the installed version and a Home photo; capture any stalled or failed update."
@@ -3323,7 +3323,7 @@
           "expected_result": "Updating firmware appears, followed by Restarting and Home. No Update failed message or repeated restart occurs."
         },
         {
-          "action": "Open About Device and check Temperature Unit and measurement interval. Return Home, allow up to five minutes for numeric PM2.5 and CO2 readings, then observe for another 40 seconds.",
+          "action": "Check the installed firmware version in About Device. Then check Temperature Unit and the measurement interval in Settings. Return Home, allow up to five minutes for numeric PM2.5 and CO2 readings, then observe for another 40 seconds.",
           "expected_result": "About Device reports the selected older version. The recorded temperature unit and 10-second interval remain selected. At least three measurement updates complete.",
           "evidence": [
             "Save the installed version and a Home photo; capture any stalled or failed update."
