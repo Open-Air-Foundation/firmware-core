@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "8717ea9",
+  "rev": "f5c3fef",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1682,8 +1682,8 @@
     },
     {
       "id": "go.tracking.start",
-      "title": "Starting tracking creates a recording session",
-      "objective": "Verify starting tracking shows the session ID and recording indicator, and recorded points accumulate.",
+      "title": "Tracking controls redraw Home and Status cleanly",
+      "objective": "Verify Start, Pause, Resume and Stop update the physical indicators, messages and menus without leftover content, while live measurements remain visible during Pause.",
       "category": "Tracking & Storage",
       "sub_category": "Route Lifecycle",
       "applicability": [
@@ -1695,163 +1695,46 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record the current measurement interval.",
-          "expected_result": "Portable is selected and the original interval is recorded."
+          "action": "Select Portable mode. Record the current measurement interval, then set it to 10 seconds. Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings.",
+          "expected_result": "The original interval is recorded and Home displays measurements."
         },
         {
-          "action": "Set the measurement interval to 10 seconds and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
-          "expected_result": "Home displays measurements."
+          "action": "Select Main Menu > Start Tracking. Watch the message and Home through the completed refresh, allowing up to 10 seconds from selection.",
+          "expected_result": "The tracking-start message and session ID are readable. Home shows a clear recording dot without overlapping nearby icons."
         },
         {
-          "action": "Select Main Menu > Start Tracking. Record the ID displayed in Tracking start = <ID> and inspect Home.",
-          "expected_result": "A nonzero session ID appears, and Home shows the recording dot."
+          "action": "Open Main Menu > Tracking > Status. Inspect the completed refresh, allowing up to 10 seconds from opening Status.",
+          "expected_result": "State shows Recording. Labels and values are readable without clipped text, overlapping rows or leftover menu content."
         },
         {
-          "action": "Open Main Menu > Tracking > Status. Observe for up to 40 seconds.",
-          "expected_result": "State shows Recording and Points reaches at least three."
+          "action": "Return Home. Select Main Menu > Tracking > Pause Tracking. Watch Home through the completed refresh, allowing up to 10 seconds from selection.",
+          "expected_result": "Tracking paused is readable. The paused indicator replaces the recording dot cleanly."
+        },
+        {
+          "action": "Open Main Menu > Tracking, inspect its rows, then open Status. Allow up to 10 seconds for each screen refresh.",
+          "expected_result": "Resume Tracking replaces Pause Tracking with readable rows and highlighting. Status shows Paused without leftover Recording text."
+        },
+        {
+          "action": "Return Home and observe for 40 seconds.",
+          "expected_result": "Measurements continue refreshing while the paused indicator remains visible. The pause message clears without leftover text or a message rectangle."
+        },
+        {
+          "action": "Select Main Menu > Tracking > Resume Tracking. Watch Home through the completed refresh, then reopen Main Menu > Tracking. Allow up to 10 seconds for each screen refresh.",
+          "expected_result": "Tracking resumed is readable, and the recording dot replaces the paused indicator cleanly. The menu offers Pause Tracking with readable rows and highlighting."
+        },
+        {
+          "action": "Select Stop Tracking. Watch the stop message and Home through the completed refresh, then open Main Menu. Allow up to 10 seconds for each screen refresh.",
+          "expected_result": "The tracking-stop message is readable. The recording dot clears without leftover pixels, and Start Tracking replaces Tracking without a blank row or leftover text."
         }
       ],
       "cleanup": [
-        "Stop the session created by this case, including after interruption.",
-        "Restore and confirm the recorded measurement interval, then return Home. Record any restoration failure. The test session’s route data is expendable."
+        "Stop this case’s session if still active, including after interruption. Leave saved routes intact; the test session’s route data is expendable.",
+        "Restore and confirm the recorded measurement interval, then return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/storage_service.md",
-        "products/go/docs/ui_manager.md"
-      ]
-    },
-    {
-      "id": "go.tracking.pause",
-      "title": "Pausing stops new route points but keeps live readings",
-      "objective": "Verify Pause shows the paused indicator, stops the point count, and leaves live measurements updating.",
-      "category": "Tracking & Storage",
-      "sub_category": "Route Lifecycle",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "The Portable/Stationary measurement interval is not a custom value."
-      ],
-      "steps": [
-        {
-          "action": "Select Portable mode. Record the current measurement interval.",
-          "expected_result": "Portable is selected and the original interval is recorded."
-        },
-        {
-          "action": "Set the measurement interval to 10 seconds and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
-          "expected_result": "Home displays measurements."
-        },
-        {
-          "action": "Select Main Menu > Start Tracking, then open Tracking > Status. Allow up to 40 seconds.",
-          "expected_result": "State shows Recording and Points reaches at least three."
-        },
-        {
-          "action": "Select Tracking > Pause Tracking and inspect Home. Open Tracking > Status and record Points.",
-          "expected_result": "Home shows the paused indicator. Status shows Paused."
-        },
-        {
-          "action": "Return Home and observe for 40 seconds, then reopen Tracking > Status.",
-          "expected_result": "Home continues refreshing measurements while the paused indicator remains visible. Points matches the count recorded after pausing."
-        }
-      ],
-      "cleanup": [
-        "Stop the session created by this case, including after interruption.",
-        "Restore and confirm the recorded measurement interval, then return Home. Record any restoration failure. The test session’s route data is expendable."
-      ],
-      "references": [
-        "products/go/docs/storage_service.md",
-        "products/go/docs/ui_manager.md"
-      ]
-    },
-    {
-      "id": "go.tracking.resume",
-      "title": "Resume restores the recording display",
-      "objective": "Verify Resume restores the recording indicator and continues the displayed point count.",
-      "category": "Tracking & Storage",
-      "sub_category": "Route Lifecycle",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "The Portable/Stationary measurement interval is not a custom value."
-      ],
-      "steps": [
-        {
-          "action": "Select Portable mode. Record the current measurement interval.",
-          "expected_result": "Portable is selected and the original interval is recorded."
-        },
-        {
-          "action": "Set the measurement interval to 10 seconds and return Home. Allow up to five minutes for numeric PM2.5 and CO2 readings.",
-          "expected_result": "Home displays measurements."
-        },
-        {
-          "action": "Select Main Menu > Start Tracking, then open Tracking > Status. Allow up to 40 seconds.",
-          "expected_result": "State shows Recording and Points reaches at least three."
-        },
-        {
-          "action": "Select Tracking > Pause Tracking. Inspect Home, then open Tracking > Status and record Points.",
-          "expected_result": "Home shows the paused indicator and Status shows Paused."
-        },
-        {
-          "action": "Select Tracking > Resume Tracking. Inspect Home, then reopen the Tracking menu.",
-          "expected_result": "The recording dot replaces the paused indicator, and Pause Tracking replaces Resume Tracking."
-        },
-        {
-          "action": "Open Status and observe for up to 40 seconds.",
-          "expected_result": "State shows Recording and Points increases beyond the count recorded while paused."
-        }
-      ],
-      "cleanup": [
-        "Stop the session created by this case, including after interruption.",
-        "Restore and confirm the recorded measurement interval, then return Home. Record any restoration failure. The test session’s route data is expendable."
-      ],
-      "references": [
-        "products/go/docs/storage_service.md",
-        "products/go/docs/ui_manager.md"
-      ]
-    },
-    {
-      "id": "go.tracking.stop-recording",
-      "title": "Stopping a recording or paused session returns to Idle",
-      "objective": "Verify Stop clears either tracking indicator and allows a new session.",
-      "category": "Tracking & Storage",
-      "sub_category": "Route Lifecycle",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle."
-      ],
-      "steps": [
-        {
-          "action": "Select Portable mode, then Start Tracking. Record the ID from Tracking start = <ID>.",
-          "expected_result": "Home shows the recording dot."
-        },
-        {
-          "action": "Select Tracking > Stop Tracking. Inspect the stop message and Home, then open Main Menu.",
-          "expected_result": "The stop ID matches the recorded ID, the recording dot clears, and Start Tracking is available."
-        },
-        {
-          "action": "Select Start Tracking again and record the new ID.",
-          "expected_result": "The new ID differs from the first, and Home shows the recording dot."
-        },
-        {
-          "action": "Select Tracking > Pause Tracking.",
-          "expected_result": "Home shows the paused indicator."
-        },
-        {
-          "action": "Select Tracking > Stop Tracking. Inspect the stop message and Home, then open Main Menu.",
-          "expected_result": "The stop ID matches the second session’s ID, the paused indicator clears, and Start Tracking is available."
-        }
-      ],
-      "cleanup": [
-        "Stop any session created by this case that remains active, including after interruption. Return Home and record any failure to stop. The test sessions’ route data is expendable."
-      ],
-      "references": [
-        "products/go/docs/storage_service.md",
-        "products/go/docs/ui_manager.md"
+        "products/go/docs/ui_manager.md",
+        "products/go/docs/display_service.md"
       ]
     },
     {

@@ -3363,6 +3363,10 @@ TEST_CASE("start_tracking: generates session ID and starts route", "[Orchestrato
   REQUIRE(test_spy::ble_notify_tracking_status_called);
   CHECK(test_spy::ble_last_status_tracking == true);
   CHECK(test_spy::ble_last_status_session == A::tracking_session_id(orch));
+  const auto started = f.ui_manager.build_values(A::build_context(orch));
+  REQUIRE(started.snackbar_text != nullptr);
+  CHECK(std::string(started.snackbar_text) ==
+        "Tracking start = " + std::to_string(A::tracking_session_id(orch)));
 }
 
 TEST_CASE("start_tracking: storage open failure surfaces inline and returns false",
@@ -5588,16 +5592,18 @@ TEST_CASE("generate_tracking_session_id: returns a 5-digit random ID", "[Orchest
   REQUIRE(id <= 99999);
 }
 
-TEST_CASE("generate_tracking_session_id: stays within the 5-digit range across calls",
+TEST_CASE("generate_tracking_session_id: successive calls avoid an existing session",
           "[Orchestrator][session]") {
   TestFixture f;
   const uint32_t first_id = generate_tracking_session_id(f.storage_service);
+  test_spy::existing_route_session_ids.insert(first_id);
   const uint32_t second_id = generate_tracking_session_id(f.storage_service);
 
   REQUIRE(first_id >= 10000);
   REQUIRE(first_id <= 99999);
   REQUIRE(second_id >= 10000);
   REQUIRE(second_id <= 99999);
+  CHECK(second_id != first_id);
 }
 
 TEST_CASE("generate_tracking_session_id: returns 0 when all retries collide",
