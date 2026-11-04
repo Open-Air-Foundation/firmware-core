@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "f5c3fef",
+  "rev": "358d605",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1637,8 +1637,8 @@
     },
     {
       "id": "go.ble.bond-reconnect",
-      "title": "A saved Bluetooth bond survives a power cycle",
-      "objective": "Verify the same phone reconnects and reads protected data after restarting the Go without another passkey, and the BLE icon and advertising reflect connection changes.",
+      "title": "Portable mode and its Bluetooth bond survive a power cycle",
+      "objective": "Verify Portable remains selected after restart, the same phone reconnects and reads protected data without another passkey, and the BLE icon and advertising reflect connection changes.",
       "category": "Portable BLE",
       "sub_category": "Pairing",
       "applicability": [
@@ -1661,8 +1661,8 @@
           "expected_result": "The serial matches the Go. Pairing completes if needed, and the read succeeds."
         },
         {
-          "action": "Disconnect in nRF Connect without deleting the bond. Disconnect USB. Hold Power until Powered off is fully displayed, release it, and wait ten seconds. Press and release Power; allow up to five minutes.",
-          "expected_result": "Home returns."
+          "action": "Disconnect in nRF Connect without deleting the bond. Disconnect USB. Hold Power until Powered off is fully displayed, release it, and wait ten seconds. Press and release Power; allow up to five minutes for Home. Open Main Menu > Operating Mode, inspect the selected mode, then return Home without changing it.",
+          "expected_result": "Home returns and Portable remains selected."
         },
         {
           "action": "Scan for up to 30 seconds and reconnect to the same Go. Read Serial Number String (0x2A25) in Device Information (0x180A) within 30 seconds of connecting. Keep the connection open for another 30 seconds.",
@@ -1677,7 +1677,9 @@
         "Disconnect in nRF Connect, leave the bond intact, and return Home, including after interruption."
       ],
       "references": [
-        "products/go/docs/ble_service.md"
+        "products/go/docs/ble_service.md",
+        "products/go/docs/settings.md",
+        "products/go/docs/power_management.md"
       ]
     },
     {
@@ -1866,8 +1868,8 @@
     },
     {
       "id": "go.wifi.portal-dhcp",
-      "title": "Browser setup connects using DHCP and survives power cycling",
-      "objective": "Verify browser provisioning connects Go to Wi-Fi and saves the network for automatic reconnection.",
+      "title": "DHCP setup and local access survive a power cycle",
+      "objective": "Verify browser provisioning connects Go using DHCP, then a power cycle preserves Stationary mode, saved Wi-Fi and local API access.",
       "category": "Stationary Network",
       "sub_category": "Provisioning",
       "applicability": [
@@ -1876,7 +1878,8 @@
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
         "A 2.4 GHz WPA2 network with DHCP enabled and known credentials.",
-        "A computer with a browser and Wi-Fi settings.",
+        "The test network allows multicast between clients.",
+        "A computer with Wi-Fi, a browser, and Postman or an equivalent GUI API client supporting .local addresses.",
         "Access to the router’s connected-device list and DHCP leases."
       ],
       "steps": [
@@ -1885,8 +1888,8 @@
           "expected_result": "Getting Started appears."
         },
         {
-          "action": "Hold Menu for one second to complete onboarding. Select Stationary mode. Select Use portal and confirm Yes.",
-          "expected_result": "Go displays the setup network name and password."
+          "action": "Hold Menu for one second to complete onboarding. Read and record the serial from Settings > About Device. Select Stationary mode, then select Use portal and confirm Yes.",
+          "expected_result": "The serial is recorded, and Go displays the setup network name and password."
         },
         {
           "action": "Connect the computer to the exact airgradient- network shown on Go using password cleanair. Open http://192.168.4.1/.",
@@ -1901,8 +1904,16 @@
           "expected_result": "Go is connected and has a DHCP lease matching the displayed IP address."
         },
         {
-          "action": "Hold Power until Powered off is fully displayed, release and wait 10 seconds. Press and release Power. Observe startup for up to five minutes, then refresh the router’s connected-device list.",
-          "expected_result": "Go returns Home and reconnects to the saved network without requesting credentials. The router shows Go connected; its IP address may change."
+          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout.",
+          "expected_result": "HTTP 200 is returned, and serialNumber matches Go."
+        },
+        {
+          "action": "Hold Power until Powered off is fully displayed, release and wait 10 seconds. Press and release Power. Allow up to five minutes for Home, then open Main Menu > Operating Mode and inspect the selected mode. Return Home without changing it and refresh the router’s connected-device list.",
+          "expected_result": "Stationary remains selected. Go returns Home with the connected Wi-Fi icon and reconnects without requesting credentials. The router shows Go connected; its IP address may change."
+        },
+        {
+          "action": "Repeat the GET request using the same hostname and five-second timeout.",
+          "expected_result": "HTTP 200 is returned with the matching serialNumber, without changing mode or re-entering credentials."
         }
       ],
       "cleanup": [
@@ -1910,7 +1921,9 @@
       ],
       "references": [
         "products/go/docs/wifi_service.md",
-        "products/go/docs/local_server.md"
+        "products/go/docs/local_server.md",
+        "products/go/docs/settings.md",
+        "products/go/docs/power_management.md"
       ]
     },
     {
@@ -2516,87 +2529,6 @@
         "products/go/docs/orchestrator.md",
         "products/go/docs/wifi_service.md",
         "products/go/docs/ble_service.md"
-      ]
-    },
-    {
-      "id": "go.modes.persist-portable",
-      "title": "Portable survives a cold restart",
-      "objective": "Verify Portable remains selected and Bluetooth works after a full power-off and startup.",
-      "category": "Modes & Sleep",
-      "sub_category": "Mode Persistence",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "An Android phone with nRF Connect and Bluetooth enabled."
-      ],
-      "steps": [
-        {
-          "action": "Select Portable mode. Read and record the serial from Settings > About Device and return Home.",
-          "expected_result": "Portable is selected and the serial is recorded."
-        },
-        {
-          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
-          "expected_result": "Powered off remains displayed; Go does not restart by itself."
-        },
-        {
-          "action": "Press and release Power. Allow up to five minutes for Home, then open Main Menu > Operating Mode.",
-          "expected_result": "Home appears and Portable remains selected."
-        },
-        {
-          "action": "Return Home. Clear previous scan results in nRF Connect, scan for up to 30 seconds and connect to AirGradient Go <last4>, matching the last four characters of the recorded serial. Read Serial Number String (0x2A25) under Device Information (0x180A), entering the displayed pairing passkey if prompted.",
-          "expected_result": "The connection succeeds and the read serial matches Go."
-        }
-      ],
-      "cleanup": [
-        "Disconnect nRF Connect and return Go Home, including after interruption. Record any failure."
-      ],
-      "references": [
-        "products/go/docs/settings.md",
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
-      "id": "go.modes.persist-stationary",
-      "title": "Stationary survives a cold restart",
-      "objective": "Verify Stationary remains selected and local Wi-Fi access works after a full power-off and startup.",
-      "category": "Modes & Sleep",
-      "sub_category": "Mode Persistence",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Go has saved credentials for a Wi-Fi network. The test computer is connected to that network.",
-        "Postman or an equivalent GUI API client supporting .local addresses is available."
-      ],
-      "steps": [
-        {
-          "action": "Select Stationary mode. Read and record the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
-          "expected_result": "Home shows the connected Wi-Fi icon."
-        },
-        {
-          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout.",
-          "expected_result": "HTTP 200 is returned with the matching serialNumber."
-        },
-        {
-          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
-          "expected_result": "Powered off remains displayed; Go does not restart by itself."
-        },
-        {
-          "action": "Press and release Power. Allow up to five minutes for Home, then open Main Menu > Operating Mode.",
-          "expected_result": "Home shows the connected Wi-Fi icon and Stationary remains selected."
-        },
-        {
-          "action": "Return Home and repeat the GET request using the five-second timeout.",
-          "expected_result": "HTTP 200 is returned with the matching serialNumber."
-        }
-      ],
-      "cleanup": [
-        "Return Go Home, including after interruption. Record any failure."
-      ],
-      "references": [
-        "products/go/docs/settings.md",
-        "products/go/docs/power_management.md"
       ]
     },
     {
