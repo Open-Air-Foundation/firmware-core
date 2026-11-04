@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "2eb68e6",
+  "rev": "ff3fa9d",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2901,7 +2901,7 @@
           "expected_result": "The markers appear in that order. Their numeric values may vary."
         },
         {
-          "action": "Within 30 seconds of the second sleep marker, press and release Power, then select Main Menu > Tracking > Start Tracking. Reconnect logging after the restart if needed.",
+          "action": "Within 30 seconds of the second sleep marker, press and release Power, then select Main Menu > Start Tracking. Reconnect logging after the restart if needed.",
           "expected_result": "Go shows Starting tracking..., restarts once, then shows Started with a five-digit session ID within one minute.",
           "evidence": [
             "Record the display sequence and session ID."
