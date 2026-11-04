@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "5512371",
+  "rev": "9a17653",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2848,7 +2848,7 @@
           "expected_result": "Device logs are visible."
         },
         {
-          "action": "Select Energy Saving mode. Record the current measurement interval. Record Auto Lock under Settings > Display & Touch. Set them to 5 minutes and Off respectively. Return Home and allow up to six minutes for numeric PM2.5 and CO2 readings. Save a Home photo.",
+          "action": "Select Energy Saving mode. Record the current measurement interval. Record Auto Lock under Settings > Display & Touch. Set the measurement interval to 5 minutes and Auto Lock to Off. Return Home and allow up to six minutes for numeric PM2.5 and CO2 readings. Save a Home photo.",
           "expected_result": "Home shows readings to compare after waking."
         },
         {
@@ -2893,7 +2893,7 @@
           "expected_result": "Logs are visible and the line contains pwr=None or pwr=OTG, confirming battery operation."
         },
         {
-          "action": "Select Energy Saving mode. Record the current measurement interval. Record GPS under Settings > Operations, and Auto Lock under Settings > Display & Touch. Set them to 5 minutes, On When Tracking and Off respectively. Return Home and short-press Power to lock.",
+          "action": "Select Energy Saving mode. Record the current measurement interval. Record GPS under Settings > Operations, and Auto Lock under Settings > Display & Touch. Set the measurement interval to 5 minutes, GPS to On When Tracking and Auto Lock to Off. Return Home and short-press Power to lock.",
           "expected_result": "Go is ready for the sleep cycle."
         },
         {
