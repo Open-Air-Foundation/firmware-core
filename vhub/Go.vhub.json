@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "dca0082",
+  "rev": "665ef2c",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1982,7 +1982,7 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record GPS Mode in Settings > Operations.",
+          "action": "Select Portable mode. Record GPS in Settings > Operations.",
           "expected_result": "Portable is selected and the original GPS setting is recorded."
         },
         {
@@ -1994,7 +1994,7 @@
           "expected_result": "UTC agrees within 10 seconds."
         },
         {
-          "action": "Set Settings > Operations > GPS Mode to Always Off. Reopen Main Menu > Tracking > Status and inspect both views.",
+          "action": "Set Settings > Operations > GPS to Always Off. Reopen Main Menu > Tracking > Status and inspect both views.",
           "expected_result": "GPS shows Off. UTC and GPS detail values show --, with no previous values left visible."
         }
       ],
