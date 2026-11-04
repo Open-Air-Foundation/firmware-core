@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "2d34c05",
+  "rev": "4f0b007",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -811,7 +811,7 @@
       ],
       "setup": [
         "Home shows battery charge above 5% and at most 95%.",
-        "A USB power source and compatible cable.",
+        "A USB power source.",
         "The saved Portable measurement interval is not a custom value."
       ],
       "steps": [
@@ -846,7 +846,7 @@
       ],
       "setup": [
         "Home shows battery charge above 5% and at most 95%.",
-        "A USB power source and compatible cable.",
+        "A USB power source.",
         "The saved Portable measurement interval is not a custom value."
       ],
       "steps": [
@@ -881,7 +881,7 @@
       ],
       "setup": [
         "Home shows battery charge above 5% and at most 95%.",
-        "A USB power source and compatible cable."
+        "A USB power source."
       ],
       "steps": [
         {
@@ -915,7 +915,7 @@
       ],
       "setup": [
         "Home shows battery charge above 5% and at most 95%.",
-        "A USB power source and compatible cable."
+        "A USB power source."
       ],
       "steps": [
         {
