@@ -630,12 +630,6 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
   return touch;
 }
 
-bool GoHardwareBoard::sleep_touch() {
-  assert(_buses_ready && "sleep_touch() requires init_buses()");
-  CAP1203 touch(_i2c_bus, I2C_ADDR_CAP1203);
-  return touch.init() && touch.set_sleep(true);
-}
-
 AccelSensor *GoHardwareBoard::new_accel_sensor() {
   assert(_buses_ready && "new_accel_sensor() requires init_buses()");
   LIS2DH12::Config cfg;

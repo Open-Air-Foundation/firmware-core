@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "14a65e9",
+  "rev": "e834d9e",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2522,19 +2522,21 @@
     },
     {
       "id": "go.modes.portable-offline",
-      "title": "Switching to Energy Saving stops connectable Bluetooth",
-      "objective": "Verify Portable’s Bluetooth connection closes and connectable advertising stops when Energy Saving is selected.",
+      "title": "Switching to Energy Saving ends tracking and stops connectable Bluetooth",
+      "objective": "Verify a mode change ends recording, closes Bluetooth and redraws the reduced menu on battery and USB power.",
       "category": "Modes & Sleep",
       "sub_category": "Mode Transitions",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "An Android phone with nRF Connect and Bluetooth enabled."
+        "An Android phone with nRF Connect and Bluetooth enabled.",
+        "Tracking is idle.",
+        "A USB power source."
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Read the serial from Settings > About Device and return Home.",
+          "action": "Disconnect USB. Select Portable mode, allowing up to one minute for startup if it restarts. Read the serial from Settings > About Device and return Home.",
           "expected_result": "Portable is selected and the serial is recorded."
         },
         {
@@ -2542,16 +2544,29 @@
           "expected_result": "The read serial matches Go."
         },
         {
-          "action": "Keep the Bluetooth connection open and select Energy Saving mode.",
-          "expected_result": "nRF Connect reports disconnection and Go returns Home."
+          "action": "Select Main Menu > Start Tracking while the Bluetooth connection remains open.",
+          "expected_result": "Home shows the recording dot."
+        },
+        {
+          "action": "Keep the Bluetooth connection open and select Energy Saving mode. Watch startup for up to one minute.",
+          "expected_result": "nRF Connect reports disconnection. Go restarts into Energy Saving; Home has no recording or paused indicator."
         },
         {
           "action": "Clear previous scan results in nRF Connect and scan for 30 seconds.",
           "expected_result": "No connectable Go advertisement appears. Brief, non-connectable measurement broadcasts are allowed."
+        },
+        {
+          "action": "Open Main Menu, inspect the rows, then return Home.",
+          "expected_result": "Only Exit Menu, Operating Mode and Settings appear. Labels and highlighting are readable without a blank tracking row or leftover text."
+        },
+        {
+          "action": "Connect USB power. Select Portable mode, allowing up to one minute for Home, then repeat steps 2–6 with USB connected.",
+          "expected_result": "The Bluetooth, tracking-indicator and menu outcomes are the same. Go remains usable through the mode changes; a restart is not required with USB."
         }
       ],
       "cleanup": [
-        "Disconnect nRF Connect and return Go Home, including after interruption. Record any failure."
+        "Stop this case’s session if still active, including after interruption. Leave saved routes intact; the test sessions’ route data is expendable.",
+        "Disconnect nRF Connect and USB, return Home and record any failure."
       ],
       "references": [
         "products/go/docs/orchestrator.md",
@@ -2569,11 +2584,12 @@
         "V1"
       ],
       "setup": [
-        "An Android phone with nRF Connect and Bluetooth enabled."
+        "An Android phone with nRF Connect and Bluetooth enabled.",
+        "Tracking is idle."
       ],
       "steps": [
         {
-          "action": "Select Energy Saving mode. Read the serial from Settings > About Device and return Home.",
+          "action": "Disconnect USB. Select Energy Saving mode, allowing up to one minute for startup if it restarts. Read the serial from Settings > About Device and return Home.",
           "expected_result": "Energy Saving is selected and the serial is recorded."
         },
         {
@@ -2581,8 +2597,8 @@
           "expected_result": "No connectable Go advertisement appears. Brief, non-connectable measurement broadcasts are allowed."
         },
         {
-          "action": "Select Portable mode.",
-          "expected_result": "Go returns Home."
+          "action": "Select Portable mode and watch startup for up to one minute. Open Main Menu, then return Home.",
+          "expected_result": "Go restarts into Portable. Start Tracking is visible again, and the menu rows and highlighting are readable without leftover content."
         },
         {
           "action": "Clear previous scan results in nRF Connect, scan for up to 30 seconds and connect to AirGradient Go <last4>, matching the last four characters of the recorded serial. Read Serial Number String (0x2A25) under Device Information (0x180A), entering the displayed pairing passkey if prompted.",
@@ -2600,8 +2616,8 @@
     },
     {
       "id": "go.modes.stationary-offline",
-      "title": "Switching to Energy Saving stops local Wi-Fi access",
-      "objective": "Verify Stationary’s local API becomes unavailable and connectable Bluetooth remains unavailable in Energy Saving.",
+      "title": "Switching to Energy Saving ends paused tracking and stops local Wi-Fi access",
+      "objective": "Verify a mode change ends a paused session and disables local Wi-Fi access on battery and USB power.",
       "category": "Modes & Sleep",
       "sub_category": "Mode Transitions",
       "applicability": [
@@ -2610,11 +2626,13 @@
       "setup": [
         "Go has saved credentials for a Wi-Fi network. The test computer is connected to that network.",
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
-        "An Android phone with nRF Connect and Bluetooth enabled."
+        "An Android phone with nRF Connect and Bluetooth enabled.",
+        "Tracking is idle.",
+        "A USB power source."
       ],
       "steps": [
         {
-          "action": "Select Stationary mode. Read and record the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
+          "action": "Disconnect USB. Select Stationary mode, allowing up to one minute for startup if it restarts. Read and record the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
           "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
@@ -2622,8 +2640,12 @@
           "expected_result": "HTTP 200 is returned with the matching serialNumber."
         },
         {
-          "action": "Select Energy Saving mode.",
-          "expected_result": "Go returns Home and the Wi-Fi icon disappears."
+          "action": "Select Main Menu > Start Tracking, then Tracking > Pause Tracking.",
+          "expected_result": "Home shows the paused indicator."
+        },
+        {
+          "action": "Select Energy Saving mode and watch startup for up to one minute.",
+          "expected_result": "Go restarts into Energy Saving. Home has no Wi-Fi icon, recording dot or paused indicator."
         },
         {
           "action": "Repeat the GET request using the five-second timeout.",
@@ -2632,10 +2654,15 @@
         {
           "action": "Clear previous scan results in nRF Connect and scan for 30 seconds.",
           "expected_result": "No connectable Go advertisement appears. Brief, non-connectable measurement broadcasts are allowed."
+        },
+        {
+          "action": "Connect USB power. Select Stationary mode, allowing up to one minute for Home and Wi-Fi connection, then repeat steps 2–6 with USB connected.",
+          "expected_result": "The tracking-indicator, Wi-Fi and Bluetooth outcomes are the same. Go remains usable through the mode changes; a restart is not required with USB."
         }
       ],
       "cleanup": [
-        "Return Go Home, including after interruption. Record any failure."
+        "Stop this case’s session if still active, including after interruption. Leave saved routes intact; the test sessions’ route data is expendable.",
+        "Disconnect USB, return Home and record any failure."
       ],
       "references": [
         "products/go/docs/orchestrator.md",
@@ -2655,11 +2682,12 @@
       "setup": [
         "Go has saved credentials for a Wi-Fi network. The test computer is connected to that network.",
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
-        "An Android phone with nRF Connect and Bluetooth enabled."
+        "An Android phone with nRF Connect and Bluetooth enabled.",
+        "Tracking is idle."
       ],
       "steps": [
         {
-          "action": "Select Energy Saving mode. Read and record the serial from Settings > About Device and return Home.",
+          "action": "Disconnect USB. Select Energy Saving mode, allowing up to one minute for startup if it restarts. Read and record the serial from Settings > About Device and return Home.",
           "expected_result": "Energy Saving is selected."
         },
         {
@@ -2667,8 +2695,8 @@
           "expected_result": "Go’s local API is unreachable; no HTTP response is received."
         },
         {
-          "action": "Select Stationary mode. Allow up to 30 seconds for connection.",
-          "expected_result": "Go reaches Home with the connected Wi-Fi icon."
+          "action": "Select Stationary mode and watch startup for up to one minute. Open Main Menu, then return Home.",
+          "expected_result": "Go restarts into Stationary and reaches Home with the connected Wi-Fi icon. Main Menu offers Start Tracking with readable rows and highlighting."
         },
         {
           "action": "Repeat the GET request using the five-second timeout.",
@@ -2851,6 +2879,52 @@
       ]
     },
     {
+      "id": "go.sleep.energy-saving-current",
+      "title": "Energy Saving returns to its initial sleep current after timer wakes",
+      "objective": "Detect a sustained increase in sleep current after repeated measurement wakes.",
+      "category": "Modes & Sleep",
+      "sub_category": "Timer Wake",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "A test unit with accessible battery power connections.",
+        "A 3.9 V battery simulator or bench supply capable of normal startup and measurement peaks.",
+        "A current logger or ammeter that resolves sleep current without dropping supply voltage during measurement peaks.",
+        "Tracking is idle.",
+        "The saved Energy Saving measurement interval is not a custom value."
+      ],
+      "steps": [
+        {
+          "action": "Select Energy Saving mode, allowing up to one minute for startup if it restarts. Record its measurement interval, GPS under Settings > Operations and Auto Lock under Settings > Display & Touch. Set the interval to 5 minutes, GPS to Always On and Auto Lock to Off.",
+          "expected_result": "The original settings are recorded and the test settings are selected."
+        },
+        {
+          "action": "Power off, disconnect USB and the battery, then power Go from the 3.9 V supply through the current meter. Press and release Power to start, allowing up to one minute for Home. Keep USB disconnected.",
+          "expected_result": "Go starts in Energy Saving without supply collapse or repeated resets."
+        },
+        {
+          "action": "Return Home and lock with Power. Within six minutes, identify the first sustained low-current plateau after measurement. Record its 30-second current range and the meter accuracy.",
+          "expected_result": "A stable sleep-current baseline is available. Supply collapse or an unstable baseline blocks the comparison."
+        },
+        {
+          "action": "Leave Go untouched through three timer wakes, allowing 16 minutes after the baseline. After each completed Home refresh, wait 60 seconds and record the next 30-second current range.",
+          "expected_result": "Each wake refreshes Home and returns to the initial sleep-current range within meter accuracy. No sustained higher-current plateau follows a wake.",
+          "evidence": [
+            "Save the current trace or readings, supply voltage, initial baseline and three post-wake ranges."
+          ]
+        }
+      ],
+      "cleanup": [
+        "Power off, remove the measurement supply and restore the battery connection, including after interruption.",
+        "Start Go and restore the recorded Energy Saving interval, GPS and Auto Lock. Confirm the selections, return Home and record any restoration failure."
+      ],
+      "references": [
+        "products/go/docs/gps_service.md#fast-path-sleep-probing",
+        "products/go/docs/input_service.md#deep-sleep"
+      ]
+    },
+    {
       "id": "go.ble.offline-measurements",
       "title": "AirGradient app receives Energy Saving broadcasts",
       "objective": "Verify the app receives Energy Saving broadcasts from Go.",
@@ -2886,204 +2960,47 @@
     },
     {
       "id": "go.sleep.button-wake",
-      "title": "Power wakes Energy Saving without immediately locking again",
-      "objective": "Verify one Power press wakes Go to an unlocked, usable Home screen showing its saved readings.",
+      "title": "Power wake restores usable touch controls after repeated sleeps",
+      "objective": "Verify repeated Power wakes restore the retained display and usable touch controls, including after touching pads during sleep.",
       "category": "Modes & Sleep",
       "sub_category": "Button Wake",
       "applicability": [
         "V1"
       ],
       "setup": [
-        "A USB data cable and computer with the AirGradient logging tool.",
         "The saved Energy Saving measurement interval is not a custom value."
       ],
       "steps": [
         {
-          "action": "Connect USB and start the AirGradient logging tool.",
-          "expected_result": "Device logs are visible."
-        },
-        {
-          "action": "Select Energy Saving mode. Record the current measurement interval. Record Auto Lock under Settings > Display & Touch. Set the measurement interval to 5 minutes and Auto Lock to Off. Return Home and allow up to six minutes for numeric PM2.5 and CO2 readings. Save a Home photo.",
+          "action": "Disconnect USB. Select Energy Saving mode, allowing up to one minute for startup if it restarts. Record its measurement interval and Auto Lock under Settings > Display & Touch. Set the interval to 5 minutes and Auto Lock to Off. Return Home and allow up to six minutes for numeric PM2.5 and CO2 readings. Save a Home photo.",
           "expected_result": "Home shows readings to compare after waking."
         },
         {
-          "action": "Short-press Power to lock Go. Allow up to six minutes for PowerService: enter_sleep: entering deep sleep for <duration> ms.",
-          "expected_result": "The sleep marker appears; no specific duration value is required."
+          "action": "Lock Home with Power. After the next completed measurement refresh, wait 60 seconds without input. Allow six minutes for that refresh.",
+          "expected_result": "The retained Home frame remains complete and readable during sleep."
         },
         {
-          "action": "Press and release Power once while Go is asleep. Reconnect the logging tool after wake if needed.",
-          "expected_result": "The Unlocked snackbar appears promptly over the retained Home readings. Go stays on Home without an extra lock or navigation action. The log shows app: run_button_wake_path: entering button-wake boot."
+          "action": "Press and release Power once. Observe Home for up to 30 seconds.",
+          "expected_result": "Go wakes to unlocked Home with the retained readings and no empty intermediate frame. The wake press causes no immediate relock or extra navigation action."
         },
         {
-          "action": "Without pressing Power again, use the touch controls to open Main Menu > Settings.",
-          "expected_result": "Navigation works and Go remains unlocked."
+          "action": "Without pressing Power again, open Main Menu, use Up and Down to move through its rows and select Settings. Double-tap Menu to go Back, then hold Menu for one second to return Home.",
+          "expected_result": "All three pads respond, each selection opens the indicated screen, and both gestures work."
+        },
+        {
+          "action": "Repeat steps 2–4 twice. On the second cycle, after the 60-second sleep wait, touch and release each pad before pressing Power.",
+          "expected_result": "Touch alone does not wake Go. After all three Power wakes, the retained Home frame and controls remain usable without immediate relocking.",
+          "evidence": [
+            "Record any unresponsive pad or unexpected action and the cycle when it occurred."
+          ]
         }
       ],
       "cleanup": [
-        "Restore the recorded Energy Saving measurement interval and Auto Lock settings, including after interruption. Confirm both selections, return Home, download the logs and disconnect the logging tool. Record any restoration failure."
+        "Wake with Power and restore the recorded Energy Saving interval and Auto Lock, including after interruption. Confirm both selections, return Home and record any restoration failure."
       ],
       "references": [
         "products/go/docs/power_management.md",
         "products/go/docs/input_service.md"
-      ]
-    },
-    {
-      "id": "go.sleep.gps-tracking-restart",
-      "title": "Starting tracking in Energy Saving restarts Go and resumes recording",
-      "objective": "Verify Go restarts to wake the sleeping GPS, confirms the new session and continues recording automatically.",
-      "category": "Modes & Sleep",
-      "sub_category": "GPS Sleep",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "A USB data connection with VBUS disconnected, allowing logging without powering Go.",
-        "A computer with the AirGradient logging tool.",
-        "The saved Energy Saving measurement interval is not a custom value."
-      ],
-      "steps": [
-        {
-          "action": "Connect the data-only USB connection and start logging. Allow up to 40 seconds for a PowerService: poll_bms: line.",
-          "expected_result": "Logs are visible and the line contains pwr=None or pwr=OTG, confirming battery operation."
-        },
-        {
-          "action": "Select Energy Saving mode. Record the current measurement interval. Record GPS under Settings > Operations, and Auto Lock under Settings > Display & Touch. Set the measurement interval to 5 minutes, GPS to On When Tracking and Auto Lock to Off. Return Home and short-press Power to lock.",
-          "expected_result": "Go is ready for the sleep cycle."
-        },
-        {
-          "action": "Observe one sleep → timer wake → sleep cycle, allowing six minutes. Use PowerService: enter_sleep: entering deep sleep for <duration> ms as the sleep marker and app: run_fast_path: entering fast-path boot (sensors_warm=<value>) as the wake marker. Reconnect logging after wake if needed.",
-          "expected_result": "The markers appear in that order. Their numeric values may vary."
-        },
-        {
-          "action": "Within 30 seconds of the second sleep marker, press and release Power, then select Main Menu > Start Tracking. Reconnect logging after the restart if needed.",
-          "expected_result": "Go shows Starting tracking..., restarts once, then shows Started with a five-digit session ID within one minute.",
-          "evidence": [
-            "Record the display sequence and session ID."
-          ]
-        },
-        {
-          "action": "After the restart, find StorageService: end_route: session <id> closed (<count> points total) and record the count.",
-          "expected_result": "The ID matches the displayed session and the count is at least one."
-        },
-        {
-          "action": "Leave Go untouched through the next timer wake, allowing six minutes from its sleep marker. Check the next route-count log, reconnecting logging after wake if needed.",
-          "expected_result": "Home refreshes and the same session has a higher point count, without another Start Tracking action or power restart."
-        }
-      ],
-      "cleanup": [
-        "Stop the session created by this case. Restore the recorded Energy Saving measurement interval, GPS and Auto Lock settings, including after interruption. Confirm the selections, return Home, save the logs and disconnect logging. Record any restoration failure."
-      ],
-      "references": [
-        "products/go/docs/gps_service.md",
-        "products/go/docs/hardware_init.md",
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
-      "id": "go.sleep.route-recording",
-      "title": "Recording continues across Energy Saving timer wakes",
-      "objective": "Verify two timer wakes add points to the same recording session.",
-      "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "A USB data cable and computer with the AirGradient logging tool.",
-        "The saved Portable and Energy Saving measurement intervals are not custom values."
-      ],
-      "steps": [
-        {
-          "action": "Connect USB and start logging.",
-          "expected_result": "Device logs are visible."
-        },
-        {
-          "action": "Select Portable mode. Record the current measurement interval, then set it to 10 seconds. Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings. Start Tracking, record the session ID, then open Tracking > Status and allow 40 seconds for at least one point. Record Points.",
-          "expected_result": "Status shows Recording with at least one point."
-        },
-        {
-          "action": "Select Energy Saving mode. Record its current measurement interval, then set it to 5 minutes. Return Home and, if unlocked, short-press Power to lock. Watch the logs until the sleep marker appears, allowing up to one minute.",
-          "expected_result": "The log shows PowerService: enter_sleep: entering deep sleep for <duration> ms. The duration may vary."
-        },
-        {
-          "action": "Leave Go untouched and watch the logs until two timer-wake cycles complete, allowing up to 11 minutes. Reconnect logging after wake if needed. Check the session ID and point count for each cycle.",
-          "expected_result": "Each cycle logs app: run_fast_path: entering fast-path boot (sensors_warm=<value>) and StorageService: end_route: session <id> closed (<count> points total). The sensors_warm value may vary. Both cycles use the recorded session ID, and the point count increases each cycle.",
-          "evidence": [
-            "Save both cycles’ logs."
-          ]
-        },
-        {
-          "action": "Wake Go with Power and open Tracking > Status.",
-          "expected_result": "Status shows Recording with at least two more points than the recorded baseline."
-        },
-        {
-          "action": "Stop Tracking and compare the stop snackbar’s ID with the recorded start ID.",
-          "expected_result": "The IDs match."
-        }
-      ],
-      "cleanup": [
-        "Stop this case’s session if still active. Restore both recorded intervals in their respective modes, including after interruption. Confirm the selections, return Home, save the logs and disconnect logging. Record any restoration failure."
-      ],
-      "references": [
-        "products/go/docs/storage_service.md",
-        "products/go/docs/power_management.md"
-      ]
-    },
-    {
-      "id": "go.sleep.route-paused",
-      "title": "Paused tracking stays paused across Energy Saving timer wakes",
-      "objective": "Verify two timer wakes preserve the paused session without adding points.",
-      "category": "Modes & Sleep",
-      "sub_category": "Route Continuity",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "Tracking is idle.",
-        "A USB data cable and computer with the AirGradient logging tool.",
-        "The saved Portable and Energy Saving measurement intervals are not custom values."
-      ],
-      "steps": [
-        {
-          "action": "Connect USB and start logging.",
-          "expected_result": "Device logs are visible."
-        },
-        {
-          "action": "Select Portable mode. Record the current measurement interval, then set it to 10 seconds. Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings. Start Tracking, record the session ID, then open Tracking > Status and allow 40 seconds for at least one point.",
-          "expected_result": "Status shows Recording with at least one point."
-        },
-        {
-          "action": "Pause Tracking, reopen Status and record Points.",
-          "expected_result": "Status shows Paused."
-        },
-        {
-          "action": "Select Energy Saving mode. Record its current measurement interval, then set it to 5 minutes. Return Home and, if unlocked, short-press Power to lock. Watch the logs until the sleep marker appears, allowing up to one minute.",
-          "expected_result": "The log shows PowerService: enter_sleep: entering deep sleep for <duration> ms. The duration may vary."
-        },
-        {
-          "action": "Leave Go untouched and watch Home and the logs until two consecutive wake-and-sleep cycles complete, allowing up to 11 minutes. Reconnect logging after wake if needed.",
-          "expected_result": "Each cycle logs app: run_fast_path: entering fast-path boot (sensors_warm=<value>), Home refreshes, and the sleep marker appears again. The sensors_warm value may vary.",
-          "evidence": [
-            "Save both cycles’ logs."
-          ]
-        },
-        {
-          "action": "Wake Go with Power and open Tracking > Status.",
-          "expected_result": "Status shows Paused and Points matches the recorded count."
-        },
-        {
-          "action": "Stop Tracking and compare the stop snackbar’s ID with the recorded start ID.",
-          "expected_result": "The IDs match."
-        }
-      ],
-      "cleanup": [
-        "Stop this case’s session if still active. Restore both recorded intervals in their respective modes, including after interruption. Confirm the selections, return Home, save the logs and disconnect logging. Record any restoration failure."
-      ],
-      "references": [
-        "products/go/docs/storage_service.md",
-        "products/go/docs/power_management.md"
       ]
     },
     {

@@ -51,7 +51,6 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "go_sensor_producer.h"
 #include "go_settings.h"
 #include "go_storage.h"
-#include "go_tracking_session.h"
 #include "go_type_helpers.hpp"
 #include "go_ui.h"
 #include "go_ulp.h"
@@ -65,17 +64,12 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "services/local_server.h"
 #include "services/sensor_manager.h"
 
-#include <ctime>
-
 static constexpr const char *TAG = "app";
 
 // HTTP host for WiFi pull OTA. Mirrors AgClient's (private) default cloud
 // domain; keep in sync with the Cloud service host.
 static constexpr const char *OTA_HTTP_DOMAIN = "hw.airgradient.com";
 
-// The GPS receiver remains powered and tracking through Offline deep sleep.
-// Allow several NMEA epochs after reconnecting the UART on timer wake.
-static constexpr uint32_t GPS_FAST_PATH_READ_TIMEOUT_MS = 3000;
 // Offline SGP41 acquisition timing belongs to Go.
 static constexpr uint32_t FAST_PATH_GAS_CONDITIONING_MS = 10000;
 static constexpr uint32_t FAST_PATH_GAS_SAMPLE_INTERVAL_MS = 500;
@@ -217,21 +211,14 @@ void GoApp::run() {
           static_cast<int>(state.tracking_state), state.tracking_session_id,
           state.has_flag(RtcAppFlag::SensorsWarm));
 
-  BootPath path = select_boot_path(cause, state, charging_only_eligible);
-  const char *boot_message = nullptr;
-
-  // Check if its system reset from pending tracking flow
-  if (path != BootPath::ChargingOnly && cause == WakeCause::PowerOn &&
-      pending_tracking_start(_board.config_store())) {
-    const GoSettings settings = _board.load_settings();
-    if (settings.operating_mode == OperatingMode::Offline) {
-      if (recover_offline_tracking_start(settings, state)) {
-        path = BootPath::FastPath;
-      } else {
-        boot_message = "Tracking not\nstarted";
-      }
-    }
+  if (_board.load_settings().operating_mode == OperatingMode::Offline) {
+    state.behavior = Behavior::Idle;
+    state.tracking_state = TrackingState::Idle;
+    state.tracking_session_id = 0;
+    state.tracking_timing = {};
+    state.set_flag(RtcAppFlag::GpsEnabled, false);
   }
+  const BootPath path = select_boot_path(cause, state, charging_only_eligible);
 
   switch (path) {
   case BootPath::ChargingOnly:
@@ -245,62 +232,9 @@ void GoApp::run() {
     break; // never reached
   case BootPath::Interactive:
     AG_LOGI(TAG, "Serial number: %s", _board.serial_number().c_str());
-    run_interactive(cause, state, {}, boot_message);
+    run_interactive(cause, state, {});
     break; // never reached
   }
-}
-
-// ===========================================================================
-// Recover the session before entering the cold Offline fast path.
-// ===========================================================================
-
-bool GoApp::recover_offline_tracking_start(const GoSettings &settings, RtcAppState &state) {
-  if (!save_pending_tracking_start(_board.config_store(), false)) {
-    AG_LOGE(TAG, "Tracking recovery: failed to clear pending start");
-    return false;
-  }
-
-  _board.init_core();
-  StorageService &storage = _board.storage();
-  const uint32_t session_id = generate_tracking_session_id(storage);
-  if (session_id == 0 || !storage.create_route(session_id)) {
-    AG_LOGE(TAG, "Tracking recovery: failed to create route");
-    return false;
-  }
-  if (!storage.end_route()) {
-    AG_LOGE(TAG, "Tracking recovery: failed to close new route");
-    return false;
-  }
-
-  state = {};
-  state.mode = OperatingMode::Offline;
-  state.behavior = Behavior::Tracking;
-  state.tracking_state = TrackingState::Recording;
-  state.tracking_session_id = session_id;
-  state.set_flag(RtcAppFlag::GpsEnabled, settings.gps_mode != GpsMode::AlwaysOff);
-  if (!tracking_timing_start(state.tracking_timing,
-                             tracking_seconds_from_ms(RTOS::get_retained_time_ms()))) {
-    state.tracking_timing = {};
-  }
-  AG_LOGI(TAG, "Tracking recovery: starting Offline fast path");
-
-  char message[48];
-  (void)snprintf(message, sizeof(message), "Started\n%05lu",
-                 static_cast<unsigned long>(session_id));
-  DisplayValues values = build_boot_splash_values();
-  values.info_text = message;
-  values.tracking_state = TrackingState::Recording;
-  DisplayService &display = _board.display();
-  display.init(values);
-  // Leave the confirmation visible during warmup. The fast path initializes
-  // its own display worker when the first measurement is ready.
-  display.stop();
-  // This cold fast path has no InputService to suspend touch. Timer wakes
-  // preserve this state without initializing or waking the touch controller.
-  if (!_board.sleep_touch()) {
-    AG_LOGW(TAG, "tracking recovery: touch sleep failed");
-  }
-  return true;
 }
 
 // ===========================================================================
@@ -337,7 +271,11 @@ void GoApp::run_charging_only(const BmsStatus &initial_status) {
   auto &power = _board.power();
   power.set_pm_power(false);
 
-  power.save_state({}); // Consume the one-shot charging-only request.
+  RtcAppState state{};
+  if (_board.load_settings().operating_mode == OperatingMode::Offline) {
+    prepare_gps_for_sleep(state);
+  }
+  power.save_state(state); // Consume the one-shot charging-only request.
 
   _board.init_spi();
   auto &display = _board.display();
@@ -413,20 +351,34 @@ void GoApp::run_factory_learning_path(const RtcAppState & /*state*/) {
 // Fast-path boot (timer wake, locked)
 // ===========================================================================
 
-void GoApp::prepare_gps_for_sleep(uint32_t duration_ms, RtcAppState &state) {
+bool GoApp::prepare_gps_for_sleep(RtcAppState &state, bool probe_receiver) {
   const auto settings = _board.load_settings();
+  const bool probe_after_wake = probe_receiver && settings.operating_mode == OperatingMode::Offline;
   if (is_gps_active_at_boot(settings, state) ||
-      state.gps_wake_deadline_ms > RTOS::get_retained_time_ms()) {
-    return;
+      (!probe_after_wake && state.gps_wake_deadline_ms > RTOS::get_retained_time_ms())) {
+    return false;
   }
   auto *driver = _board.new_gps_driver();
   if (driver != nullptr) {
-    GpsService service(*driver, nullptr, {.wake_deadline_ms = state.gps_wake_deadline_ms});
-    if (!service.request_sleep(gps_inactive_sleep_ms(settings.operating_mode, duration_ms))) {
+    // A retained deadline cannot rule out a receiver wake/reset during MCU sleep.
+    // Bypass it for this probe; preserve it if no new sleep request is sent.
+    GpsService service(*driver, nullptr,
+                       {.wake_deadline_ms = probe_after_wake ? 0 : state.gps_wake_deadline_ms,
+                        .fast_path_sleep_probe = probe_after_wake});
+    if (probe_after_wake) {
+      AG_LOGI(TAG, "Timer wake: probing GPS before long sleep");
+    }
+    if (service.request_sleep(gps_inactive_sleep_ms(settings.operating_mode))) {
+      state.gps_wake_deadline_ms = service.sleep_deadline_ms();
+      AG_LOGI(TAG, "GPS sleep command sent");
+      return true;
+    } else if (probe_after_wake) {
+      AG_LOGI(TAG, "GPS probe/sleep not completed; retaining previous deadline");
+    } else {
       AG_LOGW(TAG, "GPS sleep request failed");
     }
-    state.gps_wake_deadline_ms = service.sleep_deadline_ms();
   }
+  return false;
 }
 
 void GoApp::run_fast_path(const RtcAppState &state) {
@@ -455,7 +407,6 @@ void GoApp::run_fast_path(const RtcAppState &state) {
   }
 
   RtcAppState save = state;
-  save.tracking_timing = result.tracking_timing;
   save.set_flag(RtcAppFlag::SensorsWarm, result.sensors_warm);
   save.gps_wake_deadline_ms = result.gps_wake_deadline_ms;
 
@@ -464,7 +415,6 @@ void GoApp::run_fast_path(const RtcAppState &state) {
     _board.display().deep_sleep();
     _board.ulp_start();
     log_heap(TAG, "boot:fast-path:before-sleep");
-    prepare_gps_for_sleep(result.sleep_duration_ms, save);
     _board.power().save_state(save);
     _board.power().enter_sleep(result.sleep_duration_ms);
     // Never returns — CPU reboots on wake.
@@ -499,8 +449,6 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
                                                const RtcDisplaySnapshot *snapshot,
                                                bool snapshot_valid) {
   const uint32_t boot_time_ms = static_cast<uint32_t>(RTOS::get_time_ms());
-  TrackingTiming tracking_timing =
-      tracking_timing_for_state(state.tracking_timing, state.tracking_state);
 
   // --- Core init (NVS must be ready before load_settings) ---
   _board.init_core();
@@ -519,25 +467,11 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
       sensors_warm ? 0 : RTOS::get_time_ms() + CONFIG_SENSOR_WARMUP_DURATION_MS;
 
   bool pm_sleep_attempted = false;
-  bool display_painted = false;
 
-  // GPS UART work overlaps PM warmup. Keep it outside the bounded gas
-  // conditioning window, and preserve the existing GPS activity/sleep policy.
-  GpsData gps{};
+  // GPS sleep probing overlaps PM warmup, outside gas conditioning.
+  // Recheck on every timer wake, even with a retained deadline.
   RtcAppState gps_state = state;
-  if (is_gps_active_at_boot(settings, state)) {
-    auto *gps_driver = _board.new_gps_driver();
-    if (gps_driver != nullptr) {
-      gps = gps_read_once(*gps_driver, GPS_BAUD, GPS_FAST_PATH_READ_TIMEOUT_MS, button_pressed,
-                          state.gps_wake_deadline_ms);
-    }
-  } else {
-    // Sleep across this acquisition cycle and the following ESP sleep.
-    // The final sleep request remains a fallback if this one fails or expires.
-    const uint32_t interval_ms =
-        static_cast<uint32_t>(settings.active_measure_interval_seconds()) * 1000;
-    prepare_gps_for_sleep(interval_ms, gps_state);
-  }
+  const bool gps_sleep_sent = prepare_gps_for_sleep(gps_state, /*probe_receiver=*/true);
 
   PowerService &power = _board.power();
   TVOCNOxData gas{};
@@ -599,135 +533,99 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   }
 
   // --- Storage + cache ---
-  // Leave tracking state intact so interactive promotion can retry storage.
-  bool promote = false;
-  bool power_polled = false;
-  PowerSnapshot power_snapshot{};
   StorageService &stor = _board.storage();
   stor.cache_measurement(ago);
-
-  if (state.tracking_state == TrackingState::Recording) {
-    // The session was opened before sleep or during tracking-start recovery.
-    if (!stor.resume_route(state.tracking_session_id)) {
-      AG_LOGW(TAG, "fast-path: resume_route failed → promote");
-      promote = true;
-    } else {
-      power_snapshot = _board.power().poll_bms();
-      power_polled = true;
-      RoutePoint point{};
-      point.timestamp = time(nullptr);
-      point.gps = gps;
-      point.sensors = ago;
-      point.battery_percentage = power_snapshot.battery_percentage;
-      const uint32_t record_s = tracking_seconds_from_ms(RTOS::get_retained_time_ms());
-      const uint32_t count_before = stor.current_route_point_count();
-      const bool append_ok = stor.append_route_point(point);
-      const uint32_t count_after = stor.current_route_point_count();
-      // An accepted write advances the count even if its subsequent sync fails.
-      // Observe it before end_route() resets the writer count.
-      if (count_after > count_before &&
-          !tracking_timing_record_accepted(tracking_timing, state.tracking_state, record_s)) {
-        tracking_timing.last_record_s = TRACKING_TIME_INVALID_S;
-      }
-      if (!append_ok) {
-        AG_LOGW(TAG, "fast-path: append_route_point failed → promote");
-        promote = true;
-      }
-      stor.end_route(); // best-effort close even on append failure
-    }
-  }
-  _board.storage().backup_cache();
+  stor.backup_cache();
 
   // --- Display + sleep decision ---
-  PowerService::SleepDecision decision{};
-  bool warm = false;
-  if (!promote) {
-    PowerService &pwr = _board.power();
-    if (!power_polled) {
-      power_snapshot = pwr.poll_bms();
+  const PowerSnapshot power_snapshot = power.poll_bms();
+  DisplayService &disp = _board.display();
+  DisplayValues values = build_fast_path_display(ago, power_snapshot, settings);
+  // Rendering is synchronous even when panel refresh is deferred. Keep the
+  // sample buffer alive through init() and the saved display snapshot.
+  float chart_samples[DISPLAY_CHART_BUF_SIZE]{};
+  if (values.chart_metric() != Metric::None) {
+    MeasuresAGo cache[DISPLAY_CHART_BUF_SIZE];
+    const uint16_t count = stor.read_cache(cache, DISPLAY_CHART_BUF_SIZE);
+    const auto corrections = effective_measurement_corrections(settings);
+    for (uint16_t i = 0; i < count; ++i) {
+      cache[i] = apply_measurement_corrections(cache[i], corrections);
     }
-
-    DisplayService &disp = _board.display();
-    DisplayValues values =
-        build_fast_path_display(ago, gps, power_snapshot, settings, state.tracking_state);
-    // Rendering is synchronous even when panel refresh is deferred. Keep the
-    // sample buffer alive through init() and the saved display snapshot.
-    float chart_samples[DISPLAY_CHART_BUF_SIZE]{};
-    if (values.chart_metric() != Metric::None) {
-      MeasuresAGo cache[DISPLAY_CHART_BUF_SIZE];
-      const uint16_t count = stor.read_cache(cache, DISPLAY_CHART_BUF_SIZE);
-      const auto corrections = effective_measurement_corrections(settings);
-      for (uint16_t i = 0; i < count; ++i) {
-        cache[i] = apply_measurement_corrections(cache[i], corrections);
-      }
-      populate_display_chart(values, cache, static_cast<uint8_t>(count), chart_samples);
-    }
-    if (power_snapshot.ship_mode_request == ShipModeRequest::OverTemperature ||
-        power_snapshot.ship_mode_request == ShipModeRequest::UnderTemperature) {
-      values.screen = power_snapshot.ship_mode_request == ShipModeRequest::UnderTemperature
-                          ? Screen::ShutdownTemperatureLow
-                          : Screen::ShutdownTemperature;
-      disp.init(values);
-      return {
-          .outcome = FastPathResult::Outcome::Shutdown,
-          .handoff = {},
-          .measures = ago,
-          .has_measures = true,
-          .sleep_duration_ms = 0,
-          .sensors_warm = false,
-          .tracking_timing = {},
-          .gps_wake_deadline_ms = gps_state.gps_wake_deadline_ms,
-      };
-    }
-    // Broadcast raw measurements, matching Portable BLE, while the
-    // synchronous display refresh runs.
-    AgBleServer *broadcast = nullptr;
-    if (!button_pressed && preliminary_sleep.type == PowerService::SleepType::Deep &&
-        power_snapshot.ship_mode_request == ShipModeRequest::None) {
-      MeasuresAGo advertised = ago;
-      advertised.power.battery_percentage = power_snapshot.battery_percentage;
-      const auto payload =
-          GoBleAdvertisement::manufacturer_data(GoBleAdvertisement::encode(advertised));
-      broadcast = &_board.ble_server();
-      if (!broadcast->init("") ||
-          !broadcast->set_service_list_broadcast(GoBleAdvertisement::SERVICE_UUID, payload.data(),
-                                                 payload.size()) ||
-          !broadcast->set_advertising_interval(FAST_PATH_BLE_ADVERTISING_INTERVAL_US) ||
-          !broadcast->start_advertising()) {
-        AG_LOGW(TAG, "fast-path: BLE broadcast setup failed");
-        broadcast->deinit();
-        broadcast = nullptr;
-      }
-    }
-
+    populate_display_chart(values, cache, static_cast<uint8_t>(count), chart_samples);
+  }
+  if (power_snapshot.ship_mode_request == ShipModeRequest::OverTemperature ||
+      power_snapshot.ship_mode_request == ShipModeRequest::UnderTemperature) {
+    values.screen = power_snapshot.ship_mode_request == ShipModeRequest::UnderTemperature
+                        ? Screen::ShutdownTemperatureLow
+                        : Screen::ShutdownTemperature;
     disp.init(values);
-    display_painted = true;
-
-    if (broadcast != nullptr) {
-      if (!broadcast->stop_advertising()) {
-        AG_LOGW(TAG, "fast-path: BLE broadcast stop failed");
-      }
+    return {
+        .outcome = FastPathResult::Outcome::Shutdown,
+        .handoff = {},
+        .measures = ago,
+        .has_measures = true,
+        .sleep_duration_ms = 0,
+        .sensors_warm = false,
+        .gps_wake_deadline_ms = gps_state.gps_wake_deadline_ms,
+    };
+  }
+  // Broadcast raw measurements, matching Portable BLE, while the
+  // synchronous display refresh runs.
+  AgBleServer *broadcast = nullptr;
+  if (!button_pressed && preliminary_sleep.type == PowerService::SleepType::Deep &&
+      power_snapshot.ship_mode_request == ShipModeRequest::None) {
+    MeasuresAGo advertised = ago;
+    advertised.power.battery_percentage = power_snapshot.battery_percentage;
+    const auto payload =
+        GoBleAdvertisement::manufacturer_data(GoBleAdvertisement::encode(advertised));
+    broadcast = &_board.ble_server();
+    if (!broadcast->init("") ||
+        !broadcast->set_service_list_broadcast(GoBleAdvertisement::SERVICE_UUID, payload.data(),
+                                               payload.size()) ||
+        !broadcast->set_advertising_interval(FAST_PATH_BLE_ADVERTISING_INTERVAL_US) ||
+        !broadcast->start_advertising()) {
+      AG_LOGW(TAG, "fast-path: BLE broadcast setup failed");
       broadcast->deinit();
+      broadcast = nullptr;
     }
+  }
 
-    uint32_t awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
-    decision = pwr.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, awake_ms);
+  disp.init(values);
 
-    if (decision.type == PowerService::SleepType::Deep) {
-      warm = !pm_sleep_attempted && pwr.should_hold_pm_sensor(decision.duration_ms);
-      if (!warm && !pm_sleep_attempted) {
-        // Long sleep: stop the PM fan for the sleep window. Next boot's
-        // init() wakes the sensor and re-warms (sensors_warm=false).
-        if (!sm.pm_sleep()) {
-          AG_LOGW(TAG, "fast-path: PM sleep failed; next cycle requires full preparation");
-        }
+  if (broadcast != nullptr) {
+    if (!broadcast->stop_advertising()) {
+      AG_LOGW(TAG, "fast-path: BLE broadcast stop failed");
+    }
+    broadcast->deinit();
+  }
+
+  uint32_t final_awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
+  auto decision =
+      power.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, final_awake_ms);
+  if (!button_pressed && decision.type == PowerService::SleepType::Deep && !gps_sleep_sent) {
+    // Retry before the final sleep calculation so probing consumes this interval.
+    // Only this wake's early result decides whether to retry, not the deadline.
+    prepare_gps_for_sleep(gps_state, /*probe_receiver=*/true);
+    final_awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
+    decision =
+        power.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, final_awake_ms);
+  }
+  bool warm = false;
+
+  if (decision.type == PowerService::SleepType::Deep) {
+    warm = !pm_sleep_attempted && power.should_hold_pm_sensor(decision.duration_ms);
+    if (!warm && !pm_sleep_attempted) {
+      // Long sleep: stop the PM fan for the sleep window. Next boot's
+      // init() wakes the sensor and re-warms (sensors_warm=false).
+      if (!sm.pm_sleep()) {
+        AG_LOGW(TAG, "fast-path: PM sleep failed; next cycle requires full preparation");
       }
     }
   }
 
   // Observe the latched button once, after acquisition, storage, and display.
   const bool button_caused = button_pressed;
-  if (!promote && !button_caused && decision.type == PowerService::SleepType::Deep) {
+  if (!button_caused && decision.type == PowerService::SleepType::Deep) {
     return {
         .outcome = FastPathResult::Outcome::Sleep,
         .handoff = {},
@@ -735,7 +633,6 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
         .has_measures = true,
         .sleep_duration_ms = decision.duration_ms,
         .sensors_warm = warm,
-        .tracking_timing = tracking_timing,
         .gps_wake_deadline_ms = gps_state.gps_wake_deadline_ms,
     };
   }
@@ -757,10 +654,8 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     handoff.display_snapshot = snapshot_valid ? snapshot : nullptr;
     handoff.display_painted = false;
   } else {
-    // "Sleep too short" runs AFTER disp.init() (painted); storage-failure
-    // promotion runs BEFORE the display block (not painted).
     handoff.initial_lock_state = LockState::Locked;
-    handoff.display_painted = display_painted;
+    handoff.display_painted = true;
   }
 
   return {
@@ -770,7 +665,6 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
       .has_measures = true,
       .sleep_duration_ms = 0,
       .sensors_warm = false,
-      .tracking_timing = tracking_timing,
       .gps_wake_deadline_ms = gps_state.gps_wake_deadline_ms,
   };
 }
@@ -1047,7 +941,7 @@ void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff
 
   SensorManager &sm = _board.sensors();
 
-  // --- GPS driver (never done in fast path) ---
+  // --- GPS driver for the interactive service ---
   auto *gps_driver = _board.new_gps_driver();
 
   // --- Touch sensor (never done in fast path) ---
@@ -1224,9 +1118,10 @@ BootPath select_boot_path(WakeCause cause, const RtcAppState &state, bool chargi
 }
 
 bool is_gps_active_at_boot(const GoSettings &settings, const RtcAppState &state) {
-  return (settings.gps_mode == GpsMode::AlwaysOn) ||
-         (settings.gps_mode == GpsMode::OnWhenTracking &&
-          tracking_session_active(state.tracking_state));
+  return settings.operating_mode != OperatingMode::Offline &&
+         ((settings.gps_mode == GpsMode::AlwaysOn) ||
+          (settings.gps_mode == GpsMode::OnWhenTracking &&
+           tracking_session_active(state.tracking_state)));
 }
 
 MeasuresAGo measures_to_ago(const Measures &m) {
@@ -1240,9 +1135,8 @@ MeasuresAGo measures_to_ago(const Measures &m) {
   return ago;
 }
 
-DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData &gps,
-                                      const PowerSnapshot &bms, const GoSettings &settings,
-                                      TrackingState tracking_state) {
+DisplayValues build_fast_path_display(const MeasuresAGo &measures, const PowerSnapshot &bms,
+                                      const GoSettings &settings) {
   const MeasuresAGo corrected =
       apply_measurement_corrections(measures, effective_measurement_corrections(settings));
   DisplayValues v{};
@@ -1272,8 +1166,6 @@ DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData
     v.altitude_m = corrected.pressure.altitude;
   }
 
-  v.gps_fix = is_fix_valid(gps.fix);
-
   if (bms.battery_percentage >= 0.0f) {
     v.battery_pct = static_cast<uint8_t>(bms.battery_percentage);
   }
@@ -1282,7 +1174,6 @@ DisplayValues build_fast_path_display(const MeasuresAGo &measures, const GpsData
 
   v.locked = true;
   v.screen = Screen::Home;
-  v.tracking_state = tracking_state;
 
   v.use_fahrenheit = settings.use_fahrenheit;
   v.use_feet = settings.use_feet;

@@ -446,7 +446,6 @@ public:
   void init_spi() override {}
   void init_fuel_gauge() override {}
   bool init_bms() override { return true; }
-  bool sleep_touch() override { return true; }
   void init_wifi_subsystem() override { ++init_wifi_subsystem_calls; }
   void init_core() override {}
 
@@ -2712,11 +2711,11 @@ TEST_CASE("Tracking Status: Auto Lock Off remains disabled after leaving",
 
 TEST_CASE("Tracking Status: manual Power and safety shutdown remain available",
           "[Orchestrator][tracking][status]") {
-  for (const auto mode : {OperatingMode::Portable, OperatingMode::Offline}) {
+  for (const auto mode : {OperatingMode::Portable, OperatingMode::Stationary}) {
     DYNAMIC_SECTION("Operating mode " << static_cast<int>(mode)) {
       TestFixture f;
       f.settings.auto_lock_seconds = 10;
-      f.settings.energy_saving_measure_interval_seconds = 300;
+      f.settings.operating_mode = mode;
       auto orch = f.make_orchestrator();
       A::set_mode(orch, mode);
       uint32_t now_ms = 1000;
@@ -9259,706 +9258,6 @@ TEST_CASE("Stationary -> Portable preserves paused tracking without reopening th
   CHECK(std::string(stopped.snackbar_text) == "Tracking stop = " + std::to_string(session));
 }
 
-TEST_CASE("Portable -> Energy Saving preserves recording at the new interval",
-          "[Orchestrator][offline][mode_change][tracking][interval]") {
-  TestFixture f;
-  f.settings.measure_interval_seconds = 10;
-  f.settings.energy_saving_measure_interval_seconds = 300;
-  uint32_t now_ms = 100'000;
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-  A::unlock(orch);
-  REQUIRE(A::mode(orch) == OperatingMode::Portable);
-
-  f.mock_rtos.retained_time_ms = now_ms;
-  REQUIRE(A::start_tracking(orch));
-  const auto session = A::tracking_session_id(orch);
-  REQUIRE(session != 0);
-  now_ms = 110'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::on_sensor_data(orch, MeasuresAGo{});
-  REQUIRE(f.storage_service.current_route_point_count() == 1);
-  const auto timing = A::tracking_timing(orch);
-  test_spy::route_started = false;
-  test_spy::route_resumed = false;
-  test_spy::route_ended = false;
-  test_spy::route_point_appended = false;
-
-  const auto check_route = [&] {
-    CHECK(A::tracking_state(orch) == TrackingState::Recording);
-    CHECK(A::tracking_session_id(orch) == session);
-    CHECK(f.storage_service.current_route_session_id() == session);
-    CHECK(f.storage_service.is_route_active());
-    CHECK(f.storage_service.current_route_point_count() == 1);
-    check_tracking_timing(A::tracking_timing(orch), timing);
-    CHECK_FALSE(test_spy::route_started);
-    CHECK_FALSE(test_spy::route_resumed);
-    CHECK_FALSE(test_spy::route_ended);
-    CHECK_FALSE(test_spy::route_point_appended);
-  };
-
-  now_ms = 120'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::change_mode(orch, OperatingMode::Offline);
-  REQUIRE(A::mode(orch) == OperatingMode::Offline);
-  check_route();
-  enter_tracking_status(f, orch); // Keep awake, matching the manual Status observation.
-  test_spy::measurement_requested = false;
-  for (const uint32_t before_due : {130'000u, 419'999u}) {
-    now_ms = before_due;
-    f.mock_rtos.retained_time_ms = now_ms;
-    A::check_timers(orch);
-    CHECK_FALSE(test_spy::measurement_requested);
-    check_route();
-  }
-
-  now_ms = 420'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::check_timers(orch);
-  REQUIRE(test_spy::measurement_requested);
-  CHECK(A::last_measurement_ms(orch) == now_ms);
-  A::on_sensor_data(orch, MeasuresAGo{});
-  CHECK(test_spy::route_point_appended);
-  CHECK(A::tracking_state(orch) == TrackingState::Recording);
-  CHECK(A::tracking_session_id(orch) == session);
-  CHECK(f.storage_service.current_route_session_id() == session);
-  CHECK(f.storage_service.current_route_point_count() == 2);
-  auto updated_timing = timing;
-  updated_timing.last_record_s = 420;
-  check_tracking_timing(A::tracking_timing(orch), updated_timing);
-
-  const auto ctx = A::build_context(orch);
-  CHECK(f.ui_manager.build_values(ctx).tracking_state == TrackingState::Recording);
-  CHECK(ctx.tracking_status.point_count_known);
-  CHECK(ctx.tracking_status.point_count == 2);
-
-  A::stop_tracking(orch);
-  CHECK(test_spy::route_ended);
-  CHECK_FALSE(f.storage_service.is_route_active());
-  CHECK(A::tracking_state(orch) == TrackingState::Idle);
-  const auto stopped = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(stopped.snackbar_text != nullptr);
-  CHECK(std::string(stopped.snackbar_text) == "Tracking stop = " + std::to_string(session));
-}
-
-TEST_CASE("Portable -> Energy Saving keeps tracking paused through a measurement",
-          "[Orchestrator][offline][mode_change][tracking][pause][interval]") {
-  TestFixture f;
-  f.settings.measure_interval_seconds = 10;
-  f.settings.energy_saving_measure_interval_seconds = 300;
-  uint32_t now_ms = 100'000;
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-  A::unlock(orch);
-  REQUIRE(A::mode(orch) == OperatingMode::Portable);
-
-  f.mock_rtos.retained_time_ms = now_ms;
-  REQUIRE(A::start_tracking(orch));
-  const auto session = A::tracking_session_id(orch);
-  REQUIRE(session != 0);
-  now_ms = 110'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::on_sensor_data(orch, MeasuresAGo{});
-  REQUIRE(f.storage_service.current_route_point_count() == 1);
-  now_ms = 120'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  REQUIRE(A::pause_tracking(orch));
-  REQUIRE_FALSE(f.storage_service.is_route_active());
-  const auto timing = A::tracking_timing(orch);
-  test_spy::route_started = false;
-  test_spy::route_resumed = false;
-  test_spy::route_ended = false;
-  test_spy::route_point_appended = false;
-
-  const auto check_paused = [&] {
-    CHECK(A::tracking_state(orch) == TrackingState::Paused);
-    CHECK(A::tracking_session_id(orch) == session);
-    check_tracking_timing(A::tracking_timing(orch), timing);
-    CHECK_FALSE(f.storage_service.is_route_active());
-    uint32_t points = 0;
-    REQUIRE(f.storage_service.try_get_session_point_count(session, points));
-    CHECK(points == 1);
-    CHECK_FALSE(test_spy::route_started);
-    CHECK_FALSE(test_spy::route_resumed);
-    CHECK_FALSE(test_spy::route_ended);
-    CHECK_FALSE(test_spy::route_point_appended);
-  };
-  check_paused();
-
-  now_ms = 130'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::change_mode(orch, OperatingMode::Offline);
-  REQUIRE(A::mode(orch) == OperatingMode::Offline);
-  check_paused();
-  CHECK(f.ui_manager.build_values(A::build_context(orch)).tracking_state == TrackingState::Paused);
-  enter_tracking_status(f, orch); // Keep awake, matching the manual Status observation.
-  test_spy::measurement_requested = false;
-  for (const uint32_t before_due : {140'000u, 429'999u}) {
-    now_ms = before_due;
-    f.mock_rtos.retained_time_ms = now_ms;
-    A::check_timers(orch);
-    CHECK_FALSE(test_spy::measurement_requested);
-    check_paused();
-  }
-
-  now_ms = 430'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::check_timers(orch);
-  REQUIRE(test_spy::measurement_requested);
-  CHECK(A::last_measurement_ms(orch) == now_ms);
-  A::on_sensor_data(orch, MeasuresAGo{});
-  check_paused();
-  const auto ctx = A::build_context(orch);
-  CHECK(f.ui_manager.build_values(ctx).tracking_state == TrackingState::Paused);
-  CHECK(ctx.tracking_status.point_count_known);
-  CHECK(ctx.tracking_status.point_count == 1);
-
-  A::stop_tracking(orch);
-  CHECK(A::tracking_state(orch) == TrackingState::Idle);
-  CHECK(A::tracking_session_id(orch) == 0);
-  CHECK_FALSE(f.storage_service.is_route_active());
-  const auto stopped = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(stopped.snackbar_text != nullptr);
-  CHECK(std::string(stopped.snackbar_text) == "Tracking stop = " + std::to_string(session));
-}
-
-TEST_CASE("Energy Saving -> Portable preserves recording at the new interval",
-          "[Orchestrator][offline][mode_change][tracking][interval]") {
-  TestFixture f;
-  f.settings.measure_interval_seconds = 10;
-  f.settings.energy_saving_measure_interval_seconds = 300;
-  uint32_t now_ms = 100'000;
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-  A::unlock(orch);
-  A::change_mode(orch, OperatingMode::Offline);
-  REQUIRE(A::mode(orch) == OperatingMode::Offline);
-
-  f.mock_rtos.retained_time_ms = now_ms;
-  REQUIRE(A::start_tracking(orch));
-  const auto session = A::tracking_session_id(orch);
-  REQUIRE(session != 0);
-  now_ms = 110'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::on_sensor_data(orch, MeasuresAGo{});
-  REQUIRE(f.storage_service.current_route_point_count() == 1);
-  const auto timing = A::tracking_timing(orch);
-  test_spy::route_started = false;
-  test_spy::route_resumed = false;
-  test_spy::route_ended = false;
-  test_spy::route_point_appended = false;
-
-  const auto check_route = [&] {
-    CHECK(A::tracking_state(orch) == TrackingState::Recording);
-    CHECK(A::tracking_session_id(orch) == session);
-    CHECK(f.storage_service.current_route_session_id() == session);
-    CHECK(f.storage_service.is_route_active());
-    CHECK(f.storage_service.current_route_point_count() == 1);
-    check_tracking_timing(A::tracking_timing(orch), timing);
-    CHECK_FALSE(test_spy::route_started);
-    CHECK_FALSE(test_spy::route_resumed);
-    CHECK_FALSE(test_spy::route_ended);
-    CHECK_FALSE(test_spy::route_point_appended);
-  };
-
-  now_ms = 120'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::change_mode(orch, OperatingMode::Portable);
-  REQUIRE(A::mode(orch) == OperatingMode::Portable);
-  check_route();
-  enter_tracking_status(f, orch); // Keep awake, matching the manual Status observation.
-  test_spy::measurement_requested = false;
-  for (const uint32_t before_due : {125'000u, 129'999u}) {
-    now_ms = before_due;
-    f.mock_rtos.retained_time_ms = now_ms;
-    A::check_timers(orch);
-    CHECK_FALSE(test_spy::measurement_requested);
-    check_route();
-  }
-
-  now_ms = 130'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::check_timers(orch);
-  REQUIRE(test_spy::measurement_requested);
-  CHECK(A::last_measurement_ms(orch) == now_ms);
-  A::on_sensor_data(orch, MeasuresAGo{});
-  CHECK(test_spy::route_point_appended);
-  CHECK(A::tracking_state(orch) == TrackingState::Recording);
-  CHECK(A::tracking_session_id(orch) == session);
-  CHECK(f.storage_service.current_route_session_id() == session);
-  CHECK(f.storage_service.current_route_point_count() == 2);
-  auto updated_timing = timing;
-  updated_timing.last_record_s = 130;
-  check_tracking_timing(A::tracking_timing(orch), updated_timing);
-
-  const auto ctx = A::build_context(orch);
-  CHECK(f.ui_manager.build_values(ctx).tracking_state == TrackingState::Recording);
-  CHECK(ctx.tracking_status.point_count_known);
-  CHECK(ctx.tracking_status.point_count == 2);
-
-  A::stop_tracking(orch);
-  CHECK(test_spy::route_ended);
-  CHECK_FALSE(f.storage_service.is_route_active());
-  CHECK(A::tracking_state(orch) == TrackingState::Idle);
-  const auto stopped = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(stopped.snackbar_text != nullptr);
-  CHECK(std::string(stopped.snackbar_text) == "Tracking stop = " + std::to_string(session));
-}
-
-TEST_CASE("Energy Saving -> Portable keeps tracking paused through a measurement",
-          "[Orchestrator][offline][mode_change][tracking][pause][interval]") {
-  TestFixture f;
-  f.settings.measure_interval_seconds = 10;
-  f.settings.energy_saving_measure_interval_seconds = 300;
-  uint32_t now_ms = 100'000;
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-  A::unlock(orch);
-  A::change_mode(orch, OperatingMode::Offline);
-  REQUIRE(A::mode(orch) == OperatingMode::Offline);
-
-  f.mock_rtos.retained_time_ms = now_ms;
-  REQUIRE(A::start_tracking(orch));
-  const auto session = A::tracking_session_id(orch);
-  REQUIRE(session != 0);
-  now_ms = 110'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::on_sensor_data(orch, MeasuresAGo{});
-  REQUIRE(f.storage_service.current_route_point_count() == 1);
-  now_ms = 120'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  REQUIRE(A::pause_tracking(orch));
-  REQUIRE_FALSE(f.storage_service.is_route_active());
-  const auto timing = A::tracking_timing(orch);
-  test_spy::route_started = false;
-  test_spy::route_resumed = false;
-  test_spy::route_ended = false;
-  test_spy::route_point_appended = false;
-
-  const auto check_paused = [&] {
-    CHECK(A::tracking_state(orch) == TrackingState::Paused);
-    CHECK(A::tracking_session_id(orch) == session);
-    check_tracking_timing(A::tracking_timing(orch), timing);
-    CHECK_FALSE(f.storage_service.is_route_active());
-    uint32_t points = 0;
-    REQUIRE(f.storage_service.try_get_session_point_count(session, points));
-    CHECK(points == 1);
-    CHECK_FALSE(test_spy::route_started);
-    CHECK_FALSE(test_spy::route_resumed);
-    CHECK_FALSE(test_spy::route_ended);
-    CHECK_FALSE(test_spy::route_point_appended);
-  };
-  check_paused();
-
-  now_ms = 130'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::change_mode(orch, OperatingMode::Portable);
-  REQUIRE(A::mode(orch) == OperatingMode::Portable);
-  check_paused();
-  CHECK(f.ui_manager.build_values(A::build_context(orch)).tracking_state == TrackingState::Paused);
-  enter_tracking_status(f, orch); // Keep awake, matching the manual Status observation.
-  test_spy::measurement_requested = false;
-  for (const uint32_t before_due : {135'000u, 139'999u}) {
-    now_ms = before_due;
-    f.mock_rtos.retained_time_ms = now_ms;
-    A::check_timers(orch);
-    CHECK_FALSE(test_spy::measurement_requested);
-    check_paused();
-  }
-
-  now_ms = 140'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::check_timers(orch);
-  REQUIRE(test_spy::measurement_requested);
-  CHECK(A::last_measurement_ms(orch) == now_ms);
-  A::on_sensor_data(orch, MeasuresAGo{});
-  check_paused();
-  const auto ctx = A::build_context(orch);
-  CHECK(f.ui_manager.build_values(ctx).tracking_state == TrackingState::Paused);
-  CHECK(ctx.tracking_status.point_count_known);
-  CHECK(ctx.tracking_status.point_count == 1);
-
-  A::stop_tracking(orch);
-  CHECK(A::tracking_state(orch) == TrackingState::Idle);
-  CHECK(A::tracking_session_id(orch) == 0);
-  CHECK_FALSE(f.storage_service.is_route_active());
-  const auto stopped = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(stopped.snackbar_text != nullptr);
-  CHECK(std::string(stopped.snackbar_text) == "Tracking stop = " + std::to_string(session));
-}
-
-TEST_CASE("Stationary -> Energy Saving preserves recording at the new interval",
-          "[Orchestrator][stationary][offline][mode_change][tracking][interval]") {
-  TestFixture f;
-  f.settings.measure_interval_seconds = 10;
-  f.settings.energy_saving_measure_interval_seconds = 300;
-  uint32_t now_ms = 100'000;
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-  test_spy::wifi_has_saved_networks = true;
-  A::change_mode(orch, OperatingMode::Stationary);
-  REQUIRE(test_spy::wifi_connect_saved_called);
-  test_spy::wifi_is_online = true;
-  A::on_wifi_connected(orch, 0x0104a8c0); // 192.168.4.1
-  REQUIRE(A::mode(orch) == OperatingMode::Stationary);
-  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
-  REQUIRE(A::build_context(orch).wifi_connected);
-
-  f.mock_rtos.retained_time_ms = now_ms;
-  REQUIRE(A::start_tracking(orch));
-  const auto session = A::tracking_session_id(orch);
-  REQUIRE(session != 0);
-  now_ms = 110'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::on_sensor_data(orch, MeasuresAGo{});
-  REQUIRE(f.storage_service.current_route_point_count() == 1);
-  const auto timing = A::tracking_timing(orch);
-  test_spy::route_started = false;
-  test_spy::route_resumed = false;
-  test_spy::route_ended = false;
-  test_spy::route_point_appended = false;
-  test_spy::wifi_shutdown_called = false;
-
-  const auto check_route = [&] {
-    CHECK(A::tracking_state(orch) == TrackingState::Recording);
-    CHECK(A::tracking_session_id(orch) == session);
-    CHECK(f.storage_service.current_route_session_id() == session);
-    CHECK(f.storage_service.is_route_active());
-    CHECK(f.storage_service.current_route_point_count() == 1);
-    check_tracking_timing(A::tracking_timing(orch), timing);
-    CHECK_FALSE(test_spy::route_started);
-    CHECK_FALSE(test_spy::route_resumed);
-    CHECK_FALSE(test_spy::route_ended);
-    CHECK_FALSE(test_spy::route_point_appended);
-  };
-
-  now_ms = 120'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::change_mode(orch, OperatingMode::Offline);
-  REQUIRE(A::mode(orch) == OperatingMode::Offline);
-  CHECK(test_spy::wifi_shutdown_called);
-  check_route();
-  enter_tracking_status(f, orch); // Keep awake, matching the manual Status observation.
-  test_spy::measurement_requested = false;
-  for (const uint32_t before_due : {130'000u, 419'999u}) {
-    now_ms = before_due;
-    f.mock_rtos.retained_time_ms = now_ms;
-    A::check_timers(orch);
-    CHECK_FALSE(test_spy::measurement_requested);
-    check_route();
-  }
-
-  now_ms = 420'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::check_timers(orch);
-  REQUIRE(test_spy::measurement_requested);
-  CHECK(A::last_measurement_ms(orch) == now_ms);
-  A::on_sensor_data(orch, MeasuresAGo{});
-  CHECK(test_spy::route_point_appended);
-  CHECK(A::tracking_state(orch) == TrackingState::Recording);
-  CHECK(A::tracking_session_id(orch) == session);
-  CHECK(f.storage_service.current_route_session_id() == session);
-  CHECK(f.storage_service.current_route_point_count() == 2);
-  auto updated_timing = timing;
-  updated_timing.last_record_s = 420;
-  check_tracking_timing(A::tracking_timing(orch), updated_timing);
-
-  const auto ctx = A::build_context(orch);
-  CHECK(f.ui_manager.build_values(ctx).tracking_state == TrackingState::Recording);
-  CHECK(ctx.tracking_status.point_count_known);
-  CHECK(ctx.tracking_status.point_count == 2);
-
-  A::stop_tracking(orch);
-  CHECK(test_spy::route_ended);
-  CHECK_FALSE(f.storage_service.is_route_active());
-  CHECK(A::tracking_state(orch) == TrackingState::Idle);
-  const auto stopped = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(stopped.snackbar_text != nullptr);
-  CHECK(std::string(stopped.snackbar_text) == "Tracking stop = " + std::to_string(session));
-}
-
-TEST_CASE("Stationary -> Energy Saving keeps tracking paused through a measurement",
-          "[Orchestrator][stationary][offline][mode_change][tracking][pause][interval]") {
-  TestFixture f;
-  f.settings.measure_interval_seconds = 10;
-  f.settings.energy_saving_measure_interval_seconds = 300;
-  uint32_t now_ms = 100'000;
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-  test_spy::wifi_has_saved_networks = true;
-  A::change_mode(orch, OperatingMode::Stationary);
-  REQUIRE(test_spy::wifi_connect_saved_called);
-  test_spy::wifi_is_online = true;
-  A::on_wifi_connected(orch, 0x0104a8c0); // 192.168.4.1
-  REQUIRE(A::mode(orch) == OperatingMode::Stationary);
-  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
-  REQUIRE(A::build_context(orch).wifi_connected);
-
-  f.mock_rtos.retained_time_ms = now_ms;
-  REQUIRE(A::start_tracking(orch));
-  const auto session = A::tracking_session_id(orch);
-  REQUIRE(session != 0);
-  now_ms = 110'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::on_sensor_data(orch, MeasuresAGo{});
-  REQUIRE(f.storage_service.current_route_point_count() == 1);
-  now_ms = 120'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  REQUIRE(A::pause_tracking(orch));
-  REQUIRE_FALSE(f.storage_service.is_route_active());
-  const auto timing = A::tracking_timing(orch);
-  test_spy::route_started = false;
-  test_spy::route_resumed = false;
-  test_spy::route_ended = false;
-  test_spy::route_point_appended = false;
-  test_spy::wifi_shutdown_called = false;
-
-  const auto check_paused = [&] {
-    CHECK(A::tracking_state(orch) == TrackingState::Paused);
-    CHECK(A::tracking_session_id(orch) == session);
-    check_tracking_timing(A::tracking_timing(orch), timing);
-    CHECK_FALSE(f.storage_service.is_route_active());
-    uint32_t points = 0;
-    REQUIRE(f.storage_service.try_get_session_point_count(session, points));
-    CHECK(points == 1);
-    CHECK_FALSE(test_spy::route_started);
-    CHECK_FALSE(test_spy::route_resumed);
-    CHECK_FALSE(test_spy::route_ended);
-    CHECK_FALSE(test_spy::route_point_appended);
-  };
-  check_paused();
-
-  now_ms = 130'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::change_mode(orch, OperatingMode::Offline);
-  REQUIRE(A::mode(orch) == OperatingMode::Offline);
-  CHECK(test_spy::wifi_shutdown_called);
-  check_paused();
-  CHECK(f.ui_manager.build_values(A::build_context(orch)).tracking_state == TrackingState::Paused);
-  enter_tracking_status(f, orch); // Keep awake, matching the manual Status observation.
-  test_spy::measurement_requested = false;
-  for (const uint32_t before_due : {140'000u, 429'999u}) {
-    now_ms = before_due;
-    f.mock_rtos.retained_time_ms = now_ms;
-    A::check_timers(orch);
-    CHECK_FALSE(test_spy::measurement_requested);
-    check_paused();
-  }
-
-  now_ms = 430'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::check_timers(orch);
-  REQUIRE(test_spy::measurement_requested);
-  CHECK(A::last_measurement_ms(orch) == now_ms);
-  A::on_sensor_data(orch, MeasuresAGo{});
-  check_paused();
-  const auto ctx = A::build_context(orch);
-  CHECK(f.ui_manager.build_values(ctx).tracking_state == TrackingState::Paused);
-  CHECK(ctx.tracking_status.point_count_known);
-  CHECK(ctx.tracking_status.point_count == 1);
-
-  A::stop_tracking(orch);
-  CHECK(A::tracking_state(orch) == TrackingState::Idle);
-  CHECK(A::tracking_session_id(orch) == 0);
-  CHECK_FALSE(f.storage_service.is_route_active());
-  const auto stopped = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(stopped.snackbar_text != nullptr);
-  CHECK(std::string(stopped.snackbar_text) == "Tracking stop = " + std::to_string(session));
-}
-
-TEST_CASE("Energy Saving -> Stationary preserves recording through Wi-Fi connection",
-          "[Orchestrator][stationary][offline][mode_change][tracking][interval]") {
-  TestFixture f;
-  f.settings.measure_interval_seconds = 10;
-  f.settings.energy_saving_measure_interval_seconds = 300;
-  uint32_t now_ms = 100'000;
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-  A::unlock(orch);
-  A::change_mode(orch, OperatingMode::Offline);
-  REQUIRE(A::mode(orch) == OperatingMode::Offline);
-
-  f.mock_rtos.retained_time_ms = now_ms;
-  REQUIRE(A::start_tracking(orch));
-  const auto session = A::tracking_session_id(orch);
-  REQUIRE(session != 0);
-  now_ms = 110'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::on_sensor_data(orch, MeasuresAGo{});
-  REQUIRE(f.storage_service.current_route_point_count() == 1);
-  const auto timing = A::tracking_timing(orch);
-  test_spy::route_started = false;
-  test_spy::route_resumed = false;
-  test_spy::route_ended = false;
-  test_spy::route_point_appended = false;
-
-  const auto check_route = [&] {
-    CHECK(A::tracking_state(orch) == TrackingState::Recording);
-    CHECK(A::tracking_session_id(orch) == session);
-    CHECK(f.storage_service.current_route_session_id() == session);
-    CHECK(f.storage_service.is_route_active());
-    CHECK(f.storage_service.current_route_point_count() == 1);
-    check_tracking_timing(A::tracking_timing(orch), timing);
-    CHECK_FALSE(test_spy::route_started);
-    CHECK_FALSE(test_spy::route_resumed);
-    CHECK_FALSE(test_spy::route_ended);
-    CHECK_FALSE(test_spy::route_point_appended);
-  };
-
-  now_ms = 120'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  test_spy::wifi_has_saved_networks = true;
-  A::change_mode(orch, OperatingMode::Stationary);
-  REQUIRE(A::mode(orch) == OperatingMode::Stationary);
-  REQUIRE(test_spy::wifi_connect_saved_called);
-  check_route();
-
-  now_ms = 125'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  test_spy::wifi_is_online = true;
-  A::on_wifi_connected(orch, 0x0104a8c0); // 192.168.4.1
-  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
-  REQUIRE(A::build_context(orch).wifi_connected);
-  check_route();
-  enter_tracking_status(f, orch); // Keep awake, matching the manual Status observation.
-  test_spy::measurement_requested = false;
-  for (const uint32_t before_due : {130'000u, 134'999u}) {
-    now_ms = before_due;
-    f.mock_rtos.retained_time_ms = now_ms;
-    A::check_timers(orch);
-    CHECK_FALSE(test_spy::measurement_requested);
-    check_route();
-  }
-
-  now_ms = 135'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::check_timers(orch);
-  REQUIRE(test_spy::measurement_requested);
-  CHECK(A::last_measurement_ms(orch) == now_ms);
-  A::on_sensor_data(orch, MeasuresAGo{});
-  CHECK(test_spy::route_point_appended);
-  CHECK(A::tracking_state(orch) == TrackingState::Recording);
-  CHECK(A::tracking_session_id(orch) == session);
-  CHECK(f.storage_service.current_route_session_id() == session);
-  CHECK(f.storage_service.current_route_point_count() == 2);
-  auto updated_timing = timing;
-  updated_timing.last_record_s = 135;
-  check_tracking_timing(A::tracking_timing(orch), updated_timing);
-
-  const auto ctx = A::build_context(orch);
-  CHECK(f.ui_manager.build_values(ctx).tracking_state == TrackingState::Recording);
-  CHECK(ctx.tracking_status.point_count_known);
-  CHECK(ctx.tracking_status.point_count == 2);
-
-  A::stop_tracking(orch);
-  CHECK(test_spy::route_ended);
-  CHECK_FALSE(f.storage_service.is_route_active());
-  CHECK(A::tracking_state(orch) == TrackingState::Idle);
-  const auto stopped = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(stopped.snackbar_text != nullptr);
-  CHECK(std::string(stopped.snackbar_text) == "Tracking stop = " + std::to_string(session));
-}
-
-TEST_CASE("Energy Saving -> Stationary keeps tracking paused through Wi-Fi and measurement",
-          "[Orchestrator][stationary][offline][mode_change][tracking][pause][interval]") {
-  TestFixture f;
-  f.settings.measure_interval_seconds = 10;
-  f.settings.energy_saving_measure_interval_seconds = 300;
-  uint32_t now_ms = 100'000;
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-  A::unlock(orch);
-  A::change_mode(orch, OperatingMode::Offline);
-  REQUIRE(A::mode(orch) == OperatingMode::Offline);
-
-  f.mock_rtos.retained_time_ms = now_ms;
-  REQUIRE(A::start_tracking(orch));
-  const auto session = A::tracking_session_id(orch);
-  REQUIRE(session != 0);
-  now_ms = 110'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::on_sensor_data(orch, MeasuresAGo{});
-  REQUIRE(f.storage_service.current_route_point_count() == 1);
-  now_ms = 120'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  REQUIRE(A::pause_tracking(orch));
-  REQUIRE_FALSE(f.storage_service.is_route_active());
-  const auto timing = A::tracking_timing(orch);
-  test_spy::route_started = false;
-  test_spy::route_resumed = false;
-  test_spy::route_ended = false;
-  test_spy::route_point_appended = false;
-
-  const auto check_paused = [&] {
-    CHECK(A::tracking_state(orch) == TrackingState::Paused);
-    CHECK(A::tracking_session_id(orch) == session);
-    check_tracking_timing(A::tracking_timing(orch), timing);
-    CHECK_FALSE(f.storage_service.is_route_active());
-    uint32_t points = 0;
-    REQUIRE(f.storage_service.try_get_session_point_count(session, points));
-    CHECK(points == 1);
-    CHECK_FALSE(test_spy::route_started);
-    CHECK_FALSE(test_spy::route_resumed);
-    CHECK_FALSE(test_spy::route_ended);
-    CHECK_FALSE(test_spy::route_point_appended);
-  };
-  check_paused();
-
-  now_ms = 130'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  test_spy::wifi_has_saved_networks = true;
-  A::change_mode(orch, OperatingMode::Stationary);
-  REQUIRE(A::mode(orch) == OperatingMode::Stationary);
-  REQUIRE(test_spy::wifi_connect_saved_called);
-  check_paused();
-
-  now_ms = 135'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  test_spy::wifi_is_online = true;
-  A::on_wifi_connected(orch, 0x0104a8c0); // 192.168.4.1
-  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
-  REQUIRE(A::build_context(orch).wifi_connected);
-  check_paused();
-  CHECK(f.ui_manager.build_values(A::build_context(orch)).tracking_state == TrackingState::Paused);
-  enter_tracking_status(f, orch); // Keep awake, matching the manual Status observation.
-  test_spy::measurement_requested = false;
-  for (const uint32_t before_due : {140'000u, 144'999u}) {
-    now_ms = before_due;
-    f.mock_rtos.retained_time_ms = now_ms;
-    A::check_timers(orch);
-    CHECK_FALSE(test_spy::measurement_requested);
-    check_paused();
-  }
-
-  now_ms = 145'000;
-  f.mock_rtos.retained_time_ms = now_ms;
-  A::check_timers(orch);
-  REQUIRE(test_spy::measurement_requested);
-  CHECK(A::last_measurement_ms(orch) == now_ms);
-  A::on_sensor_data(orch, MeasuresAGo{});
-  check_paused();
-  const auto ctx = A::build_context(orch);
-  CHECK(f.ui_manager.build_values(ctx).tracking_state == TrackingState::Paused);
-  CHECK(ctx.tracking_status.point_count_known);
-  CHECK(ctx.tracking_status.point_count == 1);
-
-  A::stop_tracking(orch);
-  CHECK(A::tracking_state(orch) == TrackingState::Idle);
-  CHECK(A::tracking_session_id(orch) == 0);
-  CHECK_FALSE(f.storage_service.is_route_active());
-  const auto stopped = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(stopped.snackbar_text != nullptr);
-  CHECK(std::string(stopped.snackbar_text) == "Tracking stop = " + std::to_string(session));
-}
-
 TEST_CASE("direct got-IP activates local HTTP, admission, and mDNS",
           "[Orchestrator][stationary][local_endpoint]") {
   TestFixture f;
@@ -12654,7 +11953,7 @@ TEST_CASE("GPS sleep: Portable and Stationary wait without a tracking reset",
   SECTION("Portable") { A::set_mode(orch, OperatingMode::Portable); }
   SECTION("Stationary") { A::set_mode(orch, OperatingMode::Stationary); }
   f.stub_bms.status.power_source = BmsPowerSource::OtgMode;
-  test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + 1;
+  test_spy::gps_remaining_ms = GPS_IDLE_SLEEP_MS + 1;
   FORBID_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_));
   REQUIRE(A::start_tracking(orch));
   CHECK(f.stub_bms.status_reads == 0);
@@ -12663,125 +11962,113 @@ TEST_CASE("GPS sleep: Portable and Stationary wait without a tracking reset",
   CHECK(test_spy::gps_started);
 }
 
-TEST_CASE("GPS sleep: USB and unknown supply wait without resetting", "[Orchestrator][gps_sleep]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
-  f.stub_bms.status_ok = true;
-  test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + 1;
-  SECTION("USB") { f.stub_bms.status.power_source = BmsPowerSource::UsbDcp; }
-  SECTION("Unknown source") { f.stub_bms.status.power_source = BmsPowerSource::Unknown; }
-  SECTION("Read failed") {
-    f.stub_bms.status.power_source = BmsPowerSource::None;
-    f.stub_bms.status_ok = false;
+TEST_CASE("Energy Saving transitions save the mode and stop tracking before charger reset",
+          "[Orchestrator][gps_sleep]") {
+  for (auto mode : {OperatingMode::Portable, OperatingMode::Stationary}) {
+    for (bool paused : {false, true}) {
+      CAPTURE(mode, paused);
+      TestFixture f;
+      f.settings.operating_mode = mode;
+      f.settings.gps_mode = GpsMode::AlwaysOn;
+      auto orch = f.make_orchestrator();
+      A::set_mode(orch, mode);
+      CP2_ALLOW_CONFIG_WRITES(f);
+      test_spy::wifi_has_saved_networks = true;
+      A::unlock(orch);
+      f.mock_rtos.retained_time_ms = 100'000;
+      REQUIRE(A::start_tracking(orch));
+      const auto session = A::tracking_session_id(orch);
+      REQUIRE(session != 0);
+      f.mock_rtos.retained_time_ms = 110'000;
+      A::on_sensor_data(orch, MeasuresAGo{});
+      REQUIRE(f.storage_service.current_route_point_count() == 1);
+      if (paused) {
+        f.mock_rtos.retained_time_ms = 120'000;
+        REQUIRE(A::pause_tracking(orch));
+      }
+      test_spy::route_ended = false;
+      test_spy::route_started = false;
+      test_spy::route_resumed = false;
+      test_spy::route_point_appended = false;
+      const auto check_ended_session = [&] {
+        CHECK(A::tracking_state(orch) == TrackingState::Idle);
+        CHECK(A::tracking_session_id(orch) == 0);
+        check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
+        CHECK_FALSE(f.storage_service.is_route_active());
+        uint32_t points = 0;
+        REQUIRE(f.storage_service.try_get_session_point_count(session, points));
+        CHECK(points == 1);
+        CHECK_FALSE(test_spy::route_started);
+        CHECK_FALSE(test_spy::route_resumed);
+        CHECK_FALSE(test_spy::route_point_appended);
+      };
+      bool mode_saved = false;
+      bool committed = false;
+      ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+          .WITH(std::string(_1) == "opm")
+          .LR_SIDE_EFFECT(mode_saved = _2 == static_cast<int>(OperatingMode::Offline))
+          .RETURN(ConfigStoreResult::OK);
+      ALLOW_CALL(f.mock_config, commit())
+          .LR_SIDE_EFFECT(committed = true)
+          .RETURN(ConfigStoreResult::OK);
+      f.stub_bms.on_reset = [&] {
+        CHECK(mode_saved);
+        CHECK(committed);
+        check_ended_session();
+        CHECK(test_spy::route_ended == !paused); // Pausing already closed the route.
+        CHECK(test_spy::cache_backed_up);
+        CHECK(test_spy::gps_sleep_interval_ms == GPS_ENERGY_SAVING_SLEEP_MS);
+      };
+      A::change_mode(orch, OperatingMode::Offline);
+      CHECK(f.stub_bms.reset_requests == 1);
+      CHECK_FALSE(A::is_gps_active(orch));
+      CHECK(A::settings(orch).gps_mode == GpsMode::AlwaysOn);
+      check_ended_session();
+      f.mock_rtos.retained_time_ms = 430'000;
+      A::on_sensor_data(orch, MeasuresAGo{});
+      check_ended_session();
+      A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+      REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
+      const auto offline_menu = f.ui_manager.build_values(A::build_context(orch));
+      REQUIRE(offline_menu.row_count == 3);
+      CHECK(std::string(offline_menu.rows[1].text) == "Operating Mode");
+
+      f.stub_bms.on_reset = nullptr;
+      A::change_mode(orch, mode);
+      CHECK(f.stub_bms.reset_requests == 2);
+      CHECK(A::is_gps_active(orch));
+      check_ended_session();
+      if (mode == OperatingMode::Stationary) {
+        REQUIRE(test_spy::wifi_connect_saved_called);
+        A::on_wifi_connected(orch, 0x0104a8c0);
+        check_ended_session();
+      }
+      f.mock_rtos.retained_time_ms = 440'000;
+      A::on_sensor_data(orch, MeasuresAGo{});
+      check_ended_session();
+      f.ui_manager.reset_to_home();
+      A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+      REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
+      const auto menu = f.ui_manager.build_values(A::build_context(orch));
+      REQUIRE(menu.row_count == 4);
+      CHECK(std::string(menu.rows[1].text) == "Start Tracking");
+    }
   }
-  REQUIRE(A::start_tracking(orch));
-  CHECK(f.stub_bms.status_reads == 1);
-  CHECK(f.stub_bms.reset_requests == 0);
-  CHECK(test_spy::route_started);
-  CHECK(test_spy::gps_started);
 }
 
-TEST_CASE("GPS sleep: short wait and AlwaysOff never request a tracking reset",
+TEST_CASE("Energy Saving boot ignores retained tracking and Always On GPS",
           "[Orchestrator][gps_sleep]") {
   TestFixture f;
-  f.stub_bms.status_ok = true;
-  f.stub_bms.status.power_source = BmsPowerSource::None;
-  SECTION("At threshold") { test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS; }
-  SECTION("AlwaysOff") {
-    f.settings.gps_mode = GpsMode::AlwaysOff;
-    test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + GPS_IDLE_SLEEP_MS;
-  }
+  f.settings.operating_mode = OperatingMode::Offline;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  test_spy::state_to_load.tracking_state = TrackingState::Recording;
+  test_spy::state_to_load.tracking_session_id = 42000;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
-  REQUIRE(A::start_tracking(orch));
-  CHECK(f.stub_bms.status_reads == 0);
-  CHECK(f.stub_bms.reset_requests == 0);
-  CHECK(test_spy::gps_started == (f.settings.gps_mode != GpsMode::AlwaysOff));
-}
-
-TEST_CASE("GPS sleep: battery reset persists only intent before creating a route",
-          "[Orchestrator][gps_sleep]") {
-  struct PowerCut {};
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
-  f.stub_bms.status_ok = true;
-  SECTION("No adapter") { f.stub_bms.status.power_source = BmsPowerSource::None; }
-  SECTION("OTG boost") { f.stub_bms.status.power_source = BmsPowerSource::OtgMode; }
-  test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + 1;
-  bool pending = false;
-  bool committed = false;
-  REQUIRE_CALL(f.mock_config, set_bool(trompeloeil::_, true))
-      .WITH(std::string(_1) == "trk_start")
-      .LR_SIDE_EFFECT(pending = true)
-      .RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, commit())
-      .LR_SIDE_EFFECT(committed = true)
-      .RETURN(ConfigStoreResult::OK);
-  f.stub_bms.on_reset = [&] {
-    CHECK(pending);
-    CHECK(committed);
-    const auto values = f.ui_manager.build_values(A::build_context(orch));
-    REQUIRE(values.snackbar_text != nullptr);
-    CHECK(std::string(values.snackbar_text) == "Starting tracking...");
-    CHECK(DisplayService::spy_last_update_wait);
-    CHECK(DisplayService::spy_flush_count == 1);
-    CHECK_FALSE(test_spy::route_started);
-    CHECK_FALSE(test_spy::cache_backed_up);
-    CHECK_FALSE(A::tracking_active(orch));
-    throw PowerCut{};
-  };
-  REQUIRE_THROWS_AS(A::start_tracking(orch), PowerCut);
-  CHECK(f.stub_bms.reset_requests == 1);
-  CHECK_FALSE(test_spy::route_started);
-}
-
-TEST_CASE("GPS sleep: failed reset clears intent and starts while waiting",
-          "[Orchestrator][gps_sleep]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
-  f.stub_bms.status_ok = true;
-  f.stub_bms.status.power_source = BmsPowerSource::None;
-  test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + 1;
-  SECTION("Driver error") { f.stub_bms.reset_result = false; }
-  SECTION("Command accepted but power did not cycle") { f.stub_bms.reset_result = true; }
-  bool pending = false;
-  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_))
-      .WITH(std::string(_1) == "trk_start")
-      .LR_SIDE_EFFECT(pending = _2)
-      .RETURN(ConfigStoreResult::OK);
-  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
-  REQUIRE(A::start_tracking(orch));
-  CHECK(f.stub_bms.reset_requests == 1);
-  CHECK_FALSE(pending);
-  CHECK(test_spy::route_started);
-  CHECK(test_spy::gps_started);
-}
-
-TEST_CASE("GPS sleep: failed intent save starts tracking without reset or clearing intent",
-          "[Orchestrator][gps_sleep]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
-  f.stub_bms.status_ok = true;
-  f.stub_bms.status.power_source = BmsPowerSource::None;
-  test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + 1;
-  bool write_ok = false;
-  SECTION("Write fails") {}
-  SECTION("Commit fails") { write_ok = true; }
-  REQUIRE_CALL(f.mock_config, set_bool(trompeloeil::_, true))
-      .RETURN(write_ok ? ConfigStoreResult::OK : ConfigStoreResult::ERROR);
-  std::unique_ptr<trompeloeil::expectation> commit;
-  if (write_ok) {
-    commit = NAMED_REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
-  }
-  FORBID_CALL(f.mock_config, set_bool(trompeloeil::_, false));
-  CHECK(A::start_tracking(orch));
-  CHECK(f.stub_bms.reset_requests == 0);
-  CHECK(test_spy::route_started);
-  CHECK(test_spy::gps_started);
+  orch.init(WakeCause::Button);
+  CHECK_FALSE(A::tracking_active(orch));
+  CHECK_FALSE(test_spy::route_resumed);
+  CHECK_FALSE(test_spy::gps_started);
+  CHECK(test_spy::gps_sleep_interval_ms == GPS_ENERGY_SAVING_SLEEP_MS);
 }
 
 TEST_CASE("GPS sleep: initialization selects GPS mode after restoring tracking",
@@ -12821,7 +12108,7 @@ TEST_CASE("GPS sleep: initialization configures maintenance once and timers leav
   SECTION("Offline") {
     f.settings.operating_mode = OperatingMode::Offline;
     f.settings.measure_interval_seconds = 300;
-    expected = 300000;
+    expected = GPS_ENERGY_SAVING_SLEEP_MS;
   }
   SECTION("Portable AlwaysOff") {
     f.settings.operating_mode = OperatingMode::Portable;
@@ -12835,7 +12122,7 @@ TEST_CASE("GPS sleep: initialization configures maintenance once and timers leav
     f.settings.operating_mode = OperatingMode::Offline;
     f.settings.gps_mode = GpsMode::AlwaysOff;
     f.settings.measure_interval_seconds = 300;
-    expected = 300000;
+    expected = GPS_ENERGY_SAVING_SLEEP_MS;
   }
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
@@ -12861,22 +12148,6 @@ TEST_CASE("GPS sleep: preparation preserves an existing GPS timer", "[Orchestrat
   test_spy::gps_remaining_ms = 5000;
   A::prepare_for_sleep(orch, 60000);
   CHECK(test_spy::gps_remaining_ms == 5000);
-}
-
-TEST_CASE("GPS sleep: uncleared intent prevents a duplicate session after failed reset",
-          "[Orchestrator][gps_sleep]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
-  f.stub_bms.status_ok = true;
-  f.stub_bms.status.power_source = BmsPowerSource::None;
-  test_spy::gps_remaining_ms = GPS_RESET_THRESHOLD_MS + 1;
-  REQUIRE_CALL(f.mock_config, set_bool(trompeloeil::_, true)).RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, set_bool(trompeloeil::_, false)).RETURN(ConfigStoreResult::ERROR);
-  CHECK_FALSE(A::start_tracking(orch));
-  CHECK(f.stub_bms.reset_requests == 1);
-  CHECK_FALSE(test_spy::route_started);
 }
 
 TEST_CASE("Energy Saving mode changes recalculate current readings and charts",

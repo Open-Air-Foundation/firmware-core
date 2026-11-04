@@ -29,7 +29,6 @@ public:
   void init_spi() override;
   void init_fuel_gauge() override;
   bool init_bms() override;
-  bool sleep_touch() override;
   void init_wifi_subsystem() override;
   void init_core() override;
 
