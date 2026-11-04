@@ -19,6 +19,9 @@ top-level CMake tree via `add_subdirectory()` from
 
 ## Build
 
+The host-test CI uses `ubuntu-24.04` to avoid automatic Ubuntu release upgrades
+through `ubuntu-latest`.
+
 From the repository root:
 
 ```sh
