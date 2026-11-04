@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "9a17653",
+  "rev": "14a65e9",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1265,6 +1265,61 @@
       "references": [
         "products/go/docs/display_service.md",
         "products/go/docs/ui_manager.md"
+      ]
+    },
+    {
+      "id": "go.display.correction-limits",
+      "title": "Home redraws missing readings and restores them cleanly",
+      "objective": "Verify the physical display replaces temperature and humidity readings with dashes, then restores readable values without leftover content.",
+      "category": "Measurements",
+      "sub_category": "Display Recovery",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "Go has saved credentials for an available Wi-Fi network.",
+        "A computer on that network with Postman or an equivalent GUI API client supporting .local addresses."
+      ],
+      "steps": [
+        {
+          "action": "Select Stationary mode. Read the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
+          "expected_result": "Home shows the connected Wi-Fi icon and the serial is recorded."
+        },
+        {
+          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/config with No Auth and no body. Save measurementInterval, configurationControl, and the complete corrections.temperature and corrections.humidity entries.",
+          "expected_result": "The original interval, configuration control and both correction entries are saved before any changes."
+        },
+        {
+          "action": "At the same URL, send PUT with No Auth, Content-Type: application/json and raw JSON body {\"configurationControl\":\"local\"}. Poll GET config every two seconds for up to 10 seconds to confirm the change.",
+          "expected_result": "configurationControl becomes local, preventing cloud settings from replacing the test inputs."
+        },
+        {
+          "action": "Send PUT at the same URL with the same headers and raw JSON body {\"measurementInterval\":300}. Return to the Home overview and allow up to six minutes for numeric temperature and humidity readings. Photograph both fields.",
+          "expected_result": "Temperature and humidity both show readable numeric values, providing the display baseline."
+        },
+        {
+          "action": "Send PUT at the same URL with the same headers and raw JSON body:\n{\"corrections\":{\"temperature\":{\"correctionAlgorithm\":\"custom\",\"slr\":{\"scalingFactor\":0,\"intercept\":126}},\"humidity\":{\"correctionAlgorithm\":\"custom\",\"slr\":{\"scalingFactor\":0,\"intercept\":101}}}}\nObserve Home through the completed refresh, allowing up to 10 seconds from Send.",
+          "expected_result": "Both fields show clean dashes. Previous digits disappear without leftover content, clipping or overlap; the rest of Home remains readable.",
+          "evidence": [
+            "Save a photo of the dashes for comparison with the baseline."
+          ]
+        },
+        {
+          "action": "Send PUT at the same URL with the same headers and a raw JSON body containing corrections with only the saved temperature and humidity entries. Observe Home through the completed refresh, allowing up to 10 seconds from Send.",
+          "expected_result": "Numeric temperature and humidity readings return without leftover dashes, overlapping digits or a restart.",
+          "evidence": [
+            "Save a photo of the restored readings."
+          ]
+        }
+      ],
+      "cleanup": [
+        "Including after interruption, use PUT at the same URL with No Auth and Content-Type: application/json to restore the saved temperature and humidity correction entries and measurementInterval. Include only temperature and humidity inside corrections; leave pm25 out of the request.",
+        "Restore configurationControl last using its saved value. Poll GET config every two seconds for up to 10 seconds to confirm each restoration. Restore only values captured before mutation; record any missing baseline or restoration failure. Return Home."
+      ],
+      "references": [
+        "products/go/docs/display_service.md",
+        "products/go/docs/measurement_corrections.md",
+        "products/go/docs/local_server.md"
       ]
     },
     {
