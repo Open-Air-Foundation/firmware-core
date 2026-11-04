@@ -476,15 +476,23 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     CHECK(d.duration_ms == 0);
   }
 
-  SECTION("Unlocked — None with zero duration") {
+  SECTION("Unlocked Energy Saving stays awake across its measurement deadline") {
     PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
     GoSettings settings{};
-    settings.measure_interval_seconds = 60;
+    settings.operating_mode = OperatingMode::Offline;
+    settings.measure_interval_seconds = 10;
+    settings.energy_saving_measure_interval_seconds = 300;
+    settings.auto_lock_seconds = 0;
 
-    auto d = svc.decide_sleep(settings, LockState::Unlocked, OperatingMode::Offline, 0);
-    CHECK(d.type == PowerService::SleepType::None);
-    CHECK(d.duration_ms == 0);
+    // Includes a freshly reset measurement clock and the full six-minute observation.
+    for (const uint32_t awake_ms : {0u, 299'999u, 300'000u, 360'000u}) {
+      CAPTURE(awake_ms);
+      const auto d =
+          svc.decide_sleep(settings, LockState::Unlocked, OperatingMode::Offline, awake_ms);
+      CHECK(d.type == PowerService::SleepType::None);
+      CHECK(d.duration_ms == 0);
+    }
   }
 
   SECTION("Offline uses its saved interval independently of the normal interval") {

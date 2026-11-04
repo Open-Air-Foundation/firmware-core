@@ -16,6 +16,10 @@ Establish the requested scope from the user's PR, commit range, local diff,
 described behavior, or template review. A review-only request produces findings
 without edits.
 
+State the comparison base. For a branch review, use the merge base with the
+intended target branch unless the user specifies another range; the target tip
+may contain changes that are absent from the reviewed branch.
+
 Inspect the actual diff, relevant implementation, product wiring, and local
 documentation. Use the PR description as context, then establish which shipping
 products and observable behaviors are affected. Group overlapping changes from
@@ -33,6 +37,12 @@ IDs across categories, what automation actually asserts, and any agreed future
 coverage. Apply the guide to decide whether to update, add, merge, remove, defer,
 or leave a scenario unchanged.
 
+For a removal or merge, identify where each required outcome is covered: specific
+automated assertions, a retained manual case, or explicitly proposed follow-up.
+Record out-of-scope removals as scope decisions, not replacement coverage. Apply
+the guide's firmware scope when a suggested case primarily tests an external
+client's behavior.
+
 Resolve case-specific questions about behavior and available tools from the
 product documentation and implementation. Ask for missing information only when
 it affects the decision or procedure. Before editing, briefly state the affected
@@ -49,6 +59,12 @@ evidence for the final summary, including where removed or merged cases went.
 Run the guide's template and documentation checks. Review each changed procedure
 as QA, then inspect the final diff against the coverage decisions for omissions
 or changes outside the requested scope.
+
+Walk through the device states created by the procedure. Check whether USB
+power, locking, an open Status screen, or the logging setup changes the behavior
+being tested. Confirm the intended trigger still occurs and can be observed with
+the specified tools. Verify placement among neighboring cases and categories
+without relying on earlier cases to establish prerequisites.
 
 If the task also changes firmware, complete the repository's required firmware
 verification separately. This maintenance workflow does not authorize flashing

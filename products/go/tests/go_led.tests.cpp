@@ -17,6 +17,7 @@
 
 #include <limits>
 
+#include "aqi.h"
 #include "go_led.h"
 #include "rtos.h"
 
@@ -673,6 +674,7 @@ TEST_CASE("LedService: back AQI", "[LedService][back][aqi]") {
   }
 
   SECTION("PM2.5 = 35.4 -> Moderate -> yellow") {
+    CHECK(aqi::pm25_to_us_aqi(35.4f) == 100);
     f.svc->back_update_aqi(35.4f);
 
     REQUIRE_CALL(f.driver, set_rgb(6, 255, 255, 0)).RETURN(true);

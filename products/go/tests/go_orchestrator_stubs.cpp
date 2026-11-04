@@ -42,6 +42,7 @@
 namespace test_spy {
 std::function<void()> during_melody;
 uint32_t buzzer_refresh_ack_count = 0;
+uint32_t buzzer_play_count = 0;
 uint32_t retained_time_read_count = 0;
 
 // --- SensorProducer ---
@@ -81,6 +82,7 @@ bool input_started = false;
 bool input_stopped = false;
 
 // --- LedService ---
+uint32_t led_back_solid_count = 0;
 uint32_t led_back_brightness_count = 0;
 LedBrightness led_last_back_brightness = LedBrightness::Off;
 bool led_back_bright_seen = false;
@@ -276,6 +278,7 @@ uint32_t recover_pm_sensor_count = 0;
 void reset() {
   during_melody = nullptr;
   buzzer_refresh_ack_count = 0;
+  buzzer_play_count = 0;
   retained_time_read_count = 0;
   sensor_started = false;
   sensor_stopped = false;
@@ -310,6 +313,7 @@ void reset() {
   input_started = false;
   input_stopped = false;
 
+  led_back_solid_count = 0;
   led_back_brightness_count = 0;
   led_last_back_brightness = LedBrightness::Off;
   led_back_bright_seen = false;
@@ -1348,7 +1352,7 @@ LedService::~LedService() = default;
 bool LedService::init() { return true; }
 bool LedService::start() { return true; }
 
-void LedService::back_solid(Rgb /*color*/) {}
+void LedService::back_solid(Rgb /*color*/) { ++test_spy::led_back_solid_count; }
 void LedService::back_blink(Rgb /*color*/, uint32_t /*period_ms*/) {}
 void LedService::back_breathe(Rgb /*color*/, uint32_t /*period_ms*/) {}
 void LedService::back_fade_to(Rgb /*color*/, uint32_t /*duration_ms*/) {}
@@ -1432,7 +1436,9 @@ BuzzerService::~BuzzerService() = default;
 bool BuzzerService::init() { return true; }
 bool BuzzerService::start() { return true; }
 
-void BuzzerService::play(const Note * /*notes*/, uint8_t /*count*/) {}
+void BuzzerService::play(const Note * /*notes*/, uint8_t /*count*/) {
+  ++test_spy::buzzer_play_count;
+}
 void BuzzerService::beep(uint32_t /*freq_hz*/, uint32_t /*duration_ms*/) {}
 void BuzzerService::acknowledge_refresh() { ++test_spy::buzzer_refresh_ack_count; }
 void BuzzerService::set_enabled(bool /*enabled*/) {}
