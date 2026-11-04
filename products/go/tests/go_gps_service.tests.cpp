@@ -95,6 +95,7 @@ public:
   bool respond = true;
   uint64_t receiver_wake_ms = 0;
   std::deque<uint8_t> rx;
+  bool nmea_sent = false;
 
   void reply(uint8_t group, uint8_t sub, std::vector<uint8_t> payload) {
     std::vector<uint8_t> packet{0xF1, 0xD9, group, sub, static_cast<uint8_t>(payload.size()), 0};
@@ -112,11 +113,25 @@ public:
   bool begin(int rate) override {
     opened_bauds.push_back(rate);
     baud = rate;
+    nmea_sent = false;
+    rx.clear();
     open = open_ok;
     return open_ok;
   }
   void end() override { open = false; }
-  int available() override { return static_cast<int>(rx.size()); }
+  int available() override {
+    if (receiver_wake_ms != 0 && RTOS::get_retained_time_ms() >= receiver_wake_ms) {
+      receiver_wake_ms = 0;
+      receiver_baud = GpsDriver::MODULE_DEFAULT_BAUD;
+    }
+    if (open && respond && !nmea_sent && baud == receiver_baud && receiver_wake_ms == 0) {
+      const std::string sentence =
+          "$GPGGA,092725.00,4717.11364,N,00833.91565,E,1,08,1.01,499.6,M,48.0,M,,*53\r\n";
+      rx.insert(rx.end(), sentence.begin(), sentence.end());
+      nmea_sent = true;
+    }
+    return static_cast<int>(rx.size());
+  }
   int read() override {
     if (rx.empty())
       return -1;
@@ -171,65 +186,112 @@ bool is_command(const ServiceSerial::Write &write, uint8_t sub) {
 
 } // namespace
 
+TEST_CASE_METHOD(Fixture, "GPS connection probe waits three seconds at each baud",
+                 "[gps_service][probe]") {
+  serial.respond = false;
+  const uint64_t start_ms = clock.retained_ms;
+
+  SECTION("silent receiver times out at both bauds") {}
+  SECTION("continuous unrelated data does not end the probe early or extend it") {
+    clock.on_delay = [&] { serial.rx.insert(serial.rx.end(), 128, '$'); };
+  }
+
+  CHECK(driver.connect(GpsDriver::MODULE_DEFAULT_BAUD) == 0);
+  CHECK(clock.retained_ms - start_ms == 6000);
+  CHECK(serial.opened_bauds == std::vector<int>{9600, 115200});
+  CHECK_FALSE(serial.open);
+}
+
+TEST_CASE_METHOD(Fixture, "GPS connection probe detects valid NMEA without sending a command",
+                 "[gps_service][probe]") {
+  serial.respond = false;
+  const uint64_t start_ms = clock.retained_ms;
+  int responding_baud = GpsDriver::MODULE_DEFAULT_BAUD;
+  uint64_t expected_ms = 2500;
+  SECTION("first baud") {}
+  SECTION("alternate baud") {
+    responding_baud = GpsDriver::MODULE_ACTIVE_BAUD;
+    expected_ms = 5500;
+  }
+  clock.on_delay = [&] {
+    if (serial.baud == responding_baud && clock.retained_ms - start_ms == expected_ms) {
+      const std::string nmea =
+          "$GPGGA,092725.00,4717.11364,N,00833.91565,E,1,08,1.01,499.6,M,48.0,M,,*53\r\n";
+      serial.rx.insert(serial.rx.end(), nmea.begin(), nmea.end());
+    }
+  };
+  CHECK(driver.connect(GpsDriver::MODULE_DEFAULT_BAUD) == responding_baud);
+  CHECK(clock.retained_ms - start_ms == expected_ms);
+  CHECK(serial.writes.empty());
+}
+
+TEST_CASE_METHOD(Fixture, "GPS connection validates fragmented NMEA without parsing fields",
+                 "[gps_service][probe]") {
+  serial.respond = false;
+  const std::string valid =
+      "$GPGGA,092725.00,4717.11364,N,00833.91565,E,1,08,1.01,499.6,M,48.0,M,,*53\r\n";
+  clock.on_delay = [&] {
+    if (clock.boot_ms == 20) {
+      const std::string invalid = "$GPGGA,invalid*00\r\n$GPGGA,invalid*ZZ\r\n$\n";
+      serial.rx.insert(serial.rx.end(), invalid.begin(), invalid.end());
+      serial.rx.insert(serial.rx.end(), valid.begin(), valid.begin() + 10);
+    } else if (clock.boot_ms == 40) {
+      serial.rx.insert(serial.rx.end(), valid.begin() + 10, valid.end());
+    }
+  };
+  CHECK(driver.connect(GpsDriver::MODULE_DEFAULT_BAUD) == GpsDriver::MODULE_DEFAULT_BAUD);
+  CHECK(clock.boot_ms == 40);
+  CHECK(serial.writes.empty());
+}
+
 TEST_CASE_METHOD(Fixture, "GPS service sleep uses default baud without acquisition setup",
                  "[gps_service]") {
   GpsServiceTestAccess::seed_fix(service);
   serial.tx_delay_ms = 20;
   REQUIRE(service.request_sleep(60000));
   CHECK(serial.opened_bauds == std::vector<int>{GpsDriver::MODULE_DEFAULT_BAUD});
-  REQUIRE(serial.writes.size() == 2); // MON-VER response check, then sleep
+  REQUIRE(serial.writes.size() == 1); // Sleep command only
   CHECK(is_command(serial.writes.back(), 0x41));
   CHECK(service.sleep_remaining_ms() == 60000);
   CHECK_FALSE(is_position_valid(service.get_latest_fix().position));
   CHECK_FALSE(serial.open);
 }
 
-TEST_CASE_METHOD(Fixture, "Fast-path GPS probe retries at 9600 every 300 ms for five seconds",
+TEST_CASE_METHOD(Fixture, "Fast-path GPS probe uses NMEA at both bauds",
                  "[gps_service][fast_path]") {
   GpsService gps(driver, nullptr, {.fast_path_sleep_probe = true});
   const uint64_t start_ms = clock.retained_ms;
-  bool succeeds = false;
-  size_t polls = 17;
-  uint64_t elapsed_ms = 5000;
+  bool succeeds = true;
+  uint64_t elapsed_ms = 20;
+  std::vector<int> expected_bauds{9600};
 
-  SECTION("silent receiver") { serial.respond = false; }
-  SECTION("receiver at 115200 is not probed there") {
+  SECTION("silent receiver") {
+    serial.respond = false;
+    succeeds = false;
+    elapsed_ms = 6000;
+    expected_bauds.push_back(115200);
+  }
+  SECTION("alternate baud") {
     serial.receiver_baud = GpsDriver::MODULE_ACTIVE_BAUD;
+    elapsed_ms = 3020;
+    expected_bauds.push_back(115200);
   }
-  SECTION("short writes keep the cadence") { serial.short_write = true; }
-  SECTION("UART open fails immediately") {
+  SECTION("UART open fails") {
     serial.open_ok = false;
-    polls = 0;
+    succeeds = false;
     elapsed_ms = 0;
+    expected_bauds.push_back(115200);
   }
-  SECTION("immediate response stops probing") {
-    succeeds = true;
-    polls = 1;
-    elapsed_ms = 20;
-  }
-  SECTION("receiver responds after several probes") {
-    serial.receiver_wake_ms = start_ms + 850;
-    succeeds = true;
-    polls = 4;
-    elapsed_ms = 920;
-  }
-  SECTION("receiver responds to the final probe") {
-    serial.receiver_wake_ms = start_ms + 4800;
-    succeeds = true;
-    polls = 17;
-    elapsed_ms = 4820;
+  SECTION("receiver wakes near the end of the first probe") {
+    serial.receiver_wake_ms = start_ms + 2980;
+    elapsed_ms = 2980;
   }
 
   REQUIRE(gps.request_sleep(UINT32_MAX) == succeeds);
-  CHECK(serial.opened_bauds == std::vector<int>{9600});
+  CHECK(serial.opened_bauds == expected_bauds);
   CHECK_FALSE(serial.open);
   CHECK(clock.retained_ms - start_ms == elapsed_ms);
-  REQUIRE(serial.writes.size() == polls + (succeeds ? 1 : 0));
-  for (size_t i = 0; i < polls; ++i) {
-    CHECK(serial.writes[i].time_ms == start_ms + i * 300);
-    CHECK(serial.writes[i].bytes[2] == 0x0A);
-    CHECK(serial.writes[i].bytes[3] == 0x04);
-  }
+  REQUIRE(serial.writes.size() == (succeeds ? 1 : 0));
   if (succeeds) {
     CHECK(is_command(serial.writes.back(), 0x41));
     CHECK(gps.sleep_remaining_ms() == UINT32_MAX);
@@ -294,7 +356,7 @@ TEST_CASE_METHOD(Fixture, "GPS service activation waits then switches to 115200"
           std::vector<int>{GpsDriver::MODULE_DEFAULT_BAUD, GpsDriver::MODULE_ACTIVE_BAUD});
   REQUIRE_FALSE(serial.writes.empty());
   CHECK(serial.writes.front().time_ms >= deadline);
-  CHECK(is_command(serial.writes[1], 0x00));
+  CHECK(is_command(serial.writes[0], 0x00));
   CHECK(is_command(serial.writes.back(), 0x40));
   CHECK(service.sleep_deadline_ms() == 0);
 }
@@ -536,6 +598,6 @@ TEST_CASE_METHOD(Fixture, "GPS service stop interrupts a failed-sleep retry", "[
   CHECK(clock.waits == std::vector<uint32_t>{1000});
   CHECK(clock.retained_ms == stopped_at_ms);
   CHECK(service.sleep_deadline_ms() == 0);
-  REQUIRE(serial.writes.size() == 2); // Response check and one failed sleep.
+  REQUIRE(serial.writes.size() == 1); // One failed sleep command.
   CHECK(is_command(serial.writes.back(), 0x41));
 }

@@ -57,14 +57,10 @@ public:
   /// Call end() before changing baud. Use MODULE_DEFAULT_BAUD after timed wake.
   [[nodiscard]] bool open_uart(int baud_rate);
 
-  /// Poll at the expected baud, then try the other supported baud if silent.
+  /// Listen for valid NMEA at the expected baud, then try the other baud.
   /// Returns the responding baud, or zero if neither responds. Leaves UART open
   /// on success. Does not change receiver configuration or baud.
   int connect(int expected_baud);
-
-  /// Fast-path sleep probe: MON-VER every 300 ms at 9600 only, for up to 5 s.
-  /// Returns 9600 with UART open on response, or zero with UART closed.
-  int connect_fast_path();
 
   /// Send the 115200 command over the currently open UART, drain TX, allow
   /// processing, then reopen the host UART at MODULE_ACTIVE_BAUD. Requires an
@@ -72,7 +68,7 @@ public:
   /// False means transport failure; receiver baud may then be unknown.
   [[nodiscard]] bool switch_to_active_baud();
 
-  /// Poll version and configure ephemeris saving/constellations at the current
+  /// Configure ephemeris saving/constellations at the current
   /// baud. Requires an awake receiver and open UART. Failures are logged.
   /// Separate from open_uart() so sleep-only cycles need no configuration.
   void configure_receiver();
