@@ -14,19 +14,28 @@ rules for maintainers and agents across the firmware monorepo.
 - Include observable outcomes that still need human verification, such as
   display quality, touch response, sound, or faults automation cannot reproduce.
 - Inspect host tests, device integration tests, and scripts before adding or
-  retaining cases. Do not repeat host-covered parsing, encoding, calculations,
-  or deterministic logic checks manually.
+  retaining cases. Classify each outcome separately: parsing, encoding,
+  calculations, and deterministic state transitions, cancellation, and setting
+  combinations belong in developer tests. Do not repeat those checks manually
+  when automation covers them; identify missing automation as developer follow-up.
 - Keep checks assigned to developer-owned host tests, device integration tests,
   or scripts out of manual procedures. Distinguish existing replacement coverage
   from planned or deferred coverage; removing a case does not establish a pass.
 - Verify actual assertions prove the outcome. A response-format check that
-  accepts failure does not prove successful operation.
+  accepts failure does not prove successful operation. Mocked display values or
+  service calls do not prove physical rendering or hardware operation. Keep a
+  focused manual observation for a distinct physical outcome, such as clean
+  redraw from numbers to dashes and back. A mock boundary alone does not justify
+  another manual case when an existing case already checks that outcome.
 - Retain a case for its distinct human verification value. Adding a display or
   restart observation does not justify repeating a developer-owned workflow or
   an outcome already checked by another manual case.
 - Share cases across interchangeable sensors; note sensor-specific differences
   within the case. Require separate executions only for different expected
   behavior or explicit release-plan requirements.
+- When automation covers equivalent choices or branches, use representative
+  manual coverage of the physical interaction. Do not repeat every timeout or
+  mode/state combination unless it has a distinct physical outcome.
 - Keep product procedures in its cases or linked documentation. Assess every
   affected product when shared components change.
 - When automation replaces a case, record the replacement coverage or planned
@@ -48,6 +57,11 @@ This applies to setup, test steps, evidence collection, and cleanup.
 Name established QA tools; assume QA knows their standard workflows. Do not
 repeat basic tool setup instructions or add links to familiar tool guides. Keep
 case-specific actions, observations, and timing in the case.
+
+Apps, browsers, and API clients provide controls and observations for firmware
+checks. Their limitations do not establish firmware defects or additional
+firmware requirements by themselves. Include client-specific compatibility
+scenarios only when they are explicitly part of the release requirements.
 
 | Workflow | Procedure Requirements |
 | --- | --- |
@@ -126,6 +140,12 @@ versions, and uploaded evidence belong to the release execution record.
 A tester should be able to execute a case without designing the experiment or
 asking its author what counts as a pass.
 
+Use concise, familiar actions such as “Select Portable mode.” Give exact menu
+paths where needed to locate a control, and verify labels against the current
+UI. Spell out units in instructions and name each setting beside its value.
+Avoid repeated routine unlocking instructions, incidental internal terminology,
+and tester-environment bookkeeping that does not affect the scenario.
+
 | Write Cases That | Avoid |
 | --- | --- |
 | Verify one coherent scenario with a clear outcome. | Combining unrelated checks because they share a menu or component. |
@@ -171,11 +191,22 @@ mode, recording a setting, and creating test data are actions. Write each action
 once at the point it is performed. Preparation steps can have simple expected
 results that confirm readiness for the next action.
 
-`cleanup` answers “What must I restore?” Record original values before changing
-them. Include restoration after failure or interruption, using only baselines
-actually captured. If restoration fails, record the remaining state. Destructive
-cases must identify expendable devices or data in setup; do not promise to
-restore data the procedure intentionally erases.
+`cleanup` answers “What must I restore?” Capture original settings before changing
+them for the test, and restore them even after failure or interruption. Use only
+baselines actually captured and record any restoration failure. For routine preparation
+such as mode selection, lock state, cable connection, or the computer's network,
+specify a usable end state when needed; do not require reconstructing every
+incidental starting condition. Restore those conditions when the scenario or
+release requirements depend on them. Destructive cases must identify expendable
+devices or data in setup; do not promise to restore data intentionally erased.
+
+### Case Order
+
+Keep related categories and cases together in practical execution order. Place
+connectivity checks before dependent cloud checks, and normally place destructive
+or firmware-changing procedures last. Insert new cases beside related scenarios
+instead of appending them automatically. Each case must still establish its own
+prerequisites; ordering must not make a pass depend on a previous case's result.
 
 ### Scope and Evidence
 
@@ -183,6 +214,11 @@ Keep related actions together when they prove one outcome, such as changing a
 setting and checking persistence after restart. Split cases when they need
 different preparation or would be investigated and rerun independently. Do not
 turn every button press or internal code branch into a separate case.
+
+Where an absent output could also indicate broken hardware, establish the
+positive behavior before the negative check. For example, verify audible startup
+before testing silent startup. Combine these checks when they share one scenario
+and preparation.
 
 Use logs when they establish an otherwise hidden result or help diagnose a
 failure. Exact log text should be a pass condition only when that text is itself
@@ -317,11 +353,12 @@ Check unique IDs, required fields and types defined in this guide, applicability
 against the product variants, nonempty actions and expectations, and reference
 targets. Check that baseline capture precedes mutation and that cleanup covers
 changes made by the procedure. Review the diff for lost or duplicated coverage.
+Check placement among neighboring cases and the product's category order.
 Read every setup entry as a checklist item: it must express one relevant,
 verifiable, case-specific prerequisite and contain no execution instructions.
 Remove product/applicability repetition and general release-preparation items.
-Check that the
-steps establish temporary state and do not repeat setup as preparation work.
+Check that the steps establish temporary state and do not repeat setup as
+preparation work.
 
 Review the complete procedure against [QA Audience and Tools](#qa-audience-and-tools),
 including cleanup and evidence collection. Confirm API requests are usable in a
