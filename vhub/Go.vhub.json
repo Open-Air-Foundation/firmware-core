@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "e2e3b87",
+  "rev": "2d34c05",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1333,7 +1333,7 @@
         },
         {
           "action": "Leave the controls untouched. Listen to the PM fan and capture two complete measurement cycles within 90 seconds.",
-          "expected_result": "The fan stops between measurements and resumes before each measurement. Both completed snapshots contain valid PM1, PM2.5 and PM10 readings, with no PMID collapse or timeout warnings.",
+          "expected_result": "The fan stops between measurements and resumes before each measurement. Both cycles produce MeasuresAGo entries with numeric PM1, PM2.5 and PM10 readings.",
           "evidence": [
             "Save the logs covering both cycles."
           ]
