@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "358d605",
+  "rev": "74ec512",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -523,8 +523,8 @@
     },
     {
       "id": "go.settings.auto-lock-30",
-      "title": "Home automatically locks after 30 seconds without input",
-      "objective": "Verify that the nondefault 30-second Auto Lock setting locks Home after inactivity.",
+      "title": "Auto Lock locks Home when enabled and leaves it unlocked when Off",
+      "objective": "Verify automatic locking with the 30-second setting before checking that Off leaves Home unlocked.",
       "category": "Display & Controls",
       "sub_category": "Auto Lock",
       "applicability": [
@@ -543,38 +543,11 @@
           "expected_result": "Home is locked."
         },
         {
-          "action": "Short-press Power to unlock. Start timing when you release Power, then leave the controls untouched. Stop timing when Home shows the locked state.",
+          "action": "Short-press Power to unlock. Start timing when you release Power, then leave the controls untouched for up to 32 seconds. Record when Home shows the locked state.",
           "expected_result": "Home unlocks, then automatically locks 30–32 seconds after the Power release.",
           "evidence": [
             "Record the measured duration. Retain video if the result falls outside this window."
           ]
-        }
-      ],
-      "cleanup": [
-        "Restore the recorded Auto Lock setting, including after interruption.",
-        "Confirm the restored choice in the menu and return Home. Record any restoration failure."
-      ],
-      "references": [
-        "products/go/docs/settings.md",
-        "products/go/docs/input_service.md"
-      ]
-    },
-    {
-      "id": "go.settings.auto-lock-off",
-      "title": "Auto Lock Off leaves Home unlocked",
-      "objective": "Verify that disabling Auto Lock prevents inactivity locking.",
-      "category": "Display & Controls",
-      "sub_category": "Auto Lock",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A stopwatch or a camera capable of timestamped video."
-      ],
-      "steps": [
-        {
-          "action": "Select Portable mode. Open Settings > Display & Touch > Auto Lock and record the current choice.",
-          "expected_result": "The original Auto Lock setting is recorded."
         },
         {
           "action": "Select Off and return Home. If Home is unlocked, short-press Power to lock it.",
@@ -593,7 +566,8 @@
         "Confirm the restored choice in the menu and return Home. Record any restoration failure."
       ],
       "references": [
-        "products/go/docs/settings.md"
+        "products/go/docs/settings.md",
+        "products/go/docs/input_service.md"
       ]
     },
     {
@@ -618,8 +592,8 @@
           "expected_result": "Home displays a PM2.5 value rather than a dash."
         },
         {
-          "action": "Open Settings > Display & Touch > AQI LED. Select Off, Dim, Mid, and Bright in turn, inspecting the rear LEDs after each selection. Keep the device position and room lighting unchanged.",
-          "expected_result": "Off produces no rear light. Dim, Mid, and Bright produce visibly increasing brightness."
+          "action": "Open Settings > Display & Touch > AQI LED. Select Dim, Mid, and Bright in turn, inspecting the rear LEDs after each selection. Keep the device position and room lighting unchanged. After confirming illumination at all three levels, select Off.",
+          "expected_result": "Dim, Mid, and Bright produce visibly increasing brightness. Selecting Off then turns the rear LEDs off."
         },
         {
           "action": "Select Mid, or Dim if the original setting was Mid. Note the selected level and observe its brightness.",
@@ -656,12 +630,12 @@
           "expected_result": "The original Touch LED setting is recorded."
         },
         {
-          "action": "Select Off and return Home. Lock Home with a short Power press if it is unlocked. Tap left, center, and right separately.",
-          "expected_result": "None of the touch LEDs lights."
+          "action": "Select Dim and return Home. Lock Home with a short Power press if it is unlocked. Tap left, center, and right separately, letting each flash finish before the next tap. Repeat with Bright, keeping room lighting unchanged.",
+          "expected_result": "Only the LED corresponding to the touched control flashes white, then turns off. Bright is visibly brighter than Dim."
         },
         {
-          "action": "Repeat with Dim, then Bright. For each setting, return to locked Home and tap each control separately, letting each flash finish before the next tap. Keep room lighting unchanged.",
-          "expected_result": "Only the LED corresponding to the touched control flashes white, then turns off. Bright is visibly brighter than Dim."
+          "action": "Select Off and return Home. Lock Home with a short Power press if it is unlocked. Tap left, center, and right separately.",
+          "expected_result": "None of the touch LEDs lights."
         },
         {
           "action": "Select Dim, or Bright if the original setting was Dim. Note the selected level. Disconnect USB, power off, release Power, and wait 10 seconds. Press and release Power to start, allowing up to five minutes for Home. Check the Touch LED setting, then return to locked Home and tap each control separately.",
@@ -2408,10 +2382,6 @@
           "expected_result": "Energy Saving is selected and the serial is recorded."
         },
         {
-          "action": "Clear previous scan results in nRF Connect and scan for 30 seconds.",
-          "expected_result": "No connectable Go advertisement appears. Brief, non-connectable measurement broadcasts are allowed."
-        },
-        {
           "action": "Select Portable mode and watch startup for up to one minute. Open Main Menu, then return Home.",
           "expected_result": "Go restarts into Portable. Start Tracking is visible again, and the menu rows and highlighting are readable without leftover content."
         },
@@ -2441,7 +2411,6 @@
       "setup": [
         "Go has saved credentials for a Wi-Fi network. The test computer is connected to that network.",
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
-        "An Android phone with nRF Connect and Bluetooth enabled.",
         "Tracking is idle.",
         "A USB power source."
       ],
@@ -2467,12 +2436,8 @@
           "expected_result": "Go’s local API is unreachable; no HTTP response is received."
         },
         {
-          "action": "Clear previous scan results in nRF Connect and scan for 30 seconds.",
-          "expected_result": "No connectable Go advertisement appears. Brief, non-connectable measurement broadcasts are allowed."
-        },
-        {
-          "action": "Connect USB power. Select Stationary mode, allowing up to one minute for Home and Wi-Fi connection, then repeat steps 2–6 with USB connected.",
-          "expected_result": "The tracking-indicator, Wi-Fi and Bluetooth outcomes are the same. Go remains usable through the mode changes; a restart is not required with USB."
+          "action": "Connect USB power. Select Stationary mode, allowing up to one minute for Home and Wi-Fi connection, then repeat steps 2–5 with USB connected.",
+          "expected_result": "The tracking-indicator and Wi-Fi outcomes are the same. Go remains usable through the mode changes; a restart is not required with USB."
         }
       ],
       "cleanup": [
@@ -2481,8 +2446,7 @@
       ],
       "references": [
         "products/go/docs/orchestrator.md",
-        "products/go/docs/wifi_service.md",
-        "products/go/docs/ble_service.md"
+        "products/go/docs/wifi_service.md"
       ]
     },
     {
@@ -2497,29 +2461,20 @@
       "setup": [
         "Go has saved credentials for a Wi-Fi network. The test computer is connected to that network.",
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
-        "An Android phone with nRF Connect and Bluetooth enabled.",
         "Tracking is idle."
       ],
       "steps": [
         {
           "action": "Disconnect USB. Select Energy Saving mode, allowing up to one minute for startup if it restarts. Read and record the serial from Settings > About Device and return Home.",
-          "expected_result": "Energy Saving is selected."
-        },
-        {
-          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout.",
-          "expected_result": "Go’s local API is unreachable; no HTTP response is received."
+          "expected_result": "Energy Saving is selected and the serial is recorded."
         },
         {
           "action": "Select Stationary mode and watch startup for up to one minute. Open Main Menu, then return Home.",
           "expected_result": "Go restarts into Stationary and reaches Home with the connected Wi-Fi icon. Main Menu offers Start Tracking with readable rows and highlighting."
         },
         {
-          "action": "Repeat the GET request using the five-second timeout.",
+          "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout.",
           "expected_result": "HTTP 200 is returned with the matching serialNumber."
-        },
-        {
-          "action": "Clear previous scan results in nRF Connect and scan for 30 seconds.",
-          "expected_result": "Go does not appear in the fresh Bluetooth scan."
         }
       ],
       "cleanup": [
@@ -2527,8 +2482,7 @@
       ],
       "references": [
         "products/go/docs/orchestrator.md",
-        "products/go/docs/wifi_service.md",
-        "products/go/docs/ble_service.md"
+        "products/go/docs/wifi_service.md"
       ]
     },
     {
@@ -2541,12 +2495,21 @@
         "V1"
       ],
       "setup": [
-        "An Android phone with nRF Connect and Bluetooth enabled."
+        "An Android phone with nRF Connect and Bluetooth enabled.",
+        "Tracking is idle."
       ],
       "steps": [
         {
-          "action": "Select Energy Saving mode. Read and record the serial from Settings > About Device and return Home.",
-          "expected_result": "Energy Saving is selected and the serial is recorded."
+          "action": "Select Portable mode, allowing up to one minute for startup if it restarts. Read and record the serial from Settings > About Device and return Home.",
+          "expected_result": "Portable is selected and the serial is recorded."
+        },
+        {
+          "action": "In nRF Connect, scan for up to 30 seconds and connect to AirGradient Go <last4>, matching the last four characters of the recorded serial. Read Serial Number String (0x2A25) under Device Information (0x180A), entering the displayed pairing passkey if prompted.",
+          "expected_result": "The read serial matches Go, establishing that this unit and phone can communicate over Bluetooth."
+        },
+        {
+          "action": "Disconnect in nRF Connect. Select Energy Saving mode, allowing up to one minute for startup if it restarts, then return Home.",
+          "expected_result": "Energy Saving is selected and Home is displayed."
         },
         {
           "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release Power and wait 10 seconds.",
@@ -2557,16 +2520,17 @@
           "expected_result": "Home appears and Energy Saving remains selected."
         },
         {
-          "action": "Return Home. Clear previous scan results in nRF Connect and scan for 30 seconds, identifying Go by the last four characters of its serial.",
-          "expected_result": "Home has no Wi-Fi icon. No connectable Go advertisement appears. Brief, non-connectable measurement broadcasts are allowed."
+          "action": "Return Home. Clear previous scan results in nRF Connect and scan for 30 seconds for the same Go identified in Portable mode.",
+          "expected_result": "No connectable Go advertisement appears. Brief, non-connectable measurement broadcasts are allowed."
         }
       ],
       "cleanup": [
-        "Return Go Home, including after interruption. Record any failure."
+        "Disconnect nRF Connect and return Go Home, including after interruption. Record any failure."
       ],
       "references": [
         "products/go/docs/settings.md",
-        "products/go/docs/power_management.md"
+        "products/go/docs/power_management.md",
+        "products/go/docs/ble_service.md"
       ]
     },
     {
