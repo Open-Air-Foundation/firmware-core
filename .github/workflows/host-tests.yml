@@ -15,7 +15,7 @@ concurrency:
 jobs:
   detect-changes:
     name: detect host-test changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       host-tests-required: ${{ steps.select.outputs.host_tests_required }}
     steps:
@@ -56,7 +56,7 @@ jobs:
     name: native host tests
     if: needs.detect-changes.outputs.host-tests-required == 'true'
     needs: detect-changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out
         uses: actions/checkout@v7.0.1
@@ -107,7 +107,7 @@ jobs:
     name: host tests
     if: always()
     needs: [detect-changes, host-tests]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check host-test result
         env:
