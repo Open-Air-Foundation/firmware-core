@@ -1189,6 +1189,48 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
   }
 }
 
+TEST_CASE("UIManager: cancelling an unconfirmed choice preserves its value and selection",
+          "[UIManager][settings][nav]") {
+  for (bool enabled : {false, true}) {
+    CAPTURE(enabled);
+    UIManager ui(DEFAULT_UI_CONFIG);
+    GoSettings original{};
+    original.buzzer_enabled = enabled;
+    ui.sync_settings(original);
+    go_to_group(ui, "Operations");
+    open_row(ui, "Buzzer");
+
+    const auto selected_text = [&] {
+      const auto values = ui.build_values(make_default_ctx());
+      REQUIRE(values.selected_row < values.row_count);
+      return std::string(values.rows[values.selected_row].text);
+    };
+    REQUIRE(selected_text() == (enabled ? "On" : "Off"));
+    const auto direction = enabled ? InputSource::TouchUp : InputSource::TouchDown;
+    CHECK(press(ui, direction).action == UIAction::None);
+    REQUIRE(ui.current_screen() == Screen::SettingsChoice);
+    REQUIRE(selected_text() == (enabled ? "Off" : "On"));
+    GoSettings actual = original;
+    ui.apply_to_settings(actual);
+    CHECK(actual.buzzer_enabled == enabled);
+
+    CHECK(double_press(ui).action == UIAction::None);
+    REQUIRE(ui.current_screen() == Screen::Operations);
+    CHECK(selected_text() == (enabled ? "Buzzer: On" : "Buzzer: Off"));
+    ui.apply_to_settings(actual);
+    CHECK(actual.buzzer_enabled == enabled);
+
+    CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
+    REQUIRE(ui.current_screen() == Screen::SettingsChoice);
+    CHECK(selected_text() == (enabled ? "On" : "Off"));
+
+    press(ui, direction);
+    CHECK(press(ui, InputSource::TouchEnter).action == UIAction::SettingsChanged);
+    ui.apply_to_settings(actual);
+    CHECK(actual.buzzer_enabled == !enabled);
+  }
+}
+
 TEST_CASE("UIManager: custom measurement interval presentation",
           "[UIManager][settings][interval]") {
   UIManager ui(DEFAULT_UI_CONFIG);

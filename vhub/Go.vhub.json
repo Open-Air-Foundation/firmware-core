@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "8fb9ada",
+  "rev": "8717ea9",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -291,47 +291,6 @@
       ],
       "cleanup": [
         "Return to Home if interrupted before completing the gesture."
-      ],
-      "references": [
-        "products/go/docs/ui_manager.md",
-        "products/go/docs/input_service.md"
-      ]
-    },
-    {
-      "id": "go.ui.cancel-choice",
-      "title": "Leaving a choice without confirming preserves its value",
-      "objective": "Verify that highlighting another option does not apply it, and reopening the choice selects the saved value.",
-      "category": "Display & Controls",
-      "sub_category": "Navigation",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [],
-      "steps": [
-        {
-          "action": "Select Portable mode.",
-          "expected_result": "Portable mode is selected."
-        },
-        {
-          "action": "Open Main Menu > Settings > Operations. Record the displayed Buzzer value, then open Buzzer.",
-          "expected_result": "The current value, On or Off, is highlighted."
-        },
-        {
-          "action": "Use the left or right touch control to highlight the opposite value without tapping Menu to confirm.",
-          "expected_result": "The opposite value is highlighted and the choice screen remains open."
-        },
-        {
-          "action": "Quickly double-tap Menu to go back.",
-          "expected_result": "Operations appears with Buzzer highlighted and still showing the recorded value."
-        },
-        {
-          "action": "Open Buzzer again.",
-          "expected_result": "The original value is highlighted, rather than the unconfirmed choice."
-        }
-      ],
-      "cleanup": [
-        "If Buzzer changed unexpectedly, record the failure and restore its recorded value.",
-        "Return to Home, including after interruption."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
@@ -1320,46 +1279,6 @@
         "products/go/docs/display_service.md",
         "products/go/docs/measurement_corrections.md",
         "products/go/docs/local_server.md"
-      ]
-    },
-    {
-      "id": "go.sensing.cadence",
-      "title": "Three-second measurements continue regularly",
-      "objective": "Verify that scheduled measurements continue at the selected interval without manual refresh.",
-      "category": "Measurements",
-      "sub_category": "Scheduling",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A USB data cable.",
-        "A computer with access to the AirGradient logging tool.",
-        "The Portable/Stationary measurement interval is not a custom value."
-      ],
-      "steps": [
-        {
-          "action": "Select Portable mode. Record the current measurement interval. Connect USB and open the AirGradient logging tool.",
-          "expected_result": "The original interval is recorded and device logs are visible."
-        },
-        {
-          "action": "Set the measurement interval to 3 seconds and return Home. Keep the device still and allow five minutes for warmup.",
-          "expected_result": "Home displays measurements and MeasuresAGo entries appear in the logs."
-        },
-        {
-          "action": "Leave the controls untouched. Record five consecutive MeasuresAGo timestamps within 20 seconds and inspect Home.",
-          "expected_result": "Each of the four gaps is 2–4 seconds. Measurements continue and Home remains displayed without a restart.",
-          "evidence": [
-            "Save the five timestamps and four gaps."
-          ]
-        }
-      ],
-      "cleanup": [
-        "Restore the recorded measurement interval, including after interruption.",
-        "Confirm the restored choice and return Home. Record any restoration failure.",
-        "Save the relevant logs and disconnect the logging tool."
-      ],
-      "references": [
-        "products/go/docs/sensor_producer.md"
       ]
     },
     {

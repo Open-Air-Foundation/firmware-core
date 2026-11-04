@@ -4608,6 +4608,47 @@ TEST_CASE("check_timers: no measurement when interval not yet elapsed", "[Orches
   REQUIRE_FALSE(test_spy::measurement_requested);
 }
 
+TEST_CASE("check_timers: three-second cadence continues after each completed measurement",
+          "[Orchestrator][timers]") {
+  static constexpr int INTERVAL_SECONDS = 3;
+  static constexpr uint32_t INTERVAL_MS = INTERVAL_SECONDS * 1000;
+  static constexpr uint32_t COMPLETION_DELAY_MS = 100;
+  static constexpr uint32_t MEASUREMENT_COUNT = 5;
+  TestFixture f;
+  f.settings.measure_interval_seconds = INTERVAL_SECONDS;
+  auto orch = f.make_orchestrator();
+  uint32_t now_ms = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
+
+  for (uint32_t cycle = 1; cycle <= MEASUREMENT_COUNT; ++cycle) {
+    CAPTURE(cycle);
+    const uint32_t deadline_ms = cycle * INTERVAL_MS;
+    test_spy::measurement_requested = false;
+    now_ms = deadline_ms - 1;
+    A::check_timers(orch);
+    CHECK_FALSE(test_spy::measurement_requested);
+
+    now_ms = deadline_ms;
+    A::check_timers(orch);
+    REQUIRE(test_spy::measurement_requested);
+    CHECK(test_spy::last_measurement_origin == MeasurementOrigin::Scheduled);
+    CHECK(test_spy::last_iterations == 1);
+    CHECK(test_spy::last_groups == SensorGroup::All);
+    CHECK(A::last_measurement_ms(orch) == deadline_ms);
+
+    test_spy::measurement_requested = false;
+    A::check_timers(orch);
+    CHECK_FALSE(test_spy::measurement_requested);
+
+    MeasuresAGo data{};
+    data.co2.co2 = 420;
+    now_ms += COMPLETION_DELAY_MS;
+    A::on_sensor_data(orch, data);
+    A::check_timers(orch);
+    CHECK_FALSE(test_spy::measurement_requested);
+  }
+}
+
 TEST_CASE("check_timers: fires BMS timer when due", "[Orchestrator][timers]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
