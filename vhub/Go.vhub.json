@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "dc7ea80",
+  "rev": "400800e",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1208,7 +1208,8 @@
       ],
       "setup": [
         "Go has saved credentials for an available Wi-Fi network.",
-        "A computer on that network with Postman or an equivalent GUI API client supporting .local addresses."
+        "A computer with Postman or an equivalent GUI API client supporting .local addresses.",
+        "The test computer is connected to that network."
       ],
       "steps": [
         {
@@ -1909,7 +1910,8 @@
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
         "A 2.4 GHz WPA2 network with known credentials.",
-        "An available static IP excluded from DHCP allocation, with the network’s subnet mask, gateway and DNS addresses.",
+        "An available static IP excluded from DHCP allocation.",
+        "The test network’s subnet mask, gateway and DNS addresses.",
         "A computer with Wi-Fi, a browser and Postman or an equivalent GUI API client."
       ],
       "steps": [
@@ -1956,7 +1958,9 @@
         "V1"
       ],
       "setup": [
-        "Go has saved credentials for a Wi-Fi network that allows multicast between clients. The test computer is connected to that network.",
+        "Go has saved credentials for the test Wi-Fi network.",
+        "The test network allows multicast between clients.",
+        "The test computer is connected to that network.",
         "Postman or an equivalent GUI API client supporting .local addresses is available."
       ],
       "steps": [
@@ -1997,7 +2001,9 @@
         "V1"
       ],
       "setup": [
-        "Go has saved credentials for a Wi-Fi network whose access point can be switched off. The test computer uses that network.",
+        "Go has saved credentials for the test Wi-Fi network.",
+        "The test access point can be switched off.",
+        "The test computer is connected to that network.",
         "No other saved Go networks are available.",
         "Postman or an equivalent GUI API client supporting .local addresses is available."
       ],
@@ -2036,7 +2042,8 @@
         "V1"
       ],
       "setup": [
-        "Go has saved credentials for a Wi-Fi network whose access point can be switched off.",
+        "Go has saved credentials for the test Wi-Fi network.",
+        "The test access point can be switched off.",
         "No other saved Go networks are available."
       ],
       "steps": [
@@ -2124,7 +2131,9 @@
         "V1"
       ],
       "setup": [
-        "Go has saved credentials for a Wi-Fi network with internet access. The test computer is connected to that network.",
+        "Go has saved credentials for the test Wi-Fi network.",
+        "The test network has internet access.",
+        "The test computer is connected to that network.",
         "Postman or an equivalent GUI API client is available.",
         "Access to the registered Go in AirGradient Dashboard."
       ],
@@ -2172,7 +2181,9 @@
         "V1"
       ],
       "setup": [
-        "Go has saved credentials for a Wi-Fi network with internet access. The test computer is connected to that network.",
+        "Go has saved credentials for the test Wi-Fi network.",
+        "The test network has internet access.",
+        "The test computer is connected to that network.",
         "Postman or an equivalent GUI API client is available.",
         "Access to change the registered Go’s temperature unit and measurement interval in AirGradient Dashboard."
       ],
@@ -2230,7 +2241,8 @@
         "V1"
       ],
       "setup": [
-        "Go has saved credentials for a Wi-Fi network. The test computer is connected to that network.",
+        "Go has saved credentials for the test Wi-Fi network.",
+        "The test computer is connected to that network.",
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
         "An Android phone with nRF Connect and Bluetooth enabled."
       ],
@@ -2271,7 +2283,8 @@
         "V1"
       ],
       "setup": [
-        "Go has saved credentials for a Wi-Fi network. The test computer is connected to that network.",
+        "Go has saved credentials for the test Wi-Fi network.",
+        "The test computer is connected to that network.",
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
         "An Android phone with nRF Connect and Bluetooth enabled."
       ],
@@ -2406,7 +2419,8 @@
         "V1"
       ],
       "setup": [
-        "Go has saved credentials for a Wi-Fi network. The test computer is connected to that network.",
+        "Go has saved credentials for the test Wi-Fi network.",
+        "The test computer is connected to that network.",
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
         "Tracking is idle.",
         "A USB power source."
@@ -2456,7 +2470,8 @@
         "V1"
       ],
       "setup": [
-        "Go has saved credentials for a Wi-Fi network. The test computer is connected to that network.",
+        "Go has saved credentials for the test Wi-Fi network.",
+        "The test computer is connected to that network.",
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
         "Tracking is idle."
       ],
@@ -2540,7 +2555,8 @@
         "V1"
       ],
       "setup": [
-        "A USB data cable and computer with the AirGradient logging tool.",
+        "A USB data cable.",
+        "A computer with access to the AirGradient logging tool.",
         "The saved Energy Saving measurement interval is not a custom value."
       ],
       "steps": [
@@ -2853,9 +2869,13 @@
       ],
       "setup": [
         "Tracking is idle.",
-        "Go has saved credentials for a Wi-Fi network with internet access. The test computer is connected to that network.",
+        "Go has saved credentials for the test Wi-Fi network.",
+        "The test network has internet access.",
+        "The test computer is connected to that network.",
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
-        "Access to the registered Go in AirGradient Dashboard, with its installed firmware and an approved newer Go version available for assignment.",
+        "Access to the registered Go in AirGradient Dashboard.",
+        "The installed Go firmware version is available for assignment in the dashboard.",
+        "An approved newer Go firmware version is available for assignment in the dashboard.",
         "A USB power source."
       ],
       "steps": [
@@ -2913,9 +2933,13 @@
       ],
       "setup": [
         "Tracking is idle.",
-        "Go has saved credentials for a Wi-Fi network with internet access. The test computer is connected to that network.",
+        "Go has saved credentials for the test Wi-Fi network.",
+        "The test network has internet access.",
+        "The test computer is connected to that network.",
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
-        "Access to the registered Go in AirGradient Dashboard, with its installed firmware and an approved older Go version compatible with the device and the settings checked by this procedure available for assignment.",
+        "Access to the registered Go in AirGradient Dashboard.",
+        "The installed Go firmware version is available for assignment in the dashboard.",
+        "An approved older Go firmware version compatible with the device and the settings checked by this procedure is available for assignment in the dashboard.",
         "A USB power source."
       ],
       "steps": [
