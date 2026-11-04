@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "4f0b007",
+  "rev": "5512371",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1251,11 +1251,11 @@
         },
         {
           "action": "Select Temperature as Pinned Chart. Inspect Home with a 60-second measurement interval while locked and unlocked, then change it to 5 minutes and inspect again. Repeat with Humidity.",
-          "expected_result": "At 60s, “Not available” appears centered instead of the chart in both lock states. At 5m, the hint disappears and the temperature/humidity row and pinned chart area return cleanly. The plot may be empty until history is available."
+          "expected_result": "At 60 seconds, “Not available” appears centered instead of the chart in both lock states. At 5 minutes, the hint disappears and the temperature/humidity row and pinned chart area return cleanly. The plot may be empty until history is available."
         },
         {
-          "action": "Select PM2.5 as Pinned Chart. Compare Home at 5m and 60s.",
-          "expected_result": "At 5m, temperature/humidity and TVOC/NOx appear above the chart. At 60s, TVOC/NOx and pressure/altitude appear above it. Neither view has a chart hint, overlapping rows or leftover content."
+          "action": "Select PM2.5 as Pinned Chart. Compare Home at 5 minutes and 60 seconds.",
+          "expected_result": "At 5 minutes, temperature/humidity and TVOC/NOx appear above the chart. At 60 seconds, TVOC/NOx and pressure/altitude appear above it. Neither view has a chart hint, overlapping rows or leftover content."
         }
       ],
       "cleanup": [
