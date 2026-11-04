@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "665ef2c",
+  "rev": "e2e3b87",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2775,12 +2775,12 @@
           "expected_result": "Energy Saving uses the five-minute interval."
         },
         {
-          "action": "If Home is unlocked, short-press Power to lock it. Look for PowerService: enter_sleep: entering deep sleep for <duration> ms. The <duration> placeholder represents a changing number; no specific value is required.",
-          "expected_result": "The sleep marker appears. The retained Home screen is complete and readable, with no leftover snackbar text or rectangle."
+          "action": "If Home is unlocked, short-press Power to lock it. Watch the logs until the sleep marker appears, allowing up to one minute.",
+          "expected_result": "The log shows PowerService: enter_sleep: entering deep sleep for <duration> ms. The duration may vary. The retained Home screen is complete and readable, with no leftover snackbar text or rectangle."
         },
         {
-          "action": "Leave the controls untouched and observe two consecutive cycles, allowing 11 minutes. Reconnect the logging tool after wake if needed. For each cycle, look for app: run_fast_path: entering fast-path boot (sensors_warm=<value>). The <value> placeholder represents a changing number; no specific value is required. Then observe Home and wait for the sleep marker again.",
-          "expected_result": "Each cycle shows the wake marker, Home refreshes with numeric PM2.5 and CO2 readings, and the sleep marker appears again. Text and icons remain complete and readable, with no leftover snackbar.",
+          "action": "Leave the controls untouched and watch Home and the logs until two consecutive wake-and-sleep cycles complete, allowing up to 11 minutes. Reconnect the logging tool after wake if needed.",
+          "expected_result": "Each cycle logs app: run_fast_path: entering fast-path boot (sensors_warm=<value>), Home refreshes with numeric PM2.5 and CO2 readings, and the sleep marker appears again. The sensors_warm value may vary. Text and icons remain complete and readable, with no leftover snackbar.",
           "evidence": [
             "Save the logs covering both cycles and a Home photo after each refresh."
           ]
@@ -2949,12 +2949,12 @@
           "expected_result": "Status shows Recording with at least one point."
         },
         {
-          "action": "Select Energy Saving mode. Record its current measurement interval, then set it to 5 minutes. Return Home and, if unlocked, short-press Power to lock.",
-          "expected_result": "The log shows PowerService: enter_sleep: entering deep sleep for <duration> ms."
+          "action": "Select Energy Saving mode. Record its current measurement interval, then set it to 5 minutes. Return Home and, if unlocked, short-press Power to lock. Watch the logs until the sleep marker appears, allowing up to one minute.",
+          "expected_result": "The log shows PowerService: enter_sleep: entering deep sleep for <duration> ms. The duration may vary."
         },
         {
-          "action": "Leave Go untouched for two timer-wake cycles, allowing 11 minutes. Reconnect logging after wake if needed. For each cycle, find app: run_fast_path: entering fast-path boot (sensors_warm=<value>) and StorageService: end_route: session <id> closed (<count> points total).",
-          "expected_result": "Both cycles use the recorded session ID, and the point count increases each cycle.",
+          "action": "Leave Go untouched and watch the logs until two timer-wake cycles complete, allowing up to 11 minutes. Reconnect logging after wake if needed. Check the session ID and point count for each cycle.",
+          "expected_result": "Each cycle logs app: run_fast_path: entering fast-path boot (sensors_warm=<value>) and StorageService: end_route: session <id> closed (<count> points total). The sensors_warm value may vary. Both cycles use the recorded session ID, and the point count increases each cycle.",
           "evidence": [
             "Save both cycles’ logs."
           ]
@@ -3004,12 +3004,12 @@
           "expected_result": "Status shows Paused."
         },
         {
-          "action": "Select Energy Saving mode. Record its current measurement interval, then set it to 5 minutes. Return Home and, if unlocked, short-press Power to lock.",
-          "expected_result": "The log shows PowerService: enter_sleep: entering deep sleep for <duration> ms."
+          "action": "Select Energy Saving mode. Record its current measurement interval, then set it to 5 minutes. Return Home and, if unlocked, short-press Power to lock. Watch the logs until the sleep marker appears, allowing up to one minute.",
+          "expected_result": "The log shows PowerService: enter_sleep: entering deep sleep for <duration> ms. The duration may vary."
         },
         {
-          "action": "Leave Go untouched for two timer-wake cycles, allowing 11 minutes. Reconnect logging after wake if needed. For each cycle, look for app: run_fast_path: entering fast-path boot (sensors_warm=<value>), followed by the sleep marker.",
-          "expected_result": "Both cycles refresh Home and return to sleep.",
+          "action": "Leave Go untouched and watch Home and the logs until two consecutive wake-and-sleep cycles complete, allowing up to 11 minutes. Reconnect logging after wake if needed.",
+          "expected_result": "Each cycle logs app: run_fast_path: entering fast-path boot (sensors_warm=<value>), Home refreshes, and the sleep marker appears again. The sensors_warm value may vary.",
           "evidence": [
             "Save both cycles’ logs."
           ]
