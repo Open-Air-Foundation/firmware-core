@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "e834d9e",
+  "rev": "8fb9ada",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2876,52 +2876,6 @@
         "products/go/docs/power_management.md",
         "products/go/docs/sensor_producer.md",
         "products/go/docs/orchestrator.md#prepare_for_sleep"
-      ]
-    },
-    {
-      "id": "go.sleep.energy-saving-current",
-      "title": "Energy Saving returns to its initial sleep current after timer wakes",
-      "objective": "Detect a sustained increase in sleep current after repeated measurement wakes.",
-      "category": "Modes & Sleep",
-      "sub_category": "Timer Wake",
-      "applicability": [
-        "V1"
-      ],
-      "setup": [
-        "A test unit with accessible battery power connections.",
-        "A 3.9 V battery simulator or bench supply capable of normal startup and measurement peaks.",
-        "A current logger or ammeter that resolves sleep current without dropping supply voltage during measurement peaks.",
-        "Tracking is idle.",
-        "The saved Energy Saving measurement interval is not a custom value."
-      ],
-      "steps": [
-        {
-          "action": "Select Energy Saving mode, allowing up to one minute for startup if it restarts. Record its measurement interval, GPS under Settings > Operations and Auto Lock under Settings > Display & Touch. Set the interval to 5 minutes, GPS to Always On and Auto Lock to Off.",
-          "expected_result": "The original settings are recorded and the test settings are selected."
-        },
-        {
-          "action": "Power off, disconnect USB and the battery, then power Go from the 3.9 V supply through the current meter. Press and release Power to start, allowing up to one minute for Home. Keep USB disconnected.",
-          "expected_result": "Go starts in Energy Saving without supply collapse or repeated resets."
-        },
-        {
-          "action": "Return Home and lock with Power. Within six minutes, identify the first sustained low-current plateau after measurement. Record its 30-second current range and the meter accuracy.",
-          "expected_result": "A stable sleep-current baseline is available. Supply collapse or an unstable baseline blocks the comparison."
-        },
-        {
-          "action": "Leave Go untouched through three timer wakes, allowing 16 minutes after the baseline. After each completed Home refresh, wait 60 seconds and record the next 30-second current range.",
-          "expected_result": "Each wake refreshes Home and returns to the initial sleep-current range within meter accuracy. No sustained higher-current plateau follows a wake.",
-          "evidence": [
-            "Save the current trace or readings, supply voltage, initial baseline and three post-wake ranges."
-          ]
-        }
-      ],
-      "cleanup": [
-        "Power off, remove the measurement supply and restore the battery connection, including after interruption.",
-        "Start Go and restore the recorded Energy Saving interval, GPS and Auto Lock. Confirm the selections, return Home and record any restoration failure."
-      ],
-      "references": [
-        "products/go/docs/gps_service.md#fast-path-sleep-probing",
-        "products/go/docs/input_service.md#deep-sleep"
       ]
     },
     {
