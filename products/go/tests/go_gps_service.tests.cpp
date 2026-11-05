@@ -441,28 +441,84 @@ TEST_CASE_METHOD(Fixture, "GPS service failed sleep does not create a deadline",
   CHECK(service.sleep_remaining_ms() == 5000);
 }
 
-TEST_CASE_METHOD(Fixture, "GPS service failed activation waits without retrying or GNSS start",
+TEST_CASE_METHOD(Fixture, "GPS service repeats failed activation with a delay between attempts",
                  "[gps_service]") {
   SECTION("UART unavailable") { serial.open_ok = false; }
   SECTION("Baud switch failed") { serial.tx_ok = false; }
   SECTION("Neither baud responds") { serial.respond = false; }
-  std::vector<int> attempted_bauds;
+  size_t bauds_per_attempt = 0;
+  uint64_t previous_failure_ms = 0;
   clock.on_wait = [&] {
     CHECK(GpsServiceTestAccess::running(service));
     CHECK_FALSE(serial.open);
+    CHECK(clock.waits.back() == 30000);
     if (clock.waits.size() == 1) {
-      attempted_bauds = serial.opened_bauds;
+      bauds_per_attempt = serial.opened_bauds.size();
     } else {
-      CHECK(serial.opened_bauds == attempted_bauds);
+      CHECK(serial.opened_bauds.size() == bauds_per_attempt * clock.waits.size());
+      CHECK(clock.retained_ms >= previous_failure_ms + 30000);
+    }
+    previous_failure_ms = clock.retained_ms;
+    if (clock.waits.size() == 3) {
       GpsServiceTestAccess::cancel(service);
+    } else {
+      clock.delay_ms_impl(clock.waits.back());
     }
   };
   GpsServiceTestAccess::run(service);
-  CHECK(clock.waits == std::vector<uint32_t>{UINT32_MAX, UINT32_MAX});
+  CHECK(clock.waits == std::vector<uint32_t>{30000, 30000, 30000});
   CHECK_FALSE(GpsServiceTestAccess::running(service));
   CHECK_FALSE(serial.open);
   for (const auto &write : serial.writes)
     CHECK_FALSE(is_command(write, 0x40));
+}
+
+TEST_CASE_METHOD(Fixture, "GPS activation recovers automatically on the same task",
+                 "[gps_service][jobs]") {
+  const auto task = GpsServiceTestAccess::attach_worker(service);
+  SECTION("UART becomes available") { serial.open_ok = false; }
+  SECTION("baud transmission recovers") { serial.tx_ok = false; }
+  SECTION("receiver starts responding") { serial.respond = false; }
+  uint64_t failed_at_ms = 0;
+  clock.on_wait = [&] {
+    CHECK(GpsServiceTestAccess::task_handle(service) == task);
+    if (clock.waits.size() == 1) {
+      CHECK(clock.waits.back() == 30000);
+      CHECK_FALSE(serial.open);
+      failed_at_ms = clock.retained_ms;
+      clock.delay_ms_impl(clock.waits.back());
+      serial.open_ok = true;
+      serial.tx_ok = true;
+      serial.respond = true;
+    } else {
+      CHECK(command_count(serial, 0x40) == 1);
+      CHECK(clock.waits.back() != 30000);
+      CHECK(serial.open);
+      CHECK(serial.writes.back().time_ms >= failed_at_ms + 30000);
+      GpsServiceTestAccess::cancel(service);
+    }
+  };
+  GpsServiceTestAccess::run(service);
+  CHECK(clock.waits.size() == 2);
+  CHECK(GpsServiceTestAccess::task_handle(service) == task);
+}
+
+TEST_CASE_METHOD(Fixture, "GPS stop interrupts an acquisition retry delay",
+                 "[gps_service][jobs]") {
+  serial.respond = false;
+  uint64_t stopped_at_ms = 0;
+  clock.on_wait = [&] {
+    REQUIRE(clock.waits.back() == 30000);
+    stopped_at_ms = clock.retained_ms;
+    service.stop();
+  };
+  GpsServiceTestAccess::run(service);
+  CHECK(clock.waits == std::vector<uint32_t>{30000});
+  CHECK(clock.retained_ms == stopped_at_ms);
+  CHECK(serial.opened_bauds == std::vector<int>{9600, 115200});
+  CHECK(serial.writes.empty());
+  CHECK_FALSE(serial.open);
+  CHECK_FALSE(GpsServiceTestAccess::running(service));
 }
 
 TEST_CASE_METHOD(Fixture, "GPS service restores only the sleep deadline after MCU deep sleep",
@@ -922,16 +978,19 @@ TEST_CASE_METHOD(Fixture, "GPS failed acquisition accepts a new request on the s
   bool request_sleep = false;
   SECTION("explicit acquisition retry") {}
   SECTION("switch to sleep maintenance") { request_sleep = true; }
+  uint64_t requested_at_ms = 0;
   clock.on_wait = [&] {
     CHECK(GpsServiceTestAccess::task_handle(service) == task);
     if (clock.waits.size() == 1) {
-      CHECK(clock.waits.back() == UINT32_MAX);
+      CHECK(clock.waits.back() == 30000);
       CHECK(serial.writes.empty());
       CHECK_FALSE(serial.open);
+      requested_at_ms = clock.retained_ms;
       serial.respond = true;
       REQUIRE((request_sleep ? service.maintain_sleep(60000) : service.acquire()));
     } else {
       CHECK(command_count(serial, request_sleep ? 0x41 : 0x40) == 1);
+      CHECK(serial.writes.back().time_ms < requested_at_ms + 30000);
       GpsServiceTestAccess::cancel(service);
     }
   };

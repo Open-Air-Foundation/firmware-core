@@ -23,6 +23,7 @@ static constexpr const char *TAG = "GpsService";
 static constexpr uint32_t FAST_DRAIN_YIELD_MS = 10;
 static constexpr uint32_t IDLE_YIELD_MS = 1000;
 static constexpr uint32_t SLEEP_RETRY_MS = 1000;
+static constexpr uint32_t ACQUISITION_RETRY_MS = 30000;
 static constexpr uint32_t MAX_WAKE_WAIT_MS = 60 * 60 * 1000;
 static constexpr uint32_t MIN_WAKE_WAIT_MS = 10; // One tick at Go's 100 Hz RTOS rate.
 // UINT32_MAX remains available for the energy-saving sleep interval.
@@ -185,7 +186,7 @@ void GpsService::task_entry(void *arg) {
 // Task loop
 // ---------------------------------------------------------------------------
 
-bool GpsService::wait_for_job_change(uint32_t timeout_ms, bool retry_acquisition) {
+bool GpsService::wait_for_job_change(uint32_t timeout_ms) {
   if (!_running) {
     return true;
   }
@@ -199,7 +200,7 @@ bool GpsService::wait_for_job_change(uint32_t timeout_ms, bool retry_acquisition
   }
   const bool changed = request != _sleep_interval_ms;
   _sleep_interval_ms = request;
-  return changed || retry_acquisition || !_running;
+  return changed || !_running;
 }
 
 bool GpsService::wait_for_wake() {
@@ -287,10 +288,11 @@ void GpsService::run_acquisition() {
   if (!activate_receiver()) {
     _driver.end();
     if (_running && _sleep_interval_ms == 0) {
-      AG_LOGW(TAG, "GPS activation failed; waiting for a new request");
-      // Any new request, including acquisition again, retries on this task.
-      while (!wait_for_job_change(UINT32_MAX, /*retry_acquisition=*/true)) {
-      }
+      AG_LOGW(TAG, "GPS activation failed; retrying in %lu ms",
+              static_cast<unsigned long>(ACQUISITION_RETRY_MS));
+      // Timeout retries on this task. A notification can retry sooner, switch
+      // to sleep maintenance, or stop the worker.
+      (void)wait_for_job_change(ACQUISITION_RETRY_MS);
     }
     return;
   }

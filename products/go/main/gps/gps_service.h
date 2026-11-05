@@ -56,6 +56,7 @@ public:
 
   /// Request acquisition on the existing task. Never creates a task.
   /// Repeated requests are idempotent unless activation failed.
+  /// Activation failures retry automatically until acquisition succeeds or the job changes.
   /// If sleeping, the task waits for the expected wake before acquisition setup.
   /// Returns false if stopped; success means request accepted, not GPS readiness.
   bool acquire();
@@ -126,7 +127,7 @@ private:
   bool request_job(uint32_t sleep_interval_ms);
   void run_acquisition();
   void run_sleep_loop(uint32_t interval_ms);
-  bool wait_for_job_change(uint32_t timeout_ms, bool retry_acquisition = false);
+  bool wait_for_job_change(uint32_t timeout_ms);
   bool wait_for_wake();
   bool send_sleep(uint32_t duration_ms, bool maintenance = false);
   bool activate_receiver();              // cancellable wait, then acquisition setup
