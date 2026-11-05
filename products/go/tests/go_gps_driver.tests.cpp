@@ -1165,45 +1165,6 @@ TEST_CASE("gnss_start does not retry when ACK received", "[gps][driver][gnss_con
 }
 
 // ===========================================================================
-// MON-VER module version poll tests
-// ===========================================================================
-
-// ---------------------------------------------------------------------------
-// Test 32 — begin() sends MON-VER poll before CFG commands.
-// Expected poll: F1 D9 0A 04 00 00 0E 34
-// ---------------------------------------------------------------------------
-TEST_CASE("begin sends MON-VER poll before CFG commands", "[gps][driver][mon_ver]") {
-  StubRTOS rtos;
-  RTOS::set_instance(&rtos);
-
-  StubSerial serial;
-  serial.set_auto_ack(true);
-  GpsDriver gps(serial);
-
-  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
-
-  const auto &tx = serial.get_tx_bytes();
-
-  // MON-VER poll packet must be present (group=0x0A, sub=0x04).
-  const size_t ver_off = find_casic_packet(tx, 0x0A, 0x04);
-  REQUIRE(ver_off != SIZE_MAX);
-
-  // Verify it has empty payload (length=0).
-  REQUIRE(tx[ver_off + 4] == 0x00); // len_lo = 0
-  REQUIRE(tx[ver_off + 5] == 0x00); // len_hi = 0
-
-  // Must appear before CFG-EPHSAVE and CFG-NAVSAT.
-  const size_t ephsave_off = find_casic_packet(tx, 0x06, 0x10);
-  const size_t navsat_off = find_casic_packet(tx, 0x06, 0x0C);
-  REQUIRE(ephsave_off != SIZE_MAX);
-  REQUIRE(navsat_off != SIZE_MAX);
-  REQUIRE(ver_off < ephsave_off);
-  REQUIRE(ver_off < navsat_off);
-
-  RTOS::set_instance(nullptr);
-}
-
-// ===========================================================================
 // CFG-NAVSAT constellation configuration tests
 // ===========================================================================
 
@@ -1333,40 +1294,9 @@ TEST_CASE("begin sends CFG-EPHSAVE before CFG-NAVSAT", "[gps][driver][navsat]") 
 // mechanism.
 // ===========================================================================
 
-// Helper: build a MON-VER payload (32 bytes: 16 sw + 16 hw) from C strings.
-static void build_mon_ver_payload(uint8_t (&payload)[32], const char *sw, const char *hw) {
-  memset(payload, 0, sizeof(payload));
-  strncpy(reinterpret_cast<char *>(&payload[0]), sw, 16);
-  strncpy(reinterpret_cast<char *>(&payload[16]), hw, 16);
-}
-
 // Helper: build a CFG-NAVSAT payload (4 bytes: U4 LE mask).
 static void build_navsat_payload(uint8_t (&payload)[4], uint32_t mask) {
   memcpy(payload, &mask, sizeof(mask));
-}
-
-// ---------------------------------------------------------------------------
-// Test 37 — MON-VER poll response is consumed by begin().
-// ---------------------------------------------------------------------------
-TEST_CASE("MON-VER poll response is consumed during begin", "[gps][driver][poll]") {
-  StubRTOS rtos;
-  RTOS::set_instance(&rtos);
-
-  StubSerial serial;
-  serial.set_auto_ack(true);
-
-  uint8_t ver_payload[32];
-  build_mon_ver_payload(ver_payload, "FWVER_1.0.0", "TAU1113");
-  serial.add_poll_response(0x0A, 0x04, ver_payload, sizeof(ver_payload));
-
-  GpsDriver gps(serial);
-  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
-
-  // After begin(), all auto-generated RX bytes (ACKs + poll responses)
-  // should be fully consumed by the driver's poll/ACK handlers.
-  REQUIRE(serial.available() == 0);
-
-  RTOS::set_instance(nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -1393,33 +1323,6 @@ TEST_CASE("CFG-NAVSAT poll response is consumed during begin", "[gps][driver][po
 }
 
 // ---------------------------------------------------------------------------
-// Test 39 — Both MON-VER and CFG-NAVSAT poll responses consumed by begin().
-// ---------------------------------------------------------------------------
-TEST_CASE("begin consumes both MON-VER and CFG-NAVSAT poll responses", "[gps][driver][poll]") {
-  StubRTOS rtos;
-  RTOS::set_instance(&rtos);
-
-  StubSerial serial;
-  serial.set_auto_ack(true);
-
-  uint8_t ver_payload[32];
-  build_mon_ver_payload(ver_payload, "FWVER_1.0.0", "TAU1113");
-  serial.add_poll_response(0x0A, 0x04, ver_payload, sizeof(ver_payload));
-
-  uint8_t navsat_payload[4];
-  build_navsat_payload(navsat_payload, 0x00004037); // full match
-  serial.add_poll_response(0x06, 0x0C, navsat_payload, sizeof(navsat_payload));
-
-  GpsDriver gps(serial);
-  gps.begin(GpsDriver::MODULE_DEFAULT_BAUD);
-
-  // Both poll responses and all ACKs consumed.
-  REQUIRE(serial.available() == 0);
-
-  RTOS::set_instance(nullptr);
-}
-
-// ---------------------------------------------------------------------------
 // Test 40 — begin() succeeds when no poll responses are registered (timeout).
 // Without poll responses registered, the poll helpers time out gracefully.
 // begin() must still return true.
@@ -1434,7 +1337,28 @@ TEST_CASE("begin succeeds when poll responses time out", "[gps][driver][poll]") 
 
   GpsDriver gps(serial);
   REQUIRE(gps.begin(GpsDriver::MODULE_DEFAULT_BAUD));
+  REQUIRE(count_casic_packets(serial.get_tx_bytes(), 0x0A, 0x04) == 1);
 
+  RTOS::set_instance(nullptr);
+}
+
+TEST_CASE("receiver configuration polls MON-VER after NAVSAT", "[gps][driver][poll]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  uint8_t version[32]{};
+  memcpy(version, "test-sw", 7);
+  memcpy(version + 16, "test-hw", 7);
+  serial.add_poll_response(0x0A, 0x04, version, sizeof(version));
+  GpsDriver gps(serial);
+  REQUIRE(gps.open_uart(GpsDriver::MODULE_DEFAULT_BAUD));
+  gps.configure_receiver();
+
+  const auto &tx = serial.get_tx_bytes();
+  REQUIRE(count_casic_packets(tx, 0x0A, 0x04) == 1);
+  REQUIRE(find_casic_packet(tx, 0x0A, 0x04) > find_casic_packet(tx, 0x06, 0x0C));
+  REQUIRE(serial.available() == 0);
   RTOS::set_instance(nullptr);
 }
 
@@ -1716,7 +1640,7 @@ TEST_CASE_METHOD(GpsBaudFixture, "GPS active initialization switches before rece
   REQUIRE(serial.opened_bauds == std::vector<int>{9600, 115200});
   const auto &tx = serial.get_tx_bytes();
   REQUIRE(find_casic_packet(tx, 0x06, 0x00) == 0);
-  REQUIRE(find_casic_packet(tx, 0x0A, 0x04) == 18);
+  REQUIRE(find_casic_packet(tx, 0x06, 0x10) == 18);
 }
 
 TEST_CASE_METHOD(GpsBaudFixture, "GPS receiver configuration does not open UART or switch baud",
@@ -1726,7 +1650,7 @@ TEST_CASE_METHOD(GpsBaudFixture, "GPS receiver configuration does not open UART 
   gps.configure_receiver();
   REQUIRE(serial.opened_bauds == std::vector<int>{9600});
   REQUIRE(find_casic_packet(serial.get_tx_bytes(), 0x06, 0x00) == SIZE_MAX);
-  REQUIRE(find_casic_packet(serial.get_tx_bytes(), 0x0A, 0x04) != SIZE_MAX);
+  REQUIRE(find_casic_packet(serial.get_tx_bytes(), 0x06, 0x10) != SIZE_MAX);
 }
 
 TEST_CASE_METHOD(GpsBaudFixture, "GPS active initialization aborts on transport failure",

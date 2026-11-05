@@ -35,7 +35,7 @@ public:
     uint8_t task_priority = 3; // must be below display worker (4)
     int expected_baud = GpsDriver::MODULE_DEFAULT_BAUD;
     uint64_t wake_deadline_ms = 0;      // restored from RtcAppState after deep sleep
-    bool fast_path_sleep_probe = false; // repeated 9600-only probe before sleep
+    bool fast_path_sleep_probe = false; // expect 9600 first after timer wake
   };
 
   /// Construct the service.  Does not start the task.
@@ -47,17 +47,28 @@ public:
   GpsService(GpsDriver &driver, RtosQueueHandle event_queue, const Config &config);
   ~GpsService();
 
-  /// Start GPS task and GNSS receiver. Returns true if running or started.
-  /// Idempotent: returns true without creating a second task if already running.
+  /// Create the GPS task with its initial job: zero acquires, nonzero maintains
+  /// sleep for that interval. Call at initialization or after explicit stop().
+  /// An already running task is left unchanged. Does not confirm GPS readiness.
+  /// UINT32_MAX - 1 is reserved for stop and rejected as an initial interval.
+  /// Lifecycle and job requests require one owning caller.
+  bool start(uint32_t initial_sleep_interval_ms = 0);
+
+  /// Request acquisition on the existing task. Never creates a task.
+  /// Repeated requests are idempotent unless activation failed.
+  /// Activation failures retry automatically until acquisition succeeds or the job changes.
   /// If sleeping, the task waits for the expected wake before acquisition setup.
-  /// stop() cancels that wait. Success means task creation, not GPS readiness.
-  /// Lifecycle calls (start/stop/sleep) require one owning caller.
-  bool start();
+  /// Returns false if stopped; success means request accepted, not GPS readiness.
+  bool acquire();
 
   /// Keep GPS inactive while ESP is awake. The worker sends sleep, waits for
-  /// its deadline, and repeats. start() changes back to acquisition; stop()
+  /// its deadline, and repeats. acquire() changes back to acquisition; stop()
   /// cancels maintenance. A sleeping receiver keeps its existing deadline.
-  bool start_sleeping(uint32_t interval_ms);
+  /// Job changes return immediately; setup or an acquisition iteration may finish
+  /// before the worker applies the request.
+  /// Latest request wins. Returns false if stopped, interval is zero, or
+  /// interval is UINT32_MAX - 1 (reserved for stop). Never creates a task.
+  bool maintain_sleep(uint32_t interval_ms);
 
   /// Stop GPS task and close UART. Does not send GNSS stop.
   /// Used when entering ESP32 deep sleep while GPS is active (preserves
@@ -72,6 +83,7 @@ public:
   [[nodiscard]] bool request_sleep(uint32_t duration_ms);
 
   /// Expected time remaining, not hardware-confirmed sleep status.
+  /// External callers must stop the task before reading either sleep value.
   uint32_t sleep_remaining_ms() const;
   uint64_t sleep_deadline_ms() const;
 
@@ -106,17 +118,19 @@ private:
   bool _aiding_pending = false; // protected by _mutex
   // Worker owns baud while running; lifecycle caller joins before accessing it.
   int _baud_rate;
-  uint64_t _wake_deadline_ms;      // protected by _mutex
+  uint64_t _wake_deadline_ms; // worker-owned; external reads only after stop()
+  // Initialized before task creation, then owned exclusively by the worker.
   uint32_t _sleep_interval_ms = 0; // zero: acquire; nonzero: repeat sleep
 
   static void task_entry(void *arg); // RTOS task entry point
   void run();                        // actual task loop
-  bool start_worker(uint32_t sleep_interval_ms);
+  bool request_job(uint32_t sleep_interval_ms);
   void run_acquisition();
-  void run_sleep_loop();
+  void run_sleep_loop(uint32_t interval_ms);
+  bool wait_for_job_change(uint32_t timeout_ms);
   bool wait_for_wake();
-  bool send_sleep(uint32_t duration_ms); // caller owns UART; never joins worker
-  bool activate_receiver();              // cancellable wait, then acquisition setup
+  bool send_sleep(uint32_t duration_ms, bool maintenance = false);
+  bool activate_receiver(); // cancellable wait, then acquisition setup
 
   void update_latest_fix(const GpsData &data);    // writes under mutex
   void post_fix_event();                          // post GpsData to event queue

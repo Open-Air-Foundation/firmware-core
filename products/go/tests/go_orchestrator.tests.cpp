@@ -74,6 +74,8 @@ extern int last_nox_learning_offset;
 extern bool gps_started;
 extern uint32_t gps_start_count;
 extern uint32_t gps_sleeping_start_count;
+extern uint32_t gps_task_start_count;
+extern uint32_t gps_task_stop_count;
 extern bool gps_stopped;
 extern bool gps_sleeping_started;
 extern bool gps_sleep_requested;
@@ -3389,6 +3391,8 @@ TEST_CASE("start_tracking: storage open failure surfaces inline and returns fals
   CHECK(test_spy::ble_notify_tracking_status_called);
   CHECK(test_spy::ble_last_status_tracking == false);
   CHECK(test_spy::ble_last_status_session == 0);
+  CHECK(test_spy::gps_start_count == 0);
+  CHECK(test_spy::gps_sleeping_start_count == 0);
 }
 
 TEST_CASE("start_tracking: session-ID collision retried transparently",
@@ -12141,9 +12145,49 @@ TEST_CASE("GPS sleep: initialization selects GPS mode after restoring tracking",
   }
   auto orch = f.make_orchestrator();
   orch.init(cause);
+  CHECK(test_spy::gps_task_start_count == 1);
   CHECK(test_spy::gps_start_count == (expected_active ? 1 : 0));
   CHECK(test_spy::gps_sleeping_start_count == (expected_active ? 0 : 1));
   CHECK_FALSE(test_spy::gps_stopped);
+}
+
+TEST_CASE("GPS task lifecycle is separate from tracking and provisioning job changes",
+          "[Orchestrator][gps_sleep][provisioning]") {
+  TestFixture f;
+  f.settings.operating_mode = OperatingMode::Portable;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  orch.init(WakeCause::PowerOn);
+  REQUIRE(test_spy::gps_task_start_count == 1);
+  REQUIRE(test_spy::gps_sleeping_start_count == 1);
+
+  REQUIRE(A::start_tracking(orch));
+  CHECK(test_spy::gps_start_count == 1);
+  A::stop_tracking(orch);
+  CHECK(test_spy::gps_sleeping_start_count == 2);
+  CHECK(test_spy::gps_task_start_count == 1);
+  CHECK(test_spy::gps_task_stop_count == 0);
+
+  SECTION("resume acquisition selected while suspended") {
+    A::pause_sensitive_services(orch);
+    REQUIRE(A::start_tracking(orch));
+    CHECK(test_spy::gps_start_count == 1); // No request while suspended.
+    A::resume_sensitive_services(orch);
+    CHECK(test_spy::gps_start_count == 2);
+    CHECK(test_spy::gps_sleeping_start_count == 2);
+  }
+  SECTION("resume maintenance selected while suspended") {
+    REQUIRE(A::start_tracking(orch));
+    A::pause_sensitive_services(orch);
+    A::stop_tracking(orch);
+    CHECK(test_spy::gps_sleeping_start_count == 2);
+    A::resume_sensitive_services(orch);
+    CHECK(test_spy::gps_sleeping_start_count == 3);
+  }
+  CHECK(test_spy::gps_task_stop_count == 1);
+  CHECK(test_spy::gps_task_start_count == 2);
+  A::resume_sensitive_services(orch);
+  CHECK(test_spy::gps_task_start_count == 2); // Resume itself is idempotent.
 }
 
 TEST_CASE("GPS sleep: initialization configures maintenance once and timers leave it alone",

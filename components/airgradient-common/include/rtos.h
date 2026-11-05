@@ -207,7 +207,7 @@ public:
    * @brief Send a 32-bit value to a task via notification.
    *
    * Overwrites any pending notification value.
-   * No-op in TEST_HOST mode.
+   * Delegates to the installed mock in TEST_HOST mode (default no-op).
    *
    * @param task_handle Opaque task handle from task_create().
    * @param value       32-bit value to deliver.
@@ -264,6 +264,9 @@ public:
    * @return Retained monotonic time in milliseconds; defaults to 0 on host.
    */
   virtual uint64_t get_retained_time_ms_impl();
+
+  /// Host hook for value notifications; default is a no-op.
+  virtual void task_notify_send_impl(RtosTaskHandle task_handle, uint32_t value);
 
   /**
    * @brief Virtual implementation of task_notify_wait (mockable).

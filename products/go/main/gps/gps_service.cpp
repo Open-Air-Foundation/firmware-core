@@ -23,8 +23,11 @@ static constexpr const char *TAG = "GpsService";
 static constexpr uint32_t FAST_DRAIN_YIELD_MS = 10;
 static constexpr uint32_t IDLE_YIELD_MS = 1000;
 static constexpr uint32_t SLEEP_RETRY_MS = 1000;
+static constexpr uint32_t ACQUISITION_RETRY_MS = 30000;
 static constexpr uint32_t MAX_WAKE_WAIT_MS = 60 * 60 * 1000;
 static constexpr uint32_t MIN_WAKE_WAIT_MS = 10; // One tick at Go's 100 Hz RTOS rate.
+// UINT32_MAX remains available for the energy-saving sleep interval.
+static constexpr uint32_t STOP_REQUEST = UINT32_MAX - 1;
 
 // ---------------------------------------------------------------------------
 // Construction / destruction
@@ -46,15 +49,12 @@ GpsService::~GpsService() {
 // Public API
 // ---------------------------------------------------------------------------
 
-bool GpsService::start() { return start_worker(0); }
-
-bool GpsService::start_sleeping(uint32_t interval_ms) {
-  return interval_ms != 0 && start_worker(interval_ms);
-}
-
-bool GpsService::start_worker(uint32_t sleep_interval_ms) {
-  if (_running && _sleep_interval_ms == sleep_interval_ms) {
-    return true; // already running — idempotent
+bool GpsService::start(uint32_t initial_sleep_interval_ms) {
+  if (_running) {
+    return true;
+  }
+  if (initial_sleep_interval_ms == STOP_REQUEST) {
+    return false;
   }
   if (!_mutex.is_valid()) {
     return false;
@@ -63,15 +63,13 @@ bool GpsService::start_worker(uint32_t sleep_interval_ms) {
       _config.baud_rate != GpsDriver::MODULE_ACTIVE_BAUD) {
     return false;
   }
-  // Reap a task that exited after acquisition setup failed. Create completion
-  // before launching so an immediate stop cannot miss the join semaphore.
-  stop();
+  // Create completion before launching so an immediate stop cannot miss it.
   if (!_done_sem.create()) {
     return false;
   }
+  _driver.end();
   update_latest_fix({});
-  _clock_synced = false;
-  _sleep_interval_ms = sleep_interval_ms;
+  _sleep_interval_ms = initial_sleep_interval_ms;
   _running = true;
   const bool ok =
       RTOS::task_create(task_entry, "gps_task", static_cast<uint32_t>(_config.task_stack_size),
@@ -84,14 +82,27 @@ bool GpsService::start_worker(uint32_t sleep_interval_ms) {
   return true;
 }
 
-void GpsService::stop() {
-  AG_LOGI(TAG, "stop: task only (GNSS keeps tracking)");
-  // Serialize notification with worker exit so its task handle is still live.
-  _mutex.lock();
-  if (_running.exchange(false) && _task_handle != nullptr) {
-    RTOS::task_notify_give(_task_handle);
+bool GpsService::acquire() { return request_job(0); }
+
+bool GpsService::maintain_sleep(uint32_t interval_ms) {
+  return interval_ms != 0 && interval_ms != STOP_REQUEST && request_job(interval_ms);
+}
+
+bool GpsService::request_job(uint32_t sleep_interval_ms) {
+  // A missing task is a lifecycle error, never a reason to create one here.
+  if (_task_handle == nullptr) {
+    return false;
   }
-  _mutex.unlock();
+  RTOS::task_notify_send(_task_handle, sleep_interval_ms);
+  return true;
+}
+
+void GpsService::stop() {
+  AG_LOGI(TAG, "stop: GPS worker and UART; receiver state unchanged");
+  // The worker exits only after consuming stop; its handle stays live until then.
+  if (_running && _task_handle != nullptr) {
+    RTOS::task_notify_send(_task_handle, STOP_REQUEST);
+  }
   if (_task_handle != nullptr && _done_sem.is_created()) {
     _done_sem.take();
     _done_sem.destroy();
@@ -109,21 +120,24 @@ bool GpsService::request_sleep(uint32_t duration_ms) {
   return send_sleep(duration_ms);
 }
 
-bool GpsService::send_sleep(uint32_t duration_ms) {
+bool GpsService::send_sleep(uint32_t duration_ms, bool maintenance) {
   if (sleep_remaining_ms() != 0) {
     return false; // Sleeping GPS cannot accept a replacement interval.
   }
-  const int baud =
-      _config.fast_path_sleep_probe ? _driver.connect_fast_path() : _driver.connect(_baud_rate);
+  const int expected_baud =
+      _config.fast_path_sleep_probe ? GpsDriver::MODULE_DEFAULT_BAUD : _baud_rate;
+  const int baud = _driver.connect(expected_baud);
   if (baud == 0) {
     return false;
   }
   _baud_rate = baud;
+  if (maintenance && wait_for_job_change(0)) {
+    _driver.end();
+    return false;
+  }
   const bool sent = _driver.request_sleep(duration_ms);
   if (sent) {
-    _mutex.lock();
     _wake_deadline_ms = RTOS::get_retained_time_ms() + duration_ms;
-    _mutex.unlock();
     _baud_rate = GpsDriver::MODULE_DEFAULT_BAUD;
   }
   _driver.end();
@@ -136,12 +150,7 @@ uint32_t GpsService::sleep_remaining_ms() const {
   return deadline_ms > now_ms ? static_cast<uint32_t>(deadline_ms - now_ms) : 0;
 }
 
-uint64_t GpsService::sleep_deadline_ms() const {
-  _mutex.lock();
-  const uint64_t deadline_ms = _wake_deadline_ms;
-  _mutex.unlock();
-  return deadline_ms;
-}
+uint64_t GpsService::sleep_deadline_ms() const { return _wake_deadline_ms; }
 
 GpsData GpsService::get_latest_fix() const {
   _mutex.lock();
@@ -151,7 +160,9 @@ GpsData GpsService::get_latest_fix() const {
 }
 
 void GpsService::set_posting_interval_ms(int interval_ms) {
+  _mutex.lock();
   _config.posting_interval_ms = interval_ms;
+  _mutex.unlock();
 }
 
 void GpsService::set_aiding_data(const GpsAidingData &data) {
@@ -175,17 +186,36 @@ void GpsService::task_entry(void *arg) {
 // Task loop
 // ---------------------------------------------------------------------------
 
+bool GpsService::wait_for_job_change(uint32_t timeout_ms) {
+  if (!_running) {
+    return true;
+  }
+  uint32_t request;
+  if (!RTOS::task_notify_wait(&request, timeout_ms)) {
+    return !_running;
+  }
+  if (request == STOP_REQUEST) {
+    _running = false;
+    return true;
+  }
+  const bool changed = request != _sleep_interval_ms;
+  _sleep_interval_ms = request;
+  return changed || !_running;
+}
+
 bool GpsService::wait_for_wake() {
   while (_running) {
     const uint32_t remaining_ms = sleep_remaining_ms();
-    if (remaining_ms == 0) {
-      break;
+    const uint32_t wait_ms =
+        remaining_ms == 0 ? 0 : std::clamp(remaining_ms, MIN_WAKE_WAIT_MS, MAX_WAKE_WAIT_MS);
+    if (wait_for_job_change(wait_ms)) {
+      return false;
     }
-    const uint32_t wait_ms = std::clamp(remaining_ms, MIN_WAKE_WAIT_MS, MAX_WAKE_WAIT_MS);
-    uint32_t notification;
-    (void)RTOS::task_notify_wait(&notification, wait_ms);
+    if (sleep_remaining_ms() == 0) {
+      return true;
+    }
   }
-  return _running;
+  return false;
 }
 
 bool GpsService::activate_receiver() {
@@ -203,6 +233,10 @@ bool GpsService::activate_receiver() {
     return false;
   }
   _baud_rate = baud;
+  if (wait_for_job_change(0)) {
+    _driver.end();
+    return false;
+  }
   if (_config.baud_rate == GpsDriver::MODULE_ACTIVE_BAUD && baud != GpsDriver::MODULE_ACTIVE_BAUD) {
     if (!_driver.switch_to_active_baud()) {
       _driver.end();
@@ -210,39 +244,41 @@ bool GpsService::activate_receiver() {
     }
     _baud_rate = GpsDriver::MODULE_ACTIVE_BAUD;
   }
-  _mutex.lock();
   _wake_deadline_ms = 0;
-  _mutex.unlock();
   _driver.configure_receiver();
-  if (!_running) {
-    return false;
-  }
   _driver.gnss_start();
   AG_LOGI(TAG, "GNSS receiver started");
   return true;
 }
 
 void GpsService::run() {
-  if (_sleep_interval_ms != 0) {
-    run_sleep_loop();
-  } else {
-    run_acquisition();
+  while (_running) {
+    update_latest_fix({});
+    _clock_synced = false;
+    if (_sleep_interval_ms != 0) {
+      run_sleep_loop(_sleep_interval_ms);
+    } else {
+      run_acquisition();
+    }
+    // Only the worker touches UART during a job handoff. A new job reconnects
+    // at the last known baud and preserves any sleep already sent.
+    _driver.end();
   }
-  _mutex.lock();
-  _running = false;
-  _mutex.unlock();
   if (_done_sem.is_created()) {
     _done_sem.give();
   }
 }
 
-void GpsService::run_sleep_loop() {
-  while (wait_for_wake()) {
-    if (!send_sleep(_sleep_interval_ms)) {
+void GpsService::run_sleep_loop(uint32_t interval_ms) {
+  while (_sleep_interval_ms == interval_ms && wait_for_wake()) {
+    const bool sent = send_sleep(interval_ms, /*maintenance=*/true);
+    if (!_running || _sleep_interval_ms != interval_ms) {
+      return;
+    }
+    if (!sent) {
       AG_LOGW(TAG, "GPS sleep failed; will retry");
-      if (_running) {
-        uint32_t notification;
-        (void)RTOS::task_notify_wait(&notification, SLEEP_RETRY_MS);
+      if (wait_for_job_change(SLEEP_RETRY_MS)) {
+        return;
       }
     }
   }
@@ -250,12 +286,23 @@ void GpsService::run_sleep_loop() {
 
 void GpsService::run_acquisition() {
   if (!activate_receiver()) {
+    _driver.end();
+    if (_running && _sleep_interval_ms == 0) {
+      AG_LOGW(TAG, "GPS activation failed; retrying in %lu ms",
+              static_cast<unsigned long>(ACQUISITION_RETRY_MS));
+      // Timeout retries on this task. A notification can retry sooner, switch
+      // to sleep maintenance, or stop the worker.
+      (void)wait_for_job_change(ACQUISITION_RETRY_MS);
+    }
     return;
   }
 
   uint64_t last_post_ms = 0;
+  uint32_t wait_ms = 0;
 
-  while (_running) {
+  // Complete each aiding/read/publish iteration before handling the next job.
+  // The first check also handles requests received during receiver setup.
+  while (!wait_for_job_change(wait_ms)) {
     // Check for pending aiding data (set via set_aiding_data() from any
     // thread).  Copy under mutex; inject outside mutex to avoid holding the
     // lock during serial I/O.
@@ -295,13 +342,15 @@ void GpsService::run_acquisition() {
     }
 
     const uint64_t now_ms = RTOS::get_time_ms();
-    if (now_ms - last_post_ms >= static_cast<uint64_t>(_config.posting_interval_ms)) {
+    _mutex.lock();
+    const int posting_interval_ms = _config.posting_interval_ms;
+    _mutex.unlock();
+    if (now_ms - last_post_ms >= static_cast<uint64_t>(posting_interval_ms)) {
       // Post unconditionally so fix loss (NoFix) reaches the orchestrator.
       post_fix_event();
       last_post_ms = now_ms;
     }
-
-    RTOS::delay_ms(had_data ? FAST_DRAIN_YIELD_MS : IDLE_YIELD_MS);
+    wait_ms = had_data ? FAST_DRAIN_YIELD_MS : IDLE_YIELD_MS;
   }
 }
 

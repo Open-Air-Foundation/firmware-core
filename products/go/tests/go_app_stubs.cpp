@@ -459,12 +459,16 @@ GpsService::GpsService(GpsDriver &driver, RtosQueueHandle event_queue, const Con
 
 GpsService::~GpsService() = default;
 
-bool GpsService::start() {
+bool GpsService::start(uint32_t initial_sleep_interval_ms) {
+  return initial_sleep_interval_ms == 0 ? acquire() : maintain_sleep(initial_sleep_interval_ms);
+}
+
+bool GpsService::acquire() {
   test_spy::gps_started = true;
   return true;
 }
 
-bool GpsService::start_sleeping(uint32_t interval_ms) {
+bool GpsService::maintain_sleep(uint32_t interval_ms) {
   test_spy::gps_sleeping_started = true;
   test_spy::gps_sleep_interval_ms = interval_ms;
   return interval_ms != 0;

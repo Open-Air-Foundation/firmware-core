@@ -10,6 +10,7 @@
 #include "gps/gps_driver.h"
 
 #include <cstdlib>
+#include <cctype>
 #include <cstring>
 #include <ctime>
 
@@ -85,8 +86,52 @@ static constexpr uint32_t CASIC_ACK_POLL_MS = 20;
 /// Maximum total time to wait for the TAU1113 ACK/NAK response (ms).
 /// The module typically responds within 50–100 ms; 300 ms provides margin.
 static constexpr uint32_t CASIC_ACK_TIMEOUT_MS = 300;
-static constexpr uint32_t FAST_PATH_PROBE_INTERVAL_MS = 300;
-static constexpr uint32_t FAST_PATH_PROBE_TIMEOUT_MS = 5000;
+// Maximum time to listen for valid NMEA at each supported baud rate.
+static constexpr uint32_t CONNECT_PROBE_TIMEOUT_MS = 3000;
+static constexpr size_t NMEA_PROBE_MAX_LENGTH = 82;
+
+static bool wait_for_nmea(AirgradientSerial &serial, uint32_t timeout_ms) {
+  char sentence[NMEA_PROBE_MAX_LENGTH + 1];
+  size_t length = 0;
+  uint32_t elapsed_ms = 0;
+  while (elapsed_ms < timeout_ms) {
+    const uint32_t wait_ms =
+        (timeout_ms - elapsed_ms < CASIC_ACK_POLL_MS) ? timeout_ms - elapsed_ms : CASIC_ACK_POLL_MS;
+    RTOS::delay_ms(wait_ms);
+    elapsed_ms += wait_ms;
+    int pending = serial.available();
+    while (pending-- > 0) {
+      const int value = serial.read();
+      if (value < 0) {
+        break;
+      }
+      const char byte = static_cast<char>(value);
+      if (byte == '$') {
+        length = 0;
+      } else if (length == 0) {
+        continue;
+      }
+      if (length == NMEA_PROBE_MAX_LENGTH) {
+        length = 0;
+        continue;
+      }
+      sentence[length++] = byte;
+      sentence[length] = '\0';
+      if (byte == '\n') {
+        if (length >= 9 && nmea_has_checksum(sentence, length) == 0 &&
+            std::isxdigit(static_cast<unsigned char>(sentence[length - 4])) &&
+            std::isxdigit(static_cast<unsigned char>(sentence[length - 3])) &&
+            nmea_validate(sentence, length, 1) == 0) {
+          AG_LOGI(TAG, "NMEA detected after %lu ms", static_cast<unsigned long>(elapsed_ms));
+          return true;
+        }
+        length = 0;
+      }
+    }
+  }
+  AG_LOGW(TAG, "NMEA probe timeout after %lu ms", static_cast<unsigned long>(elapsed_ms));
+  return false;
+}
 
 /// ACK/NAK packet length: header(2) + group(1) + sub(1) + len(2) + payload(2) + ck(2) = 10.
 static constexpr size_t CASIC_ACK_PACKET_LEN = 10;
@@ -94,8 +139,8 @@ static constexpr size_t CASIC_ACK_PACKET_LEN = 10;
 /// Maximum payload size across AID-POS (17), AID-TIME (20), CFG-EPHSAVE (1).
 static constexpr size_t CASIC_MAX_PAYLOAD = 20;
 
-/// Maximum payload size for a polled CASIC response.  Sized for MON-VER (32
-/// bytes) with headroom for interleaved NMEA data in the scan buffer.
+/// Scan buffer holds a complete response plus room for incoming bytes.
+/// Unmatched prefixes are discarded while partial frames survive each read.
 static constexpr size_t CASIC_POLL_BUF_SIZE = 64;
 
 /// Leap seconds since 1980 (18 as of 2026, unchanged since 2017-01-01).
@@ -266,6 +311,9 @@ static bool wait_for_casic_poll_response(AirgradientSerial &serial, uint8_t grou
   uint8_t buf[CASIC_POLL_BUF_SIZE];
   size_t buf_len = 0;
   uint32_t elapsed_ms = 0;
+  if (packet_len > sizeof(buf)) {
+    return false;
+  }
 
   while (elapsed_ms < timeout_ms) {
     const uint32_t remaining_ms = timeout_ms - elapsed_ms;
@@ -273,36 +321,43 @@ static bool wait_for_casic_poll_response(AirgradientSerial &serial, uint8_t grou
     RTOS::delay_ms(delay_ms);
     elapsed_ms += delay_ms;
 
-    const int avail = serial.available();
-    if (avail <= 0) {
-      continue;
-    }
-
-    const int room = static_cast<int>(sizeof(buf)) - static_cast<int>(buf_len);
-    const int to_read = (avail < room) ? avail : room;
-    if (to_read > 0) {
+    // Drain a snapshot of pending UART data. A continuous NMEA stream must
+    // neither fill the search buffer permanently nor extend this loop forever.
+    int pending_bytes = serial.available();
+    while (pending_bytes > 0) {
+      const int room = static_cast<int>(sizeof(buf) - buf_len);
+      const int to_read = pending_bytes < room ? pending_bytes : room;
       const int n = serial.read(&buf[buf_len], to_read);
+      if (n <= 0) {
+        break;
+      }
+      pending_bytes -= n;
       buf_len += static_cast<size_t>(n);
-    }
 
-    for (size_t i = 0; i + packet_len <= buf_len; ++i) {
-      if (buf[i] != CASIC_HEADER_0 || buf[i + 1] != CASIC_HEADER_1) {
-        continue;
+      for (size_t i = 0; i + packet_len <= buf_len; ++i) {
+        if (buf[i] != CASIC_HEADER_0 || buf[i + 1] != CASIC_HEADER_1) {
+          continue;
+        }
+        if (buf[i + 2] != group || buf[i + 3] != sub) {
+          continue;
+        }
+        const uint16_t payload_len =
+            static_cast<uint16_t>(buf[i + 4]) | (static_cast<uint16_t>(buf[i + 5]) << 8);
+        if (payload_len != expected_payload_len) {
+          continue;
+        }
+        memcpy(out_payload, &buf[i + 6], expected_payload_len);
+        return true;
       }
-      if (buf[i + 2] != group || buf[i + 3] != sub) {
-        continue;
-      }
-      const uint16_t payload_len =
-          static_cast<uint16_t>(buf[i + 4]) | (static_cast<uint16_t>(buf[i + 5]) << 8);
-      if (payload_len != expected_payload_len) {
-        continue;
-      }
-      memcpy(out_payload, &buf[i + 6], expected_payload_len);
-      return true;
-    }
 
-    if (buf_len >= sizeof(buf)) {
-      break;
+      // Every complete candidate has been checked. Keep only the suffix that
+      // could be the beginning of a frame split across UART reads.
+      if (buf_len >= packet_len) {
+        const size_t keep = packet_len - 1;
+        const size_t discard = buf_len - keep;
+        memmove(buf, buf + discard, keep);
+        buf_len = keep;
+      }
     }
   }
 
@@ -333,7 +388,6 @@ bool GpsDriver::begin(int baud_rate) {
 }
 
 void GpsDriver::configure_receiver() {
-  _poll_mon_ver(CASIC_ACK_TIMEOUT_MS);
   _send_cfg_ephsave();
   _send_cfg_navsat();
 }
@@ -354,40 +408,13 @@ int GpsDriver::connect(int expected_baud) {
       expected_baud == MODULE_DEFAULT_BAUD ? MODULE_ACTIVE_BAUD : MODULE_DEFAULT_BAUD;
   const int bauds[] = {expected_baud, alternate};
   for (const int baud : bauds) {
-    if (open_uart(baud) && _poll_mon_ver(CASIC_ACK_TIMEOUT_MS)) {
+    AG_LOGI(TAG, "connection probe: baud=%d timeout_ms=%lu", baud,
+            static_cast<unsigned long>(CONNECT_PROBE_TIMEOUT_MS));
+    if (open_uart(baud) && wait_for_nmea(_serial, CONNECT_PROBE_TIMEOUT_MS)) {
       return baud;
     }
     end();
   }
-  return 0;
-}
-
-int GpsDriver::connect_fast_path() {
-  if (!open_uart(MODULE_DEFAULT_BAUD)) {
-    end();
-    return 0;
-  }
-  const uint64_t deadline_ms = RTOS::get_time_ms() + FAST_PATH_PROBE_TIMEOUT_MS;
-  while (true) {
-    const uint64_t now_ms = RTOS::get_time_ms();
-    if (now_ms >= deadline_ms) {
-      break;
-    }
-    const uint64_t remaining_ms = deadline_ms - now_ms;
-    const uint32_t wait_ms = remaining_ms < FAST_PATH_PROBE_INTERVAL_MS
-                                 ? static_cast<uint32_t>(remaining_ms)
-                                 : FAST_PATH_PROBE_INTERVAL_MS;
-    if (_poll_mon_ver(wait_ms)) {
-      return MODULE_DEFAULT_BAUD;
-    }
-    // Failed writes/full RX buffers may return early; keep the probe cadence.
-    const uint64_t next_probe_ms = now_ms + wait_ms;
-    const uint64_t after_poll_ms = RTOS::get_time_ms();
-    if (after_poll_ms < next_probe_ms) {
-      RTOS::delay_ms(static_cast<uint32_t>(next_probe_ms - after_poll_ms));
-    }
-  }
-  end();
   return 0;
 }
 
@@ -738,6 +765,7 @@ void GpsDriver::_send_cfg_navsat() {
     return;
   }
   _poll_cfg_navsat();
+  (void)_poll_mon_ver(CASIC_ACK_TIMEOUT_MS);
 }
 
 void GpsDriver::_poll_cfg_navsat() {

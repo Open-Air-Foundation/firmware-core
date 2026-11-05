@@ -65,6 +65,8 @@ int last_nox_learning_offset = 0;
 bool gps_started = false;
 uint32_t gps_start_count = 0;
 uint32_t gps_sleeping_start_count = 0;
+uint32_t gps_task_start_count = 0;
+uint32_t gps_task_stop_count = 0;
 bool gps_stopped = false;
 bool gps_sleep_requested = false;
 bool gps_sleeping_started = false;
@@ -298,6 +300,8 @@ void reset() {
   gps_started = false;
   gps_start_count = 0;
   gps_sleeping_start_count = 0;
+  gps_task_start_count = 0;
+  gps_task_stop_count = 0;
   gps_stopped = false;
   gps_sleep_requested = false;
   gps_sleeping_started = false;
@@ -552,13 +556,18 @@ GpsService::GpsService(GpsDriver &driver, RtosQueueHandle event_queue, const Con
 
 GpsService::~GpsService() = default;
 
-bool GpsService::start() {
+bool GpsService::start(uint32_t initial_sleep_interval_ms) {
+  ++test_spy::gps_task_start_count;
+  return initial_sleep_interval_ms == 0 ? acquire() : maintain_sleep(initial_sleep_interval_ms);
+}
+
+bool GpsService::acquire() {
   test_spy::gps_started = true;
   ++test_spy::gps_start_count;
   return true;
 }
 
-bool GpsService::start_sleeping(uint32_t interval_ms) {
+bool GpsService::maintain_sleep(uint32_t interval_ms) {
   test_spy::gps_sleeping_started = true;
   ++test_spy::gps_sleeping_start_count;
   test_spy::gps_sleep_interval_ms = interval_ms;
@@ -566,6 +575,7 @@ bool GpsService::start_sleeping(uint32_t interval_ms) {
 }
 
 void GpsService::stop() {
+  ++test_spy::gps_task_stop_count;
   test_spy::gps_stopped = true;
   _driver.end();
 }
