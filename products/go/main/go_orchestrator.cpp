@@ -322,10 +322,9 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   publish_local_wifi_snapshot();
 
   init_ble_if_portable();
-  if (is_gps_active()) {
-    _svc.gps_service.start();
-  } else {
-    deactivate_gps();
+  const uint32_t initial_gps_sleep_ms = is_gps_active() ? 0 : gps_inactive_sleep_ms(_mode);
+  if (!_svc.gps_service.start(initial_gps_sleep_ms)) {
+    AG_LOGE(TAG, "Failed to start GPS task");
   }
   if (_settings.operating_mode == OperatingMode::Stationary) {
     enter_stationary();
@@ -1596,9 +1595,6 @@ bool Orchestrator::start_tracking() {
   const bool starting_gps = !is_gps_active() && _settings.gps_mode != GpsMode::AlwaysOff;
   const uint32_t session_id = generate_tracking_session_id(_svc.storage_service);
   if (session_id == 0 || !_svc.storage_service.create_route(session_id)) {
-    if (starting_gps) {
-      deactivate_gps();
-    }
     AG_LOGE(TAG, "start_tracking: failed to open route (session=%" PRIu32 ")", session_id);
     _svc.ui_manager.show_snackbar("Storage error — can't track");
     update_display();
@@ -1617,7 +1613,7 @@ bool Orchestrator::start_tracking() {
   }
 
   if (starting_gps) {
-    _svc.gps_service.start();
+    activate_gps();
   }
 
   char msg[48];
@@ -1943,10 +1939,10 @@ void Orchestrator::start_gps_test() {
   _gps_test_entry_ms = static_cast<uint32_t>(RTOS::get_time_ms());
   _gps_ttff_ms = GPS_TTFF_PENDING;
 
-  // Ungate the receiver if settings leave GPS inactive; start() is idempotent
+  // Ungate the receiver if settings leave GPS inactive; acquisition is idempotent
   // when the task is already running (AlwaysOn / active tracking).
   if (!is_gps_active()) {
-    _svc.gps_service.start();
+    activate_gps();
   }
   _svc.gps_service.set_posting_interval_ms(static_cast<int>(GPS_TEST_POSTING_INTERVAL_MS));
 
@@ -2212,7 +2208,7 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
 
   const bool is_gps_active_now = is_gps_active();
   if (!was_gps_active && is_gps_active_now) {
-    _svc.gps_service.start();
+    activate_gps();
   } else if (!is_gps_active_now && _svc.ui_manager.current_screen() != Screen::GpsTest) {
     deactivate_gps();
   }
@@ -3163,9 +3159,7 @@ void Orchestrator::pause_provisioning_sensitive_services() {
   _measurement_pending = false;
   _pm_state = PmState::Asleep;
   finish_peripheral_test();
-  if (is_gps_active()) {
-    _svc.gps_service.stop(); // Preserve receiver operation while tracking/Always On.
-  }
+  _svc.gps_service.stop(); // Leave receiver state unchanged during provisioning.
   _svc.power_service.set_pm_power(false);
   _provisioning_sensitive_services_paused = true;
   log_heap(TAG, "prov.pause-sensitive:exit");
@@ -3179,8 +3173,9 @@ void Orchestrator::resume_provisioning_sensitive_services() {
   _svc.power_service.set_pm_power(true);
   _svc.sensor_producer.start();
   _pm_state = PmState::Preparing;
-  if (is_gps_active()) {
-    _svc.gps_service.start();
+  const uint32_t initial_gps_sleep_ms = is_gps_active() ? 0 : gps_inactive_sleep_ms(_mode);
+  if (!_svc.gps_service.start(initial_gps_sleep_ms)) {
+    AG_LOGE(TAG, "Failed to restart GPS task after provisioning");
   }
   _provisioning_sensitive_services_paused = false;
   // One immediate measurement so the display refreshes promptly after
@@ -3535,14 +3530,24 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 // Helpers
 // ---------------------------------------------------------------------------
 
+void Orchestrator::activate_gps() {
+  if (_shutting_down || _provisioning_sensitive_services_paused) {
+    return; // Resume explicitly creates the task with the current GPS policy.
+  }
+  if (!_svc.gps_service.acquire()) {
+    AG_LOGE(TAG, "GPS acquisition request rejected: task is stopped");
+  }
+}
+
 void Orchestrator::deactivate_gps() {
   if (_shutting_down) {
     _svc.gps_service.stop();
     _latest_gps = GpsData{};
     return;
   }
-  if (!_svc.gps_service.start_sleeping(gps_inactive_sleep_ms(_mode))) {
-    AG_LOGE(TAG, "Failed to start GPS sleep maintenance");
+  if (!_provisioning_sensitive_services_paused &&
+      !_svc.gps_service.maintain_sleep(gps_inactive_sleep_ms(_mode))) {
+    AG_LOGE(TAG, "GPS sleep maintenance request rejected: task is stopped");
   }
   _latest_gps = GpsData{};
 }

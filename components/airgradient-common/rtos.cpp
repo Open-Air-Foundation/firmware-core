@@ -204,8 +204,10 @@ void RTOS::task_notify_send(RtosTaskHandle task_handle, uint32_t value) {
 #ifndef TEST_HOST
   xTaskNotify(task_handle, value, eSetValueWithOverwrite);
 #else
-  (void)task_handle;
-  (void)value;
+  RTOS *rtos = get_instance();
+  if (rtos != nullptr) {
+    rtos->task_notify_send_impl(task_handle, value);
+  }
 #endif
 }
 
@@ -239,6 +241,11 @@ void RTOS::set_system_time_from_epoch(int64_t epoch_seconds) {
 }
 
 void RTOS::set_system_time_from_epoch_impl(int64_t epoch_seconds) { (void)epoch_seconds; }
+
+void RTOS::task_notify_send_impl(RtosTaskHandle task_handle, uint32_t value) {
+  (void)task_handle;
+  (void)value;
+}
 
 bool RTOS::task_notify_wait_impl(uint32_t *out_value, uint32_t timeout_ms) {
   (void)out_value;

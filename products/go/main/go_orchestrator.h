@@ -459,6 +459,7 @@ private:
 
   // --- Helpers ---
   bool is_gps_active() const;
+  void activate_gps();
   void deactivate_gps();
 
   /// Recording requires an open route; Paused retains only the session ID.
