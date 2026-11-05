@@ -765,6 +765,7 @@ void GpsDriver::_send_cfg_navsat() {
     return;
   }
   _poll_cfg_navsat();
+  (void)_poll_mon_ver(CASIC_ACK_TIMEOUT_MS);
 }
 
 void GpsDriver::_poll_cfg_navsat() {

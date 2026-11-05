@@ -1337,7 +1337,28 @@ TEST_CASE("begin succeeds when poll responses time out", "[gps][driver][poll]") 
 
   GpsDriver gps(serial);
   REQUIRE(gps.begin(GpsDriver::MODULE_DEFAULT_BAUD));
+  REQUIRE(count_casic_packets(serial.get_tx_bytes(), 0x0A, 0x04) == 1);
 
+  RTOS::set_instance(nullptr);
+}
+
+TEST_CASE("receiver configuration polls MON-VER after NAVSAT", "[gps][driver][poll]") {
+  StubRTOS rtos;
+  RTOS::set_instance(&rtos);
+  StubSerial serial;
+  serial.set_auto_ack(true);
+  uint8_t version[32]{};
+  memcpy(version, "test-sw", 7);
+  memcpy(version + 16, "test-hw", 7);
+  serial.add_poll_response(0x0A, 0x04, version, sizeof(version));
+  GpsDriver gps(serial);
+  REQUIRE(gps.open_uart(GpsDriver::MODULE_DEFAULT_BAUD));
+  gps.configure_receiver();
+
+  const auto &tx = serial.get_tx_bytes();
+  REQUIRE(count_casic_packets(tx, 0x0A, 0x04) == 1);
+  REQUIRE(find_casic_packet(tx, 0x0A, 0x04) > find_casic_packet(tx, 0x06, 0x0C));
+  REQUIRE(serial.available() == 0);
   RTOS::set_instance(nullptr);
 }
 
