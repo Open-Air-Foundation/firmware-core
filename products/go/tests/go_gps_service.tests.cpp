@@ -503,8 +503,7 @@ TEST_CASE_METHOD(Fixture, "GPS activation recovers automatically on the same tas
   CHECK(GpsServiceTestAccess::task_handle(service) == task);
 }
 
-TEST_CASE_METHOD(Fixture, "GPS stop interrupts an acquisition retry delay",
-                 "[gps_service][jobs]") {
+TEST_CASE_METHOD(Fixture, "GPS stop interrupts an acquisition retry delay", "[gps_service][jobs]") {
   serial.respond = false;
   uint64_t stopped_at_ms = 0;
   clock.on_wait = [&] {
@@ -728,8 +727,7 @@ TEST_CASE_METHOD(Fixture, "GPS service stop interrupts a failed-sleep retry", "[
   CHECK(is_command(serial.writes.back(), 0x41));
 }
 
-TEST_CASE_METHOD(Fixture, "GPS job requests cannot create a stopped task",
-                 "[gps_service][jobs]") {
+TEST_CASE_METHOD(Fixture, "GPS job requests cannot create a stopped task", "[gps_service][jobs]") {
   SECTION("before initialization") {}
   SECTION("after explicit stop") { service.stop(); }
   const auto now = clock.retained_ms;

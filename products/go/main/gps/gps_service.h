@@ -130,7 +130,7 @@ private:
   bool wait_for_job_change(uint32_t timeout_ms);
   bool wait_for_wake();
   bool send_sleep(uint32_t duration_ms, bool maintenance = false);
-  bool activate_receiver();              // cancellable wait, then acquisition setup
+  bool activate_receiver(); // cancellable wait, then acquisition setup
 
   void update_latest_fix(const GpsData &data);    // writes under mutex
   void post_fix_event();                          // post GpsData to event queue
