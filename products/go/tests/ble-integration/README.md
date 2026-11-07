@@ -118,14 +118,18 @@ for compatibility. See the [BLE client guide](../../go_ble_client.md#6-status-ch
 Covers read, write, delta-notify, and command operations:
 
 - **Read** (sync): reads Config once (module-scoped fixture), then validates the
-  17 config keys present with correct types; versioned correction
-  arrays, `gps_mode`, and `op_mode` use valid fields and enum values
+  18 config keys present with correct types; versioned correction
+  arrays, `bledi`, `gps_mode`, and `op_mode` use valid fields and enum values
 - **Set config** (async): writes a single-field `{"op": "set", ...}`, verifies
   the device sends a Config **delta** notification — `"type": "config"` plus
   only the changed key
 - **Compact device fields** (async): round-trips buzzer, CO2 ABC, TVOC learning,
-  NOx learning, and Pinned Chart (`pchart`) values, verifies exact deltas, then
+  NOx learning, Pinned Chart (`pchart`), LED indicator (`bledi`: `aqi`/`co2`),
+  and LED brightness (`bled`) values, verifies exact deltas, then
   restores each value
+- **LED indicator validation** (async): invalid names and CBOR types return
+  `invalid_config_value` and preserve the config snapshot. LED round trips also
+  verify that changing indicator or brightness preserves the other setting.
 - **No-op set** (async): writing an unchanged value emits no notification
 - **Correction set** (async): writes a complete temperature correction group,
   verifies the nested Config delta without a Measures notification, then

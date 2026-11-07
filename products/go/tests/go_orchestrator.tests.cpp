@@ -12898,3 +12898,53 @@ TEST_CASE(
   CHECK(test_spy::led_back_update_aqi_count == 1);
   CHECK(test_spy::led_last_aqi_pm25 == 12.5f);
 }
+
+TEST_CASE("BLE LED indicator activates only after successful persistence",
+          "[Orchestrator][settings][ble][led]") {
+  TestFixture f;
+  f.settings.back_led_brightness = LedBrightness::Mid;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  MeasuresAGo sample{};
+  sample.co2.co2 = 1800;
+  sample.pm_a.pm_25 = 12.5f;
+  A::on_sensor_data(orch, sample);
+  test_spy::reset();
+  test_spy::ble_connected = true;
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_config_decode_result.recognized_config_key_count = 1;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = A::settings(orch);
+  test_spy::ble_decoded_settings.back_led_indicator = BackLedIndicator::Co2;
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+
+  SECTION("saved selection updates LED and publishes config") {
+    REQUIRE_CALL(f.mock_config, set_int(trompeloeil::_, static_cast<int>(BackLedIndicator::Co2)))
+        .WITH(std::string(_1) == "bli")
+        .RETURN(ConfigStoreResult::OK);
+    A::dispatch(orch, evt);
+    CHECK(A::settings(orch).back_led_indicator == BackLedIndicator::Co2);
+    CHECK(A::settings(orch).back_led_brightness == LedBrightness::Mid);
+    CHECK(test_spy::led_back_update_co2_count == 1);
+    CHECK(test_spy::led_last_co2_ppm == 1800);
+    CHECK(test_spy::led_back_update_aqi_count == 0);
+    CHECK(test_spy::ble_notify_config_called);
+    GoSettings ui_settings{};
+    f.ui_manager.apply_to_settings(ui_settings);
+    CHECK(ui_settings.back_led_indicator == BackLedIndicator::Co2);
+  }
+  SECTION("failed persistence retains the selection and output") {
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+    A::dispatch(orch, evt);
+    CHECK(A::settings(orch).back_led_indicator == BackLedIndicator::Aqi);
+    CHECK(A::settings(orch).back_led_brightness == LedBrightness::Mid);
+    CHECK(test_spy::led_back_update_co2_count == 0);
+    CHECK(test_spy::led_back_update_aqi_count == 0);
+    CHECK_FALSE(test_spy::ble_notify_config_called);
+    CHECK(test_spy::ble_notify_command_result_called);
+    CHECK_FALSE(test_spy::ble_last_command_success);
+    CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_CONFIG_SAVE_FAILED);
+  }
+}

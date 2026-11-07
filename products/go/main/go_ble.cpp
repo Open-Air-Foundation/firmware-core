@@ -1845,6 +1845,11 @@ static void enc_op_mode(CborEncoder &m, const GoSettings &s) {
 static void enc_bled(CborEncoder &m, const GoSettings &s) {
   cbor_encode_uint(&m, static_cast<uint64_t>(s.back_led_brightness));
 }
+static void enc_bledi(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_text_stringz(&m, s.back_led_indicator == BackLedIndicator::Co2
+                                   ? BLE_VAL_BACK_LED_INDICATOR_CO2
+                                   : BLE_VAL_BACK_LED_INDICATOR_AQI);
+}
 static void enc_tled(CborEncoder &m, const GoSettings &s) {
   cbor_encode_uint(&m, static_cast<uint64_t>(s.touch_led_intensity));
 }
@@ -1898,6 +1903,9 @@ static bool dif_op_mode(const GoSettings &a, const GoSettings &b) {
 static bool dif_bled(const GoSettings &a, const GoSettings &b) {
   return a.back_led_brightness != b.back_led_brightness;
 }
+static bool dif_bledi(const GoSettings &a, const GoSettings &b) {
+  return a.back_led_indicator != b.back_led_indicator;
+}
 static bool dif_tled(const GoSettings &a, const GoSettings &b) {
   return a.touch_led_intensity != b.touch_led_intensity;
 }
@@ -1939,6 +1947,7 @@ static const ConfigField CONFIG_FIELDS[] = {
     {BLE_KEY_AUTO_LOCK, enc_auto_lock, dif_auto_lock},
     {BLE_KEY_OP_MODE, enc_op_mode, dif_op_mode},
     {BLE_KEY_BACK_LED, enc_bled, dif_bled},
+    {BLE_KEY_BACK_LED_INDICATOR, enc_bledi, dif_bledi},
     {BLE_KEY_TOUCH_LED, enc_tled, dif_tled},
     {BLE_KEY_BUZZER, enc_buz, dif_buz},
     {BLE_KEY_ABC_DAYS, enc_abc, dif_abc},
@@ -2383,7 +2392,23 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     }
     // --- text config fields ---
-    else if (key_is(BLE_KEY_GPS_MODE)) {
+    else if (key_is(BLE_KEY_BACK_LED_INDICATOR)) {
+      cbor_value_advance(&it);
+      result.recognized_config_key_count++;
+      bool is_aqi = false;
+      bool is_co2 = false;
+      if (cbor_value_is_text_string(&it) &&
+          cbor_value_text_string_equals(&it, BLE_VAL_BACK_LED_INDICATOR_AQI, &is_aqi) ==
+              CborNoError &&
+          cbor_value_text_string_equals(&it, BLE_VAL_BACK_LED_INDICATOR_CO2, &is_co2) ==
+              CborNoError &&
+          (is_aqi || is_co2)) {
+        settings.back_led_indicator = is_co2 ? BackLedIndicator::Co2 : BackLedIndicator::Aqi;
+      } else {
+        result.has_invalid_config_values = true;
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_GPS_MODE)) {
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       char text[16] = {};

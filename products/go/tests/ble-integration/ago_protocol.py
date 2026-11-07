@@ -124,7 +124,7 @@ CONFIG_READ_KEYS = {
     "gps_mode",
     "auto_lock",
     "op_mode",
-    "bled", "tled",
+    "bled", "bledi", "tled",
     "buz", "abc", "tlo", "nlo",
     "pm25_corr", "temp_corr", "hum_corr",
 }
@@ -151,6 +151,7 @@ CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "auto_lock": (int,),
     "op_mode": (str,),
     "bled": (int,),
+    "bledi": (str,),
     "tled": (int,),
     "buz": (bool,),
     "abc": (int,),
@@ -162,6 +163,7 @@ CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "type": (str,),
 }
 
+BACK_LED_INDICATORS = {"aqi", "co2"}
 GPS_MODES = {"off", "tracking", "always"}
 OPERATING_MODES = {"portable", "stationary", "offline"}
 

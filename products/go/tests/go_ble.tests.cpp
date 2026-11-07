@@ -15,6 +15,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <algorithm>
@@ -869,7 +870,7 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_config produces 17 keys with compact device config") {
+TEST_CASE("BLE: encode_config produces 18 keys with compact device config") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   auto settings = make_default_settings();
@@ -879,7 +880,7 @@ TEST_CASE("BLE: encode_config produces 17 keys with compact device config") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 17);
+  CHECK(entries.size() == 18);
 
   CHECK(find_entry(entries, "meas_int") != nullptr);
   CHECK(find_entry(entries, "pm_int") == nullptr);
@@ -894,6 +895,8 @@ TEST_CASE("BLE: encode_config produces 17 keys with compact device config") {
   CHECK(find_entry(entries, "auto_lock") != nullptr);
   CHECK(find_entry(entries, "op_mode") != nullptr);
   CHECK(find_entry(entries, "bled") != nullptr);
+  REQUIRE(find_entry(entries, "bledi") != nullptr);
+  CHECK(find_entry(entries, "bledi")->text_val == "aqi");
   CHECK(find_entry(entries, "tled") != nullptr);
   CHECK(find_entry(entries, "buz") != nullptr);
   CHECK(find_entry(entries, "abc") != nullptr);
@@ -1097,7 +1100,7 @@ TEST_CASE("BLE: notify_config sends altitude-unit-only changes") {
 
   const auto read_entries =
       decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 17);
+  CHECK(read_entries.size() == 18);
   CHECK(find_entry(read_entries, "alt_ft")->bool_val);
 
   const auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -1129,7 +1132,7 @@ TEST_CASE("BLE: notify_config sends delta and keeps READ as full snapshot") {
   REQUIRE(config_char.notify_count == 1);
 
   auto read_entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 17); // full snapshot, no "type"
+  CHECK(read_entries.size() == 18); // full snapshot, no "type"
   CHECK(find_entry(read_entries, "type") == nullptr);
 
   auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -1630,6 +1633,150 @@ TEST_CASE("BLE: pinned chart choices round-trip and notify independently of inte
       CHECK(config_char.notify_count == 0);
     }
   }
+}
+
+TEST_CASE("BLE: LED indicator round-trips and notifies independently of brightness") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  for (auto brightness :
+       {LedBrightness::Off, LedBrightness::Dim, LedBrightness::Mid, LedBrightness::Bright}) {
+    for (auto indicator : {BackLedIndicator::Aqi, BackLedIndicator::Co2}) {
+      CAPTURE(brightness, indicator);
+      const char *wire = indicator == BackLedIndicator::Co2 ? "co2" : "aqi";
+      auto previous = make_default_settings();
+      previous.back_led_brightness = brightness;
+      previous.back_led_indicator =
+          indicator == BackLedIndicator::Co2 ? BackLedIndicator::Aqi : BackLedIndicator::Co2;
+      auto settings = previous;
+      uint8_t buf[64];
+      const auto len = encode_set_text(buf, sizeof(buf), "bledi", wire);
+      const auto result = BleService::decode_config_write(buf, len, settings);
+      REQUIRE(result.op == BleConfigOp::Set);
+      CHECK(result.recognized_config_key_count == 1);
+      CHECK_FALSE(result.has_unknown_keys);
+      CHECK_FALSE(result.has_invalid_config_values);
+      CHECK(settings.back_led_indicator == indicator);
+      CHECK(settings.back_led_brightness == brightness);
+
+      config_char.reset();
+      svc.notify_config(previous, settings);
+      REQUIRE(config_char.notify_count == 1);
+      const auto snapshot =
+          decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
+      REQUIRE(find_entry(snapshot, "bledi") != nullptr);
+      CHECK(find_entry(snapshot, "bledi")->text_val == wire);
+      REQUIRE(find_entry(snapshot, "bled") != nullptr);
+      CHECK(find_entry(snapshot, "bled")->uint_val == static_cast<uint64_t>(brightness));
+      const auto delta = decode_cbor_map(config_char.last_notified_value.data(),
+                                         config_char.last_notified_value.size());
+      REQUIRE(delta.size() == 2);
+      REQUIRE(find_entry(delta, "type") != nullptr);
+      CHECK(find_entry(delta, "type")->text_val == "config");
+      REQUIRE(find_entry(delta, "bledi") != nullptr);
+      CHECK(find_entry(delta, "bledi")->text_val == wire);
+      CHECK(config_char.last_notified_value.size() <= TEST_NOTIFY_BUDGET);
+
+      config_char.reset();
+      svc.notify_config(settings, settings);
+      CHECK(config_char.notify_count == 0);
+    }
+  }
+}
+
+TEST_CASE("BLE: brightness-only writes preserve the LED indicator") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  auto previous = make_default_settings();
+  previous.back_led_indicator = BackLedIndicator::Co2;
+  previous.back_led_brightness = LedBrightness::Off;
+  auto settings = previous;
+  uint8_t buf[64];
+  const auto len =
+      encode_set_uint(buf, sizeof(buf), "bled", static_cast<uint64_t>(LedBrightness::Bright));
+  const auto result = BleService::decode_config_write(buf, len, settings);
+  CHECK_FALSE(result.has_invalid_config_values);
+  CHECK(settings.back_led_indicator == BackLedIndicator::Co2);
+  CHECK(settings.back_led_brightness == LedBrightness::Bright);
+  const auto delta_len =
+      BleServiceTestAccess::encode_config_delta(svc, buf, sizeof(buf), previous, settings);
+  REQUIRE(delta_len > 0);
+  const auto delta = decode_cbor_map(buf, delta_len);
+  REQUIRE(delta.size() == 2);
+  CHECK(find_entry(delta, "bledi") == nullptr);
+  REQUIRE(find_entry(delta, "bled") != nullptr);
+  CHECK(find_entry(delta, "bled")->uint_val == static_cast<uint64_t>(LedBrightness::Bright));
+}
+
+TEST_CASE("BLE: LED indicator rejects invalid text and CBOR types") {
+  uint8_t buf[128];
+  size_t len = 0;
+  SECTION("invalid names") {
+    const auto value = GENERATE("", "AQI", "CO2", "pm25-aqi", "off", "co2-extra");
+    len = encode_set_text(buf, sizeof(buf), "bledi", value);
+  }
+  SECTION("integer") { len = encode_set_uint(buf, sizeof(buf), "bledi", 1); }
+  SECTION("boolean") { len = encode_set_bool(buf, sizeof(buf), "bledi", true); }
+  SECTION("other types and embedded null") {
+    CborEncoder encoder;
+    CborEncoder map;
+    cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+    cbor_encoder_create_map(&encoder, &map, 2);
+    cbor_encode_text_stringz(&map, "op");
+    cbor_encode_text_stringz(&map, "set");
+    cbor_encode_text_stringz(&map, "bledi");
+    SECTION("null") { cbor_encode_null(&map); }
+    SECTION("float") { cbor_encode_float(&map, 1.0f); }
+    SECTION("bytes") { cbor_encode_byte_string(&map, reinterpret_cast<const uint8_t *>("co2"), 3); }
+    SECTION("embedded null") { cbor_encode_text_string(&map, "co2\0extra", 9); }
+    SECTION("array") {
+      CborEncoder array;
+      cbor_encoder_create_array(&map, &array, 0);
+      cbor_encoder_close_container(&map, &array);
+    }
+    SECTION("map") {
+      CborEncoder nested;
+      cbor_encoder_create_map(&map, &nested, 0);
+      cbor_encoder_close_container(&map, &nested);
+    }
+    cbor_encoder_close_container(&encoder, &map);
+    len = cbor_encoder_get_buffer_size(&encoder, buf);
+  }
+  auto settings = make_default_settings();
+  settings.back_led_indicator = BackLedIndicator::Aqi;
+  const auto original = settings;
+  const auto result = BleService::decode_config_write(buf, len, settings);
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK(result.recognized_config_key_count == 1);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK(result.has_invalid_config_values);
+  CHECK(settings.back_led_indicator == original.back_led_indicator);
+  CHECK(settings.back_led_brightness == original.back_led_brightness);
+}
+
+TEST_CASE("BLE: LED indicator and brightness count as separate config fields") {
+  uint8_t buf[64];
+  CborEncoder encoder;
+  CborEncoder map;
+  cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+  cbor_encoder_create_map(&encoder, &map, 3);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, "bledi");
+  cbor_encode_text_stringz(&map, "co2");
+  cbor_encode_text_stringz(&map, "bled");
+  cbor_encode_uint(&map, 1);
+  cbor_encoder_close_container(&encoder, &map);
+  auto settings = make_default_settings();
+  const auto result =
+      BleService::decode_config_write(buf, cbor_encoder_get_buffer_size(&encoder, buf), settings);
+  CHECK(result.op == BleConfigOp::Set);
+  CHECK(result.recognized_config_key_count == 2);
+  CHECK_FALSE(result.has_unknown_keys);
+  CHECK_FALSE(result.has_invalid_config_values);
 }
 
 TEST_CASE("BLE: pinned chart rejects out-of-range values and incorrect CBOR types") {
