@@ -2,7 +2,7 @@
  * AirGradient Go -- LED public types
  *
  * Product-specific types shared between the LED service, orchestrator,
- * and UI layers.  No dependencies beyond <cstdint>.
+ * and UI layers. Uses the common RGB value type.
  *
  * AirGradient
  * https://airgradient.com
@@ -14,11 +14,7 @@
 
 #include <cstdint>
 
-struct Rgb {
-  uint8_t r = 0;
-  uint8_t g = 0;
-  uint8_t b = 0;
-};
+#include "rgb.h"
 
 enum class LedBrightness : uint8_t {
   Off = 0,

@@ -26,7 +26,7 @@ Active on board variant V1; inert on Prototype.
 | `LedDriver` | `go_led_hal.h` | Abstract driver surface mocked in tests |
 | `LP5036` | `go_led_driver.h` | Concrete I2C driver for hardware builds |
 | `RTOS` | `airgradient-common` (`rtos.h`) | Queue, task, time for the adaptive render loop |
-| `aqi` | `airgradient-common` (`aqi.h`) | `pm25_to_us_aqi` and `us_aqi_to_category` for AQI color mapping |
+| `air_quality` | `airgradient-common` (`air_quality.h`) | `pm25_to_us_aqi` and `us_aqi_to_category` for AQI color mapping |
 
 ## Board Variant
 
@@ -245,7 +245,7 @@ back_update_aqi(pm25);          // kills sequence immediately, clears saved stat
 ## AQI Color Map
 
 `back_update_aqi(pm25)` resolves color using
-`aqi::pm25_to_us_aqi()` and `aqi::us_aqi_to_category()`.
+`air_quality::pm25_to_us_aqi()` and `air_quality::us_aqi_to_category()`.
 
 | AQI Range | Category | RGB |
 |---:|---|---|

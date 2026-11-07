@@ -13,7 +13,7 @@
 #include "go_led.h"
 
 #include "ag_log.h"
-#include "aqi.h"
+#include "air_quality.h"
 
 #include <algorithm>
 #include <cmath>
@@ -43,14 +43,6 @@ static constexpr uint8_t TOUCH_CH_RIGHT = 0;   // LED1: OUT0/1/2
 static constexpr uint8_t TOUCH_PWM_OFF = 0;
 static constexpr uint8_t TOUCH_PWM_DIM = 64;
 static constexpr uint8_t TOUCH_PWM_BRIGHT = 255;
-
-// --- AQI colors ---
-static constexpr Rgb AQI_GOOD = {0, 255, 0};
-static constexpr Rgb AQI_MODERATE = {255, 255, 0};
-static constexpr Rgb AQI_UNHEALTHY_SENSITIVE = {255, 128, 0};
-static constexpr Rgb AQI_UNHEALTHY = {255, 0, 0};
-static constexpr Rgb AQI_VERY_UNHEALTHY = {128, 0, 128};
-static constexpr Rgb AQI_HAZARDOUS = {139, 69, 19};
 
 // --- Predefined animation step arrays ---
 static constexpr BackStep BOOT_STEPS[] = {
@@ -117,26 +109,6 @@ static Rgb lerp_rgb(Rgb from, Rgb to, uint32_t elapsed, uint32_t duration) {
   return {lerp_channel(from.r, to.r, elapsed, duration),
           lerp_channel(from.g, to.g, elapsed, duration),
           lerp_channel(from.b, to.b, elapsed, duration)};
-}
-
-static Rgb category_to_rgb(aqi::UsAqiCategory cat) {
-  switch (cat) {
-  case aqi::UsAqiCategory::Good:
-    return AQI_GOOD;
-  case aqi::UsAqiCategory::Moderate:
-    return AQI_MODERATE;
-  case aqi::UsAqiCategory::UnhealthySensitive:
-    return AQI_UNHEALTHY_SENSITIVE;
-  case aqi::UsAqiCategory::Unhealthy:
-    return AQI_UNHEALTHY;
-  case aqi::UsAqiCategory::VeryUnhealthy:
-    return AQI_VERY_UNHEALTHY;
-  case aqi::UsAqiCategory::Hazardous:
-    return AQI_HAZARDOUS;
-  case aqi::UsAqiCategory::Invalid:
-    return {0, 0, 0};
-  }
-  return {0, 0, 0};
 }
 
 // step_to_type is a private static method of LedService (see go_led.h)
@@ -291,17 +263,17 @@ void LedService::back_animate(BackAnimation animation) {
 }
 
 void LedService::back_update_aqi(float pm25_ugm3) {
-  const int aqi_value = aqi::pm25_to_us_aqi(pm25_ugm3);
-  if (aqi_value == aqi::INVALID_AQI) {
+  const int aqi_value = air_quality::pm25_to_us_aqi(pm25_ugm3);
+  if (aqi_value == air_quality::INVALID_AQI) {
     back_clear_aqi();
     return;
   }
-  const aqi::UsAqiCategory cat = aqi::us_aqi_to_category(aqi_value);
-  if (cat == aqi::UsAqiCategory::Invalid) {
+  const air_quality::UsAqiCategory cat = air_quality::us_aqi_to_category(aqi_value);
+  if (cat == air_quality::UsAqiCategory::Invalid) {
     back_clear_aqi();
     return;
   }
-  back_solid(category_to_rgb(cat));
+  back_solid(air_quality::category_to_rgb(cat));
 }
 
 void LedService::back_clear_aqi() { back_off(); }

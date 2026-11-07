@@ -826,7 +826,7 @@ catch_discover_tests(go_text_wrap_tests)
 add_library(go_led_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/led/go_led.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/aqi.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/air_quality.cpp"
 )
 
 target_include_directories(go_led_test_support PUBLIC
