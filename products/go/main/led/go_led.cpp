@@ -278,6 +278,15 @@ void LedService::back_update_aqi(float pm25_ugm3) {
 
 void LedService::back_clear_aqi() { back_off(); }
 
+void LedService::back_update_co2(int ppm) {
+  const auto category = air_quality::co2_to_category(ppm);
+  if (category == air_quality::Co2Category::Invalid) {
+    back_off();
+    return;
+  }
+  back_solid(air_quality::category_to_rgb(category));
+}
+
 // ===========================================================================
 // Public API -- Touch
 // ===========================================================================

@@ -322,6 +322,7 @@ private:
     Mode,
     AutoLock,
     BackLedBrightness,
+    BackLedIndicator,
     TouchLed,
     Buzzer,
     LocalServer,
@@ -385,6 +386,7 @@ private:
   OperatingMode _setting_mode = OperatingMode::Portable;
   uint8_t _setting_auto_lock = 0;           // 0="Off"
   uint8_t _setting_back_led_brightness = 0; // 0="Off"
+  uint8_t _setting_back_led_indicator = 0;  // 0="AQI"
   uint8_t _setting_touch_led = 0;           // 0="Off"
   uint8_t _setting_buzzer_volume = 0;       // 0="Off"
   uint8_t _setting_local_server = 1;        // 0="Disable", 1="Enable"

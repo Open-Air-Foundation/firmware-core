@@ -154,7 +154,8 @@ TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
   double_press(ui);
   open_row(ui, "Display & Touch");
   check_rows(ui, {"Exit", "Back", "Pinned Chart", "Temperature Unit: C", "Altitude Unit: m",
-                  "PM Display: ug/m3", "Auto Lock: Off", "LED Brightness", "Touch LED: Off"});
+                  "PM Display: ug/m3", "Auto Lock: Off", "LED Indicator: AQI", "LED Brightness",
+                  "Touch LED: Off"});
   double_press(ui);
   open_row(ui, "Hardware Test");
   check_rows(ui, {"Exit", "Back", "Peripheral Test", "GPS Test", "Accelerometer Test",
@@ -464,7 +465,7 @@ TEST_CASE("UIManager: grouped menus wrap and return to their parent",
   const MenuCase cases[] = {
       {nullptr, Screen::Settings, "Operations", "About Device", 8},
       {"Operations", Screen::Operations, "Measure Int.", "Buzzer: Off", 6},
-      {"Display & Touch", Screen::DisplayTouch, "Pinned Chart", "Touch LED: Off", 9},
+      {"Display & Touch", Screen::DisplayTouch, "Pinned Chart", "Touch LED: Off", 10},
       {"Hardware Test", Screen::HardwareTest, "Peripheral Test", "Play Melody", 7},
   };
   for (const auto &item : cases) {
@@ -2995,4 +2996,39 @@ TEST_CASE("UIManager: Local Server is only visible in Stationary and retains its
   ui.sync_settings(settings);
   CHECK(ui.current_screen() == Screen::Operations);
   CHECK(ui.build_values(make_default_ctx()).row_count == 6);
+}
+
+TEST_CASE("UIManager: LED Indicator shows its value and retains the selected option",
+          "[UIManager][settings][led]") {
+  for (const auto initial : {BackLedIndicator::Aqi, BackLedIndicator::Co2}) {
+    UIManager ui(DEFAULT_UI_CONFIG);
+    GoSettings settings{};
+    settings.back_led_indicator = initial;
+    settings.back_led_brightness = LedBrightness::Off;
+    ui.sync_settings(settings);
+    go_to_group(ui, "Display & Touch");
+    auto values = ui.build_values(make_default_ctx());
+    REQUIRE(values.row_count == MAX_LIST_ROWS);
+    select_row(ui, "LED Indicator");
+    values = ui.build_values(make_default_ctx());
+    const char *initial_label =
+        initial == BackLedIndicator::Aqi ? "LED Indicator: AQI" : "LED Indicator: CO2";
+    CHECK(std::string(values.rows[values.selected_row].text) == initial_label);
+    open_row(ui, "LED Indicator");
+    check_rows(ui, {"Exit", "Back", "AQI", "CO2"});
+    CHECK(ui.build_values(make_default_ctx()).selected_row == 2 + static_cast<uint8_t>(initial));
+    const auto next =
+        initial == BackLedIndicator::Aqi ? BackLedIndicator::Co2 : BackLedIndicator::Aqi;
+    select_row(ui, next == BackLedIndicator::Aqi ? "AQI" : "CO2");
+    CHECK(press(ui, InputSource::TouchEnter).action == UIAction::SettingsChanged);
+    REQUIRE(ui.current_screen() == Screen::DisplayTouch);
+    ui.apply_to_settings(settings);
+    CHECK(settings.back_led_indicator == next);
+    CHECK(settings.back_led_brightness == LedBrightness::Off);
+    values = ui.build_values(make_default_ctx());
+    CHECK(std::string(values.rows[values.selected_row].text) ==
+          (next == BackLedIndicator::Aqi ? "LED Indicator: AQI" : "LED Indicator: CO2"));
+    open_row(ui, "LED Indicator");
+    CHECK(ui.build_values(make_default_ctx()).selected_row == 2 + static_cast<uint8_t>(next));
+  }
 }

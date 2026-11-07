@@ -129,6 +129,10 @@ static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource sou
     candidate.back_led_brightness = update.back_led_brightness;
     has_update = true;
   }
+  if (has_go_config_field(update.update_mask, GoConfigField::BackLedIndicator)) {
+    candidate.back_led_indicator = update.back_led_indicator;
+    has_update = true;
+  }
   if (has_go_config_field(update.update_mask, GoConfigField::TouchLedIntensity)) {
     candidate.touch_led_intensity = update.touch_led_intensity;
     has_update = true;
@@ -1022,6 +1026,27 @@ void Orchestrator::apply_config_update(const GoConfigUpdate &update, GoConfigSou
 // Event handlers
 // ---------------------------------------------------------------------------
 
+void Orchestrator::update_back_led_indicator() {
+  // Callers retain ownership guards while diagnostic effects are active.
+  switch (_settings.back_led_indicator) {
+  case BackLedIndicator::Aqi:
+    if (_corrected_measures.pm_a.is_pm_25_valid()) {
+      _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
+    } else {
+      _svc.led_service.back_clear_aqi();
+    }
+    return;
+  case BackLedIndicator::Co2:
+    if (_corrected_measures.co2.is_valid()) {
+      _svc.led_service.back_update_co2(_corrected_measures.co2.co2);
+    } else {
+      _svc.led_service.back_off();
+    }
+    return;
+  }
+  _svc.led_service.back_off();
+}
+
 void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin origin) {
   _measurement_pending = false;
   const bool refreshed = _refresh_pending;
@@ -1051,15 +1076,11 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
 
   _first_measurement_done = true;
 
-  // Back AQI LEDs — show color for valid PM2.5, off for invalid. Suppressed
+  // Back LEDs — show the selected measurement, off for invalid. Suppressed
   // while the peripheral test owns the LEDs, or while the accelerometer test
   // shows its pass/fail colour, so neither is clobbered mid-flow.
   if (!_periph.active && _svc.ui_manager.current_screen() != Screen::AccelTest) {
-    if (_corrected_measures.pm_a.is_pm_25_valid()) {
-      _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
-    } else {
-      _svc.led_service.back_clear_aqi();
-    }
+    update_back_led_indicator();
   }
 
   // PM sensor recovery (V1): after persistent PM failure, power-cycle the
@@ -1476,13 +1497,9 @@ void Orchestrator::on_input(const InputEventData &input) {
     play_synced(_svc.buzzer_service, _svc.led_service, result.melody);
     _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
     _svc.input_service.resume();
-    // Restore back-LED brightness and AQI state.
+    // Restore back-LED brightness and the selected indicator.
     _svc.led_service.back_set_brightness(_settings.back_led_brightness);
-    if (_corrected_measures.pm_a.is_pm_25_valid()) {
-      _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
-    } else {
-      _svc.led_service.back_clear_aqi();
-    }
+    update_back_led_indicator();
     break;
   }
   case UIAction::AckOnboarding:
@@ -1758,11 +1775,7 @@ void Orchestrator::run_led_test() {
   _svc.led_service.touch_set_all(false);
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
-  if (_corrected_measures.pm_a.is_pm_25_valid()) {
-    _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
-  } else {
-    _svc.led_service.back_clear_aqi();
-  }
+  update_back_led_indicator();
   AG_LOGI(TAG, "LED test finished");
 }
 
@@ -1915,16 +1928,12 @@ void Orchestrator::finish_peripheral_test() {
   try_refresh();
   sleep_pm_if_idle();
 
-  // Restore LED/buzzer to persisted settings + live AQI.
+  // Restore LED/buzzer to persisted settings and the selected indicator.
   _svc.led_service.touch_set_all(false); // clear any steady touch LEDs
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   _svc.led_service.touch_set_intensity(_settings.touch_led_intensity);
   _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
-  if (_corrected_measures.pm_a.is_pm_25_valid()) {
-    _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
-  } else {
-    _svc.led_service.back_clear_aqi();
-  }
+  update_back_led_indicator();
 }
 
 // ---------------------------------------------------------------------------
@@ -1974,13 +1983,9 @@ void Orchestrator::finish_gps_test() {
   if (!is_gps_active()) {
     deactivate_gps();
   }
-  // Restore the back LED (the fix cue may have overridden the live AQI colour).
+  // Restore the selected back LED indicator after the fix cue.
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
-  if (_corrected_measures.pm_a.is_pm_25_valid()) {
-    _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
-  } else {
-    _svc.led_service.back_clear_aqi();
-  }
+  update_back_led_indicator();
 }
 
 // ---------------------------------------------------------------------------
@@ -2048,11 +2053,7 @@ void Orchestrator::finish_accel_test() {
     AG_LOGW(TAG, "failed to restore accelerometer capture");
   }
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
-  if (_corrected_measures.pm_a.is_pm_25_valid()) {
-    _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
-  } else {
-    _svc.led_service.back_clear_aqi();
-  }
+  update_back_led_indicator();
 }
 
 void Orchestrator::change_mode(OperatingMode new_mode, bool persist) {
@@ -2215,17 +2216,17 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
   _gps_enabled = _mode != OperatingMode::Offline && _settings.gps_mode != GpsMode::AlwaysOff;
 
   // Recompute before the mode transition renders, even without a new sensor sample.
-  if (mode_changing ||
-      !measurement_corrections_equal(previous_settings.corrections, _settings.corrections)) {
+  const bool corrected_measures_changed =
+      mode_changing ||
+      !measurement_corrections_equal(previous_settings.corrections, _settings.corrections);
+  if (corrected_measures_changed) {
     _corrected_measures =
         apply_measurement_corrections(_raw_measures, effective_measurement_corrections(_settings));
-    if (!_periph.active && _svc.ui_manager.current_screen() != Screen::AccelTest) {
-      if (_corrected_measures.pm_a.is_pm_25_valid()) {
-        _svc.led_service.back_update_aqi(_corrected_measures.pm_a.pm_25);
-      } else {
-        _svc.led_service.back_clear_aqi();
-      }
-    }
+  }
+  if ((corrected_measures_changed ||
+       previous_settings.back_led_indicator != _settings.back_led_indicator) &&
+      !_periph.active && _svc.ui_manager.current_screen() != Screen::AccelTest) {
+    update_back_led_indicator();
   }
 
   if (previous_settings.back_led_brightness != _settings.back_led_brightness) {

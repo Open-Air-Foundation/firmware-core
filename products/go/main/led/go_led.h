@@ -68,6 +68,9 @@ public:
   /// enqueues back_solid() with the resolved color.
   void back_update_aqi(float pm25_ugm3);
 
+  /// Resolve CO2 ppm to its category color. Invalid readings turn the LEDs off.
+  void back_update_co2(int ppm);
+
   /// Convenience: enqueues back_off().  Use when a PM2.5 reading fails
   /// validation so the back LEDs do not show a stale color.
   void back_clear_aqi();

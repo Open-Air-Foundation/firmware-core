@@ -23,6 +23,11 @@ enum class ConfigurationControl : uint8_t {
   Both,
 };
 
+enum class BackLedIndicator : uint8_t {
+  Aqi = 0,
+  Co2 = 1,
+};
+
 enum class GoConfigField : uint32_t {
   PmStandard = 1U << 0,
   TemperatureUnit = 1U << 1,
@@ -42,6 +47,7 @@ enum class GoConfigField : uint32_t {
   TouchLedIntensity = 1U << 15,
   BuzzerEnabled = 1U << 16,
   PinnedChart = 1U << 17,
+  BackLedIndicator = 1U << 18,
 };
 
 constexpr int MEASURE_INTERVAL_SECONDS_MIN = 1;
@@ -79,6 +85,11 @@ inline bool is_led_brightness_valid(int value) {
          value <= static_cast<int>(LedBrightness::Bright);
 }
 
+inline bool is_back_led_indicator_valid(int value) {
+  return value >= static_cast<int>(BackLedIndicator::Aqi) &&
+         value <= static_cast<int>(BackLedIndicator::Co2);
+}
+
 inline bool is_touch_led_intensity_valid(int value) {
   return value >= static_cast<int>(TouchLedIntensity::Off) &&
          value <= static_cast<int>(TouchLedIntensity::Bright);
@@ -107,6 +118,7 @@ struct GoConfigUpdate {
   int measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
   GpsMode gps_mode = GpsMode::OnWhenTracking;
   LedBrightness back_led_brightness = LedBrightness::Off;
+  BackLedIndicator back_led_indicator = BackLedIndicator::Aqi;
   TouchLedIntensity touch_led_intensity = TouchLedIntensity::Off;
   bool buzzer_enabled = false;
   int co2_abc_days = CO2_ABC_DAYS_DEFAULT;

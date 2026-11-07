@@ -1133,6 +1133,7 @@ void LedService::back_set_brightness(LedBrightness /*brightness*/) {}
 void LedService::back_play(const BackStep * /*steps*/, uint8_t /*count*/) {}
 void LedService::back_animate(BackAnimation /*animation*/) {}
 void LedService::back_update_aqi(float /*pm25_ugm3*/) {}
+void LedService::back_update_co2(int /*ppm*/) {}
 void LedService::back_clear_aqi() {}
 
 void LedService::touch_flash(TouchPad /*pad*/) {}
