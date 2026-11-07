@@ -125,6 +125,7 @@ TEST_CASE("GET config serializes the provider config", "[handler][config]") {
   config.config.temperature_unit = "f";
   config.config.altitude_unit = "ft";
   config.config.pinned_chart = "co2";
+  config.config.back_led_indicator = "co2";
 
   LocalServer ls(server, {measures, &config, ConfigAccess::ReadOnly});
   REQUIRE(ls.begin());
@@ -137,6 +138,7 @@ TEST_CASE("GET config serializes the provider config", "[handler][config]") {
   REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "temperatureUnit")->valuestring, "f") == 0);
   REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "altitudeUnit")->valuestring, "ft") == 0);
   REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "pinnedChart")->valuestring, "co2") == 0);
+  REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "backLedIndicator")->valuestring, "co2") == 0);
   cJSON_Delete(root);
 }
 
@@ -185,6 +187,33 @@ TEST_CASE("PUT config maps submit results to status codes", "[handler][config]")
     REQUIRE(resp.body_size() == 0);
     REQUIRE(config.submit_called);
     REQUIRE(*config.last_submitted.altitude_unit == "m");
+  }
+
+  SECTION("back LED indicator is admitted without brightness") {
+    config.submit_result = {ConfigSubmitStatus::Accepted, ConfigFieldId::None};
+    HttpResponse resp;
+    put(R"({"backLedIndicator":"co2"})", resp);
+    REQUIRE(resp.status == HttpStatus::Accepted);
+    REQUIRE(config.submit_called);
+    CHECK(config.last_submitted.back_led_indicator == "co2");
+    CHECK_FALSE(config.last_submitted.back_led_brightness.has_value());
+  }
+
+  SECTION("invalid indicator rejects the whole request before reaching the provider") {
+    HttpResponse resp;
+    put(R"({"backLedBrightness":2,"backLedIndicator":"pm25-aqi"})", resp);
+    REQUIRE(resp.status == HttpStatus::BadRequest);
+    CHECK(error_code(resp) == "invalid_value");
+    CHECK(error_field(resp) == "backLedIndicator");
+    CHECK_FALSE(config.submit_called);
+  }
+
+  SECTION("unsupported indicator reports the canonical field") {
+    config.submit_result = {ConfigSubmitStatus::NotSupported, ConfigFieldId::BackLedIndicator};
+    HttpResponse resp;
+    put(R"({"backLedIndicator":"aqi"})", resp);
+    REQUIRE(resp.status == HttpStatus::NotFound);
+    CHECK(error_field(resp) == "backLedIndicator");
   }
 
   SECTION("pinned chart is admitted as a partial update") {

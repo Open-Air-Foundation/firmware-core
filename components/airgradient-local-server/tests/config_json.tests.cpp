@@ -39,6 +39,7 @@ TEST_CASE("config parse: valid partial body sets only present keys", "[config][p
   // Absent keys stay nullopt.
   REQUIRE_FALSE(cfg.country.has_value());
   REQUIRE_FALSE(cfg.led_mode.has_value());
+  REQUIRE_FALSE(cfg.back_led_indicator.has_value());
 }
 
 TEST_CASE("config parse: all enum fields accept catalog values", "[config][parse]") {
@@ -340,6 +341,7 @@ TEST_CASE("config serialize: emits only present fields", "[config][serialize]") 
   REQUIRE(std::strcmp(cJSON_GetObjectItem(root, "gpsMode")->valuestring, "always") == 0);
   REQUIRE(cJSON_GetObjectItem(root, "frontLedBrightness")->valueint == 1);
   REQUIRE(cJSON_GetObjectItem(root, "backLedBrightness")->valueint == 2);
+  REQUIRE_FALSE(cJSON_HasObjectItem(root, "backLedIndicator"));
   REQUIRE(cJSON_GetObjectItem(root, "touchLedIntensity")->valueint == 2);
   REQUIRE(cJSON_IsTrue(cJSON_GetObjectItem(root, "buzzerEnabled")));
   // Absent fields omitted.
@@ -442,4 +444,34 @@ TEST_CASE("config field wire keys map correctly", "[config][parse]") {
   REQUIRE(std::strcmp(config_json::config_field_wire_key(ConfigFieldId::BuzzerEnabled),
                       "buzzerEnabled") == 0);
   REQUIRE(config_json::config_field_wire_key(ConfigFieldId::None) == nullptr);
+}
+
+TEST_CASE("config back LED indicator round-trips exact choices", "[config][parse][serialize]") {
+  for (const char *value : {"aqi", "co2"}) {
+    LocalServerConfig cfg{};
+    const auto result = parse(std::string("{\"backLedIndicator\":\"") + value + "\"}", cfg);
+    REQUIRE(result.status == config_json::ParseStatus::Ok);
+    REQUIRE(cfg.back_led_indicator == value);
+    CHECK_FALSE(cfg.back_led_brightness.has_value());
+    char buffer[128] = {};
+    REQUIRE(config_json::serialize(cfg, buffer, sizeof(buffer)) > 0);
+    LocalServerConfig decoded{};
+    REQUIRE(parse(buffer, decoded).status == config_json::ParseStatus::Ok);
+    CHECK(decoded.back_led_indicator == value);
+    CHECK_FALSE(decoded.back_led_brightness.has_value());
+  }
+}
+
+TEST_CASE("config back LED indicator rejects unknown choices and incorrect types",
+          "[config][parse]") {
+  for (const char *value : {"\"AQI\"", "\"CO2\"", "\"pm25-aqi\"", "\"pm\"", "\"off\"", "\"\"", "0",
+                            "true", "null", "[]", "{}"}) {
+    CAPTURE(value);
+    LocalServerConfig cfg{};
+    const auto result = parse(std::string("{\"backLedIndicator\":") + value + "}", cfg);
+    REQUIRE(result.status == config_json::ParseStatus::InvalidValue);
+    CHECK(result.field == ConfigFieldId::BackLedIndicator);
+    CHECK_FALSE(cfg.back_led_indicator.has_value());
+    CHECK(std::string(config_json::config_field_wire_key(result.field)) == "backLedIndicator");
+  }
 }

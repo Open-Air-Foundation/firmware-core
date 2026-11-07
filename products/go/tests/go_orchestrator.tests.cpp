@@ -12819,3 +12819,82 @@ TEST_CASE("indicator config updates honor the field mask and reject invalid choi
   CHECK(A::settings(orch).back_led_indicator == BackLedIndicator::Co2);
   CHECK(test_spy::led_back_off_count == 0);
 }
+
+TEST_CASE("local indicator update persists and publishes only after activation",
+          "[Orchestrator][local-api][led]") {
+  TestFixture f;
+  f.settings.back_led_brightness = LedBrightness::Mid;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  f.local_api.publish_config_snapshot(A::settings(orch));
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  CP2_ALLOW_CONFIG_WRITES(f);
+  MeasuresAGo sample{};
+  sample.co2.co2 = 1800;
+  sample.pm_a.pm_25 = 12.5f;
+  A::on_sensor_data(orch, sample);
+  test_spy::reset();
+
+  LocalServerConfig partial{};
+  partial.back_led_indicator = "co2";
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  CHECK(f.local_api.get_config().back_led_indicator == "aqi");
+  CHECK(test_spy::led_back_update_co2_count == 0);
+
+  SECTION("successful persistence activates and reports CO2") {
+    REQUIRE_CALL(f.mock_config, set_int(trompeloeil::_, static_cast<int>(BackLedIndicator::Co2)))
+        .WITH(std::string(_1) == "bli")
+        .RETURN(ConfigStoreResult::OK);
+    dispatch_next_local_request(f, orch);
+    CHECK(A::settings(orch).back_led_indicator == BackLedIndicator::Co2);
+    CHECK(f.local_api.get_config().back_led_indicator == "co2");
+    CHECK(f.local_api.get_config().back_led_brightness == 2);
+    CHECK(test_spy::led_last_co2_ppm == 1800);
+    CHECK(test_spy::led_back_update_co2_count == 1);
+    CHECK(test_spy::led_back_update_aqi_count == 0);
+  }
+  SECTION("failed persistence retains AQI and its current output") {
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+    dispatch_next_local_request(f, orch);
+    CHECK(A::settings(orch).back_led_indicator == BackLedIndicator::Aqi);
+    CHECK(f.local_api.get_config().back_led_indicator == "aqi");
+    CHECK(test_spy::led_back_update_co2_count == 0);
+    CHECK(test_spy::led_back_update_aqi_count == 0);
+  }
+}
+
+TEST_CASE(
+    "local brightness-only update preserves CO2 and indicator-only update preserves brightness",
+    "[Orchestrator][local-api][led]") {
+  TestFixture f;
+  f.settings.back_led_indicator = BackLedIndicator::Co2;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  f.local_api.publish_config_snapshot(A::settings(orch));
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  CP2_ALLOW_CONFIG_WRITES(f);
+  MeasuresAGo sample{};
+  sample.co2.co2 = 1200;
+  sample.pm_a.pm_25 = 12.5f;
+  A::on_sensor_data(orch, sample);
+  test_spy::reset();
+
+  LocalServerConfig partial{};
+  partial.back_led_brightness = 3;
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  dispatch_next_local_request(f, orch);
+  CHECK(A::settings(orch).back_led_indicator == BackLedIndicator::Co2);
+  CHECK(f.local_api.get_config().back_led_indicator == "co2");
+  CHECK(f.local_api.get_config().back_led_brightness == 3);
+  CHECK(test_spy::led_last_back_brightness == LedBrightness::Bright);
+  CHECK(test_spy::led_back_update_aqi_count == 0);
+
+  partial = LocalServerConfig{};
+  partial.back_led_indicator = "aqi";
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  dispatch_next_local_request(f, orch);
+  CHECK(f.local_api.get_config().back_led_indicator == "aqi");
+  CHECK(f.local_api.get_config().back_led_brightness == 3);
+  CHECK(test_spy::led_back_update_aqi_count == 1);
+  CHECK(test_spy::led_last_aqi_pm25 == 12.5f);
+}

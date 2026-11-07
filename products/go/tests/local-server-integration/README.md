@@ -75,7 +75,8 @@ exit.
 
 Persisted mutation tests require `--ago-allow-config-write`. They round-trip the
 temperature and altitude units, Pinned Chart, measurement and GPS settings,
-back and touch LED levels, buzzer, CO2 ABC period, and TVOC/NOx learning offsets.
+back LED indicator (`aqi`/`co2`), back and touch LED levels, buzzer, CO2 ABC period,
+and TVOC/NOx learning offsets.
 Each parameterized case
 changes one field, polls the asynchronous GET snapshot for convergence, and
 restores that field during fixture teardown. They run only when
@@ -87,8 +88,8 @@ firmware regression accepts and persists an invalid value, teardown restores the
 baseline by enqueuing the original value after the test request.
 
 These tests can briefly change measurement cadence, GPS operation, indicator
-brightness, buzzer enablement, and sensor algorithm configuration. Run them only
-on a dedicated device and do not use `pytest-xdist`.
+selection and brightness, buzzer enablement, and sensor algorithm configuration.
+Run them only on a dedicated device and do not use `pytest-xdist`.
 
 CO2 calibration is physical and fire-and-forget over HTTP. It runs only with
 `--ago-allow-calibration`; the HTTP response confirms queue admission, not
@@ -117,6 +118,8 @@ unknown-key rejection, and omission of invalid values rather than JSON `null`.
 Validates the complete Go configuration schema and safe empty-update admission.
 Opt-in parameterized cases round-trip and restore the display-unit, Pinned
 Chart, timing, GPS, LED, buzzer, CO2 ABC, and gas-learning settings.
+The schema requires `backLedIndicator` to be `aqi` or `co2`; its round-trip case
+switches to the other indicator and restores the original selection.
 
 ### `test_errors.py` — Error Contract
 
