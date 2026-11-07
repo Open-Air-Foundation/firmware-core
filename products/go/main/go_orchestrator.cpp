@@ -2241,8 +2241,9 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
     _svc.cloud.set_disable_cloud(_settings.disable_cloud);
   }
   if (!mode_changing && _mode == OperatingMode::Stationary &&
-      previous_settings.wifi_power_save_enabled != _settings.wifi_power_save_enabled) {
-    _svc.wifi.set_power_save_enabled(_settings.wifi_power_save_enabled);
+      previous_settings.local_server_enabled != _settings.local_server_enabled) {
+    _svc.wifi.set_power_save_enabled(!_settings.local_server_enabled);
+    (void)activate_local_endpoint();
   }
   if (previous_settings.configuration_control != _settings.configuration_control) {
     _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
@@ -2724,7 +2725,7 @@ void Orchestrator::enter_stationary() {
   // Idempotent — cheap no-op on warm Stationary re-entry. Portable-only
   // boots never reach this line.
   _svc.board.init_wifi_subsystem();
-  _svc.wifi.set_power_save_enabled(_settings.wifi_power_save_enabled);
+  _svc.wifi.set_power_save_enabled(!_settings.local_server_enabled);
   log_heap(TAG, "wifi.enter-stationary:after-init");
 
   // Silent unlock + snackbar clear.  Required so a cold-boot Locked
@@ -3101,7 +3102,19 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
 }
 
 bool Orchestrator::activate_local_endpoint() {
-  if (_mode != OperatingMode::Stationary || !_svc.wifi.is_online()) {
+  if (_mode != OperatingMode::Stationary || _svc.wifi.is_provisioning()) {
+    _local_api_activation_retry_deadline_ms = 0;
+    return false;
+  }
+  if (!_settings.local_server_enabled) {
+    _local_api_activation_retry_deadline_ms = 0;
+    _svc.local_api.set_access(ConfigAccess::Disabled);
+    discard_local_requests("local server disabled");
+    // Also release any listener retained by the provisioning handoff.
+    _svc.wifi.stop_local_endpoint();
+    return false;
+  }
+  if (!_svc.wifi.is_online()) {
     _local_api_activation_retry_deadline_ms = 0;
     return false;
   }

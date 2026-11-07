@@ -197,8 +197,13 @@ needed for scan or verification, then turned off again to preserve battery.
 
 ### Local Network Integration
 
-Once Stationary Wi-Fi has an IP address and the local routes are ready, LAN
-clients can query the local API by address. After mDNS activation also succeeds,
+**Settings → Operations → Local Server** enables or disables local access. It
+is shown only in Stationary and defaults to Enable. Disabling it stops the API
+and discovery, enables Wi-Fi power saving, and keeps cloud connectivity
+available. The selection is saved across restarts and mode changes.
+
+When enabled and connected, LAN clients can query the local API by address
+once its routes are ready. After mDNS activation also succeeds,
 clients can discover the Go as `airgradient_<serial>.local`. The API exposes the
 latest corrected common measurements; GPS, battery, route history, and other
 Go-specific resources are not part of this local v1 surface.

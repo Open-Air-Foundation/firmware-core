@@ -66,8 +66,8 @@ static constexpr uint8_t TOUCH_LED_COUNT = 3;
 static const char *const BUZZER_OPTIONS[] = {"Off", "On"};
 static constexpr uint8_t BUZZER_COUNT = 2;
 
-static const char *const WIFI_POWER_SAVE_OPTIONS[] = {"Disable", "Enable"};
-static constexpr uint8_t WIFI_POWER_SAVE_COUNT = 2;
+static const char *const LOCAL_SERVER_OPTIONS[] = {"Disable", "Enable"};
+static constexpr uint8_t LOCAL_SERVER_COUNT = 2;
 
 static const char *const MELODY_OPTIONS[] = {"Chime", "Tetris"};
 static constexpr uint8_t MELODY_COUNT = 2;
@@ -103,12 +103,11 @@ static constexpr uint8_t MENU_MODE = 2;
 static constexpr uint8_t MENU_SETTINGS = 3;
 static constexpr uint8_t SETTINGS_OPERATIONS = 2;
 static constexpr uint8_t SETTINGS_DISPLAY_TOUCH = 3;
-static constexpr uint8_t SETTINGS_POWER_SAVING = 4;
-static constexpr uint8_t SETTINGS_HARDWARE_TEST = 5;
-static constexpr uint8_t SETTINGS_CLEAR_DATA = 6;
-static constexpr uint8_t SETTINGS_SETUP_GUIDE = 7;
-static constexpr uint8_t SETTINGS_ABOUT = 8;
-static constexpr uint8_t SETTINGS_TOTAL = 9;        // indices 0..8
+static constexpr uint8_t SETTINGS_HARDWARE_TEST = 4;
+static constexpr uint8_t SETTINGS_CLEAR_DATA = 5;
+static constexpr uint8_t SETTINGS_SETUP_GUIDE = 6;
+static constexpr uint8_t SETTINGS_ABOUT = 7;
+static constexpr uint8_t SETTINGS_TOTAL = 8;        // indices 0..7
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
 static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
@@ -268,7 +267,6 @@ UIActionResult UIManager::handle_input(InputSource source, InputType type) {
     return dispatch_settings(source, type);
   case Screen::Operations:
   case Screen::DisplayTouch:
-  case Screen::PowerSaving:
     return dispatch_settings_group(source, type);
   case Screen::SettingsChoice:
     return dispatch_settings_choice(source, type);
@@ -375,7 +373,6 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     break;
   case Screen::Operations:
   case Screen::DisplayTouch:
-  case Screen::PowerSaving:
     populate_settings_group_rows(v);
     break;
   case Screen::SettingsChoice:
@@ -493,7 +490,6 @@ bool UIManager::is_on_menu_screen() const {
   case Screen::Settings:
   case Screen::Operations:
   case Screen::DisplayTouch:
-  case Screen::PowerSaving:
   case Screen::SettingsChoice:
   case Screen::TagList:
   case Screen::Confirm:
@@ -603,7 +599,19 @@ void UIManager::sync_settings(const GoSettings &s) {
   _setting_aqi_led = static_cast<uint8_t>(s.back_led_brightness);
   _setting_touch_led = static_cast<uint8_t>(s.touch_led_intensity);
   _setting_buzzer_volume = s.buzzer_enabled ? 1 : 0;
-  _setting_wifi_power_save = s.wifi_power_save_enabled ? 1 : 0;
+  _setting_local_server = s.local_server_enabled ? 1 : 0;
+  if (_setting_mode != OperatingMode::Stationary) {
+    if (_screen == Screen::SettingsChoice && _editing_setting_id == SettingId::LocalServer) {
+      _screen = Screen::Operations;
+    }
+    if (_screen == Screen::Operations) {
+      uint8_t count = 0;
+      group_items(_screen, count);
+      if (_group_index >= count + 2) {
+        _group_index = 2;
+      }
+    }
+  }
 }
 
 void UIManager::apply_to_settings(GoSettings &settings) const {
@@ -642,7 +650,7 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
   settings.back_led_brightness = static_cast<LedBrightness>(_setting_aqi_led);
   settings.touch_led_intensity = static_cast<TouchLedIntensity>(_setting_touch_led);
   settings.buzzer_enabled = (_setting_buzzer_volume == 1);
-  settings.wifi_power_save_enabled = (_setting_wifi_power_save == 1);
+  settings.local_server_enabled = (_setting_local_server == 1);
 }
 
 void UIManager::reset_to_home() {
@@ -823,10 +831,6 @@ void UIManager::navigate_back() {
   case Screen::DisplayTouch:
     _screen = Screen::Settings;
     _settings_index = SETTINGS_DISPLAY_TOUCH;
-    break;
-  case Screen::PowerSaving:
-    _screen = Screen::Settings;
-    _settings_index = SETTINGS_POWER_SAVING;
     break;
   case Screen::SettingsChoice:
     _screen = _choice_parent;
@@ -1009,28 +1013,26 @@ void UIManager::browse_metric(int delta) {
 // Settings choice helpers
 // ---------------------------------------------------------------------------
 
-const UIManager::SettingId *UIManager::group_items(Screen screen, uint8_t &count) {
+const UIManager::SettingId *UIManager::group_items(Screen screen, uint8_t &count) const {
   static constexpr SettingId OPERATIONS[] = {SettingId::MeasureInterval, SettingId::Co2Calibration,
-                                             SettingId::GpsMode, SettingId::Buzzer};
+                                             SettingId::GpsMode, SettingId::Buzzer,
+                                             SettingId::LocalServer};
   static constexpr SettingId DISPLAY_TOUCH[] = {
       SettingId::PinnedChart, SettingId::Units,  SettingId::AltitudeUnit, SettingId::PmDisplay,
       SettingId::AutoLock,    SettingId::AqiLed, SettingId::TouchLed};
-  static constexpr SettingId POWER_SAVING[] = {SettingId::WifiPowerSaving};
   static_assert(sizeof(OPERATIONS) / sizeof(OPERATIONS[0]) + 2 <= MAX_LIST_ROWS);
   static_assert(sizeof(DISPLAY_TOUCH) / sizeof(DISPLAY_TOUCH[0]) + 2 <= MAX_LIST_ROWS);
-  static_assert(sizeof(POWER_SAVING) / sizeof(POWER_SAVING[0]) + 2 <= MAX_LIST_ROWS);
 
   if (screen == Screen::Operations) {
     count = sizeof(OPERATIONS) / sizeof(OPERATIONS[0]);
+    if (_setting_mode != OperatingMode::Stationary) {
+      --count; // Local Server is the final item and only available in Stationary.
+    }
     return OPERATIONS;
   }
   if (screen == Screen::DisplayTouch) {
     count = sizeof(DISPLAY_TOUCH) / sizeof(DISPLAY_TOUCH[0]);
     return DISPLAY_TOUCH;
-  }
-  if (screen == Screen::PowerSaving) {
-    count = sizeof(POWER_SAVING) / sizeof(POWER_SAVING[0]);
-    return POWER_SAVING;
   }
   count = 0;
   return nullptr;
@@ -1069,8 +1071,8 @@ uint8_t UIManager::setting_option_count(SettingId setting_id) const {
     return TOUCH_LED_COUNT;
   case SettingId::Buzzer:
     return BUZZER_COUNT;
-  case SettingId::WifiPowerSaving:
-    return WIFI_POWER_SAVE_COUNT;
+  case SettingId::LocalServer:
+    return LOCAL_SERVER_COUNT;
   case SettingId::PlayMelody:
     return MELODY_COUNT;
   default:
@@ -1109,8 +1111,8 @@ uint8_t UIManager::setting_current_option(SettingId setting_id) const {
     return _setting_touch_led;
   case SettingId::Buzzer:
     return _setting_buzzer_volume;
-  case SettingId::WifiPowerSaving:
-    return _setting_wifi_power_save;
+  case SettingId::LocalServer:
+    return _setting_local_server;
   case SettingId::PlayMelody:
     return _setting_melody;
   default:
@@ -1171,9 +1173,9 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
   case SettingId::Buzzer:
     _setting_buzzer_volume = option_index;
     break;
-  case SettingId::WifiPowerSaving:
-    if (option_index < WIFI_POWER_SAVE_COUNT)
-      _setting_wifi_power_save = option_index;
+  case SettingId::LocalServer:
+    if (option_index < LOCAL_SERVER_COUNT)
+      _setting_local_server = option_index;
     break;
   case SettingId::PlayMelody:
     _setting_melody = option_index;
@@ -1300,9 +1302,6 @@ UIActionResult UIManager::dispatch_settings(InputSource source, InputType type) 
       break;
     case SETTINGS_DISPLAY_TOUCH:
       open_settings_group(Screen::DisplayTouch);
-      break;
-    case SETTINGS_POWER_SAVING:
-      open_settings_group(Screen::PowerSaving);
       break;
     case SETTINGS_HARDWARE_TEST:
       open_hardware_test();
@@ -1873,7 +1872,6 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
   copy_row(v, 1, "Back", false);
   copy_row(v, SETTINGS_OPERATIONS, "Operations", false);
   copy_row(v, SETTINGS_DISPLAY_TOUCH, "Display & Touch", false);
-  copy_row(v, SETTINGS_POWER_SAVING, "Power Saving", false);
   copy_row(v, SETTINGS_HARDWARE_TEST, "Hardware Test", false);
   copy_row(v, SETTINGS_CLEAR_DATA, "Clear Data", false);
   copy_row(v, SETTINGS_SETUP_GUIDE, "Setup Guide", false);
@@ -1938,8 +1936,8 @@ void UIManager::populate_settings_group_rows(DisplayValues &v) const {
     case SettingId::Buzzer:
       (void)snprintf(label, sizeof(label), "Buzzer: %s", BUZZER_OPTIONS[_setting_buzzer_volume]);
       break;
-    case SettingId::WifiPowerSaving:
-      (void)snprintf(label, sizeof(label), "Wi-Fi Power Saving");
+    case SettingId::LocalServer:
+      (void)snprintf(label, sizeof(label), "Local Server");
       break;
     default:
       break;
@@ -1997,8 +1995,8 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   case SettingId::Buzzer:
     options = BUZZER_OPTIONS;
     break;
-  case SettingId::WifiPowerSaving:
-    options = WIFI_POWER_SAVE_OPTIONS;
+  case SettingId::LocalServer:
+    options = LOCAL_SERVER_OPTIONS;
     break;
   case SettingId::PlayMelody:
     options = MELODY_OPTIONS;

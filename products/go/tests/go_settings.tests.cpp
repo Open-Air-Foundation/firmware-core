@@ -996,3 +996,28 @@ TEST_CASE("pinned chart rejects invalid settings and recovers corrupt persisted 
   CHECK_FALSE(save_go_settings(store, settings));
   CHECK(store.write_attempt_count() == 0);
 }
+
+TEST_CASE("Local Server defaults enabled regardless of legacy Wi-Fi power saving",
+          "[settings][local-server]") {
+  FakeConfigStore store;
+  CHECK(load_go_settings(store).local_server_enabled);
+  for (bool legacy_enabled : {false, true}) {
+    REQUIRE(store.set_bool("wps", legacy_enabled) == ConfigStoreResult::OK);
+    CHECK(load_go_settings(store).local_server_enabled);
+  }
+}
+
+TEST_CASE("Local Server selection is persisted and participates in settings equality",
+          "[settings][local-server]") {
+  FakeConfigStore store;
+  for (bool enabled : {false, true}) {
+    GoSettings settings;
+    settings.local_server_enabled = enabled;
+    REQUIRE(save_go_settings(store, settings));
+    const auto loaded = load_go_settings(store);
+    CHECK(loaded.local_server_enabled == enabled);
+    CHECK(loaded.equals(settings));
+    settings.local_server_enabled = !enabled;
+    CHECK_FALSE(loaded.equals(settings));
+  }
+}

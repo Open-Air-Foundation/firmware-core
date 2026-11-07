@@ -237,12 +237,15 @@ extern bool wifi_start_provisioning_called;
 extern ProvisioningTransport wifi_start_provisioning_transport;
 extern bool wifi_switch_transport_called;
 extern bool wifi_stop_provisioning_called;
+extern bool wifi_provisioning_active;
 extern bool wifi_stop_provisioning_stop_http;
 extern bool wifi_ensure_local_http_result;
 extern bool wifi_ensure_local_mdns_result;
 extern uint32_t wifi_ensure_local_http_count;
 extern uint32_t wifi_ensure_local_mdns_count;
 extern uint32_t wifi_stop_local_endpoint_count;
+extern bool wifi_power_save_enabled;
+extern uint32_t wifi_set_power_save_count;
 extern bool wifi_tick_called;
 extern uint32_t wifi_next_deadline_ms;
 extern bool wifi_is_online;
@@ -12456,4 +12459,141 @@ TEST_CASE("button wake: empty cache uses presentation fallback and invalid lates
   }
   CHECK_FALSE(A::first_measurement_done(orch));
   CHECK(test_spy::measurement_requested);
+}
+
+TEST_CASE("Local Server toggles live and cancels pending activation retries",
+          "[Orchestrator][stationary][local_endpoint][settings]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_has_been_online = true;
+  test_spy::wifi_ensure_local_mdns_result = false;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+  REQUIRE(f.local_api.access() == ConfigAccess::ReadWrite);
+  REQUIRE(A::local_api_activation_retry_deadline_ms(orch) != 0);
+  const auto epoch = f.local_api.queue_epoch();
+
+  SECTION("while connected") {}
+  SECTION("while disconnected") { test_spy::wifi_is_online = false; }
+
+  auto candidate = A::settings(orch);
+  candidate.local_server_enabled = false;
+  f.ui_manager.sync_settings(candidate);
+  A::apply_settings_change(orch);
+  REQUIRE_FALSE(A::settings(orch).local_server_enabled);
+  CHECK(test_spy::wifi_power_save_enabled);
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 1);
+  CHECK(f.local_api.access() == ConfigAccess::Disabled);
+  CHECK(f.local_api.queue_epoch() != epoch);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
+  CHECK_FALSE(test_spy::wifi_shutdown_called);
+
+  f._exp_time = NAMED_ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
+  A::check_timers(orch);
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+  test_spy::wifi_is_online = true;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+  CHECK(f.local_api.access() == ConfigAccess::Disabled);
+
+  test_spy::wifi_ensure_local_mdns_result = true;
+  candidate.local_server_enabled = true;
+  f.ui_manager.sync_settings(candidate);
+  A::apply_settings_change(orch);
+  CHECK(A::settings(orch).local_server_enabled);
+  CHECK_FALSE(test_spy::wifi_power_save_enabled);
+  CHECK(test_spy::wifi_ensure_local_http_count == 2);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+}
+
+TEST_CASE("Local Server enable waits for Wi-Fi when Stationary is disconnected",
+          "[Orchestrator][stationary][local_endpoint][settings]") {
+  TestFixture f;
+  f.settings.local_server_enabled = false;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = false;
+  auto candidate = A::settings(orch);
+  candidate.local_server_enabled = true;
+  REQUIRE(A::activate_settings_candidate(orch, candidate, false));
+  CHECK_FALSE(test_spy::wifi_power_save_enabled);
+  CHECK(test_spy::wifi_ensure_local_http_count == 0);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
+  test_spy::wifi_is_online = true;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+}
+
+TEST_CASE("Local Server save failure leaves running server and power policy unchanged",
+          "[Orchestrator][stationary][local_endpoint][settings]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+  auto candidate = A::settings(orch);
+  candidate.local_server_enabled = false;
+  f.ui_manager.sync_settings(candidate);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+  A::apply_settings_change(orch);
+  CHECK(A::settings(orch).local_server_enabled);
+  f.ui_manager.apply_to_settings(candidate);
+  CHECK(candidate.local_server_enabled);
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 0);
+  CHECK(test_spy::wifi_set_power_save_count == 0);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+}
+
+TEST_CASE("Stationary entry derives Wi-Fi power saving from Local Server preference",
+          "[Orchestrator][stationary][local_endpoint][settings]") {
+  for (bool enabled : {false, true}) {
+    TestFixture f;
+    f.settings.local_server_enabled = enabled;
+    auto orch = f.make_orchestrator();
+    CP2_ALLOW_CONFIG_WRITES(f);
+    test_spy::wifi_has_saved_networks = true;
+    A::change_mode(orch, OperatingMode::Stationary);
+    CHECK(test_spy::wifi_power_save_enabled == !enabled);
+    CHECK(test_spy::wifi_set_power_save_count == 1);
+    test_spy::wifi_is_online = true;
+    A::on_wifi_connected(orch, 0x0100A8C0);
+    CHECK(test_spy::wifi_ensure_local_http_count == (enabled ? 1 : 0));
+    CHECK(test_spy::cloud_start_count == 1);
+
+    A::change_mode(orch, OperatingMode::Portable);
+    CHECK(A::settings(orch).local_server_enabled == enabled);
+    test_spy::wifi_is_online = false;
+    A::change_mode(orch, OperatingMode::Stationary);
+    CHECK(A::settings(orch).local_server_enabled == enabled);
+    CHECK(test_spy::wifi_power_save_enabled == !enabled);
+  }
+}
+
+TEST_CASE("Disabled Local Server releases provisioning listener and allows cloud startup",
+          "[Orchestrator][stationary][local_endpoint][provisioning]") {
+  TestFixture f;
+  f.settings.local_server_enabled = false;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_provisioning_active = true;
+  test_spy::wifi_is_online = true;
+  A::on_wifi_connected(orch, 0x0100A8C0);
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 0);
+
+  A::dispatch(orch, make_provisioning_event(ProvisioningEvent::Connected));
+  CHECK(test_spy::wifi_stop_provisioning_called);
+  CHECK(test_spy::wifi_stop_local_endpoint_count == 1);
+  CHECK(test_spy::wifi_ensure_local_http_count == 0);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 0);
+  CHECK(f.local_api.access() == ConfigAccess::Disabled);
+  CHECK(test_spy::cloud_start_count == 1);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
 }

@@ -59,9 +59,15 @@ See [`go_local_api.h`](../main/go_local_api.h) for full signatures.
 
 ### Availability and Discovery
 
-The endpoint exists only while Go is in Stationary mode and has reached its
-first successful IP connection. Portable and Offline (displayed as
-**Energy Saving**) modes do not expose it.
+Local Server is controlled through **Settings → Operations → Local Server**,
+visible only in Stationary mode, including while Wi-Fi is disconnected. The
+selection defaults to Enable and persists across restarts and mode changes.
+
+Enable starts the local API and discovery when Stationary Wi-Fi connects and
+disables Wi-Fi power saving for reliable access. Disable stops both, clears
+queued requests and activation retries, and enables Wi-Fi power saving. Cloud
+connectivity continues. Portable and **Energy Saving** modes do not expose the
+endpoint.
 
 The Go configuration uses plain HTTP on `CONFIG_AG_HTTP_PORT`, currently port
 80, and advertises this profile after the HTTP routes are reachable:
@@ -259,6 +265,8 @@ open.
 
 ### Endpoint Lifecycle
 
+With Local Server enabled:
+
 ```mermaid
 stateDiagram-v2
     [*] --> Connecting: enter Stationary
@@ -268,13 +276,13 @@ stateDiagram-v2
     Provisioning --> Inactive: abort or mode change
     Active --> Reconnecting: transient link loss
     Reconnecting --> Active: IP returns
-    Active --> Inactive: leave Stationary
+    Active --> Inactive: disable Local Server or leave Stationary
     Inactive --> [*]
 ```
 
-When the first-IP `WifiConnected` event reaches the orchestrator, it registers
-local routes, starts or confirms the shared listener, publishes RSSI, enables
-read/write admission, and then starts local mDNS. Route registration or listener
+With Local Server enabled, the first-IP `WifiConnected` event triggers endpoint
+activation. The orchestrator registers routes, starts or confirms the listener,
+publishes RSSI, enables read/write admission, then starts mDNS. Route or listener
 startup failure rolls back the local routes and leaves access disabled. mDNS
 failure leaves the reachable HTTP endpoint active. Either failure schedules
 another activation attempt after `LOCAL_API_ACTIVATION_RETRY_MS`, which is 5
@@ -287,20 +295,21 @@ preserves the provisioning success response hold, stops provisioning without
 stopping the HTTP listener, removes provisioning ownership, then registers the
 local routes and starts local mDNS. BLE-only provisioning may not have started
 the listener, so the same idempotent local activation path starts it when
-needed.
+needed. If Local Server is disabled, the handoff stops any retained listener
+and leaves local routes and discovery inactive.
 
-After a Stationary session has been online, a transient disconnect does not
-return to provisioning. It omits `wifiRssi`, retains local routes and the HTTP
-listener, leaves admitted FIFO work intact, and requests a reconnect after the
+With Local Server enabled, a transient disconnect after the first connection
+does not return to provisioning. It omits `wifiRssi`, retains local routes and
+the HTTP listener, leaves admitted FIFO work intact, and requests a reconnect after the
 configured 5-second delay. The reconnect uses saved networks when present or
 retries the transient factory-default network otherwise. The `StaIpAuto` mDNS
 profile follows the STA address lifecycle; reconnect reuses the local server
 and starts mDNS again instead of rebuilding the route set.
 
-Entering provisioning, leaving Stationary, and entering committed OTA clear the
-mixed FIFO and increment its epoch. Stale central events therefore cannot pop
-requests admitted in a later endpoint generation. Leaving Stationary also
-disables admission, clears mDNS, stops the listener, and unregisters local
+Disabling Local Server, entering provisioning, leaving Stationary, and entering
+committed OTA clear the mixed FIFO and increment its epoch. Stale central events
+therefore cannot pop requests admitted in a later endpoint generation. Leaving
+Stationary also disables admission, clears mDNS, stops the listener, and unregisters local
 routes.
 
 ### OTA Behavior

@@ -35,7 +35,7 @@ struct GoSettings {
   bool buzzer_enabled = false;
 
   // --- Stationary connectivity ---
-  bool wifi_power_save_enabled = false;
+  bool local_server_enabled = true;
   bool disable_cloud = false; // honored by CloudService
   ConfigurationControl configuration_control = ConfigurationControl::Both;
   int co2_abc_days = CO2_ABC_DAYS_DEFAULT;
