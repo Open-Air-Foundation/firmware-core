@@ -220,6 +220,8 @@ bool wifi_ensure_local_mdns_result = true;
 uint32_t wifi_ensure_local_http_count = 0;
 uint32_t wifi_ensure_local_mdns_count = 0;
 uint32_t wifi_stop_local_endpoint_count = 0;
+bool wifi_power_save_enabled = false;
+uint32_t wifi_set_power_save_count = 0;
 bool wifi_tick_called = false;
 uint32_t wifi_next_deadline_ms = 0;
 bool wifi_is_online = false;
@@ -436,6 +438,8 @@ void reset() {
   wifi_ensure_local_http_count = 0;
   wifi_ensure_local_mdns_count = 0;
   wifi_stop_local_endpoint_count = 0;
+  wifi_power_save_enabled = false;
+  wifi_set_power_save_count = 0;
   wifi_tick_called = false;
   wifi_next_deadline_ms = 0;
   wifi_is_online = false;
@@ -1093,7 +1097,11 @@ WifiService::~WifiService() = default;
 
 bool WifiService::has_saved_networks() const { return test_spy::wifi_has_saved_networks; }
 
-void WifiService::set_power_save_enabled(bool enabled) { _power_save_enabled = enabled; }
+void WifiService::set_power_save_enabled(bool enabled) {
+  _power_save_enabled = enabled;
+  test_spy::wifi_power_save_enabled = enabled;
+  ++test_spy::wifi_set_power_save_count;
+}
 
 void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *static_ip) {
   test_spy::wifi_connect_saved_called = true;

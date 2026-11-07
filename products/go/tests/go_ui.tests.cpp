@@ -142,8 +142,8 @@ TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
   double_press(ui);
   CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
   open_row(ui, "Settings");
-  check_rows(ui, {"Exit", "Back", "Operations", "Display & Touch", "Power Saving", "Hardware Test",
-                  "Clear Data", "Setup Guide", "About Device"});
+  check_rows(ui, {"Exit", "Back", "Operations", "Display & Touch", "Hardware Test", "Clear Data",
+                  "Setup Guide", "About Device"});
   open_row(ui, "Operations");
   auto values = ui.build_values(make_default_ctx());
   REQUIRE(values.row_count == 6);
@@ -155,9 +155,6 @@ TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
   open_row(ui, "Display & Touch");
   check_rows(ui, {"Exit", "Back", "Pinned Chart", "Temperature Unit: C", "Altitude Unit: m",
                   "PM Display: ug/m3", "Auto Lock: Off", "AQI LED: Off", "Touch LED: Off"});
-  double_press(ui);
-  open_row(ui, "Power Saving");
-  check_rows(ui, {"Exit", "Back", "Wi-Fi Power Saving"});
   double_press(ui);
   open_row(ui, "Hardware Test");
   check_rows(ui, {"Exit", "Back", "Peripheral Test", "GPS Test", "Accelerometer Test",
@@ -264,11 +261,14 @@ TEST_CASE("UIManager: group choice returns and exit gestures", "[UIManager][nav]
       {"Operations", "Buzzer:", "On", Screen::Operations},
       {"Display & Touch", "PM Display:", "USAQI", Screen::DisplayTouch},
       {"Display & Touch", "Auto Lock:", "60 Seconds", Screen::DisplayTouch},
-      {"Power Saving", "Wi-Fi Power Saving", "Enable", Screen::PowerSaving},
+      {"Operations", "Local Server", "Disable", Screen::Operations},
   };
   for (const auto &choice : choices) {
     DYNAMIC_SECTION(choice.setting) {
       UIManager ui(DEFAULT_UI_CONFIG);
+      GoSettings settings{};
+      settings.operating_mode = OperatingMode::Stationary;
+      ui.sync_settings(settings);
       go_to_group(ui, choice.group);
       open_row(ui, choice.setting);
       const auto result = open_row(ui, choice.option);
@@ -311,7 +311,7 @@ TEST_CASE("UIManager: group summaries fit the current list font",
           "[UIManager][settings][display]") {
   // 128 px canvas, 10 px text inset, and 6 px per character.
   static constexpr size_t MAX_VISIBLE_LABEL_CHARS = 19;
-  for (const char *group : {"Operations", "Display & Touch", "Power Saving", "Hardware Test"}) {
+  for (const char *group : {"Operations", "Display & Touch", "Hardware Test"}) {
     UIManager ui(DEFAULT_UI_CONFIG);
     GoSettings settings{};
     settings.measure_interval_seconds = 3599;
@@ -462,10 +462,9 @@ TEST_CASE("UIManager: grouped menus wrap and return to their parent",
     uint8_t count;
   };
   const MenuCase cases[] = {
-      {nullptr, Screen::Settings, "Operations", "About Device", 9},
+      {nullptr, Screen::Settings, "Operations", "About Device", 8},
       {"Operations", Screen::Operations, "Measure Int.", "Buzzer: Off", 6},
       {"Display & Touch", Screen::DisplayTouch, "Pinned Chart", "Touch LED: Off", 9},
-      {"Power Saving", Screen::PowerSaving, "Wi-Fi Power Saving", "Wi-Fi Power Saving", 3},
       {"Hardware Test", Screen::HardwareTest, "Peripheral Test", "Play Melody", 7},
   };
   for (const auto &item : cases) {
@@ -2943,4 +2942,48 @@ TEST_CASE("UIManager: every chart extracts its own valid history", "[UIManager][
   CHECK(v.chart_metric() == Metric::Pressure);
   CHECK(v.chart_count == 2);
   CHECK(v.chart_min == 1013.0f);
+}
+
+TEST_CASE("UIManager: Local Server is only visible in Stationary and retains its selection",
+          "[UIManager][settings][local-server]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  GoSettings settings{};
+  settings.operating_mode = OperatingMode::Stationary;
+  ui.sync_settings(settings);
+  go_to_group(ui, "Operations");
+  check_rows(ui, {"Exit", "Back", "Measure Int.: 10s", "CO2 Calibration", "GPS: When tracking",
+                  "Buzzer: Off", "Local Server"});
+  open_row(ui, "Local Server");
+  check_rows(ui, {"Exit", "Back", "Disable", "Enable"});
+  CHECK(ui.build_values(make_default_ctx()).selected_row == 3);
+  CHECK(open_row(ui, "Disable").action == UIAction::SettingsChanged);
+  ui.apply_to_settings(settings);
+  REQUIRE_FALSE(settings.local_server_enabled);
+
+  for (auto mode : {OperatingMode::Portable, OperatingMode::Offline}) {
+    settings.operating_mode = mode;
+    ui.sync_settings(settings);
+    auto values = ui.build_values(make_default_ctx());
+    REQUIRE(values.row_count == 6);
+    CHECK(values.selected_row < values.row_count);
+    for (uint8_t row = 0; row < values.row_count; ++row)
+      CHECK(std::string(values.rows[row].text) != "Local Server");
+    ui.apply_to_settings(settings);
+    CHECK_FALSE(settings.local_server_enabled);
+  }
+
+  settings.operating_mode = OperatingMode::Stationary;
+  ui.sync_settings(settings);
+  open_row(ui, "Local Server");
+  CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
+  CHECK(open_row(ui, "Enable").action == UIAction::SettingsChanged);
+  ui.apply_to_settings(settings);
+  CHECK(settings.local_server_enabled);
+
+  // A mode update while editing must close the now-hidden choice.
+  open_row(ui, "Local Server");
+  settings.operating_mode = OperatingMode::Portable;
+  ui.sync_settings(settings);
+  CHECK(ui.current_screen() == Screen::Operations);
+  CHECK(ui.build_values(make_default_ctx()).row_count == 6);
 }
