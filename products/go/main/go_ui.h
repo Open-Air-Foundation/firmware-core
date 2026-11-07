@@ -321,7 +321,7 @@ private:
     GpsMode,
     Mode,
     AutoLock,
-    AqiLed,
+    BackLedBrightness,
     TouchLed,
     Buzzer,
     LocalServer,
@@ -383,12 +383,12 @@ private:
       ENERGY_SAVING_MEASURE_INTERVAL_SECONDS_DEFAULT;
   uint8_t _setting_gps_mode = 1; // 1="On When Tracking"
   OperatingMode _setting_mode = OperatingMode::Portable;
-  uint8_t _setting_auto_lock = 0;     // 0="Off"
-  uint8_t _setting_aqi_led = 0;       // 0="Off"
-  uint8_t _setting_touch_led = 0;     // 0="Off"
-  uint8_t _setting_buzzer_volume = 0; // 0="Off"
-  uint8_t _setting_local_server = 1;  // 0="Disable", 1="Enable"
-  uint8_t _setting_melody = 0;        // 0="Off"
+  uint8_t _setting_auto_lock = 0;           // 0="Off"
+  uint8_t _setting_back_led_brightness = 0; // 0="Off"
+  uint8_t _setting_touch_led = 0;           // 0="Off"
+  uint8_t _setting_buzzer_volume = 0;       // 0="Off"
+  uint8_t _setting_local_server = 1;        // 0="Disable", 1="Enable"
+  uint8_t _setting_melody = 0;              // 0="Off"
 
   // Snackbar
   char _snackbar_text[48] = {};

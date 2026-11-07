@@ -154,7 +154,7 @@ TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
   double_press(ui);
   open_row(ui, "Display & Touch");
   check_rows(ui, {"Exit", "Back", "Pinned Chart", "Temperature Unit: C", "Altitude Unit: m",
-                  "PM Display: ug/m3", "Auto Lock: Off", "AQI LED: Off", "Touch LED: Off"});
+                  "PM Display: ug/m3", "Auto Lock: Off", "LED Brightness", "Touch LED: Off"});
   double_press(ui);
   open_row(ui, "Hardware Test");
   check_rows(ui, {"Exit", "Back", "Peripheral Test", "GPS Test", "Accelerometer Test",
@@ -1378,13 +1378,16 @@ TEST_CASE("UIManager: open interval choice resynchronizes fixed and custom value
 TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 
-  SECTION("AQI LED opens SettingsChoice and applies Bright") {
+  SECTION("LED Brightness opens SettingsChoice and applies Bright") {
     go_to_group(ui, "Display & Touch");
-    open_row(ui, "AQI LED");
+    open_row(ui, "LED Brightness");
 
     CHECK(ui.current_screen() == Screen::SettingsChoice);
 
-    // Default _setting_aqi_led=0 (Off), cursor at option 0 → logical 2.
+    check_rows(ui, {"Exit", "Back", "Off", "Dim", "Mid", "Bright"});
+    CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
+
+    // Default brightness is Off, cursor at option 0 → logical 2.
     // Navigate down to Bright (option 3, logical 5).
     press(ui, InputSource::TouchDown); // Dim
     press(ui, InputSource::TouchDown); // Mid
@@ -1396,6 +1399,12 @@ TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
     GoSettings s{};
     ui.apply_to_settings(s);
     CHECK(s.back_led_brightness == LedBrightness::Bright);
+
+    REQUIRE(ui.current_screen() == Screen::DisplayTouch);
+    const auto values = ui.build_values(make_default_ctx());
+    CHECK(std::string(values.rows[values.selected_row].text) == "LED Brightness");
+    open_row(ui, "LED Brightness");
+    CHECK(ui.build_values(make_default_ctx()).selected_row == 5);
   }
 
   SECTION("Touch LED opens SettingsChoice and applies Dim") {
