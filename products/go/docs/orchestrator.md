@@ -586,8 +586,11 @@ Called when the UI signals a setting was changed. Calls
 propagates runtime changes (GPS posting interval, GPS enabled flag, sensor
 timer rescheduling).
 
-Wi-Fi power saving is applied when changed in Stationary and on Stationary
-entry; see [Wi-Fi Service](wifi_service.md).
+A Local Server change in Stationary updates Wi-Fi power saving and calls
+`activate_local_endpoint()`. Enable starts HTTP and mDNS when connected; Disable
+revokes API access, discards queued requests, cancels activation retries, and
+stops the endpoint. Stationary entry applies the saved preference; reconnects
+and provisioning handoff respect it. See [Local Server](local_server.md).
 
 ### clear_data()
 

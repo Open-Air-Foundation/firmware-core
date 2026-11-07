@@ -287,21 +287,19 @@ The local profile advertises `_airgradient._tcp` on `http_port` with hostname
 `ensure_local_mdns()` explicitly starts it for the current got-IP transition.
 
 Before either saved-network or factory-fallback STA connection, including
-runtime retries, `WifiService` applies the saved Wi-Fi Power Saving preference:
+runtime retries, `WifiService` applies the power policy derived by the
+orchestrator from Local Server:
 
-| Setting | Shared Mode | ESP-IDF Mode |
+| Local Server | Shared Mode | ESP-IDF Mode |
 |---|---|---|
-| Disable (default) | `WifiPowerSave::None` | `WIFI_PS_NONE` |
-| Enable | `WifiPowerSave::MaxModem` | `WIFI_PS_MAX_MODEM` |
+| Enable (default) | `WifiPowerSave::None` | `WIFI_PS_NONE` |
+| Disable | `WifiPowerSave::MaxModem` | `WIFI_PS_MAX_MODEM` |
 
-Changes apply live in normal Stationary operation without disconnecting; other
-modes retain the preference for the next Stationary entry. Provisioning uses
-`None`, then successful Stationary handoff restores the preference. Driver
-failures are logged without aborting connectivity; the next connection attempt
-reapplies the preference. The listen interval remains at the driver default.
-
-Disable preserves the previous policy for reliable local discovery. Enable
-may increase latency or reduce mDNS and direct-IP reachability on some networks.
+Changes apply live in Stationary without disconnecting or disabling cloud
+connectivity. Provisioning uses `None`, then successful handoff restores the
+derived policy. Driver failures are logged without aborting connectivity; the
+next connection attempt reapplies the policy. The listen interval remains at
+the driver default.
 
 `start_provisioning()` first tears the local endpoint down so provisioning owns
 its transport routes exclusively. Transport switches call provisioning stop
@@ -310,7 +308,8 @@ while route ownership changes. On provisioning success, the orchestrator again
 uses `stop_provisioning(false)`: Wi-Fi provisioning unregisters its routes while
 retaining its listener. Directly started BLE-only provisioning has no listener,
 while BLE-only reached through a Wi-Fi-to-BLE switch can inherit one. Local
-routes then register before the idempotent listener start.
+routes then register before the idempotent listener start when Local Server is
+enabled. When disabled, the orchestrator stops any retained listener instead.
 
 Full teardown uses the reverse ownership order: clear the mDNS profile (which
 stops mDNS), stop the listener, unregister local routes, then disconnect and

@@ -849,6 +849,9 @@ Settings fields:
 - Stationary-only v1 HTTP API registered through the same process-lifetime
   `HttpServer` object used by captive-portal provisioning; the listener itself
   starts and stops as ownership and mode change
+- Controlled by Operations → Local Server, visible only in Stationary and
+  enabled by default. Disabling stops the endpoint and enables Wi-Fi power
+  saving while cloud connectivity continues
 - Advertised after route readiness as `_airgradient._tcp` at
   `airgradient_<serial>.local`, with `api=1` and the same model, serial, and
   firmware identity returned by the measures endpoint
@@ -872,7 +875,7 @@ Settings fields:
   trusted local network, not exposure through an untrusted or public network
 - Retains routes and the listener across transient STA reconnects, restarts mDNS
   after IP recovery, and tears down mDNS, HTTP, routes, and queued work when
-  leaving Stationary
+  disabled or leaving Stationary
 
 See [`docs/local_server.md`](docs/local_server.md) for the route contract,
 snapshot ownership, queue semantics, and lifecycle details.
