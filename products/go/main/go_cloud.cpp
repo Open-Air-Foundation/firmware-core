@@ -54,6 +54,7 @@ constexpr const char *JSON_TEMPERATURE_UNIT = "temperatureUnit";
 constexpr const char *JSON_MEASUREMENT_INTERVAL = "measurementInterval";
 constexpr const char *JSON_GPS_MODE = "gpsMode";
 constexpr const char *JSON_BACK_LED_BRIGHTNESS = "backLedBrightness";
+constexpr const char *JSON_BACK_LED_INDICATOR = "backLedIndicator";
 constexpr const char *JSON_TOUCH_LED_INTENSITY = "touchLedIntensity";
 constexpr const char *JSON_BUZZER_ENABLED = "buzzerEnabled";
 constexpr const char *JSON_CO2_CALIBRATION_REQUESTED = "co2CalibrationRequested";
@@ -323,6 +324,15 @@ FetchConfigEventPayload parse_cloud_config(const char *buffer, size_t bytes) {
   const cJSON *gps_mode = cJSON_GetObjectItemCaseSensitive(root, JSON_GPS_MODE);
   if (gps_mode != nullptr && parse_gps_mode(gps_mode, update.gps_mode)) {
     update.update_mask |= static_cast<uint32_t>(GoConfigField::GpsMode);
+  }
+
+  const cJSON *back_led_indicator = cJSON_GetObjectItemCaseSensitive(root, JSON_BACK_LED_INDICATOR);
+  bool use_co2_indicator = false;
+  if (back_led_indicator != nullptr &&
+      parse_string_bool(back_led_indicator, JSON_BACK_LED_INDICATOR, "aqi", "co2",
+                        use_co2_indicator)) {
+    update.back_led_indicator = use_co2_indicator ? BackLedIndicator::Co2 : BackLedIndicator::Aqi;
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::BackLedIndicator);
   }
 
   int led_value = 0;

@@ -12948,3 +12948,133 @@ TEST_CASE("BLE LED indicator activates only after successful persistence",
     CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_CONFIG_SAVE_FAILED);
   }
 }
+
+TEST_CASE("cloud LED indicator updates persist and immediately refresh the selected measurement",
+          "[Orchestrator][cloud][led]") {
+  for (auto control : {ConfigurationControl::Cloud, ConfigurationControl::Both}) {
+    for (auto indicator : {BackLedIndicator::Aqi, BackLedIndicator::Co2}) {
+      CAPTURE(control, indicator);
+      TestFixture f;
+      f.settings.configuration_control = control;
+      f.settings.back_led_brightness = LedBrightness::Mid;
+      f.settings.back_led_indicator =
+          indicator == BackLedIndicator::Co2 ? BackLedIndicator::Aqi : BackLedIndicator::Co2;
+      auto orch = f.make_orchestrator();
+      A::set_mode(orch, OperatingMode::Stationary);
+      CP2_ALLOW_CONFIG_WRITES(f);
+      REQUIRE_CALL(f.mock_config, set_int(trompeloeil::_, static_cast<int>(indicator)))
+          .WITH(std::string(_1) == "bli")
+          .RETURN(ConfigStoreResult::OK);
+      MeasuresAGo sample{};
+      sample.co2.co2 = 1800;
+      sample.pm_a.pm_25 = 12.5f;
+      A::on_sensor_data(orch, sample);
+      test_spy::reset();
+      test_spy::ble_connected = true;
+
+      Event evt{};
+      evt.type = EventType::FetchConfigResult;
+      evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+      evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::BackLedIndicator);
+      evt.fetch_config.update.back_led_indicator = indicator;
+      A::dispatch(orch, evt);
+
+      CHECK(A::settings(orch).back_led_indicator == indicator);
+      CHECK(A::settings(orch).back_led_brightness == LedBrightness::Mid);
+      CHECK(A::settings(orch).configuration_control == control);
+      CHECK(f.local_api.get_config().back_led_indicator ==
+            (indicator == BackLedIndicator::Co2 ? "co2" : "aqi"));
+      CHECK(test_spy::ble_notify_config_called);
+      GoSettings ui_settings{};
+      f.ui_manager.apply_to_settings(ui_settings);
+      CHECK(ui_settings.back_led_indicator == indicator);
+      if (indicator == BackLedIndicator::Co2) {
+        CHECK(test_spy::led_back_update_co2_count == 1);
+        CHECK(test_spy::led_last_co2_ppm == 1800);
+        CHECK(test_spy::led_back_update_aqi_count == 0);
+      } else {
+        CHECK(test_spy::led_back_update_aqi_count == 1);
+        CHECK(test_spy::led_last_aqi_pm25 == 12.5f);
+        CHECK(test_spy::led_back_update_co2_count == 0);
+      }
+
+      test_spy::reset();
+      FORBID_CALL(f.mock_config, commit());
+      A::dispatch(orch, evt);
+      CHECK_FALSE(test_spy::ble_notify_config_called);
+      CHECK(test_spy::led_back_update_co2_count == 0);
+      CHECK(test_spy::led_back_update_aqi_count == 0);
+    }
+  }
+}
+
+TEST_CASE("cloud updates that omit the indicator preserve CO2 selection",
+          "[Orchestrator][cloud][led]") {
+  TestFixture f;
+  f.settings.back_led_indicator = BackLedIndicator::Co2;
+  f.settings.back_led_brightness = LedBrightness::Off;
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  CP2_ALLOW_CONFIG_WRITES(f);
+  MeasuresAGo sample{};
+  sample.co2.co2 = 1200;
+  A::on_sensor_data(orch, sample);
+  test_spy::reset();
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::BackLedBrightness);
+  evt.fetch_config.update.back_led_brightness = LedBrightness::Bright;
+  A::dispatch(orch, evt);
+  CHECK(A::settings(orch).back_led_indicator == BackLedIndicator::Co2);
+  CHECK(A::settings(orch).back_led_brightness == LedBrightness::Bright);
+  CHECK(f.local_api.get_config().back_led_indicator == "co2");
+  CHECK(test_spy::led_last_back_brightness == LedBrightness::Bright);
+  CHECK(test_spy::led_back_update_aqi_count == 0);
+
+  evt.fetch_config.update = GoConfigUpdate{};
+  FORBID_CALL(f.mock_config, commit());
+  A::dispatch(orch, evt);
+  CHECK(A::settings(orch).back_led_indicator == BackLedIndicator::Co2);
+  CHECK(A::settings(orch).back_led_brightness == LedBrightness::Bright);
+}
+
+TEST_CASE("cloud LED indicator retains its current state when the update cannot apply",
+          "[Orchestrator][cloud][led]") {
+  TestFixture f;
+  bool local_control = false;
+  SECTION("Local control rejects in-flight cloud changes") {
+    local_control = true;
+    f.settings.configuration_control = ConfigurationControl::Local;
+  }
+  SECTION("failed persistence rejects the candidate") {}
+  auto orch = f.make_orchestrator();
+  A::set_mode(orch, OperatingMode::Stationary);
+  f.local_api.publish_config_snapshot(A::settings(orch));
+  CP2_ALLOW_CONFIG_WRITES(f);
+  MeasuresAGo sample{};
+  sample.co2.co2 = 1800;
+  sample.pm_a.pm_25 = 12.5f;
+  A::on_sensor_data(orch, sample);
+  test_spy::reset();
+  test_spy::ble_connected = true;
+
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::BackLedIndicator);
+  evt.fetch_config.update.back_led_indicator = BackLedIndicator::Co2;
+  if (local_control) {
+    FORBID_CALL(f.mock_config, commit());
+    A::dispatch(orch, evt);
+  } else {
+    REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
+    A::dispatch(orch, evt);
+  }
+  CHECK(A::settings(orch).back_led_indicator == BackLedIndicator::Aqi);
+  CHECK(f.local_api.get_config().back_led_indicator == "aqi");
+  CHECK(test_spy::led_back_update_co2_count == 0);
+  CHECK(test_spy::led_back_update_aqi_count == 0);
+  CHECK_FALSE(test_spy::ble_notify_config_called);
+}
