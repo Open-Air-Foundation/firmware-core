@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "400800e",
+  "rev": "2b099a0",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -305,11 +305,13 @@
       "applicability": [
         "V1"
       ],
-      "setup": [],
+      "setup": [
+        "Go has saved credentials for an available Wi-Fi network."
+      ],
       "steps": [
         {
-          "action": "Select Portable mode.",
-          "expected_result": "Portable mode is selected."
+          "action": "Select Stationary mode and allow up to 30 seconds for connection.",
+          "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
           "action": "Open Main Menu > Settings and inspect the menu.",
@@ -321,7 +323,7 @@
         },
         {
           "action": "Open Operations. Move the highlight to Exit, tap left once, then right once, inspecting each completed refresh.",
-          "expected_result": "The highlight moves to Buzzer, then back to Exit. All rows remain readable, only the intended row is highlighted, and no full-screen flash occurs."
+          "expected_result": "The highlight moves to Local Server, then back to Exit. All rows remain readable, only the intended row is highlighted, and no full-screen flash occurs."
         }
       ],
       "cleanup": [
@@ -1213,8 +1215,8 @@
       ],
       "steps": [
         {
-          "action": "Select Stationary mode. Read the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
-          "expected_result": "Home shows the connected Wi-Fi icon and the serial is recorded."
+          "action": "Select Stationary mode. Read the serial from Settings > About Device. Record Local Server under Settings > Operations, then select Enable. Return Home and allow up to 30 seconds for connection.",
+          "expected_result": "Home shows the connected Wi-Fi icon and the serial is recorded. Local Server is enabled."
         },
         {
           "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/config with No Auth and no body. Save measurementInterval, configurationControl, and the complete corrections.temperature and corrections.humidity entries.",
@@ -1245,7 +1247,8 @@
       ],
       "cleanup": [
         "Including after interruption, use PUT at the same URL with No Auth and Content-Type: application/json to restore the saved temperature and humidity correction entries and measurementInterval. Include only temperature and humidity inside corrections; leave pm25 out of the request.",
-        "Restore configurationControl last using its saved value. Poll GET config every two seconds for up to 10 seconds to confirm each restoration. Restore only values captured before mutation; record any missing baseline or restoration failure. Return Home."
+        "Restore configurationControl last using its saved value. Poll GET config every two seconds for up to 10 seconds to confirm each restoration. Restore only values captured before mutation; record any missing baseline or restoration failure. Return Home.",
+        "After API cleanup, restore the recorded Local Server setting under Settings > Operations, including after interruption; record any restoration failure."
       ],
       "references": [
         "products/go/docs/display_service.md",
@@ -1951,7 +1954,7 @@
     {
       "id": "go.wifi.power-saving-disabled-access",
       "title": "Go remains reachable by hostname after idle",
-      "objective": "Verify local access remains available with Wi-Fi Power Saving disabled.",
+      "objective": "Verify local hostname access remains available after idle with Local Server enabled.",
       "category": "Stationary Network",
       "sub_category": "mDNS",
       "applicability": [
@@ -1965,11 +1968,11 @@
       ],
       "steps": [
         {
-          "action": "Select Stationary mode. Record Wi-Fi Power Saving under Settings > Power Saving and the serial from Settings > About Device.",
+          "action": "Select Stationary mode. Record Local Server under Settings > Operations and the serial from Settings > About Device.",
           "expected_result": "The original setting and serial are recorded."
         },
         {
-          "action": "Set Wi-Fi Power Saving to Disable. Return Home and allow up to 30 seconds for connection.",
+          "action": "Set Local Server to Enable. Return Home and allow up to 30 seconds for connection.",
           "expected_result": "Home shows the connected Wi-Fi icon."
         },
         {
@@ -1985,7 +1988,7 @@
         }
       ],
       "cleanup": [
-        "Restore and confirm the recorded Wi-Fi Power Saving setting, including after interruption. Return Home and record any restoration failure."
+        "Restore the recorded Local Server setting under Settings > Operations, including after interruption. Return Home and record any restoration failure."
       ],
       "references": [
         "products/go/docs/wifi_service.md"
@@ -2009,8 +2012,8 @@
       ],
       "steps": [
         {
-          "action": "Select Stationary mode. Read the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
-          "expected_result": "Home shows the connected Wi-Fi icon."
+          "action": "Select Stationary mode. Read the serial from Settings > About Device. Record Local Server under Settings > Operations, then select Enable. Return Home and allow up to 30 seconds for connection.",
+          "expected_result": "Home shows the connected Wi-Fi icon. Local Server is enabled."
         },
         {
           "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout.",
@@ -2026,7 +2029,8 @@
         }
       ],
       "cleanup": [
-        "Ensure the test access point is switched back on, including after interruption. Return Go Home and record any recovery failure."
+        "Ensure the test access point is switched back on, including after interruption. Return Go Home and record any recovery failure.",
+        "Restore the recorded Local Server setting under Settings > Operations, including after interruption; record any restoration failure."
       ],
       "references": [
         "products/go/docs/wifi_service.md"
@@ -2139,8 +2143,8 @@
       ],
       "steps": [
         {
-          "action": "Select Stationary mode. Read the full serial from Settings > About Device and open the matching unit in AirGradient Dashboard.",
-          "expected_result": "Go connects to Wi-Fi, and the device and dashboard serials match."
+          "action": "Select Stationary mode. Read the full serial from Settings > About Device and open the matching unit in AirGradient Dashboard. Record Local Server under Settings > Operations, then select Enable and return Home.",
+          "expected_result": "Go connects to Wi-Fi, and the device and dashboard serials match. Local Server is enabled."
         },
         {
           "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/config with No Auth and no body. Record configurationControl, cloudConnection and measurementInterval.",
@@ -2164,7 +2168,8 @@
       ],
       "cleanup": [
         "Using PUT at the same URL with No Auth, Content-Type: application/json and a raw JSON object containing the fields and their recorded values, restore measurementInterval and cloudConnection, then restore configurationControl last.",
-        "Poll GET config every two seconds for up to 10 seconds to confirm each restoration, including after interruption. Return Home and record any restoration failure."
+        "Poll GET config every two seconds for up to 10 seconds to confirm each restoration, including after interruption. Return Home and record any restoration failure.",
+        "After API cleanup, restore the recorded Local Server setting under Settings > Operations, including after interruption; record any restoration failure."
       ],
       "references": [
         "products/go/docs/cloud_service.md",
@@ -2189,8 +2194,8 @@
       ],
       "steps": [
         {
-          "action": "Select Stationary mode. Read the serial from Settings > About Device and open the matching dashboard unit. Record its temperature unit and measurement interval.",
-          "expected_result": "Go connects to Wi-Fi, the serials match, and both dashboard settings are recorded."
+          "action": "Select Stationary mode. Read the serial from Settings > About Device and open the matching dashboard unit. Record its temperature unit and measurement interval. Record Local Server under Settings > Operations, then select Enable and return Home.",
+          "expected_result": "Go connects to Wi-Fi, the serials match, and both dashboard settings are recorded. Local Server is enabled."
         },
         {
           "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/config with No Auth and no body. Record temperatureUnit, measurementInterval, cloudConnection and configurationControl.",
@@ -2224,7 +2229,8 @@
       "cleanup": [
         "Restore the recorded dashboard settings, including after interruption.",
         "Using PUT config at the same URL with the same headers and a raw JSON object containing the fields and their recorded values, restore the device’s temperature unit, measurement interval and cloud connection, then configuration control last.",
-        "Poll GET config every two seconds for up to 10 seconds to confirm each restoration. Return Home and record any restoration failure."
+        "Poll GET config every two seconds for up to 10 seconds to confirm each restoration. Return Home and record any restoration failure.",
+        "After API cleanup, restore the recorded Local Server setting under Settings > Operations, including after interruption; record any restoration failure."
       ],
       "references": [
         "products/go/docs/cloud_service.md",
@@ -2256,8 +2262,8 @@
           "expected_result": "The read serial matches Go."
         },
         {
-          "action": "Keep the Bluetooth connection open and select Stationary mode. Allow up to 30 seconds for Wi-Fi connection.",
-          "expected_result": "nRF Connect reports disconnection. Go reaches Home with the connected Wi-Fi icon."
+          "action": "Keep the Bluetooth connection open and select Stationary mode. Allow up to 30 seconds for Wi-Fi connection. Record Local Server under Settings > Operations, then select Enable and return Home.",
+          "expected_result": "nRF Connect reports disconnection. Go reaches Home with the connected Wi-Fi icon. Local Server is enabled."
         },
         {
           "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout. Clear previous scan results in nRF Connect and scan again for 30 seconds.",
@@ -2265,7 +2271,8 @@
         }
       ],
       "cleanup": [
-        "Disconnect nRF Connect and return Go Home, including after interruption. Record any failure."
+        "Disconnect nRF Connect and return Go Home, including after interruption. Record any failure.",
+        "Restore the recorded Local Server setting under Settings > Operations, including after interruption; record any restoration failure."
       ],
       "references": [
         "products/go/docs/orchestrator.md",
@@ -2290,8 +2297,8 @@
       ],
       "steps": [
         {
-          "action": "Select Stationary mode. Read the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
-          "expected_result": "Home shows the connected Wi-Fi icon."
+          "action": "Select Stationary mode. Read the serial from Settings > About Device. Record Local Server under Settings > Operations, then select Enable. Return Home and allow up to 30 seconds for connection.",
+          "expected_result": "Home shows the connected Wi-Fi icon. Local Server is enabled."
         },
         {
           "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout.",
@@ -2311,7 +2318,8 @@
         }
       ],
       "cleanup": [
-        "Disconnect nRF Connect and return Go Home, including after interruption. Record any failure."
+        "Disconnect nRF Connect and return Go Home, including after interruption. Record any failure.",
+        "Select Stationary, restore the recorded Local Server setting, then return to Portable Home. Record any restoration failure, including after interruption."
       ],
       "references": [
         "products/go/docs/orchestrator.md",
@@ -2427,8 +2435,8 @@
       ],
       "steps": [
         {
-          "action": "Disconnect USB. Select Stationary mode, allowing up to one minute for startup if it restarts. Read and record the serial from Settings > About Device. Return Home and allow up to 30 seconds for connection.",
-          "expected_result": "Home shows the connected Wi-Fi icon."
+          "action": "Disconnect USB. Select Stationary mode, allowing up to one minute for startup if it restarts. Read and record the serial from Settings > About Device. Record Local Server under Settings > Operations, then select Enable. Return Home and allow up to 30 seconds for connection.",
+          "expected_result": "Home shows the connected Wi-Fi icon. Local Server is enabled."
         },
         {
           "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout.",
@@ -2453,6 +2461,7 @@
       ],
       "cleanup": [
         "Stop this case’s session if still active, including after interruption. Leave saved routes intact; the test sessions’ route data is expendable.",
+        "Select Stationary, restore the recorded Local Server setting, then return to Energy Saving. Record any restoration failure, including after interruption.",
         "Disconnect USB, return Home and record any failure."
       ],
       "references": [
@@ -2481,8 +2490,8 @@
           "expected_result": "Energy Saving is selected and the serial is recorded."
         },
         {
-          "action": "Select Stationary mode and watch startup for up to one minute. Open Main Menu, then return Home.",
-          "expected_result": "Go restarts into Stationary and reaches Home with the connected Wi-Fi icon. Main Menu offers Start Tracking with readable rows and highlighting."
+          "action": "Select Stationary mode and watch startup for up to one minute. Open Main Menu, then Settings > Operations > Local Server. Record its selection, select Enable and return Home.",
+          "expected_result": "Go restarts into Stationary and reaches Home with the connected Wi-Fi icon. Main Menu offers Start Tracking with readable rows and highlighting. Local Server is enabled."
         },
         {
           "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout.",
@@ -2490,7 +2499,8 @@
         }
       ],
       "cleanup": [
-        "Return Go Home, including after interruption. Record any failure."
+        "Return Go Home, including after interruption. Record any failure.",
+        "Restore the recorded Local Server setting under Settings > Operations, including after interruption; record any restoration failure."
       ],
       "references": [
         "products/go/docs/orchestrator.md",
@@ -2884,7 +2894,7 @@
           "expected_result": "The device and dashboard serials match."
         },
         {
-          "action": "Assign the installed version in the dashboard during preparation. Connect USB and keep it connected through the update. Select Stationary mode and allow up to 30 seconds for connection.",
+          "action": "Assign the installed version in the dashboard during preparation. Connect USB and keep it connected through the update. Select Stationary mode and allow up to 30 seconds for connection. If Local Server appears under Settings > Operations, record its selection and select Enable. Return Home.",
           "expected_result": "Home shows connected Wi-Fi and a charging bolt or external-power plug icon."
         },
         {
@@ -2914,6 +2924,7 @@
       "cleanup": [
         "After the update finishes or fails, keep the installed version assigned during restoration.",
         "Restore the recorded measurement interval, then cloud connection, then configuration control using PUT config. Poll GET config every two seconds for up to 10 seconds to confirm each restoration.",
+        "After API cleanup, restore Local Server if its selection was recorded and the option is available. Otherwise record any unrestored selection, including after interruption.",
         "Select Portable mode, restore the original dashboard assignment and disconnect USB. Record the installed version and any failure. Restoring the assignment does not restore the previous firmware."
       ],
       "references": [
@@ -2948,7 +2959,7 @@
           "expected_result": "The device and dashboard serials match."
         },
         {
-          "action": "Assign the installed version in the dashboard during preparation. Connect USB and keep it connected through the update. Select Stationary mode and allow up to 30 seconds for connection.",
+          "action": "Assign the installed version in the dashboard during preparation. Connect USB and keep it connected through the update. Select Stationary mode and allow up to 30 seconds for connection. If Local Server appears under Settings > Operations, record its selection and select Enable. Return Home.",
           "expected_result": "Home shows connected Wi-Fi and a charging bolt or external-power plug icon."
         },
         {
@@ -2978,6 +2989,7 @@
       "cleanup": [
         "After the update finishes or fails, keep the installed version assigned during restoration.",
         "Restore the recorded measurement interval, then cloud connection, then configuration control using PUT config. Poll GET config every two seconds for up to 10 seconds to confirm each restoration.",
+        "After API cleanup, restore Local Server if its selection was recorded and the option is available. Otherwise record any unrestored selection, including after interruption.",
         "Select Portable mode, restore the original dashboard assignment and disconnect USB. Record the installed version and any failure. Restoring the assignment does not restore the previous firmware."
       ],
       "references": [
