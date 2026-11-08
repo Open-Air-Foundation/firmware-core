@@ -23,6 +23,27 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     include(Catch)
 endif()
 
+add_library(airgradient_common_air_quality_test_support
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/air_quality.cpp"
+)
+
+target_include_directories(airgradient_common_air_quality_test_support PUBLIC
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
+)
+
+target_compile_definitions(airgradient_common_air_quality_test_support PUBLIC TEST_HOST)
+
+add_executable(airgradient_common_air_quality_tests
+    air_quality.tests.cpp
+)
+
+target_link_libraries(airgradient_common_air_quality_tests PRIVATE
+    airgradient_common_air_quality_test_support
+    Catch2::Catch2WithMain
+)
+
+catch_discover_tests(airgradient_common_air_quality_tests)
+
 add_library(airgradient_common_correction_test_support
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/measurement_corrections.cpp"
 )

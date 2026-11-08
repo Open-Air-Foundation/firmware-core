@@ -39,6 +39,8 @@ constexpr const char *CONFIG_CONTROL_BOTH = "both";
 constexpr const char *GPS_MODE_OFF = "off";
 constexpr const char *GPS_MODE_TRACKING = "tracking";
 constexpr const char *GPS_MODE_ALWAYS = "always";
+constexpr const char *BACK_LED_INDICATOR_AQI = "aqi";
+constexpr const char *BACK_LED_INDICATOR_CO2 = "co2";
 constexpr int LOCAL_SERVER_CO2_ABC_DAYS_DISABLED = 0;
 
 constexpr const char *CORRECTION_NONE = "none";
@@ -398,6 +400,7 @@ GoLocalApiService::make_active_config(const GoSettings &settings) {
   active.measure_interval_seconds = settings.measure_interval_seconds;
   active.gps_mode = settings.gps_mode;
   active.back_led_brightness = settings.back_led_brightness;
+  active.back_led_indicator = settings.back_led_indicator;
   active.touch_led_intensity = settings.touch_led_intensity;
   active.buzzer_enabled = settings.buzzer_enabled;
   active.co2_abc_days = settings.co2_abc_days;
@@ -416,6 +419,14 @@ LocalServerConfig GoLocalApiService::map_config(const ActiveConfigSnapshot &acti
   config.cloud_connection = !active.disable_cloud;
   config.measurement_interval_seconds = active.measure_interval_seconds;
   config.back_led_brightness = static_cast<int>(active.back_led_brightness);
+  switch (active.back_led_indicator) {
+  case BackLedIndicator::Aqi:
+    config.back_led_indicator = BACK_LED_INDICATOR_AQI;
+    break;
+  case BackLedIndicator::Co2:
+    config.back_led_indicator = BACK_LED_INDICATOR_CO2;
+    break;
+  }
   config.touch_led_intensity = static_cast<int>(active.touch_led_intensity);
   config.buzzer_enabled = active.buzzer_enabled;
   config.co2_abc_days = active.co2_abc_days == CO2_ABC_DAYS_DISABLED
@@ -527,12 +538,12 @@ bool GoLocalApiService::is_exact_control_recovery(const LocalServerConfig &parti
          !partial.cloud_connection.has_value() &&
          !partial.measurement_interval_seconds.has_value() && !partial.gps_mode.has_value() &&
          !partial.front_led_brightness.has_value() && !partial.back_led_brightness.has_value() &&
-         !partial.touch_led_intensity.has_value() && !partial.buzzer_enabled.has_value() &&
-         !partial.co2_abc_days.has_value() && !partial.tvoc_learning_offset.has_value() &&
-         !partial.nox_learning_offset.has_value() && !partial.led_mode.has_value() &&
-         !partial.led_bar_brightness.has_value() && !partial.display_brightness.has_value() &&
-         !partial.mqtt_broker_url.has_value() && !partial.http_domain.has_value() &&
-         !partial.corrections.has_value();
+         !partial.back_led_indicator.has_value() && !partial.touch_led_intensity.has_value() &&
+         !partial.buzzer_enabled.has_value() && !partial.co2_abc_days.has_value() &&
+         !partial.tvoc_learning_offset.has_value() && !partial.nox_learning_offset.has_value() &&
+         !partial.led_mode.has_value() && !partial.led_bar_brightness.has_value() &&
+         !partial.display_brightness.has_value() && !partial.mqtt_broker_url.has_value() &&
+         !partial.http_domain.has_value() && !partial.corrections.has_value();
 }
 
 ConfigSubmitResult GoLocalApiService::translate_config(const LocalServerConfig &partial,
@@ -617,6 +628,17 @@ ConfigSubmitResult GoLocalApiService::translate_config(const LocalServerConfig &
       return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::GpsMode};
     }
     update.update_mask |= static_cast<uint32_t>(GoConfigField::GpsMode);
+  }
+
+  if (partial.back_led_indicator.has_value()) {
+    if (*partial.back_led_indicator == BACK_LED_INDICATOR_AQI) {
+      update.back_led_indicator = BackLedIndicator::Aqi;
+    } else if (*partial.back_led_indicator == BACK_LED_INDICATOR_CO2) {
+      update.back_led_indicator = BackLedIndicator::Co2;
+    } else {
+      return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::BackLedIndicator};
+    }
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::BackLedIndicator);
   }
 
   if (partial.back_led_brightness.has_value()) {

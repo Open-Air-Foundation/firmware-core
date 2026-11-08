@@ -129,7 +129,7 @@ private:
   std::size_t _write_attempt_count = 0;
 };
 
-static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 33;
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 34;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -147,6 +147,7 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   REQUIRE(s.use_feet == false);
   REQUIRE(s.pm_use_usaqi == false);
   REQUIRE(s.auto_lock_seconds == 10);
+  REQUIRE(s.back_led_indicator == BackLedIndicator::Aqi);
   REQUIRE(s.disable_cloud == false);
   REQUIRE(s.configuration_control == ConfigurationControl::Both);
   REQUIRE(s.co2_abc_days == CO2_ABC_DAYS_DEFAULT);
@@ -319,6 +320,7 @@ TEST_CASE("shared Go config fields and update model", "[settings][config]") {
   REQUIRE(static_cast<uint32_t>(GoConfigField::BackLedBrightness) == (1U << 14));
   REQUIRE(static_cast<uint32_t>(GoConfigField::TouchLedIntensity) == (1U << 15));
   REQUIRE(static_cast<uint32_t>(GoConfigField::BuzzerEnabled) == (1U << 16));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::BackLedIndicator) == (1U << 18));
 
   const uint32_t mask = static_cast<uint32_t>(GoConfigField::CloudConnection) |
                         static_cast<uint32_t>(GoConfigField::HumidityCorrection);
@@ -328,6 +330,7 @@ TEST_CASE("shared Go config fields and update model", "[settings][config]") {
 
   const GoConfigUpdate update{};
   REQUIRE_FALSE(update.use_feet);
+  REQUIRE(update.back_led_indicator == BackLedIndicator::Aqi);
 }
 
 TEST_CASE("shared Go config validation covers interface-managed fields", "[settings][config]") {
@@ -1020,4 +1023,51 @@ TEST_CASE("Local Server selection is persisted and participates in settings equa
     settings.local_server_enabled = !enabled;
     CHECK_FALSE(loaded.equals(settings));
   }
+}
+
+TEST_CASE("back LED indicator persists independently of brightness", "[settings][led]") {
+  for (const auto indicator : {BackLedIndicator::Aqi, BackLedIndicator::Co2}) {
+    for (const auto brightness :
+         {LedBrightness::Off, LedBrightness::Dim, LedBrightness::Mid, LedBrightness::Bright}) {
+      FakeConfigStore store;
+      GoSettings settings{};
+      settings.back_led_indicator = indicator;
+      settings.back_led_brightness = brightness;
+      REQUIRE(save_go_settings(store, settings));
+      const auto loaded = load_go_settings(store);
+      CHECK(loaded.back_led_indicator == indicator);
+      CHECK(loaded.back_led_brightness == brightness);
+      CHECK(loaded.equals(settings));
+      auto changed = settings;
+      changed.back_led_indicator =
+          indicator == BackLedIndicator::Aqi ? BackLedIndicator::Co2 : BackLedIndicator::Aqi;
+      CHECK_FALSE(changed.equals(settings));
+    }
+  }
+}
+
+TEST_CASE("back LED indicator rejects invalid values and recovers corrupt storage",
+          "[settings][led][validation]") {
+  CHECK(is_back_led_indicator_valid(static_cast<int>(BackLedIndicator::Aqi)));
+  CHECK(is_back_led_indicator_valid(static_cast<int>(BackLedIndicator::Co2)));
+  for (const int invalid : {-1, 2, 255}) {
+    CAPTURE(invalid);
+    CHECK_FALSE(is_back_led_indicator_valid(invalid));
+    FakeConfigStore store;
+    GoSettings settings{};
+    settings.back_led_indicator = static_cast<BackLedIndicator>(invalid);
+    CHECK_FALSE(is_go_settings_valid(settings));
+    CHECK_FALSE(save_go_settings(store, settings));
+    CHECK(store.write_attempt_count() == 0);
+    REQUIRE(store.set_int("bli", invalid) == ConfigStoreResult::OK);
+    CHECK(load_go_settings(store).back_led_indicator == BackLedIndicator::Aqi);
+  }
+}
+
+TEST_CASE("missing back LED indicator preserves existing brightness", "[settings][led]") {
+  FakeConfigStore store;
+  REQUIRE(store.set_int("blb", static_cast<int>(LedBrightness::Mid)) == ConfigStoreResult::OK);
+  const auto settings = load_go_settings(store);
+  CHECK(settings.back_led_indicator == BackLedIndicator::Aqi);
+  CHECK(settings.back_led_brightness == LedBrightness::Mid);
 }

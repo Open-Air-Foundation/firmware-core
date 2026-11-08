@@ -59,6 +59,8 @@ static constexpr uint8_t AUTO_LOCK_COUNT = 4;
 
 static const char *const LED_BRIGHTNESS_OPTIONS[] = {"Off", "Dim", "Mid", "Bright"};
 static constexpr uint8_t LED_BRIGHTNESS_COUNT = 4;
+static const char *const LED_INDICATOR_OPTIONS[] = {"AQI", "CO2"};
+static constexpr uint8_t LED_INDICATOR_COUNT = 2;
 
 static const char *const TOUCH_LED_OPTIONS[] = {"Off", "Dim", "Bright"};
 static constexpr uint8_t TOUCH_LED_COUNT = 3;
@@ -596,7 +598,8 @@ void UIManager::sync_settings(const GoSettings &s) {
     _setting_auto_lock = 3;
 
   // LED settings — enum values map directly to option indices
-  _setting_aqi_led = static_cast<uint8_t>(s.back_led_brightness);
+  _setting_back_led_brightness = static_cast<uint8_t>(s.back_led_brightness);
+  _setting_back_led_indicator = static_cast<uint8_t>(s.back_led_indicator);
   _setting_touch_led = static_cast<uint8_t>(s.touch_led_intensity);
   _setting_buzzer_volume = s.buzzer_enabled ? 1 : 0;
   _setting_local_server = s.local_server_enabled ? 1 : 0;
@@ -647,7 +650,8 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
   settings.auto_lock_seconds = (_setting_auto_lock < 4) ? AUTO_LOCK_SECONDS[_setting_auto_lock] : 0;
 
   // LED settings — option indices map directly to enum values
-  settings.back_led_brightness = static_cast<LedBrightness>(_setting_aqi_led);
+  settings.back_led_brightness = static_cast<LedBrightness>(_setting_back_led_brightness);
+  settings.back_led_indicator = static_cast<BackLedIndicator>(_setting_back_led_indicator);
   settings.touch_led_intensity = static_cast<TouchLedIntensity>(_setting_touch_led);
   settings.buzzer_enabled = (_setting_buzzer_volume == 1);
   settings.local_server_enabled = (_setting_local_server == 1);
@@ -1018,8 +1022,9 @@ const UIManager::SettingId *UIManager::group_items(Screen screen, uint8_t &count
                                              SettingId::GpsMode, SettingId::Buzzer,
                                              SettingId::LocalServer};
   static constexpr SettingId DISPLAY_TOUCH[] = {
-      SettingId::PinnedChart, SettingId::Units,  SettingId::AltitudeUnit, SettingId::PmDisplay,
-      SettingId::AutoLock,    SettingId::AqiLed, SettingId::TouchLed};
+      SettingId::PinnedChart,       SettingId::Units,    SettingId::AltitudeUnit,
+      SettingId::PmDisplay,         SettingId::AutoLock, SettingId::BackLedIndicator,
+      SettingId::BackLedBrightness, SettingId::TouchLed};
   static_assert(sizeof(OPERATIONS) / sizeof(OPERATIONS[0]) + 2 <= MAX_LIST_ROWS);
   static_assert(sizeof(DISPLAY_TOUCH) / sizeof(DISPLAY_TOUCH[0]) + 2 <= MAX_LIST_ROWS);
 
@@ -1065,8 +1070,10 @@ uint8_t UIManager::setting_option_count(SettingId setting_id) const {
     return MODE_COUNT;
   case SettingId::AutoLock:
     return AUTO_LOCK_COUNT;
-  case SettingId::AqiLed:
+  case SettingId::BackLedBrightness:
     return LED_BRIGHTNESS_COUNT;
+  case SettingId::BackLedIndicator:
+    return LED_INDICATOR_COUNT;
   case SettingId::TouchLed:
     return TOUCH_LED_COUNT;
   case SettingId::Buzzer:
@@ -1105,8 +1112,10 @@ uint8_t UIManager::setting_current_option(SettingId setting_id) const {
     return 0;
   case SettingId::AutoLock:
     return _setting_auto_lock;
-  case SettingId::AqiLed:
-    return _setting_aqi_led;
+  case SettingId::BackLedBrightness:
+    return _setting_back_led_brightness;
+  case SettingId::BackLedIndicator:
+    return _setting_back_led_indicator;
   case SettingId::TouchLed:
     return _setting_touch_led;
   case SettingId::Buzzer:
@@ -1164,8 +1173,11 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
   case SettingId::AutoLock:
     _setting_auto_lock = option_index;
     break;
-  case SettingId::AqiLed:
-    _setting_aqi_led = option_index;
+  case SettingId::BackLedBrightness:
+    _setting_back_led_brightness = option_index;
+    break;
+  case SettingId::BackLedIndicator:
+    _setting_back_led_indicator = option_index;
     break;
   case SettingId::TouchLed:
     _setting_touch_led = option_index;
@@ -1927,8 +1939,12 @@ void UIManager::populate_settings_group_rows(DisplayValues &v) const {
       static const char *const LOCK_SUMMARIES[] = {"Off", "10s", "30s", "60s"};
       (void)snprintf(label, sizeof(label), "Auto Lock: %s", LOCK_SUMMARIES[_setting_auto_lock]);
     } break;
-    case SettingId::AqiLed:
-      (void)snprintf(label, sizeof(label), "AQI LED: %s", LED_BRIGHTNESS_OPTIONS[_setting_aqi_led]);
+    case SettingId::BackLedBrightness:
+      (void)snprintf(label, sizeof(label), "LED Brightness");
+      break;
+    case SettingId::BackLedIndicator:
+      (void)snprintf(label, sizeof(label), "LED Indicator: %s",
+                     LED_INDICATOR_OPTIONS[_setting_back_led_indicator]);
       break;
     case SettingId::TouchLed:
       (void)snprintf(label, sizeof(label), "Touch LED: %s", TOUCH_LED_OPTIONS[_setting_touch_led]);
@@ -1986,8 +2002,11 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   case SettingId::AutoLock:
     options = AUTO_LOCK_OPTIONS;
     break;
-  case SettingId::AqiLed:
+  case SettingId::BackLedBrightness:
     options = LED_BRIGHTNESS_OPTIONS;
+    break;
+  case SettingId::BackLedIndicator:
+    options = LED_INDICATOR_OPTIONS;
     break;
   case SettingId::TouchLed:
     options = TOUCH_LED_OPTIONS;

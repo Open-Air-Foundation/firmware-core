@@ -475,7 +475,7 @@ priority; see [wake initialization](docs/measurement_corrections.md#button-wake-
 | Sensor health and recovery | Raw | User correction cannot change hardware diagnostics |
 | Current display | Corrected | Fahrenheit conversion, when selected, happens afterward |
 | Display charts | Corrected | Raw cached samples use the correction active at render time |
-| PM AQI LED | Corrected PM2.5 | AQI conversion happens after PM correction |
+| Back LED indicator | Corrected PM2.5 or unchanged CO2 | Selected by `back_led_indicator`; see [LED Service](docs/led_service.md#selected-indicator) |
 | Local Server measures GET | Corrected | The synchronized API snapshot exposes the common corrected fields |
 | RTC display snapshot | Corrected display state | It never seeds raw cloud or storage state |
 
@@ -484,7 +484,7 @@ receive raw values, while the display receives a copy with PM2.5 correction
 and raw temperature and humidity. See
 [`docs/measurement_corrections.md`](docs/measurement_corrections.md).
 
-Manual refresh results update the current readings, BLE, local API, AQI LEDs,
+Manual refresh results update the current readings, BLE, local API, back LED indicator,
 and cloud snapshot. Only scheduled results enter the RTC chart cache and route
 files. A regular measurement already requested when a shake is accepted serves
 the refresh and retains its scheduled origin. Manual refresh does not reset
@@ -800,6 +800,7 @@ Settings fields:
 - Operating mode (Portable / Stationary / Offline; default: Portable)
 - Auto-lock timeout (0 = disabled, 10 s / 30 s / 60 s)
 - GPS interval
+- Back LED indicator (AQI / CO2, default AQI) and independent brightness
 
 ### Display Service (E-Paper)
 

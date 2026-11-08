@@ -155,7 +155,8 @@ and cross-field policy.
 | `measurementInterval` | Integer | Seconds; product-defined range | Measurement interval. |
 | `gpsMode` | String | `off`, `tracking`, `always` | GPS operating mode. |
 | `frontLedBrightness` | Integer | Product-defined range | Front LED brightness. |
-| `backLedBrightness` | Integer | Product-defined range | Back or AQI LED brightness. |
+| `backLedIndicator` | String | `aqi`, `co2` | Back LED indicator selection, independent of brightness. |
+| `backLedBrightness` | Integer | Product-defined range | Back LED brightness. |
 | `touchLedIntensity` | Integer | Product-defined range | Touch LED intensity. |
 | `buzzerEnabled` | Boolean | `true`, `false` | Buzzer enablement. |
 | `ledMode` | String | `co2`, `pm`, `iaqs`, `off` | LED display mode. |
@@ -314,7 +315,7 @@ Go returns these fields from `GET /api/v1/config` and accepts them in partial
 | Field Group | Supported Fields |
 |---|---|
 | Device behavior | `pmStandard`, `temperatureUnit`, `altitudeUnit`, `measurementInterval`, `gpsMode` |
-| LEDs and buzzer | `backLedBrightness`, `touchLedIntensity`, `buzzerEnabled` |
+| LEDs and buzzer | `backLedIndicator`, `backLedBrightness`, `touchLedIntensity`, `buzzerEnabled` |
 | Connectivity policy | `cloudConnection`, `configurationControl` |
 | Sensor configuration | `co2AbcDays`, `tvocLearningOffset`, `noxLearningOffset`, `corrections` |
 

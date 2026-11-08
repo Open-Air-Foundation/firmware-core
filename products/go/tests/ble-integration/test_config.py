@@ -36,7 +36,7 @@ async def config_payload(ago_client: BleakClient) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestConfigRead:
-    """Verify reading the Config characteristic returns a valid 17-key map."""
+    """Verify reading the Config characteristic returns a valid 18-key map."""
 
     def test_read_config(self, config_payload: dict):
         """Reading Config must return valid CBOR map."""
@@ -45,7 +45,7 @@ class TestConfigRead:
         )
 
     def test_all_keys_present(self, config_payload: dict):
-        """Config read must contain exactly the 17 expected keys."""
+        """Config read must contain exactly the 18 expected keys."""
         missing = proto.CONFIG_READ_KEYS - set(config_payload.keys())
         extra = set(config_payload.keys()) - proto.CONFIG_READ_KEYS
         assert not missing, f"Missing Config keys: {missing}"
@@ -79,6 +79,9 @@ class TestConfigRead:
         assert op_mode in proto.OPERATING_MODES, (
             f"Unknown op_mode: '{op_mode}'. Expected one of: {proto.OPERATING_MODES}"
         )
+
+    def test_back_led_indicator_valid(self, config_payload: dict):
+        assert config_payload["bledi"] in proto.BACK_LED_INDICATORS
 
     def test_compact_device_fields_valid(self, config_payload: dict):
         """Compact buzzer and sensor config fields must use valid ranges."""
@@ -233,7 +236,7 @@ class TestConfigWrite:
                 )
                 await config_notifications.wait_for(timeout=ago_notify_timeout)
 
-    @pytest.mark.parametrize("key", ["buz", "abc", "tlo", "nlo", "pchart"])
+    @pytest.mark.parametrize("key", ["buz", "abc", "tlo", "nlo", "pchart", "bledi", "bled"])
     async def test_set_compact_device_field_roundtrip(
         self,
         key: str,
@@ -248,6 +251,10 @@ class TestConfigWrite:
         original_value = original[key]
         if key == "buz":
             new_value = not original_value
+        elif key == "bledi":
+            new_value = "co2" if original_value == "aqi" else "aqi"
+        elif key == "bled":
+            new_value = 0 if original_value != 0 else 1
         elif key == "pchart":
             new_value = 0 if original_value != 0 else 1
         elif key == "abc":
@@ -278,14 +285,65 @@ class TestConfigWrite:
                 bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
             )
             assert updated[key] == new_value
+            if key in {"bledi", "bled"}:
+                companion = "bled" if key == "bledi" else "bledi"
+                assert updated[companion] == original[companion]
         finally:
             current = proto.decode_cbor(
                 bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
             )
-            if current[key] != original_value:
+            restore_keys = ("bledi", "bled") if key in {"bledi", "bled"} else (key,)
+            for restore_key in restore_keys:
+                if current[restore_key] != original[restore_key]:
+                    await ago_client.write_gatt_char(
+                        proto.CHAR_CONFIG_UUID,
+                        proto.encode_config_set(**{restore_key: original[restore_key]}),
+                        response=True,
+                    )
+                    await config_notifications.wait_for(timeout=ago_notify_timeout)
+
+    @pytest.mark.parametrize(
+        "value",
+        ["", "AQI", "CO2", "pm25-aqi", "co2\0extra", 1, True, None, [], {}],
+    )
+    async def test_invalid_led_indicator_is_rejected(
+        self,
+        value: object,
+        ago_client: BleakClient,
+        config_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        original = proto.decode_cbor(
+            bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+        )
+        config_notifications.drain()
+        try:
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID,
+                proto.encode_config_set(bledi=value),
+                response=True,
+            )
+            payload = proto.decode_cbor(
+                await config_notifications.wait_for(timeout=ago_notify_timeout)
+            )
+            assert payload == {
+                "type": "cmd_result",
+                "cmd": "set",
+                "ok": False,
+                "err": proto.ERR_INVALID_CONFIG_VALUE,
+            }
+            updated = proto.decode_cbor(
+                bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+            )
+            assert updated == original, "Rejected indicator changed configuration"
+        finally:
+            current = proto.decode_cbor(
+                bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+            )
+            if current["bledi"] != original["bledi"]:
                 await ago_client.write_gatt_char(
                     proto.CHAR_CONFIG_UUID,
-                    proto.encode_config_set(**{key: original_value}),
+                    proto.encode_config_set(bledi=original["bledi"]),
                     response=True,
                 )
                 await config_notifications.wait_for(timeout=ago_notify_timeout)
@@ -423,8 +481,10 @@ class TestConfigWrite:
             )
             await config_notifications.wait_for(timeout=ago_notify_timeout)
 
+    @pytest.mark.parametrize("key", ["temp_f", "bledi"])
     async def test_noop_set_emits_no_notification(
         self,
+        key: str,
         ago_client: BleakClient,
         config_notifications: NotificationCollector,
         ago_notify_timeout: float,
@@ -434,7 +494,7 @@ class TestConfigWrite:
         original = proto.decode_cbor(bytes(raw))
 
         # Write the current value back — no field changes.
-        write_data = proto.encode_config_set(temp_f=original["temp_f"])
+        write_data = proto.encode_config_set(**{key: original[key]})
         await ago_client.write_gatt_char(
             proto.CHAR_CONFIG_UUID, write_data, response=True,
         )

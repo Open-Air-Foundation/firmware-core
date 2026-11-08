@@ -3,7 +3,7 @@
 Product-specific LED service for AirGradient Go. Drives the LP5036
 36-channel I2C LED controller on the mobile-display sub-PCB through an
 adaptive render loop. The service manages two independent LED groups
-(back AQI and touch feedback) and supports time-evolving
+(back indicator and touch feedback) and supports time-evolving
 effects such as blink, breathe, fade, chase, and sequenced animations.
 Active on board variant V1; inert on Prototype.
 
@@ -11,7 +11,7 @@ Active on board variant V1; inert on Prototype.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/led/go_led_types.h` | Public types: `Rgb`, `LedBrightness`, `TouchLedIntensity`, `TouchPad`, `BackStep`, `BackAnimation` |
+| `products/go/main/led/go_led_types.h` | Public types: `LedBrightness`, `TouchLedIntensity`, `TouchPad`, `BackStep`, `BackAnimation` |
 | `products/go/main/led/go_led_hal.h` | Abstract `LedDriver` interface |
 | `products/go/main/led/go_led_driver.h` | `LP5036` concrete driver declaration |
 | `products/go/main/led/go_led_driver.cpp` | LP5036 I2C implementation |
@@ -26,7 +26,7 @@ Active on board variant V1; inert on Prototype.
 | `LedDriver` | `go_led_hal.h` | Abstract driver surface mocked in tests |
 | `LP5036` | `go_led_driver.h` | Concrete I2C driver for hardware builds |
 | `RTOS` | `airgradient-common` (`rtos.h`) | Queue, task, time for the adaptive render loop |
-| `aqi` | `airgradient-common` (`aqi.h`) | `pm25_to_us_aqi` and `us_aqi_to_category` for AQI color mapping |
+| `air_quality`, `Rgb` | `airgradient-common` (`air_quality.h`, `rgb.h`) | Shared AQI/CO2 classification and unscaled RGB colors |
 
 ## Board Variant
 
@@ -72,6 +72,7 @@ variant.
 | `back_animate(animation)` | Play a predefined `BackAnimation` (resolves to `back_play`). |
 | `back_update_aqi(pm25)` | Resolve PM2.5 to AQI category color, enqueue `back_solid`. |
 | `back_clear_aqi()` | Enqueue `back_off`. |
+| `back_update_co2(ppm)` | Resolve CO2 category color; invalid input enqueues `back_off`. |
 
 ### Touch
 
@@ -119,13 +120,24 @@ Output per channel: `(effect_value * scale) / 255`.
 
 ## Behavior
 
+### Selected Indicator
+
+`LED Indicator` selects AQI (default) or CO2, independently of `LED Brightness`.
+The orchestrator uses corrected PM2.5 for AQI and the unchanged CO2 reading for
+CO2. Selecting a source immediately uses its latest reading; invalid or missing
+data turns the back LEDs off, without falling back to the other source. There
+is no hysteresis. PM Display units do not affect either indicator.
+
+Diagnostic and melody overrides restore the selected indicator afterward.
+Brightness Off preserves the selection and logical color for later use.
+
 ### Composite LED Test
 
 The orchestrator provides a blocking diagnostic that exercises every mapped
 LED group. All three touch LEDs remain bright while
 the five back LEDs show red, green, and blue for one second each. After three
 seconds, the orchestrator restores the configured group levels and the latest
-valid AQI color, or clears the back LEDs when PM2.5 is invalid.
+valid selected indicator color, or clears the back LEDs when its reading is invalid.
 
 The delay blocks only the orchestrator task; the LED worker continues rendering
 the back sequence. Requests are ignored while an interactive hardware-test
@@ -142,7 +154,7 @@ The worker task uses an adaptive queue timeout:
 
 Each group has an independent dirty flag. The back renderer caches its last
 successful uniform physical output and skips the full group when the effective
-RGB value has not changed. Logical AQI and effect state therefore remain
+RGB value has not changed. Logical indicator and effect state therefore remain
 current while back brightness is Off without repeatedly writing zero over I2C.
 Enabling brightness renders the latest logical state. Chase frames remain
 per-LED and invalidate the uniform cache.
@@ -182,7 +194,7 @@ completes:
 Rules:
 
 - Direct primitive calls (`back_solid`, `back_off`, `back_update_aqi`,
-  etc.) **clear** the saved effect.
+  `back_update_co2`, etc.) **clear** the saved effect.
 - `back_set_brightness()` does **not** clear it.
 - A new `back_play()` during an active sequence **keeps** the original
   saved effect.
@@ -245,7 +257,8 @@ back_update_aqi(pm25);          // kills sequence immediately, clears saved stat
 ## AQI Color Map
 
 `back_update_aqi(pm25)` resolves color using
-`aqi::pm25_to_us_aqi()` and `aqi::us_aqi_to_category()`.
+`air_quality::pm25_to_us_aqi()`, `air_quality::us_aqi_to_category()`, and
+`air_quality::category_to_rgb()`.
 
 | AQI Range | Category | RGB |
 |---:|---|---|
@@ -257,6 +270,23 @@ back_update_aqi(pm25);          // kills sequence immediately, clears saved stat
 | 301..500 | Hazardous | 139, 69, 19 |
 | Invalid | n/a | `back_clear_aqi()` sends Off |
 
+## CO2 Color Map
+
+`back_update_co2(ppm)` uses `air_quality::co2_to_category()` and
+`air_quality::category_to_rgb()`. These are CO2 categories, not US AQI values.
+
+| CO2 (ppm) | Category | Color | RGB |
+|---|---|---|---|
+| 0–800 | Excellent | Green | 0, 255, 0 |
+| 801–1000 | Acceptable | Yellow | 255, 255, 0 |
+| 1001–1500 | Not Ideal | Orange | 255, 128, 0 |
+| 1501–2000 | To Be Avoided | Red | 255, 0, 0 |
+| 2001–3000 | Unhealthy | Purple | 128, 0, 128 |
+| 3001–10000 | Very Unhealthy | Brown | 139, 69, 19 |
+
+`CO2Data::is_valid()` accepts 0–10000 ppm. Values outside that range turn the
+indicator off. RGB values above are unscaled; brightness applies afterward.
+
 ## Predefined Animations
 
 ### `BackAnimation::Boot`
@@ -264,19 +294,19 @@ back_update_aqi(pm25);          // kills sequence immediately, clears saved stat
 White chase fill (100 ms per LED) followed by white hold (400 ms).
 Played by `GoApp::run_interactive()` on `WakeCause::PowerOn` before
 display init, so it fires immediately on power-on. Auto-restores to Off;
-the orchestrator sets the AQI color when the first measurement arrives.
+the orchestrator sets the selected indicator when the first measurement arrives.
 
 ## Persistence
 
 | Setting | NVS Key | BLE Key | Enum | Valid Range | Default |
 |---|---|---|---|---:|---|
+| Back indicator | `bli` | `bledi` | `BackLedIndicator` | 0..1 in NVS; `aqi`/`co2` over BLE | AQI |
 | Back brightness | `blb` | `bled` | `LedBrightness` | 0..3 | Off |
 | Touch intensity | `tlb` | `tled` | `TouchLedIntensity` | 0..2 | Off |
 
-Missing NVS key or invalid value loads as Off. BLE writes with
-out-of-range values are silently rejected. Settings are applied
-at boot in `Orchestrator::init()` and immediately on UI change in
-`apply_settings_change()`.
+Missing or invalid NVS values load as AQI for the indicator and Off for
+brightness/intensity. Invalid BLE values return `invalid_config_value`. Settings
+apply at boot and after successful persistence; see [Settings](settings.md#gosettings-fields).
 
 ## Inert Mode
 

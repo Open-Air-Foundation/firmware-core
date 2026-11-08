@@ -171,12 +171,17 @@ and queues a value-only `FetchConfigEventPayload`. Supported fields map into
 | `temperatureUnit` | `"c"`, `"f"` | `use_fahrenheit` |
 | `measurementInterval` | Integer 1 .. 3600 | `measure_interval_seconds` (Portable/Stationary; Energy Saving is separate) |
 | `gpsMode` | `"off"`, `"tracking"`, `"always"` | `gps_mode` |
+| `backLedIndicator` | `"aqi"`, `"co2"` | `back_led_indicator` |
 | `backLedBrightness` | Integer 0 .. 3 | `back_led_brightness` |
 | `touchLedIntensity` | Integer 0 .. 2 | `touch_led_intensity` |
 | `buzzerEnabled` | Boolean | `buzzer_enabled` |
 | `co2CalibrationRequested` | Boolean | One-shot CO2 calibration request; not persisted |
 | `ledTestRequested` | Boolean | One-shot LED diagnostic request; not persisted |
 | `gpsTestRequested` | Boolean | One-shot GPS test screen request; not persisted |
+
+`backLedIndicator` changes the selection independently of brightness. The Cloud
+backend must send this field, and the dashboard needs a control to edit it;
+firmware support does not add that control. See [LED behavior](led_service.md#selected-indicator).
 
 Sensor and correction fields are:
 

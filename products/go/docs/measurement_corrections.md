@@ -154,7 +154,7 @@ is best-effort and non-transactional: a successful write that precedes a later
 write or commit failure is not rolled back.
 
 After successful activation, the orchestrator recomputes the corrected view
-from the latest raw snapshot, refreshes the PM AQI LED and display, and
+from the latest raw snapshot, refreshes the selected back LED indicator and display, and
 publishes updated Local Config and Local Measures snapshots. It does not emit a
 BLE Measures notification because that transport remains raw.
 
@@ -188,7 +188,7 @@ records.
 | Local API Measures | Corrected | Publishes the latest corrected snapshot |
 | Current display | Corrected | Applies unit and AQI presentation after correction |
 | Display charts | Corrected | Corrects raw cache copies in the chart scratch buffer at render time |
-| PM AQI LED | Corrected | Converts corrected PM2.5 to AQI color |
+| Back LED indicator | Selected field | AQI uses corrected PM2.5; CO2 uses the unchanged CO2 reading |
 | AirGradient cloud POST | Raw | Cloud receives the authoritative sensor snapshot |
 | RTC measurement cache | Raw | Preserves chart samples without a correction version |
 | Persistent route storage | Raw | Preserves route points without a correction version |

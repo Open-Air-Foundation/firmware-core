@@ -17,7 +17,7 @@
 
 #include <limits>
 
-#include "aqi.h"
+#include "air_quality.h"
 #include "go_led.h"
 #include "rtos.h"
 
@@ -674,7 +674,7 @@ TEST_CASE("LedService: back AQI", "[LedService][back][aqi]") {
   }
 
   SECTION("PM2.5 = 35.4 -> Moderate -> yellow") {
-    CHECK(aqi::pm25_to_us_aqi(35.4f) == 100);
+    CHECK(air_quality::pm25_to_us_aqi(35.4f) == 100);
     f.svc->back_update_aqi(35.4f);
 
     REQUIRE_CALL(f.driver, set_rgb(6, 255, 255, 0)).RETURN(true);
@@ -1055,4 +1055,60 @@ TEST_CASE("LedService: auto-restore from Off", "[LedService][back][restore]") {
   REQUIRE_CALL(f.driver, set_rgb(18, 0, 0, 0)).RETURN(true);
   REQUIRE_CALL(f.driver, set_rgb(24, 0, 0, 0)).RETURN(true);
   f.svc->pump_for_test(200);
+}
+
+TEST_CASE("LedService: CO2 uses the shared category colors", "[LedService][back][co2]") {
+  struct Case {
+    int ppm;
+    Rgb color;
+  };
+  const Case cases[] = {
+      {400, {0, 255, 0}},  {900, {255, 255, 0}},  {1200, {255, 128, 0}},
+      {1800, {255, 0, 0}}, {2500, {128, 0, 128}}, {3500, {139, 69, 19}},
+  };
+  for (const auto &test : cases) {
+    CAPTURE(test.ppm);
+    TestFixture f;
+    f.build();
+    f.svc->back_set_brightness(LedBrightness::Bright);
+    f.svc->back_update_co2(test.ppm);
+    REQUIRE_CALL(f.driver, set_rgb(trompeloeil::_, test.color.r, test.color.g, test.color.b))
+        .TIMES(5)
+        .RETURN(true);
+    f.svc->pump_for_test(0);
+  }
+}
+
+TEST_CASE("LedService: invalid CO2 clears the previous color", "[LedService][back][co2]") {
+  for (const int ppm : {-1, 10001}) {
+    TestFixture f;
+    f.build();
+    f.svc->back_set_brightness(LedBrightness::Bright);
+    f.svc->back_update_co2(1200);
+    {
+      REQUIRE_CALL(f.driver, set_rgb(trompeloeil::_, 255, 128, 0)).TIMES(5).RETURN(true);
+      f.svc->pump_for_test(0);
+    }
+    f.svc->back_update_co2(ppm);
+    REQUIRE_CALL(f.driver, set_rgb(trompeloeil::_, 0, 0, 0)).TIMES(5).RETURN(true);
+    f.svc->pump_for_test(10);
+  }
+}
+
+TEST_CASE("LedService: CO2 retains latest color while brightness is Off",
+          "[LedService][back][co2]") {
+  TestFixture f;
+  f.build();
+  f.svc->back_update_aqi(9.0f);
+  {
+    REQUIRE_CALL(f.driver, set_rgb(trompeloeil::_, 0, 0, 0)).TIMES(5).RETURN(true);
+    f.svc->pump_for_test(0);
+  }
+  f.svc->back_update_co2(1200);
+  f.svc->pump_for_test(10);
+  f.svc->back_update_co2(1800);
+  f.svc->pump_for_test(20);
+  f.svc->back_set_brightness(LedBrightness::Mid);
+  REQUIRE_CALL(f.driver, set_rgb(trompeloeil::_, 128, 0, 0)).TIMES(5).RETURN(true);
+  f.svc->pump_for_test(30);
 }

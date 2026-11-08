@@ -92,6 +92,9 @@ uint32_t led_back_play_count = 0;
 BackStep led_last_back_steps[LedService::MAX_SEQUENCE_STEPS]{};
 uint8_t led_last_back_step_count = 0;
 uint32_t led_back_update_aqi_count = 0;
+uint32_t led_back_update_co2_count = 0;
+int led_last_co2_ppm = MeasuresInvalid::CO2;
+uint32_t led_back_off_count = 0;
 float led_last_aqi_pm25 = MeasuresInvalid::PM;
 uint32_t led_back_clear_aqi_count = 0;
 uint32_t led_touch_set_all_count = 0;
@@ -327,6 +330,9 @@ void reset() {
   std::fill(led_last_back_steps, led_last_back_steps + LedService::MAX_SEQUENCE_STEPS, BackStep{});
   led_last_back_step_count = 0;
   led_back_update_aqi_count = 0;
+  led_back_update_co2_count = 0;
+  led_last_co2_ppm = MeasuresInvalid::CO2;
+  led_back_off_count = 0;
   led_last_aqi_pm25 = MeasuresInvalid::PM;
   led_back_clear_aqi_count = 0;
   led_touch_set_all_count = 0;
@@ -1375,7 +1381,7 @@ void LedService::back_blink(Rgb /*color*/, uint32_t /*period_ms*/) {}
 void LedService::back_breathe(Rgb /*color*/, uint32_t /*period_ms*/) {}
 void LedService::back_fade_to(Rgb /*color*/, uint32_t /*duration_ms*/) {}
 void LedService::back_chase(Rgb /*color*/, uint32_t /*step_ms*/) {}
-void LedService::back_off() {}
+void LedService::back_off() { ++test_spy::led_back_off_count; }
 void LedService::back_set_brightness(LedBrightness brightness) {
   ++test_spy::led_back_brightness_count;
   test_spy::led_last_back_brightness = brightness;
@@ -1392,6 +1398,10 @@ void LedService::back_animate(BackAnimation /*animation*/) {}
 void LedService::back_update_aqi(float pm25_ugm3) {
   ++test_spy::led_back_update_aqi_count;
   test_spy::led_last_aqi_pm25 = pm25_ugm3;
+}
+void LedService::back_update_co2(int ppm) {
+  ++test_spy::led_back_update_co2_count;
+  test_spy::led_last_co2_ppm = ppm;
 }
 void LedService::back_clear_aqi() { ++test_spy::led_back_clear_aqi_count; }
 

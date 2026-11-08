@@ -56,6 +56,7 @@ inline constexpr const char *CONFIGURATION_CONTROL = "configurationControl";
 inline constexpr const char *MEASUREMENT_INTERVAL = "measurementInterval";
 inline constexpr const char *GPS_MODE = "gpsMode";
 inline constexpr const char *FRONT_LED_BRIGHTNESS = "frontLedBrightness";
+inline constexpr const char *BACK_LED_INDICATOR = "backLedIndicator";
 inline constexpr const char *BACK_LED_BRIGHTNESS = "backLedBrightness";
 inline constexpr const char *TOUCH_LED_INTENSITY = "touchLedIntensity";
 inline constexpr const char *BUZZER_ENABLED = "buzzerEnabled";

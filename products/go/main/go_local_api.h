@@ -88,6 +88,7 @@ private:
     int measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
     GpsMode gps_mode = GpsMode::OnWhenTracking;
     LedBrightness back_led_brightness = LedBrightness::Off;
+    BackLedIndicator back_led_indicator = BackLedIndicator::Aqi;
     TouchLedIntensity touch_led_intensity = TouchLedIntensity::Off;
     bool buzzer_enabled = false;
     int co2_abc_days = CO2_ABC_DAYS_DEFAULT;

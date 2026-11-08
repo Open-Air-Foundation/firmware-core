@@ -623,6 +623,76 @@ TEST_CASE("FETCH parses supported root scalars and ignores local-only fields",
   REQUIRE_FALSE(f.mock_rtos.last_event.fetch_config.gps_test_requested);
 }
 
+TEST_CASE("FETCH parses both LED indicators independently of brightness",
+          "[CloudService][fetch][config][led]") {
+  for (const auto indicator : {BackLedIndicator::Aqi, BackLedIndicator::Co2}) {
+    for (const bool include_brightness : {false, true}) {
+      CAPTURE(indicator, include_brightness);
+      CloudFixture f;
+      const char *wire = indicator == BackLedIndicator::Co2 ? "co2" : "aqi";
+      const std::string body = std::string(R"({"backLedIndicator":")") + wire +
+                               (include_brightness ? R"(","backLedBrightness":3})" : R"("})");
+      cloud_spy::fetch_body_to_write = body.c_str();
+      cloud_spy::fetch_bytes_to_write = body.size();
+      A::set_armed(f.cloud, true);
+      A::set_was_armed(f.cloud, true);
+      A::set_post_due(f.cloud, 999'999'999);
+      A::set_fetch_due(f.cloud, 0);
+      A::run_once(f.cloud, 1000);
+
+      const auto &payload = f.mock_rtos.last_event.fetch_config;
+      REQUIRE(payload.result == static_cast<CloudResultByte>(AgClientResult::Ok));
+      CHECK(payload.update.back_led_indicator == indicator);
+      uint32_t expected_mask = static_cast<uint32_t>(GoConfigField::BackLedIndicator);
+      if (include_brightness) {
+        expected_mask |= static_cast<uint32_t>(GoConfigField::BackLedBrightness);
+        CHECK(payload.update.back_led_brightness == LedBrightness::Bright);
+      }
+      CHECK(payload.update.update_mask == expected_mask);
+    }
+  }
+}
+
+TEST_CASE("FETCH skips invalid LED indicators while retaining valid siblings",
+          "[CloudService][fetch][config][led]") {
+  for (const char *value : {R"("")", R"("AQI")", R"("CO2")", R"("pm25-aqi")", R"("off")", "0", "1",
+                            "1.5", "true", "false", "null", "[]", "{}"}) {
+    CAPTURE(value);
+    CloudFixture f;
+    const std::string body =
+        std::string(R"({"backLedIndicator":)") + value + R"(,"backLedBrightness":2})";
+    cloud_spy::fetch_body_to_write = body.c_str();
+    cloud_spy::fetch_bytes_to_write = body.size();
+    A::set_armed(f.cloud, true);
+    A::set_was_armed(f.cloud, true);
+    A::set_post_due(f.cloud, 999'999'999);
+    A::set_fetch_due(f.cloud, 0);
+    A::run_once(f.cloud, 1000);
+
+    const auto &update = f.mock_rtos.last_event.fetch_config.update;
+    CHECK(update.update_mask == static_cast<uint32_t>(GoConfigField::BackLedBrightness));
+    CHECK(update.back_led_brightness == LedBrightness::Mid);
+  }
+}
+
+TEST_CASE("FETCH does not carry an LED indicator into later responses that omit it",
+          "[CloudService][fetch][config][led]") {
+  CloudFixture f;
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 999'999'999);
+  const char *bodies[] = {R"({"backLedIndicator":"co2"})", R"({"backLedBrightness":1})", "{}"};
+  const uint32_t masks[] = {static_cast<uint32_t>(GoConfigField::BackLedIndicator),
+                            static_cast<uint32_t>(GoConfigField::BackLedBrightness), 0};
+  for (size_t i = 0; i < 3; ++i) {
+    cloud_spy::fetch_body_to_write = bodies[i];
+    cloud_spy::fetch_bytes_to_write = std::strlen(bodies[i]);
+    A::set_fetch_due(f.cloud, 0);
+    A::run_once(f.cloud, 1000 + i);
+    CHECK(f.mock_rtos.last_event.fetch_config.update.update_mask == masks[i]);
+  }
+}
+
 TEST_CASE("FETCH rejects malformed device settings independently",
           "[CloudService][fetch][config]") {
   CloudFixture f;

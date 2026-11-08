@@ -27,8 +27,9 @@ struct GoSettings {
   OperatingMode operating_mode = OperatingMode::Portable;
   int auto_lock_seconds = 10; // 0 = auto-lock disabled
 
-  // --- LED brightness ---
+  // --- LED settings ---
   LedBrightness back_led_brightness = LedBrightness::Off;
+  BackLedIndicator back_led_indicator = BackLedIndicator::Aqi;
   TouchLedIntensity touch_led_intensity = TouchLedIntensity::Off;
 
   // --- Buzzer ---

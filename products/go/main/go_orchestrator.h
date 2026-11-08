@@ -265,6 +265,7 @@ private:
   void apply_config_update(const GoConfigUpdate &update, GoConfigSource source);
 
   // --- Event handlers ---
+  void update_back_led_indicator();
   void on_sensor_data(const MeasuresAGo &data,
                       MeasurementOrigin origin = MeasurementOrigin::Scheduled);
   void on_pm_event(EventType type);

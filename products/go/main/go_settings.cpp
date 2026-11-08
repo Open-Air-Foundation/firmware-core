@@ -44,8 +44,9 @@ constexpr const char *KEY_CONFIGURATION_CONTROL = "cc";
 constexpr const char *KEY_CO2_ABC_DAYS = "cad";
 constexpr const char *KEY_TVOC_LEARNING_OFFSET = "tlo";
 constexpr const char *KEY_NOX_LEARNING_OFFSET = "nlo";
-// LED brightness — stored as int, validated against enum range.
+// LED settings — stored as ints, validated against enum ranges.
 constexpr const char *KEY_BACK_LED_BRIGHTNESS = "blb";
+constexpr const char *KEY_BACK_LED_INDICATOR = "bli";
 constexpr const char *KEY_TOUCH_LED_INTENSITY = "tlb";
 constexpr const char *KEY_BUZZER_ENABLED = "bv";
 // Static IP — 5 uint32s persisted as ints. ip == 0 means DHCP.
@@ -294,6 +295,12 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.touch_led_intensity = static_cast<TouchLedIntensity>(led_val);
   }
 
+  int indicator = 0;
+  if (store.get_int(KEY_BACK_LED_INDICATOR, indicator) == ConfigStoreResult::OK &&
+      is_back_led_indicator_valid(indicator)) {
+    settings.back_led_indicator = static_cast<BackLedIndicator>(indicator);
+  }
+
   bool buzzer_enabled = false;
   if (store.get_bool(KEY_BUZZER_ENABLED, buzzer_enabled) == ConfigStoreResult::OK) {
     settings.buzzer_enabled = buzzer_enabled;
@@ -343,6 +350,7 @@ bool GoSettings::equals(const GoSettings &other) const {
          gps_mode == other.gps_mode && operating_mode == other.operating_mode &&
          auto_lock_seconds == other.auto_lock_seconds &&
          back_led_brightness == other.back_led_brightness &&
+         back_led_indicator == other.back_led_indicator &&
          touch_led_intensity == other.touch_led_intensity &&
          buzzer_enabled == other.buzzer_enabled && disable_cloud == other.disable_cloud &&
          local_server_enabled == other.local_server_enabled &&
@@ -402,6 +410,7 @@ bool is_go_settings_valid(const GoSettings &settings) {
   }
 
   if (!is_led_brightness_valid(static_cast<int>(settings.back_led_brightness)) ||
+      !is_back_led_indicator_valid(static_cast<int>(settings.back_led_indicator)) ||
       !is_touch_led_intensity_valid(static_cast<int>(settings.touch_led_intensity))) {
     return false;
   }
@@ -479,6 +488,10 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
   }
 
   if (store.set_int(KEY_BACK_LED_BRIGHTNESS, static_cast<int>(settings.back_led_brightness)) !=
+      ConfigStoreResult::OK) {
+    return false;
+  }
+  if (store.set_int(KEY_BACK_LED_INDICATOR, static_cast<int>(settings.back_led_indicator)) !=
       ConfigStoreResult::OK) {
     return false;
   }
@@ -610,7 +623,7 @@ void print_settings(const GoSettings &settings) {
   AG_LOGI(TAG,
           "** settings | meas_int=%d | energy_saving_meas_int=%d | gps_mode=%d "
           "op_mode=%d | auto_lock=%d | pinned_chart=%d | fahrenheit=%s feet=%s usaqi=%s | "
-          "led: back=%d touch=%d | buzzer=%s | "
+          "led: back=%d indicator=%d touch=%d | buzzer=%s | "
           "local_server=%s disable_cloud=%s config_control=%d co2_abc_days=%d "
           "tvoc_learning_offset=%d nox_learning_offset=%d static_ip=%s "
           "onboarding_done=%s **",
@@ -619,6 +632,7 @@ void print_settings(const GoSettings &settings) {
           static_cast<int>(settings.pinned_chart), settings.use_fahrenheit ? "true" : "false",
           settings.use_feet ? "true" : "false", settings.pm_use_usaqi ? "true" : "false",
           static_cast<int>(settings.back_led_brightness),
+          static_cast<int>(settings.back_led_indicator),
           static_cast<int>(settings.touch_led_intensity), settings.buzzer_enabled ? "on" : "off",
           settings.local_server_enabled ? "on" : "off", settings.disable_cloud ? "true" : "false",
           static_cast<int>(settings.configuration_control), settings.co2_abc_days,

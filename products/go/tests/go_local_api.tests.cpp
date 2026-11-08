@@ -173,6 +173,7 @@ TEST_CASE("Go local API initializes safe snapshots") {
   REQUIRE(config.measurement_interval_seconds.has_value());
   REQUIRE(config.gps_mode.has_value());
   REQUIRE(config.back_led_brightness.has_value());
+  CHECK(config.back_led_indicator == "aqi");
   REQUIRE(config.touch_led_intensity.has_value());
   REQUIRE(config.buzzer_enabled.has_value());
   REQUIRE(config.co2_abc_days.has_value());
@@ -1281,4 +1282,78 @@ TEST_CASE("Go local API action reports busy only while the request queue is full
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Busy);
   fixture.receive_request();
   CHECK(fixture.service->trigger(ActionId::CalibrateCo2).status == ActionStatus::Dispatched);
+}
+
+TEST_CASE("Go local API maps and reports both back LED indicators") {
+  const struct {
+    const char *wire;
+    BackLedIndicator indicator;
+  } choices[] = {{"aqi", BackLedIndicator::Aqi}, {"co2", BackLedIndicator::Co2}};
+  for (const auto &choice : choices) {
+    Fixture fixture;
+    fixture.service->set_access(ConfigAccess::ReadWrite);
+    GoSettings settings{};
+    settings.back_led_indicator = choice.indicator;
+    settings.back_led_brightness = LedBrightness::Mid;
+    fixture.service->publish_config_snapshot(settings);
+    CHECK(fixture.service->get_config().back_led_indicator == choice.wire);
+    CHECK(fixture.service->get_config().back_led_brightness == 2);
+    LocalServerConfig partial{};
+    partial.back_led_indicator = choice.wire;
+    require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+    auto request = fixture.receive_request();
+    CHECK(request.config.update_mask == field_mask(GoConfigField::BackLedIndicator));
+    CHECK(request.config.back_led_indicator == choice.indicator);
+
+    partial.back_led_brightness = 3;
+    require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+    request = fixture.receive_request();
+    CHECK(request.config.update_mask == (field_mask(GoConfigField::BackLedIndicator) |
+                                         field_mask(GoConfigField::BackLedBrightness)));
+    CHECK(request.config.back_led_indicator == choice.indicator);
+    CHECK(request.config.back_led_brightness == LedBrightness::Bright);
+  }
+}
+
+TEST_CASE("Go local API rejects invalid indicator without queuing brightness changes") {
+  Fixture fixture;
+  fixture.service->set_access(ConfigAccess::ReadWrite);
+  for (const char *invalid : {"AQI", "CO2", "pm25-aqi", "off", ""}) {
+    LocalServerConfig partial{};
+    partial.back_led_indicator = invalid;
+    partial.back_led_brightness = 3;
+    require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
+                   ConfigFieldId::BackLedIndicator);
+    CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
+    CHECK(fixture.service->get_config().back_led_indicator == "aqi");
+    CHECK(fixture.service->get_config().back_led_brightness == 0);
+  }
+}
+
+TEST_CASE("Go local API indicator honors control policy and cannot ride a recovery request") {
+  Fixture fixture;
+  fixture.service->set_access(ConfigAccess::ReadWrite);
+  GoSettings settings{};
+  settings.configuration_control = ConfigurationControl::Cloud;
+  fixture.service->publish_config_snapshot(settings);
+  LocalServerConfig partial{};
+  partial.back_led_indicator = "co2";
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Forbidden);
+  partial.configuration_control = "both";
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Forbidden);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
+  partial.back_led_indicator.reset();
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+  const auto recovery = fixture.receive_request();
+  CHECK(recovery.config.update_mask == field_mask(GoConfigField::ConfigurationControl));
+  CHECK(recovery.config.configuration_control == ConfigurationControl::Both);
+
+  for (const auto control : {ConfigurationControl::Local, ConfigurationControl::Both}) {
+    settings.configuration_control = control;
+    fixture.service->publish_config_snapshot(settings);
+    partial = LocalServerConfig{};
+    partial.back_led_indicator = "co2";
+    require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+    CHECK(fixture.receive_request().config.back_led_indicator == BackLedIndicator::Co2);
+  }
 }

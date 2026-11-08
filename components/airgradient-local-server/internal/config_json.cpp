@@ -27,6 +27,7 @@ constexpr const char *PINNED_CHART_VALUES[] = {
     "none", "pm25", "co2", "temperature", "humidity", "tvoc", "nox", "pressure", "altitude"};
 constexpr const char *CONFIG_CONTROL_VALUES[] = {"cloud", "local", "both"};
 constexpr const char *GPS_MODE_VALUES[] = {"off", "tracking", "always"};
+constexpr const char *BACK_LED_INDICATOR_VALUES[] = {"aqi", "co2"};
 constexpr const char *LED_MODE_VALUES[] = {"co2", "pm", "iaqs", "off"};
 
 bool is_whitespace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
@@ -263,6 +264,12 @@ ParseStatus apply_item(const cJSON *item, LocalServerConfig &out, ConfigFieldId 
     field = ConfigFieldId::FrontLedBrightness;
     return take_int(item, out.front_led_brightness) ? ParseStatus::Ok : ParseStatus::InvalidValue;
   }
+  if (std::strcmp(key, fields::BACK_LED_INDICATOR) == 0) {
+    field = ConfigFieldId::BackLedIndicator;
+    return take_enum(item, BACK_LED_INDICATOR_VALUES, out.back_led_indicator)
+               ? ParseStatus::Ok
+               : ParseStatus::InvalidValue;
+  }
   if (std::strcmp(key, fields::BACK_LED_BRIGHTNESS) == 0) {
     field = ConfigFieldId::BackLedBrightness;
     return take_int(item, out.back_led_brightness) ? ParseStatus::Ok : ParseStatus::InvalidValue;
@@ -475,6 +482,9 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
     cJSON_AddNumberToObject(root, fields::FRONT_LED_BRIGHTNESS,
                             static_cast<double>(*cfg.front_led_brightness));
   }
+  if (cfg.back_led_indicator.has_value()) {
+    cJSON_AddStringToObject(root, fields::BACK_LED_INDICATOR, cfg.back_led_indicator->c_str());
+  }
   if (cfg.back_led_brightness.has_value()) {
     cJSON_AddNumberToObject(root, fields::BACK_LED_BRIGHTNESS,
                             static_cast<double>(*cfg.back_led_brightness));
@@ -555,6 +565,8 @@ const char *config_field_wire_key(ConfigFieldId id) {
     return fields::GPS_MODE;
   case ConfigFieldId::FrontLedBrightness:
     return fields::FRONT_LED_BRIGHTNESS;
+  case ConfigFieldId::BackLedIndicator:
+    return fields::BACK_LED_INDICATOR;
   case ConfigFieldId::BackLedBrightness:
     return fields::BACK_LED_BRIGHTNESS;
   case ConfigFieldId::TouchLedIntensity:

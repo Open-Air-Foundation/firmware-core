@@ -79,6 +79,7 @@ inline constexpr const char *BLE_KEY_GPS_MODE = "gps_mode";
 inline constexpr const char *BLE_KEY_AUTO_LOCK = "auto_lock";
 inline constexpr const char *BLE_KEY_OP_MODE = "op_mode";
 inline constexpr const char *BLE_KEY_BACK_LED = "bled";
+inline constexpr const char *BLE_KEY_BACK_LED_INDICATOR = "bledi";
 inline constexpr const char *BLE_KEY_TOUCH_LED = "tled";
 inline constexpr const char *BLE_KEY_BUZZER = "buz";
 inline constexpr const char *BLE_KEY_ABC_DAYS = "abc";
@@ -188,6 +189,13 @@ inline constexpr const char *BLE_VAL_ERR_SINGLE_FIELD_ONLY = "single_field_only"
 inline constexpr const char *BLE_VAL_GPS_OFF = "off";
 inline constexpr const char *BLE_VAL_GPS_TRACKING = "tracking";
 inline constexpr const char *BLE_VAL_GPS_ALWAYS = "always";
+
+// ---------------------------------------------------------------------------
+// Back LED indicator string values
+// ---------------------------------------------------------------------------
+
+inline constexpr const char *BLE_VAL_BACK_LED_INDICATOR_AQI = "aqi";
+inline constexpr const char *BLE_VAL_BACK_LED_INDICATOR_CO2 = "co2";
 
 // ---------------------------------------------------------------------------
 // Operating mode string values
