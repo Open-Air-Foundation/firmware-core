@@ -163,10 +163,13 @@ void GoHardwareBoard::init_buses() {
 
   // Isolate the SPS30 bus until I2C initialization has settled.
   auto &hal = gpio::native::hal;
-  hal.configure(PIN_PM_POWER, gpio::Mode::Output, gpio::PullMode::Floating,
-                gpio::InterruptType::Disabled);
-  gpio_set_drive_capability(PIN_PM_POWER, GPIO_DRIVE_CAP_3);
-  hal.set_level(PIN_PM_POWER, PM_POWER_OFF_LEVEL);
+  const bool v2 = variant() == BoardVariant::V2;
+  if (!v2) {
+    hal.configure(PIN_PM_POWER, gpio::Mode::Output, gpio::PullMode::Floating,
+                  gpio::InterruptType::Disabled);
+    gpio_set_drive_capability(PIN_PM_POWER, GPIO_DRIVE_CAP_3);
+    hal.set_level(PIN_PM_POWER, PM_POWER_OFF_LEVEL);
+  }
 
   RTOS::delay_ms(100);
 
@@ -190,7 +193,14 @@ void GoHardwareBoard::init_buses() {
 
   RTOS::delay_ms(100);
 
-  hal.set_level(PIN_PM_POWER, PM_POWER_ON_LEVEL);
+  if (v2) {
+    if (!gpio::tca6408a::init(_expander, _i2c_bus, {.address = I2C_ADDR_V2_EXPANDER})) {
+      ESP_ERROR_CHECK(ESP_FAIL);
+    }
+    AG_LOGI(TAG, "V2 GPIO expander ready");
+  } else {
+    hal.set_level(PIN_PM_POWER, PM_POWER_ON_LEVEL);
+  }
 
   RTOS::delay_ms(100);
   _buses_ready = true;

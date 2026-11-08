@@ -2,6 +2,7 @@
 
 #include "go_board.h"
 #include "go_settings.h"
+#include "tca6408a.h"
 
 #include <driver/i2c_master.h>
 
@@ -87,6 +88,8 @@ private:
 
   // Bus handles
   i2c_master_bus_handle_t _i2c_bus = nullptr;
+  gpio::tca6408a::Context _expander;
+  const gpio::Hal _expander_gpio = gpio::tca6408a::hal(_expander);
 
   // Owned objects (heap-allocated, never freed)
   NvsConfigStore *_config_store = nullptr;
