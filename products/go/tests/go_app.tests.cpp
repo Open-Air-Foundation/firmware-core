@@ -238,15 +238,17 @@ public:
 // Stub GPIO Hal
 // ============================================================================
 
-static bool stub_configure(int, gpio::Mode, gpio::PullMode, gpio::InterruptType) { return true; }
-static int stub_get_level(int) { return test_spy::power_button_level; }
-static bool stub_set_level(int, int) { return true; }
-static bool stub_add_handler(int, gpio::InterruptHandler, void *) { return true; }
-static bool stub_remove_handler(int) { return true; }
-static bool stub_enable_int(int) { return true; }
-static bool stub_disable_int(int) { return true; }
+static bool stub_configure(void *, int, gpio::Mode, gpio::PullMode, gpio::InterruptType, int) {
+  return true;
+}
+static int stub_get_level(void *, int) { return test_spy::power_button_level; }
+static bool stub_set_level(void *, int, int) { return true; }
+static bool stub_add_handler(void *, int, gpio::InterruptHandler, void *) { return true; }
+static bool stub_remove_handler(void *, int) { return true; }
+static bool stub_enable_int(void *, int) { return true; }
+static bool stub_disable_int(void *, int) { return true; }
 
-static const gpio::Hal stub_gpio_hal = {
+static const gpio::Operations stub_gpio_hal_operations{
     .configure = stub_configure,
     .get_level = stub_get_level,
     .set_level = stub_set_level,
@@ -255,6 +257,7 @@ static const gpio::Hal stub_gpio_hal = {
     .enable_interrupt = stub_enable_int,
     .disable_interrupt = stub_disable_int,
 };
+static const gpio::Hal stub_gpio_hal{stub_gpio_hal_operations};
 
 // ============================================================================
 // MockBoard

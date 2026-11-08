@@ -64,7 +64,7 @@ void apply_pull_mode(gpio_config_t &config, gpio::PullMode pull) {
   }
 }
 
-bool is_valid_pin(int pin) { return pin >= 0; }
+bool is_valid_pin(int pin) { return GPIO_IS_VALID_GPIO(pin); }
 
 bool install_isr_service_once() {
   static bool installed = false;
@@ -79,13 +79,25 @@ bool install_isr_service_once() {
   return false;
 }
 
-bool configure(int pin, gpio::Mode mode, gpio::PullMode pull, gpio::InterruptType interrupt) {
+bool configure(void *, int pin, gpio::Mode mode, gpio::PullMode pull, gpio::InterruptType interrupt,
+               int initial_level) {
   if (!is_valid_pin(pin)) {
     return false;
   }
 
   const gpio_num_t gpio_num = static_cast<gpio_num_t>(pin);
-  gpio_reset_pin(gpio_num);
+  const bool output = mode == gpio::Mode::Output || mode == gpio::Mode::InputOutput;
+  if (output && (!GPIO_IS_VALID_OUTPUT_GPIO(pin) || (initial_level != gpio::KEEP_OUTPUT_LEVEL &&
+                                                     initial_level != 0 && initial_level != 1))) {
+    return false;
+  }
+  if (gpio_reset_pin(gpio_num) != ESP_OK) {
+    return false;
+  }
+  if (output && initial_level != gpio::KEEP_OUTPUT_LEVEL &&
+      gpio_set_level(gpio_num, initial_level) != ESP_OK) {
+    return false;
+  }
 
   gpio_config_t config = {};
   config.pin_bit_mask = (1ULL << pin);
@@ -96,7 +108,7 @@ bool configure(int pin, gpio::Mode mode, gpio::PullMode pull, gpio::InterruptTyp
   return gpio_config(&config) == ESP_OK;
 }
 
-int get_level(int pin) {
+int get_level(void *, int pin) {
   if (!is_valid_pin(pin)) {
     return -1;
   }
@@ -104,7 +116,7 @@ int get_level(int pin) {
   return gpio_get_level(static_cast<gpio_num_t>(pin));
 }
 
-bool set_level(int pin, int level) {
+bool set_level(void *, int pin, int level) {
   if (!is_valid_pin(pin)) {
     return false;
   }
@@ -112,7 +124,7 @@ bool set_level(int pin, int level) {
   return gpio_set_level(static_cast<gpio_num_t>(pin), level) == ESP_OK;
 }
 
-bool add_interrupt_handler(int pin, gpio::InterruptHandler handler, void *arg) {
+bool add_interrupt_handler(void *, int pin, gpio::InterruptHandler handler, void *arg) {
   if (!is_valid_pin(pin) || handler == nullptr) {
     return false;
   }
@@ -124,7 +136,7 @@ bool add_interrupt_handler(int pin, gpio::InterruptHandler handler, void *arg) {
   return gpio_isr_handler_add(static_cast<gpio_num_t>(pin), handler, arg) == ESP_OK;
 }
 
-bool remove_interrupt_handler(int pin) {
+bool remove_interrupt_handler(void *, int pin) {
   if (!is_valid_pin(pin)) {
     return false;
   }
@@ -132,7 +144,7 @@ bool remove_interrupt_handler(int pin) {
   return gpio_isr_handler_remove(static_cast<gpio_num_t>(pin)) == ESP_OK;
 }
 
-bool enable_interrupt(int pin) {
+bool enable_interrupt(void *, int pin) {
   if (!is_valid_pin(pin)) {
     return false;
   }
@@ -140,7 +152,7 @@ bool enable_interrupt(int pin) {
   return gpio_intr_enable(static_cast<gpio_num_t>(pin)) == ESP_OK;
 }
 
-bool disable_interrupt(int pin) {
+bool disable_interrupt(void *, int pin) {
   if (!is_valid_pin(pin)) {
     return false;
   }
@@ -148,9 +160,11 @@ bool disable_interrupt(int pin) {
   return gpio_intr_disable(static_cast<gpio_num_t>(pin)) == ESP_OK;
 }
 
-} // namespace
-
-const gpio::Hal gpio::native::hal = {
+const gpio::Operations operations = {
     configure,        get_level,         set_level, add_interrupt_handler, remove_interrupt_handler,
     enable_interrupt, disable_interrupt,
 };
+
+} // namespace
+
+const gpio::Hal gpio::native::hal{operations};
