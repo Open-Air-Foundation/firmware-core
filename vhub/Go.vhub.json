@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "2b099a0",
+  "rev": "2ace4a8",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -299,31 +299,21 @@
     {
       "id": "go.ui.menu-wrap",
       "title": "Menu wraparound keeps rows and highlighting readable",
-      "objective": "Verify that navigating across menu boundaries produces a complete, readable display without a full-screen flash.",
+      "objective": "Verify that wrapping between the first and last rows of the full Display & Touch menu keeps all rows readable and only the intended row highlighted.",
       "category": "Display & Controls",
       "sub_category": "Navigation",
       "applicability": [
         "V1"
       ],
-      "setup": [
-        "Go has saved credentials for an available Wi-Fi network."
-      ],
+      "setup": [],
       "steps": [
         {
-          "action": "Select Stationary mode and allow up to 30 seconds for connection.",
-          "expected_result": "Home shows the connected Wi-Fi icon."
-        },
-        {
-          "action": "Open Main Menu > Settings and inspect the menu.",
-          "expected_result": "All rows, including Exit and About Device, are readable without clipping or overlap."
+          "action": "Select Portable mode. Open Main Menu > Settings > Display & Touch and inspect the menu.",
+          "expected_result": "All 10 rows, including Exit and Touch LED, are readable without clipping or overlap."
         },
         {
           "action": "Move the highlight to Exit. Tap left (Up) once, inspect the completed refresh, then tap right (Down) once and inspect again.",
-          "expected_result": "The highlight moves to About Device, then back to Exit. Only the intended row is highlighted after each refresh, with no full-screen flash."
-        },
-        {
-          "action": "Open Operations. Move the highlight to Exit, tap left once, then right once, inspecting each completed refresh.",
-          "expected_result": "The highlight moves to Local Server, then back to Exit. All rows remain readable, only the intended row is highlighted, and no full-screen flash occurs."
+          "expected_result": "The highlight moves to Touch LED, then back to Exit. All rows remain readable, only the intended row is highlighted after each refresh, and no full-screen flash occurs."
         }
       ],
       "cleanup": [
@@ -574,7 +564,7 @@
     {
       "id": "go.settings.aqi-brightness",
       "title": "Rear LED brightness levels are distinct and survive a power cycle",
-      "objective": "Verify that the AQI LED setting visibly controls rear LED brightness and persists after powering off and on.",
+      "objective": "Verify that LED Brightness visibly controls rear LED brightness and persists after powering off and on.",
       "category": "Display & Controls",
       "sub_category": "Indicators",
       "applicability": [
@@ -585,15 +575,15 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Open Settings > Display & Touch > AQI LED and record the current choice.",
-          "expected_result": "The original brightness setting is recorded."
+          "action": "Select Portable mode. Open Settings > Display & Touch and record the choices in LED Indicator and LED Brightness. Set LED Indicator to AQI.",
+          "expected_result": "Both original settings are recorded and LED Indicator shows AQI."
         },
         {
           "action": "Return Home and confirm that a numeric PM2.5 reading is available.",
           "expected_result": "Home displays a PM2.5 value rather than a dash."
         },
         {
-          "action": "Open Settings > Display & Touch > AQI LED. Select Dim, Mid, and Bright in turn, inspecting the rear LEDs after each selection. Keep the device position and room lighting unchanged. After confirming illumination at all three levels, select Off.",
+          "action": "Open Settings > Display & Touch > LED Brightness. Select Dim, Mid, and Bright in turn, inspecting the rear LEDs after each selection. Keep the device position and room lighting unchanged. After confirming illumination at all three levels, select Off.",
           "expected_result": "Dim, Mid, and Bright produce visibly increasing brightness. Selecting Off then turns the rear LEDs off."
         },
         {
@@ -601,16 +591,60 @@
           "expected_result": "The selected level differs from the original setting and the rear LEDs are illuminated."
         },
         {
-          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release, and wait 10 seconds. Press and release Power to start, allowing up to five minutes for Home with a numeric PM2.5 reading. Inspect the rear LEDs and reopen AQI LED.",
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release, and wait 10 seconds. Press and release Power to start, allowing up to five minutes for Home with a numeric PM2.5 reading. Inspect the rear LEDs and reopen LED Brightness.",
           "expected_result": "The selected level persists in the menu, and the rear LEDs return to that brightness after startup."
         }
       ],
       "cleanup": [
-        "Restore the recorded AQI LED setting, including after interruption.",
-        "Confirm the restored choice and return Home. Record any restoration failure."
+        "Restore the recorded LED Indicator and LED Brightness choices, including after interruption.",
+        "Confirm the restored choices and return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/led_service.md"
+      ]
+    },
+    {
+      "id": "go.settings.led-indicator",
+      "title": "LED Indicator selection is readable and survives a power cycle",
+      "objective": "Verify the AQI/CO2 menu selection, visible CO2 indication and restoration after powering off and on.",
+      "category": "Display & Controls",
+      "sub_category": "Indicators",
+      "applicability": [
+        "V1"
+      ],
+      "setup": [
+        "A dim room."
+      ],
+      "steps": [
+        {
+          "action": "Select Portable mode. Record Measurement Interval under Settings > Operations, and LED Indicator and LED Brightness under Settings > Display & Touch.",
+          "expected_result": "All three original settings are recorded."
+        },
+        {
+          "action": "Set Measurement Interval to 10 seconds, LED Brightness to Mid and LED Indicator to AQI. Return Home and allow up to five minutes for numeric PM2.5 and CO2 readings.",
+          "expected_result": "Both readings are numeric and the rear LEDs are illuminated."
+        },
+        {
+          "action": "Open Settings > Display & Touch > LED Indicator. Select CO2, inspect the parent menu, then reopen LED Indicator and LED Brightness.",
+          "expected_result": "LED Indicator: CO2 appears directly above LED Brightness, which shows no value in the parent menu. Both rows are readable without clipping or leftover text. CO2 is selected when reopened, and LED Brightness remains Mid."
+        },
+        {
+          "action": "Return Home and observe the displayed CO2 reading and rear LEDs for 30 seconds. Compare the color after each completed display refresh.",
+          "expected_result": "The rear LEDs show the color for the current CO2 reading: green at 0–800 ppm, yellow at 801–1000, orange at 1001–1500, red at 1501–2000, purple at 2001–3000, or brown at 3001–10000."
+        },
+        {
+          "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release, and wait 10 seconds. Press and release Power to start, allowing up to five minutes for Home with a numeric CO2 reading. Inspect the rear LEDs, then reopen LED Indicator and LED Brightness.",
+          "expected_result": "The rear LEDs resume the color for the current CO2 reading. CO2 and Mid remain selected, with readable menu labels and highlighting."
+        }
+      ],
+      "cleanup": [
+        "Restore the recorded measurement interval, LED Indicator and LED Brightness, including after interruption.",
+        "Confirm the restored choices and return Home. Record any restoration failure."
+      ],
+      "references": [
+        "products/go/docs/ui_manager.md",
+        "products/go/docs/led_service.md",
+        "products/go/docs/settings.md"
       ]
     },
     {
@@ -705,25 +739,25 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record Buzzer under Settings > Operations and AQI LED under Settings > Display & Touch. Set both to Off.",
+          "action": "Select Portable mode. Record Buzzer under Settings > Operations and LED Brightness under Settings > Display & Touch. Set both to Off.",
           "expected_result": "Both settings show Off, and the rear LEDs are dark."
         },
         {
           "action": "Select Settings > Hardware Test > Play Melody > Chime. Watch the screen and rear LEDs and listen for 10 seconds from selection.",
-          "expected_result": "A short chime of three rising notes plays despite Buzzer being Off, with rear LED colors changing alongside the notes despite AQI LED being Off. Within the observation window, playback finishes, the LEDs turn off and Hardware Test appears with Play Melody highlighted. Playback does not repeat during the remaining observation time."
+          "expected_result": "A short chime of three rising notes plays despite Buzzer being Off, with rear LED colors changing alongside the notes despite LED Brightness being Off. Within the observation window, playback finishes, the LEDs turn off and Hardware Test appears with Play Melody highlighted. Playback does not repeat during the remaining observation time."
         },
         {
           "action": "Select Hardware Test > Play Melody > Tetris. Watch the screen and rear LEDs and listen for 30 seconds from selection.",
           "expected_result": "The Tetris melody plays with rear LED colors changing alongside the notes. Within the observation window, playback finishes, the LEDs turn off and Hardware Test appears with Play Melody highlighted. Playback does not repeat during the remaining observation time."
         },
         {
-          "action": "Reopen the Buzzer and AQI LED settings.",
+          "action": "Reopen the Buzzer and LED Brightness settings.",
           "expected_result": "Both remain Off."
         }
       ],
       "cleanup": [
         "If interrupted during playback, allow only the remainder of its 10-second Chime or 30-second Tetris observation window before checking the controls. Record a failure if playback or the return to Hardware Test remains incomplete.",
-        "Restore the recorded Buzzer and AQI LED settings. Confirm the restored choices and return Home. Record any restoration failure, including unresponsive controls."
+        "Restore the recorded Buzzer and LED Brightness settings. Confirm the restored choices and return Home. Record any restoration failure, including unresponsive controls."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
@@ -1403,12 +1437,12 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record Buzzer under Settings > Operations, and AQI LED and Touch LED under Settings > Display & Touch.",
-          "expected_result": "All three original settings are recorded."
+          "action": "Select Portable mode. Record Buzzer under Settings > Operations, and LED Indicator, LED Brightness and Touch LED under Settings > Display & Touch. Set LED Indicator to CO2 and LED Brightness to Mid.",
+          "expected_result": "All four original settings are recorded. CO2 and Mid are selected."
         },
         {
-          "action": "Return Home and allow five minutes for sensor warmup. Open Settings > Hardware Test > Peripheral Test.",
-          "expected_result": "The first actuator prompt appears."
+          "action": "Return Home and allow up to five minutes for sensor warmup and a numeric CO2 reading. Observe the rear LEDs, then open Settings > Hardware Test > Peripheral Test.",
+          "expected_result": "The rear LEDs show steady CO2 indication before the diagnostic. The first actuator prompt appears."
         },
         {
           "action": "Follow the Back LED, Touch LED and Buzzer prompts. Select Pass only after observing each requested output.",
@@ -1419,24 +1453,25 @@
           "expected_result": "All actuator and sensor rows show PASS, and the overall result is PASS. The rear LEDs turn green and the completion melody plays. Results remain readable without clipping."
         },
         {
-          "action": "Exit the test, return Home and check the recorded settings.",
-          "expected_result": "The settings remain unchanged. Rear LEDs resume normal AQI indication at the saved brightness, and touch LEDs no longer remain steadily lit."
+          "action": "Exit the test and return Home. Compare the rear LEDs with the current CO2 reading using the CO2 Color Map in LED Service, then check Buzzer, LED Indicator, LED Brightness and Touch LED.",
+          "expected_result": "CO2 indication resumes at Mid, matching the displayed reading. LED Indicator remains CO2, LED Brightness remains Mid, Buzzer and Touch LED retain their recorded choices, and touch LEDs no longer remain steadily lit."
         },
         {
           "action": "Reopen Settings > Hardware Test > Peripheral Test. Deliberately select Fail for Back LED, even though it works. Verify the Touch LED and Buzzer outputs and select Pass. Allow up to five minutes for the sensor checks.",
           "expected_result": "Back LED shows FAIL; all other rows show PASS. The overall result is FAIL, the rear LEDs turn red and the alert melody plays."
         },
         {
-          "action": "Exit the test, return Home and check the recorded settings.",
-          "expected_result": "Settings remain unchanged, normal AQI lighting returns and touch LEDs no longer remain steadily lit."
+          "action": "Exit the test and return Home. Compare the rear LEDs with the current CO2 reading using the CO2 Color Map in LED Service, then check Buzzer, LED Indicator, LED Brightness and Touch LED.",
+          "expected_result": "CO2 indication resumes at Mid, matching the displayed reading. LED Indicator remains CO2, LED Brightness remains Mid, Buzzer and Touch LED retain their recorded choices, and touch LEDs no longer remain steadily lit."
         }
       ],
       "cleanup": [
         "Exit the diagnostic, including after interruption.",
-        "Confirm the recorded settings; restore any that changed. Return Home and record any restoration failure."
+        "Restore the recorded LED Indicator, LED Brightness, Buzzer and Touch LED choices. Confirm them, return Home and record any restoration failure."
       ],
       "references": [
-        "products/go/docs/hardware_test.md"
+        "products/go/docs/hardware_test.md",
+        "products/go/docs/led_service.md"
       ]
     },
     {
@@ -1455,8 +1490,8 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record GPS under Settings > Operations.",
-          "expected_result": "The original GPS setting is recorded."
+          "action": "Select Portable mode. Record GPS under Settings > Operations, and LED Indicator and LED Brightness under Settings > Display & Touch.",
+          "expected_result": "All three original settings are recorded."
         },
         {
           "action": "Set GPS to On When Tracking. Open Settings > Hardware Test > GPS Test outdoors and observe for up to five minutes.",
@@ -1471,12 +1506,12 @@
         },
         {
           "action": "Tap to exit the test and return Home.",
-          "expected_result": "The green breathing indication stops and normal AQI lighting resumes."
+          "expected_result": "The green breathing indication stops and the selected indicator resumes at its saved brightness (off if brightness is Off or the selected reading is unavailable)."
         }
       ],
       "cleanup": [
-        "Exit the diagnostic and restore the recorded GPS setting, including after interruption.",
-        "Confirm the restored choice and return Home. Record any restoration failure."
+        "Exit the diagnostic and restore the recorded GPS, LED Indicator and LED Brightness settings, including after interruption.",
+        "Confirm the restored choices and return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/hardware_test.md"
@@ -1496,8 +1531,8 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record Buzzer under Settings > Operations and AQI LED under Settings > Display & Touch.",
-          "expected_result": "Both original settings are recorded."
+          "action": "Select Portable mode. Record Buzzer under Settings > Operations, and LED Indicator and LED Brightness under Settings > Display & Touch.",
+          "expected_result": "All three original settings are recorded."
         },
         {
           "action": "Open Settings > Hardware Test > Accelerometer Test. Place the device still on the surface and observe for five seconds.",
@@ -1509,7 +1544,7 @@
         },
         {
           "action": "Tap to exit, return Home and check the recorded settings.",
-          "expected_result": "Settings remain unchanged and normal AQI lighting resumes."
+          "expected_result": "Settings remain unchanged and the selected indicator resumes at its saved brightness (off if brightness is Off or the selected reading is unavailable)."
         }
       ],
       "cleanup": [
