@@ -50,12 +50,14 @@ inline constexpr gpio_num_t PIN_DISPLAY_CS = GPIO_NUM_0;
 inline constexpr gpio_num_t PIN_DISPLAY_DC = GPIO_NUM_15;
 inline constexpr gpio_num_t PIN_DISPLAY_RST = GPIO_NUM_9;
 inline constexpr gpio_num_t PIN_DISPLAY_BUSY = GPIO_NUM_10;
+inline constexpr int V2_EXPANDER_DISPLAY_DC = 3;
 
 // ---------------------------------------------------------------------------
 // NAND flash (SPI, shared bus)
 // ---------------------------------------------------------------------------
 
 inline constexpr gpio_num_t PIN_NAND_CS = GPIO_NUM_4;
+inline constexpr int V2_EXPANDER_NAND_CS = 2;
 
 // ---------------------------------------------------------------------------
 // UART — GPS (NmeaGps)

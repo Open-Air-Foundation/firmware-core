@@ -197,6 +197,16 @@ void GoHardwareBoard::init_buses() {
     if (!gpio::tca6408a::init(_expander, _i2c_bus, {.address = I2C_ADDR_V2_EXPANDER})) {
       ESP_ERROR_CHECK(ESP_FAIL);
     }
+    // Deselect NAND before display SPI traffic.
+    if (!_expander_gpio.configure(V2_EXPANDER_NAND_CS, gpio::Mode::Output, gpio::PullMode::Floating,
+                                  gpio::InterruptType::Disabled, 1)) {
+      ESP_ERROR_CHECK(ESP_FAIL);
+    }
+    // Start display D/C at its idle level.
+    if (!_expander_gpio.configure(V2_EXPANDER_DISPLAY_DC, gpio::Mode::Output,
+                                  gpio::PullMode::Floating, gpio::InterruptType::Disabled, 1)) {
+      ESP_ERROR_CHECK(ESP_FAIL);
+    }
     AG_LOGI(TAG, "V2 GPIO expander ready");
   } else {
     hal.set_level(PIN_PM_POWER, PM_POWER_ON_LEVEL);
@@ -495,13 +505,16 @@ StorageService &GoHardwareBoard::storage() {
 
 DisplayService &GoHardwareBoard::display() {
   assert(_spi_ready && "display() requires init_spi()");
+  const bool v2 = variant() == BoardVariant::V2;
+  assert((!v2 || _buses_ready) && "V2 display() requires init_buses()");
   if (!_display) {
     _display = new DisplayService({
         .spi_host = SPI_HOST,
         .pin_cs = PIN_DISPLAY_CS,
-        .pin_dc = PIN_DISPLAY_DC,
+        .pin_dc = v2 ? V2_EXPANDER_DISPLAY_DC : PIN_DISPLAY_DC,
         .pin_rst = PIN_DISPLAY_RST,
         .pin_busy = PIN_DISPLAY_BUSY,
+        .dc_gpio = v2 ? &_expander_gpio : nullptr,
     });
   }
   return *_display;
