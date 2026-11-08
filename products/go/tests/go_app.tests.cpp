@@ -371,6 +371,12 @@ public:
 
 class MockBoard : public GoBoard {
 public:
+  BoardVariant board_variant = BoardVariant::V1;
+  BoardVariant variant() override {
+    call_log.push_back("variant");
+    return board_variant;
+  }
+
   // Call ordering log — records every method call in sequence.
   std::vector<std::string> call_log;
 
@@ -718,6 +724,49 @@ TEST_CASE("Charging-only detection: probes eligibility without running a boot pa
   CHECK_FALSE(board.sensors_called);
   CHECK(board.call_index("gpio_hal") == -1);
   CHECK_FALSE(board.isr_installed);
+}
+
+TEST_CASE("Board identity: only a successful V2 ID selects V2", "[board][efuse]") {
+  for (unsigned int id = 0; id <= UINT8_MAX; ++id) {
+    CAPTURE(id);
+    const auto expected = id == 2 ? BoardVariant::V2 : BoardVariant::V1;
+    CHECK(board_variant_from_efuse(static_cast<uint8_t>(id), true) == expected);
+    CHECK(board_variant_from_efuse(static_cast<uint8_t>(id), false) == BoardVariant::V1);
+  }
+}
+
+TEST_CASE("GoApp::run: V2 is identified before V1 peripherals are initialized", "[board][efuse]") {
+  test_spy::reset();
+  MockBoard board;
+  board.board_variant = BoardVariant::V2;
+  GoApp app(board);
+
+  app.run();
+
+  REQUIRE(board.call_log == std::vector<std::string>{"variant"});
+  CHECK_FALSE(test_spy::orchestrator_run_called);
+}
+
+TEST_CASE("GoApp::run: V1 eFuse fallbacks retain normal boot", "[board][efuse]") {
+  for (const auto id : {0, 1, 3, 255}) {
+    test_spy::reset();
+    MockBoard board;
+    board.board_variant = board_variant_from_efuse(id, true);
+    GoApp app(board);
+
+    app.run();
+
+    REQUIRE_FALSE(board.call_log.empty());
+    CHECK(board.call_log.front() == "variant");
+    CHECK(test_spy::orchestrator_run_called);
+  }
+  test_spy::reset();
+  MockBoard board;
+  board.board_variant = board_variant_from_efuse(2, false);
+  GoApp app(board);
+  app.run();
+  CHECK(board.call_log.front() == "variant");
+  CHECK(test_spy::orchestrator_run_called);
 }
 
 TEST_CASE("GoApp::run: ineligible charging boots start the application normally") {

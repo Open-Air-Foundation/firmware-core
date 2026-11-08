@@ -447,6 +447,7 @@ public:
 // dummies that are never dereferenced.
 class StubGoBoard : public GoBoard {
 public:
+  BoardVariant variant() override { return BoardVariant::V1; }
   int init_wifi_subsystem_calls = 0;
 
   void init_nvs() override {}

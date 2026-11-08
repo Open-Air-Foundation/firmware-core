@@ -18,6 +18,7 @@
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
 #include <esp_app_desc.h>
+#include <esp_efuse.h>
 #include <esp_system.h>
 #include <nvs_flash.h>
 
@@ -35,6 +36,7 @@
 #include "drivers/sht40/sht40.h"
 #include "drivers/sps30/sps30.h"
 #include "drivers/stcc4/stcc4.h"
+#include "esp_efuse_custom_table.h"
 #include "accel/lis2dh12.h"
 #include "gps/gps_driver.h"
 #include "native_gpio.h"
@@ -119,6 +121,29 @@ static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus, bool sensors_
 // ===========================================================================
 // Init methods (idempotent)
 // ===========================================================================
+
+BoardVariant GoHardwareBoard::variant() {
+  if (_variant_read)
+    return _variant;
+
+  uint8_t id = 0;
+  const esp_err_t err =
+      esp_efuse_read_field_blob(ESP_EFUSE_USER_DATA_GO_BOARD_ID, &id, sizeof(id) * 8);
+  _variant = board_variant_from_efuse(id, err == ESP_OK);
+  _variant_read = true;
+
+  if (err != ESP_OK) {
+    AG_LOGW(TAG, "Board ID read failed (%s); using V1", esp_err_to_name(err));
+  } else if (id == 0) {
+    AG_LOGI(TAG, "Board: V1 (unprogrammed eFuse)");
+  } else if (id == static_cast<uint8_t>(BoardVariant::V1) ||
+             id == static_cast<uint8_t>(BoardVariant::V2)) {
+    AG_LOGI(TAG, "Board: V%u (eFuse)", static_cast<unsigned int>(id));
+  } else {
+    AG_LOGW(TAG, "Unknown board ID 0x%02x; using V1", static_cast<unsigned int>(id));
+  }
+  return _variant;
+}
 
 void GoHardwareBoard::init_nvs() {
   if (_nvs_ready)

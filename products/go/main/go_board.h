@@ -7,6 +7,14 @@
 #include <cstdint>
 #include <string>
 
+enum class BoardVariant : uint8_t { V1 = 1, V2 = 2 };
+
+/// Blank, unknown, or unreadable eFuse IDs retain legacy V1 behavior.
+inline BoardVariant board_variant_from_efuse(uint8_t id, bool read_ok) {
+  return read_ok && id == static_cast<uint8_t>(BoardVariant::V2) ? BoardVariant::V2
+                                                                 : BoardVariant::V1;
+}
+
 // ---------------------------------------------------------------------------
 // PM bus isolation — active-low EN_PM on V1.
 // Host-safe constants shared by board initialization and PowerService.
@@ -162,6 +170,8 @@ struct GoBoard {
   // Platform info
   // -----------------------------------------------------------------
 
+  /// Read board identity on first access, before any peripheral initialization.
+  virtual BoardVariant variant() = 0;
   virtual std::string serial_number() = 0;
   virtual const char *firmware_version() = 0;
   virtual const gpio::Hal &gpio_hal() = 0;

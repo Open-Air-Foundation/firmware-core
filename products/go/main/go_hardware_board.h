@@ -56,6 +56,7 @@ public:
   AccelSensor *new_accel_sensor() override;
 
   // --- Platform ---
+  BoardVariant variant() override;
   std::string serial_number() override;
   const char *firmware_version() override;
   const gpio::Hal &gpio_hal() override;
@@ -69,6 +70,9 @@ public:
   void stop_pm_fan() override;
 
 private:
+  BoardVariant _variant = BoardVariant::V1;
+  bool _variant_read = false;
+
   // Init tracking (idempotency)
   bool _nvs_ready = false;
   bool _buses_ready = false;

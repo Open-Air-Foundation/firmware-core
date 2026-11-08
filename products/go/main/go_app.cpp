@@ -184,6 +184,12 @@ void GoApp::run() {
   retained_uptime::init();
   log_heap(TAG, "boot:run-entry");
 
+  // V2 routing is a separate integration step; do not use V1 pins on V2.
+  if (_board.variant() == BoardVariant::V2) {
+    AG_LOGE(TAG, "V2 board detected; peripheral support is not yet enabled");
+    return;
+  }
+
   // Factory fuel-gauge learning pre-empts every normal boot path. Only the
   // lightweight, idempotent init_nvs() is needed to read FactorySettings; the
   // heavy hardware initialization and BMS retry happen inside the factory

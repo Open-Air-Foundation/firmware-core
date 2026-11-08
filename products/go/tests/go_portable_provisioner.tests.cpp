@@ -134,6 +134,7 @@ private:
 // so they return reinterpret_cast'd dummies that are never dereferenced.
 class FakeBoard : public GoBoard {
 public:
+  BoardVariant variant() override { return BoardVariant::V1; }
   int init_wifi_subsystem_calls = 0;
 
   void init_nvs() override {}
