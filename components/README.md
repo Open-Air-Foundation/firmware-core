@@ -26,6 +26,7 @@ third party can live here if it is part of the shared firmware foundation.
 | [`airgradient-sensors`](airgradient-sensors/README.md) | Environmental sensor HALs, concrete drivers, and shared orchestration (`SensorManager`) |
 | [`airgradient-serial`](airgradient-serial/) | Serial transport abstractions (UART, I2C-to-UART bridge) used by sensors and other peripherals (no README yet) |
 | [`airgradient-touch`](airgradient-touch/README.md) | Capacitive touch HAL and CAP1203 driver with noise detection and recalibration |
+| [`airgradient-watchdog`](airgradient-watchdog/README.md) | Stateless external watchdog initialization and GPIO feed pulse |
 
 Each first-party component README follows the
 [component README template](../docs/templates/component_readme.md).

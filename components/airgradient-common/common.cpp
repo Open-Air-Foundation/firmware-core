@@ -7,8 +7,6 @@
 
 #include "common.h"
 
-#include "rtos.h"
-
 #include <cstdio>
 #include <cstdlib>
 
@@ -18,19 +16,6 @@
 #include "esp_random.h"
 #include "esp_system.h"
 #endif
-
-static constexpr uint32_t EXT_WDT_PULSE_MS = 20;
-
-bool ext_watchdog_init(const gpio::Hal &hal, int pin) {
-  return hal.configure(pin, gpio::Mode::Output, gpio::PullMode::Floating,
-                       gpio::InterruptType::Disabled);
-}
-
-void ext_watchdog_reset(const gpio::Hal &hal, int pin) {
-  hal.set_level(pin, 1);
-  RTOS::delay_ms(EXT_WDT_PULSE_MS);
-  hal.set_level(pin, 0);
-}
 
 std::string build_serial_number() {
 #ifndef TEST_HOST

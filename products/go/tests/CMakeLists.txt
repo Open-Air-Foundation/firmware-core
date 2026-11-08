@@ -191,12 +191,14 @@ catch_discover_tests(go_storage_tests)
 
 add_library(go_power_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_power.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-watchdog/airgradient_watchdog.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/common.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
 )
 
 target_include_directories(go_power_test_support PUBLIC
     "${AIRGRADIENT_REPO_ROOT}/products/go/main"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-watchdog/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
