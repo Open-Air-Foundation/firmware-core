@@ -157,9 +157,15 @@ objects from the same subset. Device behavior fields are:
 | `pinnedChart` | `none`, `pm25`, `co2`, `temperature`, `humidity`, `tvoc`, `nox`, `pressure`, `altitude` | Select the Home chart; default `pm25` |
 | `measurementInterval` | Integer 1 .. 3600 | Set the exact measurement interval in seconds; non-fixed UI values appear as custom |
 | `gpsMode` | `off`, `tracking`, `always` | Disable GPS, run it only while tracking, or keep it active |
-| `backLedBrightness` | Integer 0 .. 3 | Set AQI LED brightness: off, dim, mid, or bright |
+| `backLedIndicator` | `aqi`, `co2` | Select the back LED indicator; default `aqi` |
+| `backLedBrightness` | Integer 0 .. 3 | Set back LED brightness: off, dim, mid, or bright |
 | `touchLedIntensity` | Integer 0 .. 2 | Set touch LED intensity: off, dim, or bright |
 | `buzzerEnabled` | Boolean | Enable or disable buzzer playback |
+
+PUT `{"backLedIndicator":"co2"}` changes the indicator without changing brightness.
+Invalid names or types return `400 invalid_value` with field `backLedIndicator`.
+The selection appears in GET after successful persistence; existing
+`configurationControl` rules apply. See [LED behavior](led_service.md#selected-indicator).
 
 For example, PUT `{"pinnedChart":"co2"}` selects CO2. The choice is persisted
 and shared with the UI and BLE. Names are case-sensitive strings; invalid names
@@ -253,7 +259,7 @@ UI and BLE result path; no completion is returned to the HTTP client.
 `POST /api/v1/actions/test-leds` uses the same admission path and returns empty
 `200` once queued. The orchestrator later blocks its own task for three seconds
 while the LED worker exercises the back and touch groups, then restores
-the configured levels and current AQI state. The success response confirms only
+the configured levels and current selected indicator. The success response confirms only
 queue admission. If an interactive hardware-test screen owns the LEDs when the
 request is consumed, the diagnostic is ignored.
 

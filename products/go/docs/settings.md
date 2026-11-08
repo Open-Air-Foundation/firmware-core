@@ -56,9 +56,13 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 | `static_ip.gateway` | `"sgw"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
 | `static_ip.dns_primary` | `"sd1"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
 | `static_ip.dns_secondary` | `"sd2"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
-| `back_led_brightness` | `"blb"` | `int` (stored) / `LedBrightness` (in struct) | `Off` (0) | 0 .. 3 | Back AQI LED brightness: Off / Dim / Mid / Bright |
+| `back_led_indicator` | `"bli"` | `int` (stored) / `BackLedIndicator` (in struct) | `Aqi` (0) | 0 .. 1 | Back LED indicator: AQI / CO2 |
+| `back_led_brightness` | `"blb"` | `int` (stored) / `LedBrightness` (in struct) | `Off` (0) | 0 .. 3 | Back LED brightness: Off / Dim / Mid / Bright |
 | `touch_led_intensity` | `"tlb"` | `int` (stored) / `TouchLedIntensity` (in struct) | `Off` (0) | 0 .. 2 | Touch feedback LED intensity: Off / Dim / Bright |
 | `onboarding_done` | `"obd"` | `bool` | `false` | — | First-boot guide latch. `false` shows the one-time Getting Started screen after the boot splash; flips `true` on first real engagement (Menu hold on the guide, BLE pair/bond, or any operating-mode change). Cleared by factory reset. |
+
+Missing or invalid `bli` defaults to AQI. Indicator and brightness persist
+independently.
 
 ### Measurement Interval Presentation
 
@@ -178,6 +182,7 @@ bounds and validators live in `go_config_types.h`; local checks stay in
 | `tvoc_learning_offset` | `>= 1 && <= 1000` |
 | `nox_learning_offset` | `>= 1 && <= 1000` |
 | `static_ip.*` | No range check; the loader treats `static_ip.ip == 0` as DHCP and short-circuits the other four fields |
+| `back_led_indicator` | Underlying int in `0 .. 1` (AQI / CO2) |
 | `back_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |
 | `touch_led_intensity` | Underlying int in `0 .. 2` (matches `TouchLedIntensity` enum values) |
 | `onboarding_done` | No range check (bool) |

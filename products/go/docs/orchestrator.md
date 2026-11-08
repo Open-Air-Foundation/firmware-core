@@ -25,7 +25,7 @@ sleep cycle.
 | `StorageService` | product (`go_storage.h`) | Cache measurements, persist route data |
 | `PowerService` | product (`go_power.h`) | BMS polling, sleep entry, RTC state, shutdown |
 | `UIManager` | product (`go_ui.h`) | Screen navigation, input dispatch, display value building |
-| `LedService` | product (`led/go_led.h`) | Back/touch LED brightness, AQI color, touch flash, animations |
+| `LedService` | product (`led/go_led.h`) | Back/touch LED brightness, selected AQI/CO2 color, touch flash, animations |
 | `BleService` | product (`go_ble.h`) | Portable BLE peripheral; initialised on Portable entry, torn down on leave |
 | `WifiService` | product (`go_wifi.h`) | Stationary Wi-Fi lifecycle: saved-credentials connect, factory fallback, provisioning, disconnect routing |
 | `GoLocalApiService` | product (`go_local_api.h`) | Cached local HTTP snapshots, request admission, and FIFO config/action handoff |
@@ -136,7 +136,7 @@ cached data without dismissing the guide, menus, or pairing screen.
 The orchestrator keeps two `MeasuresAGo` snapshots:
 
 - `_raw_measures` is authoritative and feeds cloud POSTs, RTC cache, and route files.
-- `_corrected_measures` is derived for the display, charts, and PM AQI LED. BLE
+- `_corrected_measures` is derived for the display, charts, and back LED indicator. BLE
   Measures and History use the raw values so clients can choose their own policy.
 
 `init()` uses fresh `fast_path_measures` first, or the newest raw RTC cache
@@ -591,6 +591,14 @@ A Local Server change in Stationary updates Wi-Fi power saving and calls
 revokes API access, discards queued requests, cancels activation retries, and
 stops the endpoint. Stationary entry applies the saved preference; reconnects
 and provisioning handoff respect it. See [Local Server](local_server.md).
+
+### update_back_led_indicator()
+
+Uses corrected PM2.5 for AQI or the unchanged CO2 reading, validating the selected
+field before rendering. Invalid data clears the back LEDs without fallback.
+Measurements, settings activation, and diagnostic/melody restoration call this
+helper; callers preserve diagnostic ownership guards. See
+[LED Service](led_service.md#selected-indicator).
 
 ### clear_data()
 
@@ -1132,7 +1140,7 @@ is refreshed from `_latest_power` (`PowerSnapshot`) because Go battery and
 charger telemetry is owned by `PowerService`, not `SensorProducer`.
 The event wraps readings and `MeasurementOrigin` in `SensorEventData`.
 Both origins update the current display values, raw BLE readings, corrected
-local API snapshot, PM AQI LEDs, and raw cloud snapshot. Only `Scheduled`
+local API snapshot, back LED indicator, and raw cloud snapshot. Only `Scheduled`
 results enter chart cache and route storage. A refresh does not trigger a
 cloud upload or change its timer.
 Sensor failures are immediately visible (display shows dashes) rather

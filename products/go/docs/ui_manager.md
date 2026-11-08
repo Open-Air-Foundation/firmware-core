@@ -187,7 +187,7 @@ rows follow this order:
 | Tracking | Status, Pause Tracking or Resume Tracking, Stop Tracking |
 | Settings | Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide, About Device |
 | Operations | Measurement Interval, CO2 Calibration, GPS Mode, Buzzer, Local Server (Stationary only) |
-| Display & Touch | Pinned Chart, Temperature Unit, Altitude Unit, PM Display, Auto Lock, AQI LED, Touch LED |
+| Display & Touch | Pinned Chart, Temperature Unit, Altitude Unit, PM Display, Auto Lock, LED Indicator, LED Brightness, Touch LED |
 | Hardware Test | Peripheral Test, GPS Test, Accelerometer Test, Battery Calibration, Play Melody |
 
 Settings and its groups fit on one page. Opening Settings selects Operations;
@@ -340,13 +340,17 @@ pairs so display ordering cannot change persisted mode identities.
 | GPS Mode | `GPS: ...` (summary uses `When tracking`) | Always Off, On When Tracking, Always On |
 | Mode | Main Menu: `Operating Mode` | Portable, Stationary, Energy Saving |
 | Auto Lock | `Auto Lock: Off / 10s / 30s / 60s` | Off, 10 Seconds, 30 Seconds, 60 Seconds |
-| AQI LED | `AQI LED: ...` | Off, Dim, Mid, Bright |
+| Back LED Indicator | `LED Indicator: AQI / CO2` | AQI, CO2 |
+| Back LED Brightness | `LED Brightness` | Off, Dim, Mid, Bright |
 | Touch LED | `Touch LED: ...` | Off, Dim, Bright |
 | CO2 Calibration | Action row | Opens confirm dialog |
 | Clear Data | Action row | Opens confirm dialog |
 | Buzzer | `Buzzer: Off / On` | Off, On |
 | Local Server | `Local Server` | Disable, Enable; default Enable; Stationary only |
 | Play Melody | Hardware Test action row | Chime, Tetris |
+
+LED Indicator appears above LED Brightness in Display & Touch. Brightness omits
+its value in the parent menu; its choice screen selects the current value.
 
 Local Server remains visible in Stationary while Wi-Fi is disconnected. Its
 selection is retained across mode changes; see [Local Server](local_server.md).
@@ -362,8 +366,8 @@ uses its compact label. A different valid value, such as 17 seconds, renders as
 Selecting a fixed choice replaces the custom value and removes the custom row.
 
 `apply_to_settings()` maps the internal state back to `GoSettings`, including
-both exact intervals, `use_feet`, `local_server_enabled`, and the two LED fields
-(`back_led_brightness`, `touch_led_intensity`). Changing
+both exact intervals, `use_feet`, `local_server_enabled`, and the LED fields
+(`back_led_indicator`, `back_led_brightness`, `touch_led_intensity`). Changing
 an unrelated UI setting therefore preserves an active custom interval.
 
 ## Snackbar Lifecycle

@@ -278,16 +278,15 @@ Read-Long / Read Blob operations.
 
 Notifications are single ATT PDUs and are never fragmented by the application.
 The Config snapshot is therefore not a notification payload: it is a Read-Long
-value and is typically about 205 bytes with correction schema version 1. Clients
-must support Read-Long and must not assume that one Read Response contains the
-full snapshot.
+value. Clients must support Read-Long and must not assume that one Read Response
+contains the full snapshot.
 
 | Characteristic | Typical Size | Max/Limit | Transport |
 |---|---:|---:|---|
 | Measures | ~120 B | ~135 B | One notification when MTU is at least 138 |
 | Status Read | ~100 B | ~120 B | Read; notifications carry small deltas |
 | Status Tracking Notify | 27–29 B while active | 29 B | One notification carrying `tracking`, `session`, and `trk` |
-| Config Read | ~205 B | <512 B | Read-Long / Read Blob |
+| Config Read | — | <512 B | Read-Long / Read Blob |
 | Config Notify | — | <180 B | One notification when MTU is at least 185 |
 | History control | ~40 B | ~180 B | One notification per response |
 | History data | 227 B | 227 B | One notification when MTU is at least 230 |
@@ -598,7 +597,7 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (17-key CBOR map)
+#### Payload (18-key CBOR map)
 
 | Key | Type | Description |
 |---|---|---|
@@ -610,7 +609,8 @@ Read the characteristic to receive the full device configuration.
 | `"gps_mode"` | text | GPS mode (see table below) |
 | `"auto_lock"` | uint | Auto-lock timeout (seconds) |
 | `"op_mode"` | text | Operating mode (see table below) |
-| `"bled"` | uint | Back (AQI) LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
+| `"bledi"` | text | Back LED indicator: `"aqi"` (default) or `"co2"` |
+| `"bled"` | uint | Back LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
 | `"tled"` | uint | Touch LED intensity: 0=Off, 1=Dim, 2=Bright |
 | `"buz"` | bool | Buzzer enabled |
 | `"abc"` | int | CO2 ABC period: `-1` disables, otherwise 1–200 days |
@@ -666,7 +666,7 @@ for `op_mode` and `"op_offline"` for disconnect notices.
   "meas_int": 10, "temp_f": false, "alt_ft": false,
   "pm_aqi": false, "pchart": 1, "gps_mode": "tracking",
   "auto_lock": 60, "op_mode": "portable",
-  "bled": 3, "tled": 2, "buz": true,
+  "bledi": "aqi", "bled": 3, "tled": 2, "buz": true,
   "abc": 7, "tlo": 12, "nlo": 12,
   "pm25_corr": {"s": 1, "v": [2, 1.08, -0.2, 0]},
   "temp_corr": {"s": 1, "v": [0, 1.0, 0.0]},
@@ -709,6 +709,7 @@ silently ignored for backward compatibility. They do not modify any setting.
 | `"gps_mode"` | text | `"off"`, `"tracking"`, or `"always"` |
 | `"auto_lock"` | uint | |
 | `"op_mode"` | text | `"portable"`, `"stationary"`, or `"offline"` |
+| `"bledi"` | text | `"aqi"` or `"co2"` |
 | `"bled"` | uint | 0–3 (back LED brightness) |
 | `"tled"` | uint | 0–2 (touch LED intensity) |
 | `"buz"` | bool | Buzzer enabled |
@@ -719,8 +720,8 @@ silently ignored for backward compatibility. They do not modify any setting.
 | `"temp_corr"` | map | Complete temperature correction group |
 | `"hum_corr"` | map | Complete humidity correction group |
 
-For example, `{"op":"set","pchart":2}` selects CO2. A changed choice produces
-`{"type":"config","pchart":2}`; an unchanged choice produces no notification.
+For example, `{"op":"set","pchart":2}` selects the CO2 chart. A changed choice
+produces `{"type":"config","pchart":2}`; an unchanged choice produces no notification.
 Out-of-range IDs and non-integer values return `invalid_config_value`.
 
 Correction writes replace one complete correction group and count as one
@@ -732,7 +733,7 @@ recognized config key:
 
 The device validates the schema version, array length, algorithm enum, flags, and
 finite coefficients. A successful correction write persists the settings and
-updates the device's display and PM AQI LED. It does not send a Measures
+updates the display and selected back LED indicator. It does not send a Measures
 notification because the raw measurement data did not change. Measures and
 History remain raw; clients may apply the Config corrections locally.
 
@@ -915,9 +916,8 @@ which normally changes one setting at a time) yields a 2-key map:
 Merge the changed key(s) into your local model. Production sends no Config
 notification for a no-op write. The full config is always available via **Read /
 Read-Long** (no `"type"` key) — re-read it on connect to establish the baseline.
-The snapshot is typically about 205 bytes with schema version 1, so clients must
-collect Read-Long fragments when the negotiated MTU cannot carry the complete
-value. The `"type"` key distinguishes this from command notifications (all
+Collect Read-Long fragments when the negotiated MTU cannot carry the complete
+snapshot. The `"type"` key distinguishes this from command notifications (all
 arrive on the same characteristic; Read always returns the config snapshot
 regardless of which notification kind was last sent).
 
@@ -1727,7 +1727,7 @@ negotiated interval; only its speed is affected.
 
 ### Required MTUs by operation
 
-- **Config Read**: the full 17-key snapshot is bounded by a 512-byte
+- **Config Read**: the full 18-key snapshot is bounded by a 512-byte
   characteristic buffer. Use Read-Long / Read Blob and
   collect all fragments. Config Read does not require MTU 512, but it does
   require a client API that supports long reads.

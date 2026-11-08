@@ -87,7 +87,7 @@ leaves, so no dedicated exit action is needed.
 Play Melody opens the existing Chime/Tetris choice screen. Applying a choice or
 using Back restores the Hardware Test menu on Play Melody. The orchestrator
 pauses input, temporarily enables the buzzer for playback, and restores the
-saved buzzer setting, rear brightness, and AQI state afterward. The choice
+saved buzzer setting, rear brightness, and selected indicator afterward. The choice
 screen retains ordinary settings auto-lock behavior.
 
 ### Peripheral Test

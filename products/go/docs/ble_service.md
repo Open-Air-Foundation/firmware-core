@@ -193,7 +193,7 @@ All characteristic payloads use CBOR (RFC 8949) encoded with TinyCBOR's
 |---|---|---|---|
 | Measures | ~120B | ~135B | Yes |
 | Status | ~95B | ~115B | Yes |
-| Config (read, 17 keys) | — | <512B | Yes (Read-Long) |
+| Config (read, 18 keys) | — | <512B | Yes (Read-Long) |
 | Config (notify, one field + type) | — | <180B | Yes |
 | History control (CBOR) | ~40B | ~180B | Yes |
 | History data (binary, 4 pts) | 223B | 223B | Yes |
@@ -414,10 +414,10 @@ config**, **set config values**, and **execute commands**.
 
 ### Read (phone reads characteristic)
 
-Returns the full device configuration as a 17-key CBOR map. The BLE service
+Returns the full device configuration as an 18-key CBOR map. The BLE service
 keeps this value updated whenever the orchestrator calls `update_config()`.
 
-#### CBOR Payload (Map) — 17 Keys
+#### CBOR Payload (Map) — 18 Keys
 
 | Key | CBOR Type | `GoSettings` field | Encoded with |
 |---|---|---|---|
@@ -429,6 +429,7 @@ keeps this value updated whenever the orchestrator calls `update_config()`.
 | `"gps_mode"` | text | `gps_mode` | See mapping below |
 | `"auto_lock"` | uint | `auto_lock_seconds` | `cbor_encode_uint` |
 | `"op_mode"` | text | `operating_mode` | See mapping below |
+| `"bledi"` | text | `back_led_indicator` | `"aqi"` or `"co2"`; default `"aqi"` |
 | `"bled"` | uint | `back_led_brightness` | `cbor_encode_uint` (0–3) |
 | `"tled"` | uint | `touch_led_intensity` | `cbor_encode_uint` (0–2) |
 | `"buz"` | bool | `buzzer_enabled` | `cbor_encode_boolean` |
@@ -441,6 +442,11 @@ keeps this value updated whenever the orchestrator calls `update_config()`.
 
 `meas_int` reads and writes the shared Portable/Stationary interval. The separate
 Energy Saving interval is not exposed through BLE configuration.
+
+`bledi` reads and writes the indicator independently of `bled` brightness.
+Changes emit a `bledi` delta; unchanged writes emit none. Invalid names or
+CBOR types return `invalid_config_value`. The single-field-per-write rule applies.
+See [LED behavior](led_service.md#selected-indicator).
 
 The three presentation booleans affect the device display only; Measures units
 remain unchanged. `pchart` is readable, writable, and included in Config deltas
@@ -513,9 +519,9 @@ The device validates the schema version, array length, algorithm enum, flags,
 and finite coefficient values before changing settings. A valid correction
 update is persisted with the complete `GoSettings` write and activated only
 after commit succeeds. The multi-key store operation is not rollback-atomic.
-Activation recomputes the corrected view and refreshes the display and PM AQI
-LED. It does not notify Measures; Measures and History remain raw, and clients
-may apply correction settings locally. Raw cache and route data remain
+Activation recomputes the corrected view and refreshes the display and selected
+back LED indicator. It does not notify Measures; Measures and History remain raw,
+and clients may apply correction settings locally. Raw cache and route data remain
 unchanged.
 
 Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are matched and
@@ -963,7 +969,7 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 | `notify_tracking_status(power, gps, session_id, tracking_state)` | Refreshes the full 10-key Read snapshot, then pushes `{tracking, session, trk}` via `notify(data, len)` on start success/failure, pause, resume, and stop. Read remains authoritative. |
 | `notify_charging_status(power, gps, session_id, tracking_state)` | Refreshes the full 10-key Read snapshot, then pushes `{charging, bat_pct, bat_v}` on charging transitions. Tracking state remains in the Read snapshot. |
 | `notify_disconnect(reason)` | Pushes a NOTIFY-only `{disc}` delta via `notify(data, len)` (snapshot untouched) announcing an imminent link drop and why (`overheat`/`low_batt`/`user`/`op_stationary`/`op_offline`). Both `OverTemperature` and `UnderTemperature` use the legacy `overheat` value. Called from `change_mode()` (leaving Portable) and `shutdown()`; gated on `is_connected()`; the caller settles before teardown so it can drain. |
-| `update_config(settings)` | Encode the full snapshot via `encode_config()` (17 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
+| `update_config(settings)` | Encode the full snapshot via `encode_config()` (18 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
 | `notify_config(prev, cur)` | Refreshes the snapshot via `update_config(cur)`, then sends the changed-fields delta (`encode_config_delta()`: `"type":"config"` + changed keys) via `notify(data, len)`. |
 | `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `notify(data, len)` (stored value untouched). Sent before long-running commands. |
 | `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `notify(data, len)` (stored value untouched). |
@@ -1312,7 +1318,7 @@ cover:
 - **CBOR encoding**: `encode_measures()` (field omission, GPS inclusion),
   `encode_status()` (all 10 keys, battery clamping, all tracking states) and
   `encode_status_transition()` (3-key delta, legacy boolean derived from state),
-  `encode_config()` (full 17-key snapshot, no `"type"`) and
+  `encode_config()` (full 18-key snapshot, no `"type"`) and
   `encode_config_delta()` (`"type":"config"` + changed keys only),
   `notify_config(prev, cur)` (delta via `notify(data, len)`, Read stays full,
   snapshot refreshed first), `notify_command_result()` /
