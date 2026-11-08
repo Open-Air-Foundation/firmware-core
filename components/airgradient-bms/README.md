@@ -136,8 +136,8 @@ behind session-armed PMID and the PM-invalid-hint recovery mechanism.
 | `read_flags(out)` | Gauge status flags (see driver notes) |
 
 The runtime-poll surface and BQ27427 learning operations are virtual.
-Cell configuration and factory reset are concrete `BQ27427` methods
-called by product-level board initialization.
+Cell configuration stays on the concrete drivers; product code supplies the
+battery parameters. Factory reset is a concrete `BQ27427` method.
 
 ### Drivers
 
@@ -146,7 +146,7 @@ called by product-level board initialization.
 | `drivers/bq25xx` | TI BQ25672 / BQ25798 | Multi-cell charger family |
 | `drivers/bq25629` | TI BQ25629 | Single-cell charger; wraps the vendor `bq25629` component |
 | `drivers/bq27427` | TI BQ27427 | Single-cell Impedance Track fuel gauge; implements `FuelGaugeDevice` |
-| `drivers/bq27742` | TI BQ27742-G1 | Single-cell fuel gauge with protection; runtime telemetry only |
+| `drivers/bq27742` | TI BQ27742-G1 | Single-cell fuel gauge with protection; telemetry and cell configuration |
 
 ### BQ27427 Driver
 
@@ -182,8 +182,16 @@ Implements `FuelGaugeDevice` runtime reads. Power is calculated from voltage
 and average current; flags expose only DSG, CHG, and FC mapped to `FgFlags`.
 Failed reads leave outputs unchanged.
 
-Pack configuration is preserved. BQ27427 learning methods return `false`;
-provisioning and protection configuration remain factory responsibilities.
+`init()` preserves pack configuration. Before polling starts, call `unseal()`,
+then `read_cell_config()` / `write_cell_config()` with `FgCellConfig`, and
+`seal()` afterward, including on failure. A custom unseal key can be supplied.
+Writes validate ranges, preserve unrelated settings and the energy scale,
+skip unchanged blocks, and verify readback. The three flash blocks commit
+independently; a failure can leave a partial update.
+
+`read_design_capacity_mah()` also works while sealed. Chemistry, calibration,
+protection provisioning, and the BQ27427 learning workflow remain outside
+this driver's scope. See [TI's technical reference, chapter 5](https://www.ti.com/lit/ug/sluuax0c/sluuax0c.pdf).
 
 ## Usage
 
