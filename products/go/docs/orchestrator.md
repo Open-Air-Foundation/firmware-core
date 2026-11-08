@@ -1178,7 +1178,7 @@ preserves the regular sleep policy while preventing sleep during the test or
 an outstanding read. The measurement interval stays unchanged. See
 [Hardware Test](hardware_test.md#peripheral-test) for the complete flow.
 
-See [Power Management — PM Sensor Sleep](power_management.md#pm-sensor-sleep-active-mode-power-cycling)
+See [Power Management — PM Sensor Sleep](power_management.md#pm-sensor-sleep-active-mode)
 for the full cycle, edge cases, and method documentation.
 
 ### Shake-To-Refresh

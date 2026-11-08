@@ -82,16 +82,13 @@ inline constexpr uint8_t I2C_ADDR_LIS2DH12 = 0x18; // ST accelerometer (SA0 = GN
 // SPS30 PM sensor uses a fixed address (0x69) defined in the driver.
 
 // ---------------------------------------------------------------------------
-// PM sensor power enable (SPS30, I2C)
+// PM sensor bus enable (SPS30, I2C)
 //
-// Prototype boards use active-high (level 1 = PM on).
-// v1 boards use active-low   (level 0 = PM on).
-// The runtime variant detection in init_buses() selects the correct level.
+// Active-low EN_PM connects the SPS30 to the shared I2C bus.
+// GPIO levels are defined in the host-safe go_board.h.
 // ---------------------------------------------------------------------------
 
 inline constexpr gpio_num_t PIN_PM_POWER = GPIO_NUM_26;
-inline constexpr uint8_t PM_POWER_ON_LEVEL_PROTOTYPE = 1; ///< Active-high
-inline constexpr uint8_t PM_POWER_ON_LEVEL_V1 = 0;        ///< Active-low
 
 // ---------------------------------------------------------------------------
 // Buzzer — HYG-8503A (LEDC PWM via NPN low-side switch Q3)

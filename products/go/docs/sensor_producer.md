@@ -52,7 +52,7 @@ The wiring layer (`go_hardware_board.cpp`) populates a `Sensors` struct and pass
 
 | `Sensors` field | Driver | Notes |
 |---|---|---|
-| `temp_hum` | `SHT40` | Dedicated temperature + humidity sensor, V1 only |
+| `temp_hum` | `SHT40` | Dedicated temperature + humidity sensor |
 | `co2` | `S12`, `SCD4x`, or `STCC4` | Probed in order at boot; first detected wins |
 | `pms_a` | `SPS30` | Single particulate matter sensor |
 | `pms_b` | `nullptr` | No second PM sensor on AGo |
@@ -61,9 +61,9 @@ The wiring layer (`go_hardware_board.cpp`) populates a `Sensors` struct and pass
 | `o3_no2` | `nullptr` | No AlphaSense electrodes on AGo |
 
 `temp_hum_a` uses the product fallback order `DEDICATED` → `CO2` →
-`PRESSURE`. On V1, SHT40 is probed only after board-variant detection. If
-SHT40 is unavailable, SCD4x/STCC4 CO2-integrated T/RH can supply temperature
-and humidity; S12 cannot. DPS368 is the final temperature-only fallback.
+`PRESSURE`. SHT40 is probed during sensor initialization. If it is unavailable,
+SCD4x/STCC4 CO2-integrated T/RH can supply temperature and humidity; S12 cannot.
+DPS368 is the final temperature-only fallback.
 
 Battery management is handled separately by `PowerService` via the
 `airgradient-bms` component and is not part of the `Sensors` struct.

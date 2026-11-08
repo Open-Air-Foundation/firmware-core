@@ -206,9 +206,8 @@ The screen shows a live X/Y/Z readout. The test passes when the `WHO_AM_I`
 identity matches and the readings are sane (at rest, the acceleration vector
 magnitude is near 1 g); the buzzer beeps pass or fail. The driver attaches to
 the shared I2C master bus through a board factory (`new_accel_sensor()`), with
-its address added to `board_config.h`. If the accelerometer is only populated on
-some board variants, the driver is variant-gated the same way the LED and buzzer
-services already are.
+its address added to `board_config.h`. The factory returns `nullptr` if the
+part is absent or initialization fails; callers must handle that result.
 
 ### Battery Calibration Arm
 
@@ -285,7 +284,7 @@ Each step is small enough to land as a focused commit.
    orchestrator.
 6. **Accelerometer driver.** Add the LIS2DH12 driver under `components/`, a
    `board_config.h` address constant, and a `new_accel_sensor()` board factory
-   attaching to the shared I2C bus (variant-gated if needed).
+   attaching to the shared I2C bus and checking device identity.
 7. **Accelerometer test.** Add the live X/Y/Z screen with identity + sanity
    pass/fail and buzzer cue.
 8. **Battery calibration arm.** Add the Battery Calibration row, a strong confirm dialog, and
@@ -336,10 +335,6 @@ ctest --test-dir tests/build --output-on-failure
 
 ## Open Questions
 
-- **Accelerometer hardware facts are unconfirmed.** The I2C address (`0x18` vs
-  `0x19`), whether the part is populated on all board variants or V1-only, and
-  whether an INT line is routed to a GPIO are all TBD. These must be confirmed
-  before the driver lands.
 - **Battery Calibration visibility.** It is currently visible to all users, mitigated by
   a strong confirm dialog. Revisit if it should instead be gated behind
   manufacturing mode.

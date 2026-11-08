@@ -101,9 +101,9 @@ their hardware sequencing requires.
 | Method | What it initialises |
 |---|---|
 | `init_nvs()` | NVS flash |
-| `init_buses()` | GPIO power enables + I2C bus + settling delays + board variant detection (BQ27427 probe) + PM polarity write |
+| `init_buses()` | SPS30 bus isolation + I2C bus + settling delays + SPS30 bus connection |
 | `init_spi()` | SPI bus |
-| `init_fuel_gauge()` | Optional BQ27427 driver on V1 (requires buses), with corruption recovery + idempotent cell-config; independent from the charger |
+| `init_fuel_gauge()` | BQ27427 driver (requires buses), with corruption recovery + idempotent cell-config; independent from the charger |
 | `init_bms()` | BQ25629 charger driver (requires buses); returns availability and remains retryable after failure |
 | `init_wifi_subsystem()` | ESP-IDF Wi-Fi stack: netif, event loop, `esp_wifi_init`, storage mode, event handlers, single-shot timers. **Not** called by `init_core()` — only `Orchestrator::enter_stationary()` invokes it, so Portable-only boots never pay the cost. Idempotent at both the board layer (`_wifi_inited` flag) and the HAL layer. |
 | `init_core()` | Convenience gate: calls `init_nvs` + `init_buses` + `init_spi` (skips what's done). Deliberately excludes fuel-gauge, BMS, and Wi-Fi initialization. |
@@ -121,7 +121,7 @@ process lifetime (never freed — the app never returns).
 | `sensors(warm)` | All sensor drivers + SensorManager | Buses, BMS attempted, PowerService constructed |
 | `storage()` | PayloadCache + NAND + StorageService | SPI |
 | `display()` | DisplayService | SPI |
-| `led_service()` | LedService (LP5036 driver on V1, inert on Prototype) | Buses |
+| `led_service()` | LedService with LP5036 driver | Buses |
 | `power()` | PowerService + ext watchdog; accepts a nullable BMS and optional fuel gauge | Fuel-gauge and BMS init attempted |
 | `wifi_hal()` | `EspWifiHal` instance | — (lazy C++ construction only; ESP-IDF Wi-Fi init runs in `init_wifi_subsystem()`) |
 | `wifi_manager()` | `WifiManager` constructed against the HAL | `wifi_hal()` — the manager's constructor only registers callbacks, so construction against an uninitialised HAL is safe; driver calls fire when `WifiService` actions run |
@@ -144,13 +144,9 @@ runtime overhead in production.
 
 ### Platform info and hardware operations
 
-`variant()`, `serial_number()`, `firmware_version()`, `gpio_hal()`,
+`serial_number()`, `firmware_version()`, `gpio_hal()`,
 `release_gpio_holds()`, `ulp_stop()`, `ulp_start()`,
 `restart()`, `install_button_isr()`, `remove_button_isr()`.
-
-`variant()` returns the `BoardVariant` detected during `init_buses()`. Must
-not be called before `init_buses()` has completed. Fail-safe default is
-`Prototype`.
 
 ## GoHardwareBoard Init Method Ordering
 
@@ -166,8 +162,8 @@ Hardware sequencing constraints:
 
 - **NVS** must be ready before ConfigStore can read settings
 - **Buses** (GPIO power enables + I2C) must be ready before I2C devices.
-  `init_buses()` also runs board variant detection (BQ27427 probe at
-  `0x55`) and writes the variant-appropriate PM enable GPIO level
+  `init_buses()` isolates the SPS30 bus during initialization, then connects
+  it by driving EN_PM LOW
 - **SPI** must be ready before display and NAND flash
 - **Fuel gauge** is initialized independently before the charger retry in
   measurement and factory-learning paths. Charging-only detection probes the
@@ -180,7 +176,7 @@ Hardware sequencing constraints:
   path continues with a nullable BMS
 - **PMID** is armed by successful BMS initialization. `init_bms()` arms the boost
   converter (`EN_OTG=1`); `power().set_pm_power(true)` then drives the EN_PM
-  GPIO (PMID→SPS30 load switch on Prototype, I2C bus isolation on V1).
+  GPIO LOW to connect the SPS30 I2C bus.
   `GoHardwareBoard` enforces that BMS initialization was attempted and
   `PowerService` was constructed before `sensors()`. During degraded fast-path
   operation the PMID readiness check is skipped, so SPS30 data may be invalid
@@ -292,33 +288,19 @@ Phase 4:  Orchestrator::init() → Orchestrator::run()
 See [ARCHITECTURE.md → Button-Wake Path](../ARCHITECTURE.md#button-wake-path-button-wake-offline-mode)
 for the full sequence.
 
-## Board Variant Detection
+## Bus Initialization
 
-`init_buses()` detects the board variant after the I2C bus is up by calling
-`i2c_device_present()` (from `components/airgradient-common/include/ag_i2c.h`)
-to probe the BQ27427 fuel gauge at address `0x55`:
+`init_buses()` isolates the SPS30 I2C bus by driving EN_PM HIGH, waits
+100 ms, creates the shared I2C bus, and waits another 100 ms. It then drives
+EN_PM LOW to connect the SPS30 and waits 100 ms before marking the buses ready.
+The GPIO levels are defined by `PM_POWER_OFF_LEVEL` and `PM_POWER_ON_LEVEL`
+in the host-safe `go_board.h` header.
 
-| Probe Outcome | Variant | Reasoning |
-|---|---|---|
-| ACK | `V1` | BQ27427 only exists on v1 silicon |
-| NACK or transport error | `Prototype` | Fail-safe — prototype is the shipping default |
+Fuel-gauge availability does not affect this sequence or PM polarity.
 
-Before probing, `init_buses()` writes a safe-default `level = 1` on the
-PM enable GPIO (ON for Prototype, OFF for V1 — safe for both). After
-variant detection, V1 writes `level = 0` (V1 "PM ON"); Prototype skips
-the second write since `level = 1` is already correct.
+## Fuel Gauge Bring-Up
 
-Detection emits exactly one INFO log line:
-
-```text
-GoHardwareBoard: board variant: V1 (BQ27427 @ 0x55 ACK)
-GoHardwareBoard: board variant: Prototype (BQ27427 @ 0x55 NACK)
-```
-
-## Fuel Gauge Bring-Up (V1 Only)
-
-`init_fuel_gauge()` has a V1 branch gated on
-`_variant == BoardVariant::V1` that constructs the BQ27427 driver and runs the
+`init_fuel_gauge()` constructs the BQ27427 driver and runs the
 `evaluate_fg_state` pure helper (inline in `go_board.h`). The helper examines
 the chip's persistent Data Memory and decides whether a factory reset and/or
 cell-config write is needed. Fuel-gauge bring-up is independent from the
@@ -342,7 +324,7 @@ init failure, the fuel gauge stays offline (`ready() == false`) and
 
 See [`go_board.h`](../main/go_board.h) for `evaluate_fg_state` and
 [`go_hardware_board.cpp`](../main/go_hardware_board.cpp) for the full
-`init_bms()` V1 branch.
+`init_fuel_gauge()` implementation.
 
 ## Error Handling
 
@@ -366,12 +348,12 @@ All pin assignments in `board_config.h`. Known I2C addresses:
 | S12 CO2 | 0x68 | Both |
 | SCD4x CO2 | 0x62 | Both |
 | STCC4 CO2 | 0x64 | Both |
-| SHT40 | 0x44 | V1 only |
+| SHT40 | 0x44 | Dedicated temperature and humidity |
 | SGP41 | 0x59 | Both |
 | DPS368 | 0x77 | Both |
 | BQ25629 | 0x6A | Both |
 | CAP1203 | 0x28 | Both |
-| BQ27427 | 0x55 | V1 only (variant detection probe) |
+| BQ27427 | 0x55 | Fuel gauge |
 
 ## Serial Number
 

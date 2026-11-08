@@ -27,6 +27,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <trompeloeil.hpp>
 #include <trompeloeil/mock.hpp>
+#include <vector>
 
 #include "go_board.h"
 #include "go_power.h"
@@ -863,7 +864,7 @@ TEST_CASE("should_sleep_pm_sensor: PM power-cycle eligibility", "[PowerService][
 //
 // Background: EN_OTG (PMID boost) is armed once during BQ25629Bms::init()
 // and the chip handles buck↔boost transitions autonomously thereafter.
-// set_pm_power() drives only the EN_PM load switch — it must NOT call
+// set_pm_power() drives only the EN_PM bus isolator — it must NOT call
 // set_pmid_enabled() on the per-measurement path, because each
 // EN_OTG 0→1 transition is a boost cold-start that can exceed 1S
 // cell-protection OCP and cause a POWERON reset on battery.
@@ -889,7 +890,7 @@ TEST_CASE("set_pm_power: EN_PM GPIO only, no BMS coupling", "[PowerService][pm_p
   // because no REQUIRE_CALL / ALLOW_CALL is registered for set_pmid_enabled
   // in any of the sections below.
 
-  SECTION("set_pm_power(true): writes ON level, no BMS calls") {
+  SECTION("set_pm_power(true): drives LOW, no BMS calls") {
     PowerService::Config config = DEFAULT_CONFIG;
     config.pin_pm_power = 26;
     PowerService svc(&mock_bms, tracking_gpio, config);
@@ -899,11 +900,11 @@ TEST_CASE("set_pm_power: EN_PM GPIO only, no BMS coupling", "[PowerService][pm_p
     gpio_call_count = 0;
     svc.set_pm_power(true);
     CHECK(last_pin == 26);
-    CHECK(last_level == 1);
+    CHECK(last_level == 0);
     CHECK(gpio_call_count == 1);
   }
 
-  SECTION("set_pm_power(false): writes OFF level, no BMS calls") {
+  SECTION("set_pm_power(false): drives HIGH, no BMS calls") {
     PowerService::Config config = DEFAULT_CONFIG;
     config.pin_pm_power = 26;
     PowerService svc(&mock_bms, tracking_gpio, config);
@@ -913,7 +914,7 @@ TEST_CASE("set_pm_power: EN_PM GPIO only, no BMS coupling", "[PowerService][pm_p
     gpio_call_count = 0;
     svc.set_pm_power(false);
     CHECK(last_pin == 26);
-    CHECK(last_level == 0);
+    CHECK(last_level == 1);
     CHECK(gpio_call_count == 1);
   }
 
@@ -930,36 +931,6 @@ TEST_CASE("set_pm_power: EN_PM GPIO only, no BMS coupling", "[PowerService][pm_p
     CHECK(last_pin == -1);
     CHECK(last_level == -1);
     CHECK(gpio_call_count == 0);
-  }
-
-  SECTION("v1 polarity (pm_power_on_level=0): set_pm_power(true) drives LOW") {
-    PowerService::Config config = DEFAULT_CONFIG;
-    config.pin_pm_power = 26;
-    config.pm_power_on_level = 0;
-    PowerService svc(&mock_bms, tracking_gpio, config);
-
-    last_pin = -1;
-    last_level = -1;
-    gpio_call_count = 0;
-    svc.set_pm_power(true);
-    CHECK(last_pin == 26);
-    CHECK(last_level == 0);
-    CHECK(gpio_call_count == 1);
-  }
-
-  SECTION("v1 polarity (pm_power_on_level=0): set_pm_power(false) drives HIGH") {
-    PowerService::Config config = DEFAULT_CONFIG;
-    config.pin_pm_power = 26;
-    config.pm_power_on_level = 0;
-    PowerService svc(&mock_bms, tracking_gpio, config);
-
-    last_pin = -1;
-    last_level = -1;
-    gpio_call_count = 0;
-    svc.set_pm_power(false);
-    CHECK(last_pin == 26);
-    CHECK(last_level == 1);
-    CHECK(gpio_call_count == 1);
   }
 
   SECTION("N consecutive cycles: zero BMS calls, GPIO toggles each time") {
@@ -1191,19 +1162,28 @@ TEST_CASE("recover_pm_sensor: EN_PM off -> boost off -> boost on -> EN_PM on",
   SECTION("pin_pm_power configured: full sequence fires in order") {
     PowerService::Config config = DEFAULT_CONFIG;
     config.pin_pm_power = 26;
-    config.pm_power_on_level = 0; // V1: active-low
-    PowerService svc(&mock_bms, test_gpio_hal, config);
+    static std::vector<int> levels;
+    levels.clear();
+    gpio::Hal tracking_gpio = test_gpio_hal;
+    tracking_gpio.set_level = [](int pin, int level) -> bool {
+      CHECK(pin == 26);
+      levels.push_back(level);
+      return true;
+    };
+    PowerService svc(&mock_bms, tracking_gpio, config);
 
     trompeloeil::sequence seq;
-    // set_pm_power(false) -> GPIO level = 1 (inverted for V1 active-low)
-    // set_pmid_enabled(false)
-    // delay PM_RECOVER_OFF_MS
-    // set_pmid_enabled(true)
-    // delay PM_RECOVER_SETTLE_MS
-    // set_pm_power(true) -> GPIO level = 0
-    REQUIRE_CALL(mock_bms, set_pmid_enabled(false)).IN_SEQUENCE(seq).RETURN(true);
-    REQUIRE_CALL(mock_bms, set_pmid_enabled(true)).IN_SEQUENCE(seq).RETURN(true);
+    // Keep the bus isolated throughout the boost power cycle.
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(false))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(CHECK(levels == std::vector<int>{1}))
+        .RETURN(true);
+    REQUIRE_CALL(mock_bms, set_pmid_enabled(true))
+        .IN_SEQUENCE(seq)
+        .SIDE_EFFECT(CHECK(levels == std::vector<int>{1}))
+        .RETURN(true);
     svc.recover_pm_sensor();
+    CHECK(levels == std::vector<int>{1, 0});
   }
 
   SECTION("pin_pm_power not configured: no-op") {
@@ -2003,14 +1983,14 @@ TEST_CASE("poll_bms: full-charge pause — V1 (FG path)", "[PowerService][full_c
 }
 
 // ============================================================================
-// TEST CASE 16 — Full-charge pause: Prototype (no FG, BMS fallback)
+// TEST CASE 16 — Full-charge pause: Fuel gauge unavailable (BMS fallback)
 // ============================================================================
 
-TEST_CASE("poll_bms: full-charge pause — Prototype (BMS fallback)",
+TEST_CASE("poll_bms: full-charge pause — fuel gauge unavailable (BMS fallback)",
           "[PowerService][full_charge][bms]") {
   MockBmsDevice mock_bms;
   PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
-  // No FG attached — Prototype board path.
+  // No fuel gauge attached; charger data remains available.
 
   SECTION("ChargeTerminationDone + 100% + plugged → pause triggers") {
     STUB_BMS_READS(mock_bms, 100.0f, BmsChargingState::ChargeTerminationDone,

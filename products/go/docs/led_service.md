@@ -5,7 +5,6 @@ Product-specific LED service for AirGradient Go. Drives the LP5036
 adaptive render loop. The service manages two independent LED groups
 (back indicator and touch feedback) and supports time-evolving
 effects such as blink, breathe, fade, chase, and sequenced animations.
-Active on board variant V1; inert on Prototype.
 
 ## Files
 
@@ -27,15 +26,6 @@ Active on board variant V1; inert on Prototype.
 | `LP5036` | `go_led_driver.h` | Concrete I2C driver for hardware builds |
 | `RTOS` | `airgradient-common` (`rtos.h`) | Queue, task, time for the adaptive render loop |
 | `air_quality`, `Rgb` | `airgradient-common` (`air_quality.h`, `rgb.h`) | Shared AQI/CO2 classification and unscaled RGB colors |
-
-## Board Variant
-
-The LP5036 is only present on board variant V1. `GoHardwareBoard`
-constructs `LP5036` and passes it as `Config::driver` on V1. On
-Prototype, `Config::driver` is `nullptr` and the service enters inert
-mode: all public methods return immediately, no queue or task is created.
-The orchestrator calls `LedService` unconditionally regardless of
-variant.
 
 ## Public API
 
@@ -141,8 +131,7 @@ valid selected indicator color, or clears the back LEDs when its reading is inva
 
 The delay blocks only the orchestrator task; the LED worker continues rendering
 the back sequence. Requests are ignored while an interactive hardware-test
-screen owns the LEDs. Prototype boards remain inert because their LED service
-has no driver.
+screen owns the LEDs.
 
 ### Adaptive Render Loop
 

@@ -479,8 +479,6 @@ public:
     ++new_accel_sensor_calls;
     return accel_to_return;
   }
-  BoardVariant variant_value = BoardVariant::Prototype;
-  BoardVariant variant() const override { return variant_value; }
   std::string serial_number() override { return "TEST00"; }
   const char *firmware_version() override { return "test"; }
   const gpio::Hal &gpio_hal() override { return *reinterpret_cast<gpio::Hal *>(_buf); }
@@ -7797,13 +7795,12 @@ TEST_CASE("on_bms_status_timer: charging transition to plugged calls ensure_pmid
 }
 
 // ============================================================================
-// PM sensor recovery: time-based trigger on persistent PM failure (V1 only)
+// PM sensor recovery: time-based trigger on persistent PM failure
 // ============================================================================
 
 TEST_CASE("on_sensor_data: persistent PM failure triggers recover_pm_sensor on V1",
           "[Orchestrator][pmid][pm_recovery]") {
   TestFixture f;
-  f.stub_board.variant_value = BoardVariant::V1;
   auto orch = f.make_orchestrator();
   A::set_first_measurement_done(orch, true);
 
@@ -7831,7 +7828,6 @@ TEST_CASE("on_sensor_data: persistent PM failure triggers recover_pm_sensor on V
 TEST_CASE("on_sensor_data: valid PM resets the failure timer",
           "[Orchestrator][pmid][pm_recovery]") {
   TestFixture f;
-  f.stub_board.variant_value = BoardVariant::V1;
   auto orch = f.make_orchestrator();
   A::set_first_measurement_done(orch, true);
 
@@ -7864,30 +7860,9 @@ TEST_CASE("on_sensor_data: valid PM resets the failure timer",
   CHECK(test_spy::recover_pm_sensor_called);
 }
 
-TEST_CASE("on_sensor_data: PM recovery does not fire on Prototype",
-          "[Orchestrator][pmid][pm_recovery]") {
-  TestFixture f;
-  f.stub_board.variant_value = BoardVariant::Prototype;
-  auto orch = f.make_orchestrator();
-  A::set_first_measurement_done(orch, true);
-
-  MeasuresAGo bad{};
-  bad.pm_a.pm_25 = -1.0f;
-
-  // Fail at t=0, then well past threshold.
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(1000);
-  A::on_sensor_data(orch, bad);
-
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(60000);
-  A::on_sensor_data(orch, bad);
-
-  CHECK_FALSE(test_spy::recover_pm_sensor_called);
-}
-
 TEST_CASE("on_sensor_data: PM recovery does not fire before first measurement done",
           "[Orchestrator][pmid][pm_recovery]") {
   TestFixture f;
-  f.stub_board.variant_value = BoardVariant::V1;
   auto orch = f.make_orchestrator();
   // _first_measurement_done is false by default
 
@@ -8153,8 +8128,11 @@ TEST_CASE("Peripheral Test: holds PM awake until any test exit",
   f.ui_manager.set_screen(Screen::PeripheralTest);
   A::start_peripheral_test(orch);
 
+  MeasuresAGo measures{};
+  measures.pm_a.pm_25 = 10.0f;
+
   // A normal measurement or an interval update cannot sleep PM during the test.
-  A::on_sensor_data(orch, MeasuresAGo{});
+  A::on_sensor_data(orch, measures);
   CHECK_FALSE(test_spy::pm_sleep_requested);
   const GoSettings previous = A::settings(orch);
   A::settings(orch).measure_interval_seconds = 120;
@@ -8169,13 +8147,14 @@ TEST_CASE("Peripheral Test: holds PM awake until any test exit",
     Event done{};
     done.type = EventType::SensorTestDone;
     A::dispatch(orch, done);
-    A::on_sensor_data(orch, MeasuresAGo{});
+    A::on_sensor_data(orch, measures);
     CHECK_FALSE(test_spy::pm_sleep_requested);
     exit = InputType::ShortPress;
   }
   A::on_input(orch, {InputSource::TouchEnter, exit});
   CHECK(f.ui_manager.current_screen() != Screen::PeripheralTest);
   CHECK(test_spy::pm_sleep_requested);
+  CHECK_FALSE(test_spy::recover_pm_sensor_called);
   CHECK(A::settings(orch).measure_interval_seconds == 120);
 }
 

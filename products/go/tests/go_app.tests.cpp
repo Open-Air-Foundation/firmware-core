@@ -529,7 +529,6 @@ public:
     return nullptr;
   }
 
-  BoardVariant variant() const override { return BoardVariant::Prototype; }
   std::string serial_number() override { return "test-serial"; }
   const char *firmware_version() override { return "0.0.0-test"; }
   const gpio::Hal &gpio_hal() override {
