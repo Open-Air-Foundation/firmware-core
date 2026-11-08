@@ -1,0 +1,3 @@
+dependencies:
+  espressif/spi_nand_flash:
+    version: '*'
