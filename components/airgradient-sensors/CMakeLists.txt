@@ -13,6 +13,7 @@ idf_component_register(
          "drivers/sgp41/sgp41.cpp"
          "drivers/alpha_sense/alpha_sense.cpp"
          "drivers/dps368/dps368.cpp"
+         "drivers/spl07_003/spl07_003.cpp"
          "services/sensor_manager.cpp"
     INCLUDE_DIRS "."
     REQUIRES airgradient-common airgradient-serial ads1115 embedded-i2c-scd4x esp_driver_gpio esp_driver_i2c
