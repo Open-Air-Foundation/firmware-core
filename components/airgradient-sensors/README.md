@@ -93,7 +93,39 @@ sensor type is as simple as leaving its pointer null.
 | `drivers/sgp41` | Sensirion SGP41 | I2C | TVOC + NOx |
 | `drivers/alpha_sense` | AlphaSense O3 / NO2 | I2C (dual ADS1115) | Electrochemical front-end |
 | `drivers/dps368` | Infineon DPS368 | I2C | Pressure |
+| `drivers/spl07_003` | Goertek SPL07-003 | I2C | Pressure, derived altitude, and temperature-only fallback |
 | `drivers/co2_common` | (helper) | — | Shared Modbus CRC helper used by S8 and Sunlight |
+
+### SPL07-003 Pressure And Temperature
+
+`SPL07_003` implements `PressureSensor` with continuous pressure and internal
+temperature measurements at 1 Hz, both with 16x oversampling. Its constructor
+accepts an I2C bus and address (`0x77` by default, or `0x76` with SDO grounded).
+The caller owns the bus; the driver releases its device handle on destruction
+and failed initialization. Keep the bus alive until the driver is destroyed.
+
+Initialization verifies product/revision ID `0x11`, resets the sensor, waits
+for sensor and calibration readiness with a bounded timeout, and loads all
+21 calibration bytes. Compensation includes the SPL07-003-specific `c31` and
+`c40` terms. Register definitions and compensation follow the
+[SPL07-003 datasheet](https://media.digikey.com/pdf/Data%20Sheets/Goertek%20Microelectronics%20PDFs/SPL07-003.pdf),
+sections 4.6 and 7.
+
+`read()` requires fresh pressure and temperature results, read together in
+one transaction. It returns `true` for valid pressure in hPa. Derived altitude
+uses the same standard-atmosphere formula as DPS368, with a fixed sea-level
+pressure of 1013.25 hPa, and is validated independently. Invalid fields retain
+their invalid sentinels.
+
+Every read attempt clears the exposed temperature cache. A valid temperature
+from the current pair is available through `temp_hum_data()`, even if compensated
+pressure is out of range. An I2C failure, incomplete pair, or invalid temperature
+leaves the cache invalid. Temperature must pass `is_temp_valid()` and the
+sensor's 85 °C upper operating limit. Humidity always remains invalid. The
+reported temperature is internal sensor temperature, available as a fallback.
+
+Product code selects and instantiates this driver; no product currently
+selects it automatically.
 
 ### SPS30 Particle-Count Mapping
 
@@ -223,6 +255,11 @@ Host tests live under `components/airgradient-sensors/tests/` and run
 through the [tests runner](../../tests/README.md). Current coverage focuses
 on `SensorManager` averaging, fallback, null-handling, and iteration timing
 behavior.
+
+Concrete sensor drivers are validated on hardware; they are not compiled into
+the sensor host-test target. SPL07-003 hardware validation remains pending:
+check initialization, pressure against a reference, cold-start readings,
+power-cycle recovery, and communication-failure handling during board bring-up.
 
 ## Notes
 
