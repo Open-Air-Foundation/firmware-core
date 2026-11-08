@@ -72,7 +72,7 @@ static esp_err_t detect_chip(spi_nand_flash_device_t *dev)
         .miso_data = &manufacturer_id,
         .flags = SPI_TRANS_USE_RXDATA,
     };
-    spi_nand_execute_transaction(dev, &t);
+    ESP_RETURN_ON_ERROR(spi_nand_execute_transaction(dev, &t), TAG, "Failed to read NAND ID");
     ESP_LOGD(TAG, "%s: manufacturer_id: %x\n", __func__, manufacturer_id);
 
     switch (manufacturer_id) {

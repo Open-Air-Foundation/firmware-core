@@ -485,13 +485,16 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
 
 StorageService &GoHardwareBoard::storage() {
   assert(_spi_ready && "storage() requires init_spi()");
+  const bool v2 = variant() == BoardVariant::V2;
+  assert((!v2 || _buses_ready) && "V2 storage() requires init_buses()");
   if (!_storage) {
     auto *rtc_storage = new RtcPayloadCacheStorage();
     auto *cache = new PayloadCache(*rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
 
     SpiNandStorage::Config nand_config{};
     nand_config.spi_host = SPI_HOST;
-    nand_config.cs_pin = PIN_NAND_CS;
+    nand_config.cs_pin = v2 ? V2_EXPANDER_NAND_CS : PIN_NAND_CS;
+    nand_config.cs_gpio = v2 ? &_expander_gpio : nullptr;
     auto *nand = new SpiNandStorage(nand_config);
 
     _storage = new StorageService(*cache, *nand);

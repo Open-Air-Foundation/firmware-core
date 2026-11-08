@@ -9,6 +9,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "esp_err.h"
 #ifndef CONFIG_IDF_TARGET_LINUX
 #include "driver/spi_common.h"
@@ -20,6 +21,13 @@ extern "C" {
 #endif
 
 typedef struct spi_nand_flash_device_t spi_nand_flash_device_t;
+
+/** Optional software CS control, called synchronously in task context with the
+ * SPI bus acquired. high=false selects the chip; high=true deselects it.
+ * May block (for example, on I2C). Configure the SPI device with spics_io_num=-1.
+ * The callback and its context must remain valid for the device lifetime.
+ */
+typedef esp_err_t (*spi_nand_cs_callback_t)(void *context, bool high);
 
 
 #ifdef CONFIG_IDF_TARGET_LINUX
@@ -50,6 +58,8 @@ struct spi_nand_flash_config_t {
     spi_nand_flash_io_mode_t io_mode;        ///< set io mode for SPI NAND communication
     uint8_t flags;                           ///< set flag with SPI_DEVICE_HALFDUPLEX for half duplex communication, 0 for full-duplex.
     ///< This flag value must match the flag value in the spi_device_interface_config_t structure.
+    spi_nand_cs_callback_t cs_callback;      ///< NULL keeps SPI hardware CS control.
+    void *cs_context;                       ///< Borrowed callback context.
 };
 
 typedef struct spi_nand_flash_config_t spi_nand_flash_config_t;

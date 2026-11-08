@@ -21,12 +21,20 @@ SpiNandStorage::SpiNandStorage(const Config &config) : _config(config) {
 
 SpiNandStorage::~SpiNandStorage() { deinit(); }
 
+esp_err_t SpiNandStorage::set_cs(void *context, bool high) {
+  const auto &config = static_cast<SpiNandStorage *>(context)->_config;
+  if (!config.cs_gpio->set_level(config.cs_pin, high ? 1 : 0)) {
+    return ESP_FAIL;
+  }
+  return ESP_OK;
+}
+
 bool SpiNandStorage::init() {
   if (_mounted) {
     return true;
   }
 
-  if (_config.cs_pin == GPIO_NUM_MAX) {
+  if (_config.cs_pin < 0 || (_config.cs_gpio == nullptr && _config.cs_pin >= GPIO_NUM_MAX)) {
     ESP_LOGE(TAG, "cs_pin not configured");
     return false;
   }
@@ -37,7 +45,7 @@ bool SpiNandStorage::init() {
   dev_cfg.clock_source = SPI_CLK_SRC_DEFAULT;
   dev_cfg.duty_cycle_pos = 128;
   dev_cfg.clock_speed_hz = _config.clock_speed_hz;
-  dev_cfg.spics_io_num = static_cast<int>(_config.cs_pin);
+  dev_cfg.spics_io_num = _config.cs_gpio != nullptr ? -1 : _config.cs_pin;
   dev_cfg.flags = _config.spi_device_flags;
   dev_cfg.queue_size = 10;
 
@@ -53,10 +61,15 @@ bool SpiNandStorage::init() {
   nand_cfg.gc_factor = 4;
   nand_cfg.io_mode = SPI_NAND_IO_MODE_SIO;
   nand_cfg.flags = _config.spi_device_flags;
+  if (_config.cs_gpio != nullptr) {
+    nand_cfg.cs_callback = set_cs;
+    nand_cfg.cs_context = this;
+  }
 
   err = spi_nand_flash_init_device(&nand_cfg, &_nand_device);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "spi_nand_flash_init_device failed: %s", esp_err_to_name(err));
+    _nand_device = nullptr; // The NAND driver frees its device on init failure.
     spi_bus_remove_device(_spi_device);
     _spi_device = nullptr;
     return false;

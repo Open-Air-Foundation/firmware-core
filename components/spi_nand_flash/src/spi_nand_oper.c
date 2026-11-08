@@ -45,7 +45,26 @@ esp_err_t spi_nand_execute_transaction(spi_nand_flash_device_t *handle, spi_nand
         assert(transaction->miso_len <= 4 && "SPI_TRANS_USE_RXDATA used for a long transaction");
     }
 
-    esp_err_t ret = spi_device_transmit(handle->config.device_handle, (spi_transaction_t *) &e);
+    esp_err_t ret;
+    if (handle->config.cs_callback != NULL) {
+        ret = spi_device_acquire_bus(handle->config.device_handle, portMAX_DELAY);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+        ret = handle->config.cs_callback(handle->config.cs_context, false);
+        if (ret == ESP_OK) {
+            ret = spi_device_transmit(handle->config.device_handle, (spi_transaction_t *) &e);
+        }
+        // Even a failed select may have reached the expander. Always attempt
+        // deselection before releasing the bus, including on transfer failure.
+        esp_err_t cs_ret = handle->config.cs_callback(handle->config.cs_context, true);
+        spi_device_release_bus(handle->config.device_handle);
+        if (ret == ESP_OK) {
+            ret = cs_ret;
+        }
+    } else {
+        ret = spi_device_transmit(handle->config.device_handle, (spi_transaction_t *) &e);
+    }
     if (ret == ESP_OK) {
         if (transaction->flags == SPI_TRANS_USE_RXDATA) {
             memcpy(transaction->miso_data, e.base.rx_data, transaction->miso_len);
