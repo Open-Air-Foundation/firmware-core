@@ -171,14 +171,15 @@ _averaged_ current, so the load must be held high across the whole inter-poll
 window. `Rest`/`Verify` keep `_discharge_load_on` false, so those waits stay
 quiet (idle sleep, under the Quit Current) for clean OCV.
 
-The PM fan is the primary load: powering the EN_PM rail alone does not spin it —
-the SPS30 must be told to measure. On `Discharge` the runner powers EN_PM and
+The PM fan is the primary load: connecting the SPS30 I2C bus alone does not
+spin it — the SPS30 must be told to measure. On `Discharge` the runner connects
+the bus with EN_PM and
 then calls `GoBoard::start_pm_fan()` every poll until it reads back a valid
 measurement (proof the fan is actually running), so a slow sensor boot or a
 transient I²C error self-recovers instead of leaving the discharge load short.
 
-Unplugging the charger flips PMID (the rail feeding the EN_PM load switch hands
-off from input to OTG boost), which browns the SPS30 out of measuring mode even
+Unplugging the charger switches PMID, the SPS30 supply, from input to OTG
+boost, which browns the SPS30 out of measuring mode even
 though EN_PM stays asserted — the fan stops. The runner detects the unplug edge
 (`external_input_present` true → false) during `Discharge` and forces a full PM
 re-enable (`stop_pm_fan()` clears the inited flag), so the per-poll
@@ -412,8 +413,8 @@ frame, lights the result LED (green / red), and holds until the POWER press.
 - **Chemistry already correct:** `set_chemistry_4v2()` reads the Chem ID first
   and only writes when it differs — changing chemistry resets IT learning, so it
   must never run on an already-learned unit.
-- **No fuel gauge attached (Prototype):** the gauge prerequisites and verify read
-  return false; a Prototype board has no learning surface and never arms a run.
+- **Fuel gauge unavailable:** the gauge prerequisites and verify read return
+  false; battery calibration cannot be armed without a ready gauge.
 - **Invalid gauge data:** the dashboard renders `FG: NO DATA` when the SOC
   sentinel indicates no valid read.
 - **Abort:** a short power press (during a run or in a terminal hold) calls

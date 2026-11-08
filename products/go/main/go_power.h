@@ -29,7 +29,7 @@ class FuelGaugeDevice;
 /// Identifies where the battery_percentage value in PowerSnapshot came from.
 enum class BatteryPercentSource : uint8_t {
   Unknown,        ///< Not yet polled
-  FuelGauge,      ///< Read from BQ27427 (V1 with FG attached, read OK)
+  FuelGauge,      ///< Read from BQ27427 (FG attached, read OK)
   BatteryCharger, ///< Voltage-curve estimate from BQ25629 (fallback)
 };
 
@@ -167,12 +167,9 @@ public:
     int pin_wake_button_boot;                  ///< GPIO for deep sleep wake (Button Boot)
     int pin_ext_wdt = -1;                      ///< External watchdog GPIO (-1 = disabled)
     int deep_sleep_threshold_ms = 5000;        ///< Minimum interval (ms) to prefer deep sleep
-    int pin_pm_power = -1;                     ///< PM sensor power GPIO (-1 = no hold)
-    uint8_t pm_power_on_level = 1;             ///< GPIO level meaning "PM on"
-                                               ///<   Prototype: 1 (active-high)
-                                               ///<   v1:        0 (active-low)
-    uint32_t sensor_hold_max_sleep_ms = 20000; ///< Max sleep (ms) to hold PM sensor powered
-    uint32_t pm_sleep_threshold_ms = 20000;    ///< Min measure interval (ms) to power-cycle PM
+    int pin_pm_power = -1;                     ///< SPS30 bus-enable GPIO (-1 = no hold)
+    uint32_t sensor_hold_max_sleep_ms = 20000; ///< Max sleep (ms) to keep PM measuring
+    uint32_t pm_sleep_threshold_ms = 20000;    ///< Min measure interval (ms) to sleep PM
   };
 
   // -------------------------------------------------------------------------
@@ -206,7 +203,7 @@ public:
 
   /// Attach an already-initialised fuel gauge for runtime use.
   /// Non-owning: the fuel gauge must outlive PowerService.
-  /// Pass nullptr (or skip the call entirely) on prototype boards.
+  /// Pass nullptr when the fuel gauge is unavailable.
   void set_fuel_gauge(FuelGaugeDevice *fg);
 
   // -------------------------------------------------------------------------
@@ -258,11 +255,10 @@ public:
   /// @return true if a re-kick was performed.
   bool ensure_pmid_healthy();
 
-  /// Power-cycle the PM sensor via boost kill (V1 only).
+  /// Power-cycle the PM sensor via boost kill.
   ///
   /// Isolates EN_PM, kills the PMID boost so the SPS30 fully de-powers,
-  /// then restores both.  Only useful on V1 where PMID is the SPS30's
-  /// sole power source.
+  /// then restores both. PMID is the SPS30's sole power source.
   void recover_pm_sensor();
 
   /// Reset BMS watchdog.  Must be called periodically (< 10 s interval).
@@ -353,23 +349,22 @@ public:
                              uint32_t awake_ms) const;
 
   /// Return true when the given sleep duration is short enough that keeping
-  /// the PM sensor powered (GPIO held) across deep sleep is beneficial.
+  /// the PM sensor measuring (GPIO held) across deep sleep is beneficial.
   ///
   /// Pure logic — no platform dependencies; testable on host.
   bool should_hold_pm_sensor(uint32_t sleep_duration_ms) const;
 
   /// Return true when the measurement interval is long enough to justify
-  /// power-cycling the PM sensor between measurements (Portable mode).
+  /// sleeping the PM sensor between measurements (Portable mode).
   ///
   /// The threshold is `Config::pm_sleep_threshold_ms` (default 20 s), which
-  /// accounts for ~10 s warmup plus a minimum off-time to make the power
-  /// cycle worthwhile.
+  /// accounts for ~10 s warmup plus a minimum sleep time.
   ///
   /// Pure logic — no platform dependencies; testable on host.
   bool should_sleep_pm_sensor(uint32_t measure_interval_ms) const;
 
-  /// Control PM sensor power GPIO.  Drives the pin to the variant-appropriate
-  /// level (on=true → pm_power_on_level, on=false → inverted).
+  /// Connect or isolate the SPS30 I2C bus via active-low EN_PM.
+  /// Drives LOW when on, HIGH when off; the sensor remains powered by PMID.
   /// No-op when `Config::pin_pm_power < 0`.
   void set_pm_power(bool on);
 
@@ -379,7 +374,7 @@ public:
   /// esp_deep_sleep_start().  Only call when decide_sleep() returns Deep.
   ///
   /// When `should_hold_pm_sensor(sleep_duration_ms)` is true, the PM power
-  /// GPIO is held HIGH during deep sleep via `gpio_hold_en()`.  On ESP32-C5
+  /// GPIO is held LOW during deep sleep via `gpio_hold_en()`.  On ESP32-C5
   /// per-pin hold automatically persists through deep sleep.  The caller
   /// must set `RtcAppFlag::SensorsWarm` in the saved state
   /// accordingly before calling `save_state()`.
@@ -411,11 +406,11 @@ public:
 
   /// Release GPIO holds that were enabled before the previous deep sleep.
   ///
-  /// Must be called **after** `init_gpio()` has reconfigured the held pin
-  /// as output HIGH.  While hold is active the pad stays latched; the GPIO
+  /// Must be called **after** `init_buses()` has configured the held pin
+  /// as output LOW.  While hold is active the pad stays latched; the GPIO
   /// driver writes the new output config to registers underneath.
   /// Releasing hold then lets the fresh output driver take over with no
-  /// power glitch.  No-op when pin_pm_power < 0.
+  /// bus interruption. No-op when pin_pm_power < 0.
   /// Guarded by `#ifndef TEST_HOST`.
   static void release_sleep_gpio_holds(int pin_pm_power);
 
@@ -443,7 +438,7 @@ public:
   static constexpr uint16_t PMID_HEALTHY_MIN_MV = 4500; ///< Floor below which PMID is collapsed
   static constexpr uint32_t PMID_REKICK_OFF_MS = 15;    ///< EN_OTG low dwell before re-assert
 
-  // --- PM sensor recovery (V1 boost-kill power cycle) ---
+  // --- PM sensor recovery (boost-kill power cycle) ---
   static constexpr uint32_t PM_RECOVER_OFF_MS = 50;     ///< SPS30 discharge after boost kill
   static constexpr uint32_t PM_RECOVER_SETTLE_MS = 100; ///< PMID ramp + SPS30 boot after restore
 
