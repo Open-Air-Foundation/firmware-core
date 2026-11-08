@@ -150,15 +150,15 @@ struct GpioState {
   void *arg = nullptr;
 } gpio_state;
 
-bool configure(int, gpio::Mode, gpio::PullMode, gpio::InterruptType) { return true; }
-int get_level(int) { return gpio_state.level; }
-bool set_level(int, int) { return true; }
-bool attach(int, gpio::InterruptHandler handler, void *arg) {
+bool configure(void *, int, gpio::Mode, gpio::PullMode, gpio::InterruptType, int) { return true; }
+int get_level(void *, int) { return gpio_state.level; }
+bool set_level(void *, int, int) { return true; }
+bool attach(void *, int, gpio::InterruptHandler handler, void *arg) {
   gpio_state.handler = handler;
   gpio_state.arg = arg;
   return true;
 }
-bool detach(int) {
+bool detach(void *, int) {
   ++gpio_state.removes;
   if (!gpio_state.remove_ok) {
     return false;
@@ -166,15 +166,17 @@ bool detach(int) {
   gpio_state.handler = nullptr;
   return true;
 }
-bool enable(int) {
+bool enable(void *, int) {
   ++gpio_state.enables;
   return gpio_state.enable_ok;
 }
-bool disable(int) {
+bool disable(void *, int) {
   ++gpio_state.disables;
   return gpio_state.disable_ok;
 }
-const gpio::Hal gpio_hal{configure, get_level, set_level, attach, detach, enable, disable};
+static const gpio::Operations gpio_hal_operations{configure, get_level, set_level, attach,
+                                                  detach,    enable,    disable};
+static const gpio::Hal gpio_hal{gpio_hal_operations};
 
 class Clock : public RTOS {
 public:

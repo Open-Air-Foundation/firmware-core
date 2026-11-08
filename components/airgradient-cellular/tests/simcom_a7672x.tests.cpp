@@ -53,28 +53,32 @@ public:
   gpio::Hal as_hal();
 };
 
-// File-scope pointer used by the adapter free-functions below.
-// Tests are single-threaded; one active mock at a time is safe.
-static MockGpioHal *s_gpio_mock = nullptr;
-
-static bool mock_configure(int pin, gpio::Mode mode, gpio::PullMode pull,
-                           gpio::InterruptType interrupt) {
-  return s_gpio_mock->configure(pin, mode, pull, interrupt);
+static bool mock_configure(void *context, int pin, gpio::Mode mode, gpio::PullMode pull,
+                           gpio::InterruptType interrupt, int) {
+  return static_cast<MockGpioHal *>(context)->configure(pin, mode, pull, interrupt);
 }
-static int mock_get_level(int pin) { return s_gpio_mock->get_level(pin); }
-static bool mock_set_level(int pin, int level) { return s_gpio_mock->set_level(pin, level); }
-static bool mock_add_interrupt_handler(int pin, gpio::InterruptHandler handler, void *arg) {
-  return s_gpio_mock->add_interrupt_handler(pin, handler, arg);
+static int mock_get_level(void *context, int pin) {
+  return static_cast<MockGpioHal *>(context)->get_level(pin);
 }
-static bool mock_remove_interrupt_handler(int pin) {
-  return s_gpio_mock->remove_interrupt_handler(pin);
+static bool mock_set_level(void *context, int pin, int level) {
+  return static_cast<MockGpioHal *>(context)->set_level(pin, level);
 }
-static bool mock_enable_interrupt(int pin) { return s_gpio_mock->enable_interrupt(pin); }
-static bool mock_disable_interrupt(int pin) { return s_gpio_mock->disable_interrupt(pin); }
+static bool mock_add_interrupt_handler(void *context, int pin, gpio::InterruptHandler handler,
+                                       void *arg) {
+  return static_cast<MockGpioHal *>(context)->add_interrupt_handler(pin, handler, arg);
+}
+static bool mock_remove_interrupt_handler(void *context, int pin) {
+  return static_cast<MockGpioHal *>(context)->remove_interrupt_handler(pin);
+}
+static bool mock_enable_interrupt(void *context, int pin) {
+  return static_cast<MockGpioHal *>(context)->enable_interrupt(pin);
+}
+static bool mock_disable_interrupt(void *context, int pin) {
+  return static_cast<MockGpioHal *>(context)->disable_interrupt(pin);
+}
 
 gpio::Hal MockGpioHal::as_hal() {
-  s_gpio_mock = this;
-  return gpio::Hal{
+  static const gpio::Operations operations{
       mock_configure,
       mock_get_level,
       mock_set_level,
@@ -83,6 +87,7 @@ gpio::Hal MockGpioHal::as_hal() {
       mock_enable_interrupt,
       mock_disable_interrupt,
   };
+  return gpio::Hal{operations, this};
 }
 
 class MockAirgradientSerial : public AirgradientSerial {

@@ -53,6 +53,7 @@ idf_component_register(
               airgradient-payload-cache
               airgradient-sensors
               airgradient-touch
+              airgradient-watchdog
               json
                esp_driver_gpio
               esp_driver_i2c

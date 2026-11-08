@@ -49,26 +49,28 @@ public:
 // ============================================================================
 // GPIO HAL stubs
 //
-// gpio::Hal is a plain function-pointer table, not a class.  Stubs are plain
+// gpio::Hal binds an operations table and context. Stubs here are plain
 // C++ functions; test_gpio_level[] simulates GPIO pin state (tests write
 // directly: test_gpio_level[pin] = 0 or 1).
 // ============================================================================
 
 static int test_gpio_level[8] = {};
 
-static bool gpio_configure(int, gpio::Mode, gpio::PullMode, gpio::InterruptType) { return true; }
-static int gpio_get_level(int pin) { return test_gpio_level[pin]; }
-static bool gpio_set_level(int, int) { return true; }
-static bool gpio_add_interrupt_handler(int, gpio::InterruptHandler, void *) { return true; }
-static bool gpio_remove_interrupt_handler(int) { return true; }
-static bool gpio_enable_interrupt(int) { return true; }
+static bool gpio_configure(void *, int, gpio::Mode, gpio::PullMode, gpio::InterruptType, int) {
+  return true;
+}
+static int gpio_get_level(void *, int pin) { return test_gpio_level[pin]; }
+static bool gpio_set_level(void *, int, int) { return true; }
+static bool gpio_add_interrupt_handler(void *, int, gpio::InterruptHandler, void *) { return true; }
+static bool gpio_remove_interrupt_handler(void *, int) { return true; }
+static bool gpio_enable_interrupt(void *, int) { return true; }
 static int disabled_interrupts = 0;
-static bool gpio_disable_interrupt(int) {
+static bool gpio_disable_interrupt(void *, int) {
   ++disabled_interrupts;
   return true;
 }
 
-static const gpio::Hal test_gpio_hal = {
+static const gpio::Operations test_gpio_hal_operations{
     gpio_configure,
     gpio_get_level,
     gpio_set_level,
@@ -77,6 +79,7 @@ static const gpio::Hal test_gpio_hal = {
     gpio_enable_interrupt,
     gpio_disable_interrupt,
 };
+static const gpio::Hal test_gpio_hal{test_gpio_hal_operations};
 
 // ============================================================================
 // Test helpers

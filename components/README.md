@@ -20,12 +20,13 @@ third party can live here if it is part of the shared firmware foundation.
 | [`airgradient-cellular`](airgradient-cellular/README.md) | Cellular modem HAL, shared cellular types, AT-command service, and modem drivers (scaffold) |
 | [`airgradient-common`](airgradient-common/) | Shared measurement types, air-quality classification/colors, RTOS abstraction, and retained uptime |
 | [`airgradient-config`](airgradient-config/README.md) | Typed key-value persistence interface and reusable backends (NVS) |
-| [`airgradient-gpio`](airgradient-gpio/README.md) | GPIO HAL and ESP-IDF-backed driver for pin control and interrupt registration |
+| [`airgradient-gpio`](airgradient-gpio/README.md) | Context-aware GPIO HAL, pin bindings, native GPIO, and TCA6408A expander driver |
 | [`airgradient-nand-storage`](airgradient-nand-storage/README.md) | SPI NAND flash HAL providing FATFS mount/unmount lifecycle for application POSIX I/O |
 | [`airgradient-payload-cache`](airgradient-payload-cache/README.md) | Bounded FIFO payload queue and RTC-retained storage backend for `Measures`-derived payloads |
 | [`airgradient-sensors`](airgradient-sensors/README.md) | Environmental sensor HALs, concrete drivers, and shared orchestration (`SensorManager`) |
 | [`airgradient-serial`](airgradient-serial/) | Serial transport abstractions (UART, I2C-to-UART bridge) used by sensors and other peripherals (no README yet) |
 | [`airgradient-touch`](airgradient-touch/README.md) | Capacitive touch HAL and CAP1203 driver with noise detection and recalibration |
+| [`airgradient-watchdog`](airgradient-watchdog/README.md) | Stateless external watchdog initialization and GPIO feed pulse |
 
 Each first-party component README follows the
 [component README template](../docs/templates/component_readme.md).

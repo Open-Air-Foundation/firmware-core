@@ -1,30 +1,17 @@
 # airgradient-gpio
 
-Shared GPIO foundation: a stateless `gpio::Hal` function-pointer table plus
-a native ESP-IDF-backed implementation. Covers reusable pin operations only.
+GPIO HAL for native ESP-IDF pins and TCA6408A I2C expanders.
 
 ## Status
 
-`Stable`.
+`Stable` for the HAL and native backend. TCA6408A hardware validation is
+pending; the driver is not wired into a product.
 
 ## Scope
 
-This component owns:
-
-- configuring a pin as input or output
-- reading and writing pin level
-- configuring interrupt type
-- registering and removing GPIO interrupt handlers
-- enabling and disabling GPIO interrupts
-
-This component does not own:
-
-- debounce, short-press, long-press, or chord detection
-- factory-reset or button-policy logic
-- touch input (lives in `airgradient-touch`)
-
-Higher-level button behavior belongs in product-specific code or in a
-higher-level service.
+Owns pin configuration, reads/writes, native interrupts, and expander access.
+Products own bus creation, pin assignments, service wiring, power policy,
+and expander INT/RESET wiring. Touch belongs in `airgradient-touch`.
 
 ## Directory Layout
 
@@ -36,50 +23,101 @@ components/airgradient-gpio/
   README.md
 ```
 
-- `hal/` — public GPIO types and the `gpio::Hal` function-pointer table
-- `drivers/` — native platform implementation (`gpio::native::hal`)
+- `hal/` — GPIO types, operations, HAL, and pin bindings
+- `drivers/` — native GPIO and TCA6408A
 
 ## Public Includes
 
 ```cpp
-#include "gpio_hal.h"     // gpio::Hal, gpio::Mode, gpio::PullMode, gpio::InterruptType
-#include "native_gpio.h"  // gpio::native::hal (production instance)
+#include "airgradient_gpio.h" // GPIO types, operations, HAL, pin binding
+#include "native_gpio.h"      // gpio::native::hal
+#include "tca6408a.h"          // gpio::tca6408a namespace and Context
 ```
 
 ## Design
 
-GPIO is a global hardware peripheral; no object instance is needed. The
-component uses a namespace-based, stateless API:
-
 ```text
-caller -> const gpio::Hal& -> gpio::native::hal free fns -> ESP-IDF driver/gpio
+caller -> gpio::Hal (operations + context) -> backend -> hardware
 ```
 
-`gpio::Hal` is a plain struct of function pointers — no state, no
-initialization, no virtual dispatch. In production, pass `gpio::native::hal`
-by const-reference. In tests, construct a `gpio::Hal` directly with mock
-function pointers.
+`gpio::Hal` borrows a `gpio::Operations` table and context. Native GPIO uses
+null context; TCA6408A uses a caller-owned `gpio::tca6408a::Context`.
+`gpio::Pin` copies the binding and adds a pin number, allowing native and
+expanded pins together.
+The table and context must outlive their bindings. Stop users and call
+`deinit(context)` before destroying the context or bus; retry if removal fails.
+The context cannot be copied or moved because it contains a mutex.
+
+Operations are task-only and may block. Use one context per device;
+its mutex protects complete register updates and waits indefinitely. I2C
+transfers have a timeout. Native initialization requires caller serialization.
+
+### TCA6408A Behavior
+
+- `init()` checks communication and preserves pin settings. No chip-ID check
+  is possible; the device has no identification register. To change the bus
+  or configuration, call `deinit()` before initializing again.
+- Supports `Input`/`Output`, `Floating`, and interrupts `Disabled`.
+  Unsupported requests fail without register writes.
+- Explicit initial levels are loaded before enabling output. Omitting the
+  level preserves the latch. Output updates use a shared cache populated at
+  initialization: lock, read cache, write hardware, update cache, unlock.
+  Unchanged pin values skip the write. Transfer failures invalidate the cache;
+  the next partial output update rereads the latch. Port writes update the
+  entire latch and cache without changing direction.
+- Reads include polarity inversion and acknowledge the shared INT signal,
+  even for a single pin. `get_level()` returns `-1` on failure;
+  `read_port()` leaves its output unchanged.
+- Whole-port writes and polarity settings need coordination between users.
+  Configuration failures may leave partial changes. Reinitialize and reapply
+  configuration after reset or power loss. All output writes must use this
+  context to keep the cache valid.
 
 ## Usage
 
+Native callers use `gpio::native::hal`. The board stores an expander context:
+
 ```cpp
-#include "native_gpio.h"
-
-bool init_pin(const gpio::Hal &hal, int pin) {
-    return hal.configure(pin, gpio::Mode::Output,
-                         gpio::PullMode::Floating,
-                         gpio::InterruptType::Disabled);
-}
-
-// At the call site:
-init_pin(gpio::native::hal, MY_PIN);
+gpio::tca6408a::Context expander;
 ```
+
+After bus initialization:
+
+```cpp
+if (!gpio::tca6408a::init(expander, bus)) {
+    return false;
+}
+gpio::Pin enable{gpio::tca6408a::hal(expander), ENABLE_PIN};
+if (!enable.configure(gpio::Mode::Output, gpio::PullMode::Floating,
+                      gpio::InterruptType::Disabled, 0)) {
+    return false;
+}
+return enable.set_level(true);
+```
+
+See [`tca6408a.h`](drivers/tca6408a.h) for the full API.
+
+### Driver Configuration
+
+| Field | Default | Purpose |
+|---|---|---|
+| `address` | `0x20` | Seven-bit address; `0x20` or `0x21` according to ADDR |
+| `scl_speed_hz` | `100000` | Positive I2C clock frequency, at most `400000` Hz |
+| `timeout_ms` | `100` | Positive timeout for each I2C transaction |
 
 ## Dependencies
 
-- `esp_driver_gpio` — ESP-IDF GPIO driver
+- `esp_driver_gpio` — native GPIO
+- `esp_driver_i2c` — expander I2C
+- `airgradient-common` — RTOS mutex abstraction
 
 ## Tests
 
-This component does not currently own host tests. Mock `gpio::Hal`
-instances are constructed inline in callers' tests.
+This component has no host tests. Consumers mock `gpio::Hal` in their
+[host tests](../../tests/README.md); concrete drivers compile in firmware builds.
+
+## Notes
+
+Hardware reference: [TI TCA6408A datasheet](https://www.ti.com/lit/ds/symlink/tca6408a.pdf).
+Bench validation remains pending; firmware builds do not verify hardware.
+Product VHUB coverage is unchanged until integration.

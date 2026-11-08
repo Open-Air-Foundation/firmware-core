@@ -22,6 +22,7 @@ set(COMPONENTS
     airgradient-sensors
     airgradient-serial
     airgradient-touch
+    airgradient-watchdog
     ads1115
 )
 

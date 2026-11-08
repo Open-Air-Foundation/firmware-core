@@ -43,6 +43,7 @@ For AGo, the power service also manages:
 | `BmsDevice` | `airgradient-bms` (HAL) | BMS telemetry, status, battery %, watchdog reset, PMID, charging, ship mode |
 | `FuelGaugeDevice` | `airgradient-bms` (HAL) | Optional fuel gauge runtime polling. Attached via `set_fuel_gauge()` |
 | `gpio::Hal` | `airgradient-gpio` | Configure GPIO wake sources and read button levels |
+| `watchdog` | `airgradient-watchdog` | Initialize and feed the external watchdog |
 | `go_types.h` | product | `RtcAppState`, `WakeCause`, `LockState` |
 | `go_settings.h` | product | `GoSettings` for interval-based sleep decisions |
 | `esp_sleep.h` | ESP-IDF | `esp_sleep_*` functions (deep and light sleep) |
@@ -755,13 +756,13 @@ The orchestrator's unified `shutdown(ShipModeRequest reason)` pipeline:
 ## External Watchdog
 
 An external hardware watchdog is connected to `PIN_EXT_WDT` (GPIO2). Two
-methods on `PowerService` wrap the free functions from
-`components/airgradient-common/common.h`:
+methods on `PowerService` wrap the shared
+[`airgradient-watchdog`](../../../components/airgradient-watchdog/README.md) helpers:
 
 | Method | Calls | Effect |
 |---|---|---|
-| `init_ext_watchdog()` | `ext_watchdog_init(gpio, pin)` | Configures pin as output, drives LOW |
-| `reset_ext_watchdog()` | `ext_watchdog_reset(gpio, pin)` | Pulses pin HIGH for 20 ms, then LOW |
+| `init_ext_watchdog()` | `watchdog::init(gpio, pin)` | Configures pin as output |
+| `reset_ext_watchdog()` | `watchdog::feed(gpio, pin)` | Pulses pin HIGH for 20 ms, then LOW |
 
 Both are no-ops when `Config::pin_ext_wdt < 0`.
 

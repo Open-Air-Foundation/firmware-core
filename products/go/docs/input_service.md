@@ -300,8 +300,7 @@ normally. Touch pad events are never suppressed.
 ## Testability
 
 - Inject a mock `CapTouchSensor` returning controlled `TouchData`.
-- Construct `gpio::Hal` with mock function pointers for level reads and ISR
-  registration.
+- Bind mock `gpio::Operations` and context to `gpio::Hal` for reads and interrupts.
 - The debounce and long-press classification logic is in `process_button_event`
   and `check_pending_long_press` — pure functions of timestamps and GPIO level,
    testable without RTOS.

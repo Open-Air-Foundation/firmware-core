@@ -114,19 +114,21 @@ public:
 // ============================================================================
 // GPIO HAL stub
 //
-// gpio::Hal is a plain function-pointer table. Reads report an active-low
+// gpio::Hal binds an operations table and context. Reads report an active-low
 // button held; platform wake-source configuration remains firmware-only.
 // ============================================================================
 
-static bool gpio_configure(int, gpio::Mode, gpio::PullMode, gpio::InterruptType) { return true; }
-static int gpio_get_level(int) { return 0; }
-static bool gpio_set_level(int, int) { return true; }
-static bool gpio_add_interrupt_handler(int, gpio::InterruptHandler, void *) { return true; }
-static bool gpio_remove_interrupt_handler(int) { return true; }
-static bool gpio_enable_interrupt(int) { return true; }
-static bool gpio_disable_interrupt(int) { return true; }
+static bool gpio_configure(void *, int, gpio::Mode, gpio::PullMode, gpio::InterruptType, int) {
+  return true;
+}
+static int gpio_get_level(void *, int) { return 0; }
+static bool gpio_set_level(void *, int, int) { return true; }
+static bool gpio_add_interrupt_handler(void *, int, gpio::InterruptHandler, void *) { return true; }
+static bool gpio_remove_interrupt_handler(void *, int) { return true; }
+static bool gpio_enable_interrupt(void *, int) { return true; }
+static bool gpio_disable_interrupt(void *, int) { return true; }
 
-static const gpio::Hal test_gpio_hal = {
+static const gpio::Operations test_gpio_hal_operations{
     gpio_configure,
     gpio_get_level,
     gpio_set_level,
@@ -135,6 +137,7 @@ static const gpio::Hal test_gpio_hal = {
     gpio_enable_interrupt,
     gpio_disable_interrupt,
 };
+static const gpio::Hal test_gpio_hal{test_gpio_hal_operations};
 
 // ============================================================================
 // Default PowerService::Config for tests
@@ -588,8 +591,9 @@ TEST_CASE("reboot: waits for Power release without changing RTC state", "[PowerS
   MockBmsDevice bms;
   static int button_reads;
   button_reads = 0;
-  auto gpio = test_gpio_hal;
-  gpio.get_level = [](int) { return ++button_reads < 3 ? 0 : 1; };
+  auto operations = test_gpio_hal_operations;
+  operations.get_level = [](void *, int) { return ++button_reads < 3 ? 0 : 1; };
+  gpio::Hal gpio{operations};
   PowerService svc(&bms, gpio, DEFAULT_CONFIG);
   RtcAppState state{};
   state.set_flag(RtcAppFlag::ChargingOnlyRequested, true);
@@ -876,15 +880,16 @@ TEST_CASE("set_pm_power: EN_PM GPIO only, no BMS coupling", "[PowerService][pm_p
   static int last_pin = -1;
   static int last_level = -1;
   static int gpio_call_count = 0;
-  auto tracking_set_level = [](int pin, int level) -> bool {
+  auto tracking_set_level = [](void *, int pin, int level) -> bool {
     last_pin = pin;
     last_level = level;
     gpio_call_count++;
     return true;
   };
 
-  gpio::Hal tracking_gpio = test_gpio_hal;
-  tracking_gpio.set_level = tracking_set_level;
+  auto tracking_operations = test_gpio_hal_operations;
+  tracking_operations.set_level = tracking_set_level;
+  gpio::Hal tracking_gpio{tracking_operations};
 
   // Sentinel — any unexpected BMS call from set_pm_power() fails the test
   // because no REQUIRE_CALL / ALLOW_CALL is registered for set_pmid_enabled
@@ -1164,12 +1169,13 @@ TEST_CASE("recover_pm_sensor: EN_PM off -> boost off -> boost on -> EN_PM on",
     config.pin_pm_power = 26;
     static std::vector<int> levels;
     levels.clear();
-    gpio::Hal tracking_gpio = test_gpio_hal;
-    tracking_gpio.set_level = [](int pin, int level) -> bool {
+    gpio::Operations tracking_operations = test_gpio_hal.operations;
+    tracking_operations.set_level = [](void *, int pin, int level) -> bool {
       CHECK(pin == 26);
       levels.push_back(level);
       return true;
     };
+    gpio::Hal tracking_gpio{tracking_operations};
     PowerService svc(&mock_bms, tracking_gpio, config);
 
     trompeloeil::sequence seq;

@@ -523,15 +523,17 @@ public:
 static StubAgBleServer stub_ble_server;
 
 // GPIO HAL stub (function-pointer table — never called by stubs)
-static bool gpio_configure(int, gpio::Mode, gpio::PullMode, gpio::InterruptType) { return true; }
-static int gpio_get_level(int) { return 0; }
-static bool gpio_set_level(int, int) { return true; }
-static bool gpio_add_interrupt_handler(int, gpio::InterruptHandler, void *) { return true; }
-static bool gpio_remove_interrupt_handler(int) { return true; }
-static bool gpio_enable_interrupt(int) { return true; }
-static bool gpio_disable_interrupt(int) { return true; }
+static bool gpio_configure(void *, int, gpio::Mode, gpio::PullMode, gpio::InterruptType, int) {
+  return true;
+}
+static int gpio_get_level(void *, int) { return 0; }
+static bool gpio_set_level(void *, int, int) { return true; }
+static bool gpio_add_interrupt_handler(void *, int, gpio::InterruptHandler, void *) { return true; }
+static bool gpio_remove_interrupt_handler(void *, int) { return true; }
+static bool gpio_enable_interrupt(void *, int) { return true; }
+static bool gpio_disable_interrupt(void *, int) { return true; }
 
-static const gpio::Hal test_gpio_hal = {
+static const gpio::Operations test_gpio_hal_operations{
     gpio_configure,
     gpio_get_level,
     gpio_set_level,
@@ -540,6 +542,7 @@ static const gpio::Hal test_gpio_hal = {
     gpio_enable_interrupt,
     gpio_disable_interrupt,
 };
+static const gpio::Hal test_gpio_hal{test_gpio_hal_operations};
 
 // ============================================================================
 // OrchestratorTestAccess — friend class for private member access
