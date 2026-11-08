@@ -241,7 +241,7 @@ bool GoHardwareBoard::init_bms() {
   }
   _bms_init_attempted = true;
 
-  constexpr drivers::BQ25629_Config config = {
+  drivers::BQ25629_Config config = {
       .charge_voltage_mv = 4200,
       .charge_current_ma = 500,
       .input_current_limit_ma = 1500,
@@ -251,7 +251,24 @@ bool GoHardwareBoard::init_bms() {
       .term_current_ma = 20,
       .enable_charging = true,
       .enable_adc = true,
+      .ntc = {},
   };
+  if (variant() == BoardVariant::V2) {
+    // NCP15XH103F03RC: 10kΩ at 25°C, B25/50 = 3380K.
+    config.ntc = {
+        .pullup_ohm = 5230.0f,
+        .pulldown_ohm = 30100.0f,
+        .r25_ohm = 10000.0f,
+        .beta_k = 3380.0f,
+    };
+  } else if (variant() == BoardVariant::V1) {
+    config.ntc = {
+        .pullup_ohm = 4120.0f,
+        .pulldown_ohm = 17330.0f,
+        .r25_ohm = 10000.0f,
+        .beta_k = 3950.0f,
+    };
+  }
   _bms_driver = new BQ25629Bms(_i2c_bus, config, I2C_ADDR_BMS);
   if (!_bms_driver->init()) {
     AG_LOGE(TAG, "BMS init failed");

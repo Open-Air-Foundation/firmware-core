@@ -156,6 +156,7 @@ BQ25629::~BQ25629() { deinit(); }
 
 esp_err_t BQ25629::init(const BQ25629_Config &config) {
   esp_err_t ret;
+  ntc_config_ = config.ntc;
 
   // Create I2C device
   i2c_device_config_t dev_cfg = {
@@ -1058,7 +1059,7 @@ esp_err_t BQ25629::read_ntc_temperature(BQ25629_NTC_Data &data) {
 
   // Calculate NTC resistance using voltage divider equation
   // V_TS = V_BIAS * (RT2 || R_NTC) / (RT1 + (RT2 || R_NTC))
-  // Where RT1 = 4.12kΩ (pull-up), RT2 = 17.33kΩ (pull-down)
+  // Where RT1 is the pull-up and RT2 is the pull-down resistance
   //
   // ADC reads: TS% = V_TS / V_BIAS * 100
   // Let ratio = TS% / 100 = V_TS / V_BIAS
@@ -1071,10 +1072,10 @@ esp_err_t BQ25629::read_ntc_temperature(BQ25629_NTC_Data &data) {
   //   R_parallel = (R_NTC * RT2) / (R_NTC + RT2)
   //   R_NTC = (R_parallel * RT2) / (RT2 - R_parallel)
 
-  const float RT1 = 4120.0f;  // 4.12kΩ
-  const float RT2 = 17330.0f; // 17.33kΩ
-  const float R25 = 10000.0f; // 10kΩ @ 25°C
-  const float B = 3950.0f;    // B constant (3950K)
+  const float RT1 = ntc_config_.pullup_ohm;
+  const float RT2 = ntc_config_.pulldown_ohm;
+  const float R25 = ntc_config_.r25_ohm;
+  const float B = ntc_config_.beta_k;
 
   float adc_ratio = data.ts_percent / 100.0f;
 
@@ -1102,8 +1103,8 @@ esp_err_t BQ25629::read_ntc_temperature(BQ25629_NTC_Data &data) {
   // Calculate R_NTC from parallel resistance
   data.resistance_ohm = (r_parallel * RT2) / (RT2 - r_parallel);
 
-  // Steinhart-Hart equation: 1/T = 1/T0 + (1/B) * ln(R/R0)
-  // Where T0 = 298.15K (25°C), R0 = R25 = 10kΩ
+  // Beta equation: 1/T = 1/T0 + (1/B) * ln(R/R0)
+  // Where T0 = 298.15K (25°C), R0 = R25
   float t_kelvin = 1.0f / ((1.0f / 298.15f) + (logf(data.resistance_ohm / R25) / B));
   data.temperature_c = t_kelvin - 273.15f;
 
