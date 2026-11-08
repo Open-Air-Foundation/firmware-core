@@ -8,29 +8,12 @@
 #include <string>
 
 // ---------------------------------------------------------------------------
-// Board variant — runtime detection (no #ifdef per board)
-//
-// NOTE: do NOT #include "board_config.h" here.  That header pulls in
-// ESP-IDF driver headers unconditionally, which would break host
-// builds that include go_board.h (most of products/go/tests/).
+// PM bus isolation — active-low EN_PM on V1.
+// Host-safe constants shared by board initialization and PowerService.
 // ---------------------------------------------------------------------------
 
-enum class BoardVariant : uint8_t {
-  Prototype, ///< Legacy board: no BQ27427, PM enable active-high
-  V1,        ///< New board: BQ27427 at 0x55, PM enable active-low
-};
-
-inline const char *board_variant_str(BoardVariant v) {
-  return v == BoardVariant::V1 ? "V1" : "Prototype";
-}
-
-/// GPIO level interpreted as "PM ON" for the given variant.
-/// Prototype is active-high (level 1); v1 is active-low (level 0).
-/// Literals duplicated from board_config.h on purpose — board_config.h
-/// is target-only and cannot be included here.
-inline constexpr uint8_t pm_power_on_level(BoardVariant v) {
-  return (v == BoardVariant::V1) ? 0 : 1;
-}
+inline constexpr uint8_t PM_POWER_ON_LEVEL = 0;
+inline constexpr uint8_t PM_POWER_OFF_LEVEL = 1;
 
 // ---------------------------------------------------------------------------
 // Fuel-gauge bring-up decision helper (header-only, host-test-safe)
@@ -172,16 +155,12 @@ struct GoBoard {
 
   /// Create the accelerometer on the shared I2C bus and init() it. Returns
   /// nullptr if the part is absent / init fails (WHO_AM_I mismatch); callers
-  /// must null-check. Not variant-gated — WHO_AM_I detects absence.
+  /// must null-check. WHO_AM_I detects absence.
   virtual AccelSensor *new_accel_sensor() = 0;
 
   // -----------------------------------------------------------------
   // Platform info
   // -----------------------------------------------------------------
-
-  /// Return the board variant detected during init_buses().
-  /// Must not be called before init_buses() has completed.
-  virtual BoardVariant variant() const = 0;
 
   virtual std::string serial_number() = 0;
   virtual const char *firmware_version() = 0;

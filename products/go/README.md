@@ -14,26 +14,19 @@ portable air quality monitor with GPS, e-paper display, BLE, and battery.
 - **Pressure** — Infineon DPS368
 - **Motion** — ST LIS2DH12 accelerometer (interrupt-driven shake detection)
 - **Battery** — TI BQ25629 charger IC; TI BQ27427 Impedance Track fuel gauge
-  (V1 board only)
 
 ## Hardware Notes
 
-A single firmware binary supports both the **Prototype** and **V1** boards.
-Board variant is detected at runtime by probing the BQ27427 fuel gauge at
-I2C address `0x55` during `init_buses()`. All variant-conditional behavior is
-gated on `board.variant()`.
-
-| Variant | PM GPIO26 (EN_PM) | Fuel Gauge | SOC Source |
-|---|---|---|---|
-| Prototype | Active-high VDD load switch | None | BQ25629 voltage-curve estimate |
-| V1 | Active-low I2C bus isolation | BQ27427 | FG-derived (BQ25629 fallback) |
+The firmware supports the **V1** board. GPIO26 (EN_PM) provides active-low
+SPS30 I2C bus isolation. The BQ27427 fuel gauge provides state of charge, with
+a BQ25629 voltage-curve fallback when gauge data is unavailable.
+Peripheral failures do not change the board configuration.
 
 ### Temperature and Humidity Source
 
-V1 boards probe SHT40 during `sensors()`. `SensorManager` resolves
+Go probes SHT40 during `sensors()`. `SensorManager` resolves
 `temp_hum_a` in this priority order: dedicated SHT40, CO2-integrated T/RH
-(SCD4x or STCC4), then DPS368 temperature-only fallback. Prototype boards do
-not probe SHT40 and use the same fallback chain without the dedicated source.
+(SCD4x or STCC4), then DPS368 temperature-only fallback.
 
 ### PMID Power Rail
 
@@ -46,11 +39,10 @@ autonomously based on its own VBUS-detect:
 - VBUS absent → boost runs to drive PMID = 5 V from VBAT
 
 `set_pm_power(true/false)` drives the EN_PM GPIO (GPIO26), never `EN_OTG`.
-Its effect is variant-specific: on Prototype it is a load switch gating
-PMID → SPS30 VDD; on V1 it only isolates the SPS30 from the shared I2C
-bus — the sensor stays powered by always-on PMID.
+It isolates the SPS30 from the shared I2C bus — the sensor stays powered
+by always-on PMID.
 
-On V1 the ~50 mA fan current is cut between measurements by the SPS30's
+The ~50 mA fan current is cut between measurements by the SPS30's
 native **Sleep** command (`0x1001`), not the GPIO. When enough time remains
 before the next scheduled measurement, the orchestrator calls
 `request_pm_sleep()`; the sensor producer sleeps
@@ -134,14 +126,14 @@ factory credentials automatically.
   shutdown.
 - **Full-charge pause:** when the battery is full and USB is present,
   charging is disabled to reduce cell stress. Resumes when SOC drops
-  to 95 %. V1 uses the BQ27427 FC flag; Prototype falls back to
-  BQ25629 `ChargeTerminationDone` + 100 % SOC.
+  to 95 %. Uses the BQ27427 FC flag when a ready gauge is attached; falls back
+  to BQ25629 `ChargeTerminationDone` + 100 % SOC when no gauge is attached.
 - **BATFET_DLY:** explicitly cleared to 0 (25 ms fast disconnect)
   during BQ25629 init for deterministic ship-mode timing.
 
-### Fuel Gauge (V1 Only)
+### Fuel Gauge
 
-On V1, `init_fuel_gauge()` initializes the BQ27427 independently from the
+`init_fuel_gauge()` initializes the BQ27427 independently from the
 BQ25629, using a two-pass corruption-recovery sequence and idempotent
 cell-config write. At runtime, `poll_bms()` prefers FG-derived SOC and surfaces
 FG telemetry in `PowerSnapshot`, even when the charger is unavailable. Fast-path

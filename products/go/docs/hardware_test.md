@@ -214,8 +214,8 @@ See [`fg_learning.md`](fg_learning.md) for the runner.
   that completion and discards the old result before starting a new sweep.
 - **Sensor worker stopped.** Provisioning or committed OTA clears the pending
   measurement state and finishes the peripheral test when stopping the worker.
-- **Inert actuators.** On board variants without an LED/buzzer driver the cues
-  are silent by design; the display still reports the result.
+- **Unavailable actuators.** If LED or buzzer initialization fails, their cues
+  are unavailable; the display still reports the result.
 - **Auto-lock suppressed.** The inactivity auto-lock is disabled on every
   Hardware Test screen (submenu and live flows), so an idle operator is never
   locked and returned Home mid-test. Auto-lock resumes once the surface is

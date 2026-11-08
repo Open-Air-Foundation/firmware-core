@@ -38,6 +38,8 @@
 
 #include "go_power.h"
 
+#include "go_board.h"
+
 #include "hal/fuel_gauge_device.h"
 
 #include <algorithm>
@@ -292,7 +294,7 @@ PowerSnapshot PowerService::poll_bms(bool pm_invalid_hint) {
   // -------------------------------------------------------------------------
   const bool plugged = status_ok && bms_power_source_has_external_input(bms_status.power_source);
 
-  // FC flag (FG path) or ChargeTerminationDone + 100 % (Prototype fallback).
+  // FC flag (FG path) or ChargeTerminationDone + 100 % (no attached fuel gauge).
   const bool fg_full = (_fg != nullptr && _fg->ready() && (status.fg_flags & FgFlags::FC));
   const bool bms_full =
       (_fg == nullptr && status.charging_status == BmsChargingState::ChargeTerminationDone &&
@@ -697,15 +699,13 @@ bool PowerService::should_sleep_pm_sensor(uint32_t measure_interval_ms) const {
 }
 
 void PowerService::set_pm_power(bool on) {
-  // EN_PM load switch only — cuts SPS30 fan current between measurements.
+  // EN_PM isolates the SPS30 I2C bus; sensor sleep stops the fan.
   // PMID (EN_OTG) is armed once in BQ25629Bms::init() and never toggled
   // here; per-cycle boost cold-starts can trip 1S cell-protection OCP.
   if (_config.pin_pm_power < 0) {
     return;
   }
-  const uint8_t on_level = _config.pm_power_on_level;
-  const uint8_t off_level = on_level ? 0 : 1;
-  _gpio.set_level(_config.pin_pm_power, on ? on_level : off_level);
+  _gpio.set_level(_config.pin_pm_power, on ? PM_POWER_ON_LEVEL : PM_POWER_OFF_LEVEL);
   AG_LOGI(TAG, "set_pm_power: %s", on ? "ON" : "OFF");
 }
 

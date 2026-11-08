@@ -10,8 +10,7 @@ For AGo, the power service also manages:
 - **Session-armed PMID:** `EN_OTG` is armed once during `BQ25629Bms::init()`
   and held for the lifetime of the session. The chip handles buck↔boost
   transitions autonomously on VBUS plug/unplug. `set_pm_power()` drives only
-  the EN_PM GPIO (Prototype: SPS30 VDD load switch; V1: SPS30 I2C bus
-  isolation), never `EN_OTG`. See ["Why PMID is session-armed"](#why-pmid-is-session-armed)
+  the EN_PM GPIO for SPS30 I2C bus isolation, never `EN_OTG`. See ["Why PMID is session-armed"](#why-pmid-is-session-armed)
   below for the cell-OCP rationale
 - **EDV (over-discharge) trip:** requests ship mode
   (`ShipModeRequest::OverDischarge`) when cell voltage stays below 2.9 V
@@ -24,9 +23,9 @@ For AGo, the power service also manages:
   `ShipModeRequest::UnderTemperature` or `ShipModeRequest::OverTemperature`.
   An invalid NTC reading disables charging only and does not request shutdown
 - **Full-charge pause:** disables charging when the battery is full and
-  USB is present. Resumes when SOC drops to 95 %. V1 detects full via
-  BQ27427 FC flag; Prototype falls back to `ChargeTerminationDone` +
-  100 % SOC. Interacts safely with the thermal charge guard
+  USB is present. Resumes when SOC drops to 95 %. Uses the BQ27427 FC flag
+  when a ready gauge is attached; without an attached gauge, falls back to
+  `ChargeTerminationDone` + 100 % SOC. Interacts safely with the thermal charge guard
 - **BMS watchdog wrapper:** `set_watchdog_timeout_ms()` forwards to the
   HAL without adding policy
 
@@ -42,7 +41,7 @@ For AGo, the power service also manages:
 | Dependency | Component | Usage |
 |---|---|---|
 | `BmsDevice` | `airgradient-bms` (HAL) | BMS telemetry, status, battery %, watchdog reset, PMID, charging, ship mode |
-| `FuelGaugeDevice` | `airgradient-bms` (HAL) | Optional fuel gauge runtime polling (V1 only). Attached via `set_fuel_gauge()` |
+| `FuelGaugeDevice` | `airgradient-bms` (HAL) | Optional fuel gauge runtime polling. Attached via `set_fuel_gauge()` |
 | `gpio::Hal` | `airgradient-gpio` | Configure GPIO wake sources and read button levels |
 | `watchdog` | `airgradient-watchdog` | Initialize and feed the external watchdog |
 | `go_types.h` | product | `RtcAppState`, `WakeCause`, `LockState` |
@@ -96,7 +95,7 @@ only the failed field; the remaining FG fields populate normally.
    charging state, power source, `full_chg_paused`, regulation/fault flags
 2. **BQ25629 ADC telemetry** — input/battery current, system/PMID voltage,
    thermistor, die/battery temperature
-3. **FG telemetry** (V1 only, when FG attached and ready) — SOC, voltage,
+3. **FG telemetry** (when FG attached and ready) — SOC, voltage,
    current, power, remaining/full capacity, internal temperature, decoded
    flags (`FgFlags::FC|CHG|DSG|...`), thermal charge-off state. ITPOR
    flag triggers a separate `AG_LOGW`
@@ -139,10 +138,9 @@ threshold:
 | `pin_wake_button_boot` | `int` | — | GPIO number for Button Boot deep-sleep wake (`-1` on ESP32-C5 — GPIO28 is not RTC-capable) |
 | `pin_ext_wdt` | `int` | `-1` | External watchdog GPIO (`-1` = disabled); pulsed HIGH 20 ms on reset |
 | `deep_sleep_threshold_ms` | `int` | `5000` | Minimum sleep duration (ms) to bother entering deep sleep; shorter remaining sleep durations stay awake. AGo sets this to `5000` |
-| `pin_pm_power` | `int` | `-1` | PM sensor power-enable GPIO (`-1` = no GPIO hold during sleep) |
-| `pm_power_on_level` | `uint8_t` | `1` | GPIO level meaning "PM on". Prototype: `1` (active-high); V1: `0` (active-low). Set from `pm_power_on_level(variant)` at `PowerService` construction |
-| `sensor_hold_max_sleep_ms` | `uint32_t` | `20000` | Maximum sleep duration (ms) for which the PM sensor power GPIO is held HIGH during deep sleep. Above this threshold the sensor powers off normally |
-| `pm_sleep_threshold_ms` | `uint32_t` | `20000` | Minimum measurement interval (ms) to power-cycle the PM sensor between measurements in non-Offline modes. Accounts for ~10 s warmup plus minimum off-time |
+| `pin_pm_power` | `int` | `-1` | SPS30 bus-enable GPIO (`-1` = no GPIO hold during sleep) |
+| `sensor_hold_max_sleep_ms` | `uint32_t` | `20000` | Maximum sleep duration (ms) for keeping the SPS30 measuring with EN_PM held LOW. Longer sleeps use the SPS30 sleep command |
+| `pm_sleep_threshold_ms` | `uint32_t` | `20000` | Minimum measurement interval (ms) to sleep the PM sensor between measurements in non-Offline modes. Accounts for ~10 s warmup plus minimum off-time |
 
 ## Sleep Type Selection
 
@@ -260,8 +258,8 @@ the one-shot RTC request described under [Shutdown](#shutdown-qon--ship-mode).
 ## PM Sensor Warm-Hold
 
 For short deep sleeps (< `sensor_hold_max_sleep_ms`, default 20 s) the SPS30
-enable GPIO retains its current ON level during sleep via `gpio_hold_en()`
-(Prototype: HIGH; V1: LOW). On ESP32-C5,
+enable GPIO retains its LOW level during sleep via `gpio_hold_en()`.
+On ESP32-C5,
 per-pin hold persists through deep sleep automatically, so no global
 `gpio_deep_sleep_hold_en()` call is needed. The fan keeps spinning and the
 sensor stays in measurement mode.
@@ -293,12 +291,12 @@ return pin_pm_power >= 0 && duration_ms < sensor_hold_max_sleep_ms;
 ```
 
 `release_sleep_gpio_holds(pin_pm_power)` is a static method called in the
-boot path **after** `init_gpio()` has reconfigured the pin as output HIGH.
-While the hold is active the pad stays latched HIGH; the GPIO driver writes
-the new output configuration to registers underneath. Releasing the hold
-then lets the fresh output driver take over with zero power glitch.
+boot path **after** `init_buses()` has configured the pin and selected LOW.
+While the hold is active the pad retains its latched level; the GPIO driver
+writes the new output configuration to registers underneath. Releasing the
+hold then connects the SPS30 bus without interrupting a retained LOW level.
 
-## PM Sensor Sleep (Active Mode Power-Cycling)
+## PM Sensor Sleep (Active Mode)
 
 In non-Offline modes (Portable, Stationary) the device stays awake but
 the SPS30 PM sensor may idle for long periods between measurements,
@@ -306,7 +304,7 @@ drawing 45–65 mA of continuous fan current. When the
 time remaining until the next scheduled measurement is at or above
 `pm_sleep_threshold_ms` (default 20 s), the
 orchestrator puts the SPS30 into its native **Sleep** mode (`0x1001`)
-between measurements, then isolates it from the I2C bus (V1) via
+between measurements, then isolates it from the I2C bus via
 `set_pm_power(false)`.
 
 ### Cycle
@@ -371,15 +369,11 @@ return pin_pm_power >= 0 && measure_interval_ms >= pm_sleep_threshold_ms;
 ```
 
 `set_pm_power(on)` drives only the EN_PM GPIO. No-op when
-`pin_pm_power < 0`. The GPIO level is determined by `pm_power_on_level`
-in the config (Prototype: active-high level 1; V1: active-low level 0).
-The GPIO is a VDD load switch on Prototype but only an I2C bus isolator
-on V1, so on V1 fan current is cut by the SPS30 Sleep command, not here:
+`pin_pm_power < 0`. EN_PM isolates the SPS30 I2C bus. The SPS30 Sleep command
+stops the fan; the GPIO does not switch sensor power.
 
-- `set_pm_power(true)` — drives the GPIO to the variant-appropriate
-  on-level (`pm_power_on_level`)
-- `set_pm_power(false)` — drives the GPIO to the off-level (inverted
-  `pm_power_on_level`)
+- `set_pm_power(true)` — drives LOW (`PM_POWER_ON_LEVEL`) to connect the bus
+- `set_pm_power(false)` — drives HIGH (`PM_POWER_OFF_LEVEL`) to isolate the bus
 
 PM sleep/wake themselves are owned by the sensor producer:
 `request_pm_sleep()` sleeps the SPS30 and posts `PmSensorAsleep` (the
@@ -672,10 +666,10 @@ resumes when SOC drops to `FULL_CHARGE_RESUME_SOC` (95 %).
 
 ### Detection
 
-| Board | Full condition |
+| Available Data | Full Condition |
 |---|---|
-| V1 (FG attached) | `fg_flags & FgFlags::FC` (BQ27427 Full Charge flag) |
-| Prototype (no FG) | `ChargeTerminationDone` + `battery_percentage >= 100` |
+| Ready fuel gauge attached | `fg_flags & FgFlags::FC` (BQ27427 Full Charge flag) |
+| No fuel gauge attached | `ChargeTerminationDone` + `battery_percentage >= 100` |
 
 The plugged condition requires `bms_power_source_has_external_input()`.
 

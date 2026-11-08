@@ -307,9 +307,6 @@ Buzzer and melody features:
 - Built-in melody choices such as Chime and Tetris.
 - Synchronized buzzer and LED effects for selected melodies.
 
-Hardware note: LED and buzzer behavior depends on the board variant. Prototype
-hardware may not include every indicator supported by V1 hardware.
-
 ## First-Time Setup
 
 On a fresh device, the Go shows Getting Started after initialization while
@@ -403,9 +400,7 @@ from the device menu or the app.
 
 ## Product Notes For Team Members
 
-- The Go supports both Prototype and V1 board variants with one firmware line.
-- Some hardware features, especially LEDs, buzzer, and fuel gauge behavior,
-  depend on board variant.
+- The firmware supports Go V1 hardware, including LEDs, buzzer, and fuel gauge.
 - CO2 sensor hardware can vary by build; the product behavior is still presented
   to users as CO2 measurement.
 - Temperature and humidity may come from a dedicated sensor or from another

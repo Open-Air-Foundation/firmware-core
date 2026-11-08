@@ -1083,11 +1083,11 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
     update_back_led_indicator();
   }
 
-  // PM sensor recovery (V1): after persistent PM failure, power-cycle the
+  // PM sensor recovery: after persistent PM failure, power-cycle the
   // SPS30 via boost kill then re-trigger measurement.
   if (_raw_measures.pm_a.is_pm_25_valid()) {
     _pm_first_fail_ms = 0;
-  } else if (_first_measurement_done && _svc.board.variant() == BoardVariant::V1) {
+  } else if (_first_measurement_done) {
     const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
     if (_pm_first_fail_ms == 0) {
       _pm_first_fail_ms = now ? now : 1; // avoid 0 sentinel collision

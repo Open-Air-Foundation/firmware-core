@@ -149,7 +149,7 @@ private:
   bool _measurement_pending = false; ///< Normal measurement or peripheral sweep is outstanding.
   bool _refresh_pending = false;
 
-  // --- PM sensor recovery (V1: boost-kill power cycle on persistent failure) ---
+  // --- PM sensor recovery (boost-kill power cycle on persistent failure) ---
   uint32_t _pm_first_fail_ms = 0; ///< 0 = no failure in progress
 
   // --- Stationary networking ---
