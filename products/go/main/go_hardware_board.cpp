@@ -35,6 +35,7 @@
 #include "drivers/scd4x/scd4x.h"
 #include "drivers/sgp41/sgp41.h"
 #include "drivers/sht40/sht40.h"
+#include "drivers/spl07_003/spl07_003.h"
 #include "drivers/sps30/sps30.h"
 #include "drivers/stcc4/stcc4.h"
 #include "esp_efuse_custom_table.h"
@@ -452,7 +453,12 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
   if (!_sensor_manager) {
     auto *sgp41 = new SGP41(_i2c_bus, I2C_ADDR_SGP41);
     auto *sps30 = new SPS30(_i2c_bus);
-    auto *dps368 = new DPS368(_i2c_bus, I2C_ADDR_DPS368);
+    PressureSensor *pressure = nullptr;
+    if (variant() == BoardVariant::V2) {
+      pressure = new SPL07_003(_i2c_bus, I2C_ADDR_SPL07_003);
+    } else {
+      pressure = new DPS368(_i2c_bus, I2C_ADDR_DPS368);
+    }
 
     auto *s = new Sensors{};
 
@@ -464,12 +470,12 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
     } else {
       AG_LOGE(TAG, "SPS30 init failed");
     }
-    // Init DPS368 before the remaining sensors: continuous mode starts immediately, giving the
-    // pressure sensor time to produce its first measurement (~120 ms)
-    if (dps368->init()) {
-      s->pressure = dps368;
+    // Start continuous pressure measurements before initializing the remaining sensors.
+    if (pressure->init()) {
+      s->pressure = pressure;
     } else {
-      AG_LOGE(TAG, "DPS368 init failed");
+      AG_LOGE(TAG, "Pressure sensor init failed");
+      delete pressure;
     }
 
     s->co2 = init_co2_sensor(_i2c_bus, warm);
