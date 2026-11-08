@@ -234,7 +234,7 @@ struct BmsStatus {
 // FgCellConfig — fuel gauge cell configuration block
 // ---------------------------------------------------------------------------
 
-/// Fuel-gauge cell configuration block.  Used by the BQ27427 driver
+/// Fuel-gauge cell configuration. Used by the BQ27427 and BQ27742 drivers
 /// (read_cell_config / write_cell_config) and by the host-side
 /// evaluate_fg_state helper.  Lives here (not in the driver header)
 /// so host tests can use it without pulling in ESP-IDF.

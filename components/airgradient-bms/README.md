@@ -55,6 +55,7 @@ components/airgradient-bms/
 #include "types/bms_types.h"
 #include "drivers/bq25629/bq25629_bms.h"
 #include "drivers/bq27427/bq27427.h"
+#include "drivers/bq27742/bq27742.h"
 ```
 
 Guideline:
@@ -69,6 +70,7 @@ Guideline:
 ```text
 caller -> BmsDevice&       -> BQ25629Bms -> i2c_master -> charger IC
 caller -> FuelGaugeDevice& -> BQ27427    -> i2c_master -> fuel gauge IC
+caller -> FuelGaugeDevice& -> BQ27742    -> i2c_master -> fuel gauge IC
 ```
 
 `BmsDevice` models a charger / PMIC with telemetry reads, status
@@ -131,12 +133,11 @@ behind session-armed PMID and the PM-invalid-hint recovery mechanism.
 | `read_remaining_capacity_mah(out)` | Filtered remaining capacity |
 | `read_full_charge_capacity_mah(out)` | Filtered full-charge capacity |
 | `read_internal_temperature_c(out)` | Die temperature in degrees C |
-| `read_flags(out)` | Chip flags register |
+| `read_flags(out)` | Gauge status flags (see driver notes) |
 
-Only the runtime-poll surface is virtual. Boot-time Data Memory
-operations (read/write cell config, factory reset) are non-virtual
-methods on the concrete `BQ27427` class — product-level board init
-calls those directly.
+The runtime-poll surface and BQ27427 learning operations are virtual.
+Cell configuration stays on the concrete drivers; product code supplies the
+battery parameters. Factory reset is a concrete `BQ27427` method.
 
 ### Drivers
 
@@ -145,6 +146,7 @@ calls those directly.
 | `drivers/bq25xx` | TI BQ25672 / BQ25798 | Multi-cell charger family |
 | `drivers/bq25629` | TI BQ25629 | Single-cell charger; wraps the vendor `bq25629` component |
 | `drivers/bq27427` | TI BQ27427 | Single-cell Impedance Track fuel gauge; implements `FuelGaugeDevice` |
+| `drivers/bq27742` | TI BQ27742-G1 | Single-cell fuel gauge with protection; telemetry and cell configuration |
 
 ### BQ27427 Driver
 
@@ -174,6 +176,23 @@ The driver does not know what cell the product uses, what counts as a
 corrupted value, or whether `write_cell_config` should run. Those
 decisions live in product-level board init code.
 
+### BQ27742 Driver
+
+Implements `FuelGaugeDevice` runtime reads. Power is calculated from voltage
+and average current; flags expose only DSG, CHG, and FC mapped to `FgFlags`.
+Failed reads leave outputs unchanged.
+
+`init()` preserves pack configuration. Before polling starts, call `unseal()`,
+then `read_cell_config()` / `write_cell_config()` with `FgCellConfig`, and
+`seal()` afterward, including on failure. A custom unseal key can be supplied.
+Writes validate ranges, preserve unrelated settings and the energy scale,
+skip unchanged blocks, and verify readback. The three flash blocks commit
+independently; a failure can leave a partial update.
+
+`read_design_capacity_mah()` also works while sealed. Chemistry, calibration,
+protection provisioning, and the BQ27427 learning workflow remain outside
+this driver's scope. See [TI's technical reference, chapter 5](https://www.ti.com/lit/ug/sluuax0c/sluuax0c.pdf).
+
 ## Usage
 
 ```cpp
@@ -185,7 +204,8 @@ bms.read_telemetry(telemetry);
 ```
 
 See [`drivers/bq25629/bq25629_bms.h`](drivers/bq25629/bq25629_bms.h),
-[`drivers/bq27427/bq27427.h`](drivers/bq27427/bq27427.h), and
+[`drivers/bq27427/bq27427.h`](drivers/bq27427/bq27427.h),
+[`drivers/bq27742/bq27742.h`](drivers/bq27742/bq27742.h), and
 [`drivers/bq25xx/bq25xx.h`](drivers/bq25xx/bq25xx.h) for full APIs.
 
 ## Dependencies
@@ -204,7 +224,7 @@ Host tests live under `components/airgradient-bms/tests/` and run through
 the [tests runner](../../tests/README.md). Current coverage focuses on
 sentinel and validation behavior of the public BMS types.
 
-The BQ27427 driver has no automated host tests (bus protocol — validated
-at hardware-in-the-loop time). Product-level fuel-gauge logic
+The BQ27427 and BQ27742 drivers have no automated host tests; bus-protocol
+verification is performed on hardware. Product-level fuel-gauge logic
 (`evaluate_fg_state`, SOC source switching) is tested in the Go product
 test suite.
