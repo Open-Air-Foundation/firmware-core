@@ -29,6 +29,7 @@
 #include "common.h"
 #include "drivers/bq25629/bq25629_bms.h"
 #include "drivers/bq27427/bq27427.h"
+#include "drivers/bq27742/bq27742.h"
 #include "drivers/dps368/dps368.h"
 #include "drivers/s12/s12.h"
 #include "drivers/scd4x/scd4x.h"
@@ -270,8 +271,21 @@ void GoHardwareBoard::init_fuel_gauge() {
   }
   _fuel_gauge_init_attempted = true;
 
-  _fuel_gauge = new BQ27427(_i2c_bus);
-  if (!_fuel_gauge->init()) {
+  if (variant() == BoardVariant::V2) {
+    // BQ27742 uses pack-specific provisioning, not BQ27427 reset/config recovery.
+    auto *gauge = new BQ27742(_i2c_bus);
+    if (gauge->init()) {
+      _fuel_gauge = gauge;
+    } else {
+      AG_LOGE(TAG, "BQ27742 init failed — using charger battery estimate");
+      delete gauge;
+    }
+    return;
+  }
+
+  auto *gauge = new BQ27427(_i2c_bus);
+  _fuel_gauge = gauge;
+  if (!gauge->init()) {
     AG_LOGE(TAG, "BQ27427 init failed — FG offline");
     // Continue: _fuel_gauge stays non-null but ready() == false.
   } else {
@@ -279,9 +293,9 @@ void GoHardwareBoard::init_fuel_gauge() {
     uint16_t dc = 0;
     uint16_t fcc = 0;
     FgCellConfig current{};
-    const bool dc_ok = _fuel_gauge->read_design_capacity_mah(dc);
-    const bool fcc_ok = _fuel_gauge->read_full_charge_capacity_mah(fcc);
-    const bool cfg_ok = _fuel_gauge->read_cell_config(current);
+    const bool dc_ok = gauge->read_design_capacity_mah(dc);
+    const bool fcc_ok = gauge->read_full_charge_capacity_mah(fcc);
+    const bool cfg_ok = gauge->read_cell_config(current);
 
     FgRecoveryDecision decision =
         evaluate_fg_state(dc, dc_ok, fcc, fcc_ok, current, cfg_ok, AGO_CELL_CONFIG,
@@ -293,15 +307,15 @@ void GoHardwareBoard::init_fuel_gauge() {
     if (decision.needs_factory_reset) {
       AG_LOGW(TAG, "BQ27427 corrupted state (dc=%u fcc=%u dc_ok=%d fcc_ok=%d) — resetting", dc, fcc,
               dc_ok, fcc_ok);
-      if (!_fuel_gauge->reset_to_factory_defaults()) {
+      if (!gauge->reset_to_factory_defaults()) {
         AG_LOGE(TAG, "BQ27427 reset_to_factory_defaults() failed — "
                      "FG may be in inconsistent state; skipping config write");
         decision = {false, false};
       } else {
         // Pass 2: post-reset, re-read to drive needs_config_write.
-        const bool dc2_ok = _fuel_gauge->read_design_capacity_mah(dc);
-        const bool fcc2_ok = _fuel_gauge->read_full_charge_capacity_mah(fcc);
-        const bool cfg2_ok = _fuel_gauge->read_cell_config(current);
+        const bool dc2_ok = gauge->read_design_capacity_mah(dc);
+        const bool fcc2_ok = gauge->read_full_charge_capacity_mah(fcc);
+        const bool cfg2_ok = gauge->read_cell_config(current);
         cfg_current_ok = cfg2_ok;
         decision =
             evaluate_fg_state(dc, dc2_ok, fcc, fcc2_ok, current, cfg2_ok, AGO_CELL_CONFIG,
@@ -311,7 +325,7 @@ void GoHardwareBoard::init_fuel_gauge() {
 
     if (decision.needs_config_write) {
       AG_LOGI(TAG, "BQ27427 applying cell config");
-      if (!_fuel_gauge->write_cell_config(AGO_CELL_CONFIG)) {
+      if (!gauge->write_cell_config(AGO_CELL_CONFIG)) {
         AG_LOGW(TAG, "BQ27427 write_cell_config() failed — cell parameters "
                      "not updated; runtime polling continues with whatever "
                      "the chip currently has");
@@ -327,10 +341,10 @@ void GoHardwareBoard::init_fuel_gauge() {
     uint16_t mv = 0;
     int16_t ma = 0;
     float tc = 0.0f;
-    _fuel_gauge->read_soc_percent(soc);
-    _fuel_gauge->read_voltage_mv(mv);
-    _fuel_gauge->read_average_current_ma(ma);
-    _fuel_gauge->read_internal_temperature_c(tc);
+    gauge->read_soc_percent(soc);
+    gauge->read_voltage_mv(mv);
+    gauge->read_average_current_ma(ma);
+    gauge->read_internal_temperature_c(tc);
     AG_LOGI(TAG, "BQ27427 boot: soc=%u%% v=%umV i=%dmA t=%.1fC", soc, mv, ma, tc);
   }
 }

@@ -8,7 +8,7 @@
 
 class AgClient;
 class BQ25629Bms;
-class BQ27427;
+class FuelGaugeDevice;
 class SPS30;
 class EspWifiHal;
 class IdfHttpServer;
@@ -96,7 +96,7 @@ private:
   GoSettings _settings{};
   bool _settings_loaded = false;
   BQ25629Bms *_bms_driver = nullptr;
-  BQ27427 *_fuel_gauge = nullptr;
+  FuelGaugeDevice *_fuel_gauge = nullptr;
   SPS30 *_pm_fan = nullptr; // dedicated PM-fan load for factory learning discharge
   bool _pm_fan_inited = false;
   SensorManager *_sensor_manager = nullptr;
