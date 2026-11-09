@@ -493,10 +493,18 @@ public:
     return _sensor_manager;
   }
   StorageService &storage() override {
+    REQUIRE(spi_init_called);
+    if (board_variant == BoardVariant::V2) {
+      REQUIRE(buses_init_called);
+    }
     call_log.push_back("storage");
     return _storage;
   }
   DisplayService &display() override {
+    REQUIRE(spi_init_called);
+    if (board_variant == BoardVariant::V2) {
+      REQUIRE(buses_init_called);
+    }
     call_log.push_back("display");
     return _display;
   }
@@ -764,6 +772,105 @@ TEST_CASE("GoApp::run: V2 starts the normal application", "[board][efuse]") {
   CHECK(board.fuel_gauge_init_called);
   CHECK(board.sensors_called);
   CHECK(test_spy::orchestrator_run_called);
+}
+
+TEST_CASE("GoApp: early display respects board prerequisites after reset and button wake",
+          "[GoApp][boot-order]") {
+  for (const auto variant : {BoardVariant::V1, BoardVariant::V2}) {
+    for (const auto cause : {WakeCause::PowerOn, WakeCause::Button}) {
+      CAPTURE(variant, cause);
+      test_spy::reset(); // Non-power-on reset: charging detection cannot initialize buses first.
+      test_spy::wake_cause = cause;
+      test_spy::rtc_state.mode = OperatingMode::Offline;
+      MockBoard board;
+      board.board_variant = variant;
+      board.settings.operating_mode = OperatingMode::Offline;
+      GoApp app(board);
+
+      app.run();
+
+      REQUIRE(test_spy::orchestrator_run_called);
+      REQUIRE(board.call_index("display") >= 0);
+      REQUIRE(board.call_index("storage") >= 0);
+      REQUIRE(board.call_index("init_buses") >= 0);
+      CHECK(board.call_index("init_spi") < board.call_index("display"));
+      CHECK(board.call_index("display") < board.call_index("storage"));
+      if (variant == BoardVariant::V2) {
+        CHECK(board.call_index("init_buses") < board.call_index("display"));
+      } else {
+        CHECK(board.call_index("display") < board.call_index("init_buses"));
+      }
+    }
+  }
+}
+
+TEST_CASE("GoApp: V2 cold boot and timer paths initialize shared-SPI prerequisites",
+          "[GoApp][boot-order]") {
+  test_spy::reset();
+  MockBoard board;
+  board.board_variant = BoardVariant::V2;
+  bool expect_sleep = false;
+
+  SECTION("cold battery boot") { test_spy::power_on_reset = true; }
+  SECTION("timer wake") {
+    board.settings.operating_mode = OperatingMode::Offline;
+    test_spy::wake_cause = WakeCause::Timer;
+    test_spy::rtc_state.mode = OperatingMode::Offline;
+    test_spy::rtc_state.lock_state = LockState::Locked;
+    test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+    expect_sleep = true;
+  }
+  SECTION("timer wake promoted by Power") {
+    board.settings.operating_mode = OperatingMode::Offline;
+    test_spy::wake_cause = WakeCause::Timer;
+    test_spy::rtc_state.mode = OperatingMode::Offline;
+    test_spy::rtc_state.lock_state = LockState::Locked;
+    board.press_button_on_isr_install = true;
+  }
+  GoApp app(board);
+  app.run();
+
+  CHECK(test_spy::enter_sleep_called == expect_sleep);
+  CHECK(test_spy::orchestrator_run_called == !expect_sleep);
+  REQUIRE(board.call_index("display") >= 0);
+  REQUIRE(board.call_index("storage") >= 0);
+  REQUIRE(board.call_index("init_buses") >= 0);
+  REQUIRE(board.call_index("init_spi") >= 0);
+  CHECK(board.call_index("init_buses") < board.call_index("display"));
+  CHECK(board.call_index("init_spi") < board.call_index("display"));
+  CHECK(board.call_index("init_buses") < board.call_index("storage"));
+  CHECK(board.call_index("init_spi") < board.call_index("storage"));
+}
+
+TEST_CASE("GoApp: V2 charging-screen restart initializes a fresh board before display access",
+          "[GoApp][boot-order]") {
+  test_spy::reset();
+  test_spy::power_on_reset = true;
+  MockBoard charging_board;
+  charging_board.board_variant = BoardVariant::V2;
+  charging_board._bms.status.power_source = BmsPowerSource::UsbDcp;
+  test_spy::light_sleep_callback = [] { return true; }; // Power starts normal operation.
+  GoApp charging_app(charging_board);
+  charging_app.run();
+
+  REQUIRE(charging_board.restart_called);
+  CHECK_FALSE(test_spy::orchestrator_run_called);
+  REQUIRE(charging_board.call_index("display") >= 0);
+  CHECK(charging_board.call_index("init_buses") < charging_board.call_index("display"));
+
+  // esp_restart reconstructs the board. Reusing charging_board would hide missing init.
+  test_spy::reset();
+  MockBoard restarted_board;
+  restarted_board.board_variant = BoardVariant::V2;
+  restarted_board._bms.status.power_source = BmsPowerSource::UsbDcp;
+  GoApp restarted_app(restarted_board);
+  restarted_app.run();
+
+  REQUIRE(test_spy::orchestrator_run_called);
+  REQUIRE(restarted_board.call_index("display") >= 0);
+  REQUIRE(restarted_board.call_index("init_buses") >= 0);
+  CHECK(restarted_board.call_index("init_buses") < restarted_board.call_index("display"));
+  CHECK(test_spy::light_sleep_count == 0);
 }
 
 TEST_CASE("GoApp::run: V1 eFuse fallbacks retain normal boot", "[board][efuse]") {
