@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "9b559d0",
+  "rev": "8331431",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -308,7 +308,7 @@
     {
       "id": "go.ui.menu-wrap",
       "title": "Menu wraparound keeps rows and highlighting readable",
-      "objective": "Verify that wrapping between the first and last rows of the full Display & Touch menu keeps all rows readable and only the intended row highlighted.",
+      "objective": "Verify that wrapping between the first and last rows of Display & Touch keeps all rows readable and only the intended row highlighted.",
       "category": "Display & Controls",
       "sub_category": "Navigation",
       "applicability": [
@@ -319,11 +319,11 @@
       "steps": [
         {
           "action": "Select Portable mode. Open Main Menu > Settings > Display & Touch and inspect the menu.",
-          "expected_result": "All 10 rows, including Exit and Touch LED, are readable without clipping or overlap."
+          "expected_result": "All rows are readable without clipping or overlap. V1 ends with Touch LED. V2 ends with LED Brightness and has no Touch LED row."
         },
         {
           "action": "Move the highlight to Exit. Tap left (Up) once, inspect the completed refresh, then tap right (Down) once and inspect again.",
-          "expected_result": "The highlight moves to Touch LED, then back to Exit. All rows remain readable, only the intended row is highlighted after each refresh, and no full-screen flash occurs."
+          "expected_result": "The highlight moves to Touch LED on V1 or LED Brightness on V2, then back to Exit. All rows remain readable, only the intended row is highlighted after each refresh, and no full-screen flash occurs."
         }
       ],
       "cleanup": [
@@ -1464,7 +1464,8 @@
       "category": "Diagnostics",
       "sub_category": "Peripheral",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "A quiet environment.",
@@ -1472,37 +1473,37 @@
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Record Buzzer under Settings > Operations, and LED Indicator, LED Brightness and Touch LED under Settings > Display & Touch. Set LED Indicator to CO2 and LED Brightness to Mid.",
-          "expected_result": "All four original settings are recorded. CO2 and Mid are selected."
+          "action": "Select Portable mode. Record Buzzer under Settings > Operations, and LED Indicator and LED Brightness under Settings > Display & Touch. On V1, also record Touch LED. Set LED Indicator to CO2 and LED Brightness to Mid.",
+          "expected_result": "The original settings are recorded: four on V1, three on V2. CO2 and Mid are selected."
         },
         {
           "action": "Return Home and allow up to five minutes for sensor warmup and a numeric CO2 reading. Observe the rear LEDs, then open Settings > Hardware Test > Peripheral Test.",
           "expected_result": "The rear LEDs show steady CO2 indication before the diagnostic. The first actuator prompt appears."
         },
         {
-          "action": "Follow the Back LED, Touch LED and Buzzer prompts. Select Pass only after observing each requested output.",
-          "expected_result": "The rear LEDs cycle red, green and blue; all three touch LEDs illuminate; the buzzer sounds."
+          "action": "Follow the actuator prompts, selecting Pass only after observing each requested output.",
+          "expected_result": "The rear LEDs cycle red, green and blue. V1 then prompts for Touch LED and all three touch LEDs illuminate. V2 goes directly from Back LED to Buzzer with no Touch LED prompt. The buzzer sounds on both boards."
         },
         {
           "action": "Allow up to five minutes for the automatic sensor checks and inspect the summary.",
-          "expected_result": "All actuator and sensor rows show PASS, and the overall result is PASS. The rear LEDs turn green and the completion melody plays. Results remain readable without clipping."
+          "expected_result": "All actuator and sensor rows show PASS, and the overall result is PASS. V1 has nine summary rows, including Touch LED; V2 has eight with no Touch LED row. The rear LEDs turn green and the completion melody plays. Results remain readable without clipping."
         },
         {
-          "action": "Exit the test and return Home. Compare the rear LEDs with the current CO2 reading using the CO2 Color Map in LED Service, then check Buzzer, LED Indicator, LED Brightness and Touch LED.",
-          "expected_result": "CO2 indication resumes at Mid, matching the displayed reading. LED Indicator remains CO2, LED Brightness remains Mid, Buzzer and Touch LED retain their recorded choices, and touch LEDs no longer remain steadily lit."
+          "action": "Exit the test and return Home. Compare the rear LEDs with the current CO2 reading using the CO2 Color Map in LED Service, then check Buzzer, LED Indicator and LED Brightness. On V1, also check Touch LED.",
+          "expected_result": "CO2 indication resumes at Mid, matching the displayed reading. LED Indicator remains CO2, LED Brightness remains Mid and Buzzer retains its recorded choice. On V1, Touch LED retains its recorded choice and the touch LEDs no longer remain steadily lit."
         },
         {
-          "action": "Reopen Settings > Hardware Test > Peripheral Test. Deliberately select Fail for Back LED, even though it works. Verify the Touch LED and Buzzer outputs and select Pass. Allow up to five minutes for the sensor checks.",
+          "action": "Reopen Settings > Hardware Test > Peripheral Test. Deliberately select Fail for Back LED, even though it works. Verify and select Pass for the remaining actuator prompts: Touch LED and Buzzer on V1, Buzzer only on V2. Allow up to five minutes for the sensor checks.",
           "expected_result": "Back LED shows FAIL; all other rows show PASS. The overall result is FAIL, the rear LEDs turn red and the alert melody plays."
         },
         {
-          "action": "Exit the test and return Home. Compare the rear LEDs with the current CO2 reading using the CO2 Color Map in LED Service, then check Buzzer, LED Indicator, LED Brightness and Touch LED.",
-          "expected_result": "CO2 indication resumes at Mid, matching the displayed reading. LED Indicator remains CO2, LED Brightness remains Mid, Buzzer and Touch LED retain their recorded choices, and touch LEDs no longer remain steadily lit."
+          "action": "Exit the test and return Home. Compare the rear LEDs with the current CO2 reading using the CO2 Color Map in LED Service, then check Buzzer, LED Indicator and LED Brightness. On V1, also check Touch LED.",
+          "expected_result": "CO2 indication resumes at Mid, matching the displayed reading. LED Indicator remains CO2, LED Brightness remains Mid and Buzzer retains its recorded choice. On V1, Touch LED retains its recorded choice and the touch LEDs no longer remain steadily lit."
         }
       ],
       "cleanup": [
         "Exit the diagnostic, including after interruption.",
-        "Restore the recorded LED Indicator, LED Brightness, Buzzer and Touch LED choices. Confirm them, return Home and record any restoration failure."
+        "Restore the recorded LED Indicator, LED Brightness and Buzzer choices, plus Touch LED on V1. Confirm them, return Home and record any restoration failure."
       ],
       "references": [
         "products/go/docs/hardware_test.md",
