@@ -601,8 +601,9 @@ orchestrator can skip redundant work.
 
 On a fresh interactive power-on with no RTC snapshot and no fast-path
 measurement, `GoApp` initializes SPI and starts a deferred `Screen::Info`
-`Getting Ready` splash before core initialization. Core and I2C initialization
-run while the display refreshes; `GoApp` flushes that refresh before mounting
+`Getting Ready` splash before completing core initialization. V2 initializes
+I2C and the expander before display access; V1 can initialize I2C during the
+refresh. `GoApp` flushes that refresh before mounting
 NAND storage. At the end of initialization, the orchestrator replaces the splash
 with the one-time `Screen::GettingStarted` guide when the durable
 `onboarding_done` NVS flag is unset. Sensors warm up in the background.
@@ -1031,8 +1032,8 @@ for sequencing, timing, and promotion handoff.
 2. GoApp::run() reads wake cause: button, mode: Offline → selects ButtonWake
 3. GoApp::run_button_wake_path(state):
 
-   Phase 1 (~10 ms):
-     4. _board.init_spi(), _board.display()
+   Phase 1 (V2 initializes I2C/expander before painting):
+     4. V2: _board.init_buses(); both: _board.init_spi(), _board.display()
      5. Load RtcDisplaySnapshot from RTC memory
      6. Build DisplayValues via build_wake_values(): Home, unlocked,
         "Unlocked" snackbar, sensor values from snapshot (or dashes)
@@ -1067,7 +1068,8 @@ for sequencing, timing, and promotion handoff.
 ```
 
 First meaningful paint: ~3 s. Single display flash (no empty-frame
-flash). Touch input and sensors ready at ~310 ms.
+flash). V2 moves I2C/expander initialization ahead of display refresh, so
+its first paint starts later than V1; wake timing still needs hardware verification.
 
 ## Service Documentation
 

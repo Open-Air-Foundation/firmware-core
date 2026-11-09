@@ -21,7 +21,7 @@ The firmware selects **V1 or V2** from eFuse at runtime. Blank, unknown, or
 unreadable IDs select V1; peripheral failures never change the selection.
 V2 uses a TCA6408A expander, four back LEDs, and no touch LEDs or shake detection.
 See [Hardware Initialization](docs/hardware_init.md#board-variants) for wiring,
-board-ID tooling, and the remaining V2 early-display boot-order limitation.
+board-ID tooling, and display initialization prerequisites.
 
 ### Temperature and Humidity Source
 

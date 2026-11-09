@@ -72,9 +72,9 @@ python tools/go_board.py --port /dev/ttyACM0 set v2
 to modify an already-programmed user-data block and retains the burn confirmation.
 The field definition and generated table live in `main/efuse/`.
 
-**Current limitation:** button-wake and software-reset interactive boots can
-reach the early display before `init_buses()`. On V2 this violates the display's
-expander prerequisite. That boot-order fix and hardware verification remain pending.
+Button-wake and interactive boots initialize V2 buses and the expander before
+early display access. V1 keeps its display-first sequence. Hardware verification
+of V2 wake and restart behavior remains pending.
 
 ## Boot Path Selection
 
@@ -194,8 +194,8 @@ the accelerometer available for diagnostics without shake polling.
 |---|---|
 | **Charging only** | Detection: `init_buses()` → BMS retry; runner: `init_fuel_gauge()` → `power().set_pm_power(false)` → `init_spi()` → `display()` → light-sleep polling |
 | **Fast path** | `init_core()` → `init_fuel_gauge()` → BMS retry → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors(warm)` → `storage()` → `display()`; may sleep degraded after BMS failure |
-| **Button wake** | `init_spi()` → `display()` → early paint → `init_core()` → `init_fuel_gauge()` → BMS retry → restart on failure → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors()` → ... |
-| **Interactive** | `init_core()` → `init_fuel_gauge()` → BMS retry → restart on failure → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors()` → `storage()` → `display()` → orchestrator may call `init_wifi_subsystem()` on first `enter_stationary()` |
+| **Button wake** | V2: `init_buses()` first; both: `init_spi()` → `display()` → early paint → `init_core()` → `init_fuel_gauge()` → BMS retry → restart on failure → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors()` → ... |
+| **Interactive** | If no frame is painted: V2 `init_buses()`, then both `init_spi()` → `display()` → early paint; continue with `init_core()` → `init_fuel_gauge()` → BMS retry → restart on failure → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors()` → `storage()` → `display()` → orchestrator may call `init_wifi_subsystem()` on first `enter_stationary()` |
 | **Factory learning** | `init_core()` → `init_fuel_gauge()` → BMS retry → restart on failure → `release_gpio_holds()` → construct runner |
 
 Hardware sequencing constraints:
@@ -244,13 +244,13 @@ a fresh power-on boot.
 
 Handles both fresh boot (empty BootHandoff) and fast-path promotion.
 When no frame was already painted by the fast path, it starts a deferred
-snapshot or `Getting Ready` splash refresh before core initialization. Core and
-I2C initialization then run while the display refreshes. All init is idempotent
-via GoBoard lazy accessors:
+snapshot or `Getting Ready` splash refresh before completing core initialization.
+V2 initializes I2C and the expander before painting; V1 can initialize I2C while
+the display refreshes. Initialization is idempotent:
 
 | # | What | GoBoard call |
 |---|---|---|
-| 1 | Early display | `_board.init_spi()` → `_board.display().init(..., true)` if `!handoff.display_painted` |
+| 1 | Early display | V2: `_board.init_buses()` first; both: `_board.init_spi()` → `_board.display().init(..., true)` if `!handoff.display_painted` |
 | 2 | Core init | `_board.init_core()` (no-op if already done) |
 | 3 | Battery devices | `_board.init_fuel_gauge()` → BMS retry; restart if unavailable |
 | 4 | Settings | `_board.load_settings()` |
@@ -309,7 +309,8 @@ measurement completed.
 
 ## Button-Wake Path (GoApp::run_button_wake_path)
 
-Button wake in Offline mode. Four-phase boot with early paint. Uses
+Button wake in Offline mode. V2 calls `init_buses()` before Phase 1 so display
+D/C is available. V1 keeps I2C initialization in Phase 2. The four-phase boot uses
 individual init methods for fine-grained ordering:
 
 ```text

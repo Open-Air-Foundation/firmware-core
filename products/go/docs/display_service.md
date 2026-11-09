@@ -41,8 +41,7 @@ the expander and drives P2 (NAND CS) and P3 HIGH before display use.
 
 During transfers, D/C changes run in task context while the shared SPI bus is
 held, before display CS is asserted. A failed D/C write aborts that transfer.
-See [Hardware Initialization](hardware_init.md#board-variants) for the current
-V2 early-display boot-order limitation and
+See [Hardware Initialization](hardware_init.md#board-variants) for boot ordering and
 [NAND Storage](../../../components/airgradient-nand-storage/README.md) for
 expander-controlled NAND CS.
 

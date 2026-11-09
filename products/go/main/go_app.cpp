@@ -677,9 +677,13 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   AG_LOGI(TAG, "run_button_wake_path: entering button-wake boot");
 
   // -----------------------------------------------------------------------
-  // Phase 1: Early paint (~10 ms)
+  // Phase 1: Early paint
   // -----------------------------------------------------------------------
 
+  // V2 display D/C requires the I2C expander before any display access.
+  if (_board.variant() == BoardVariant::V2) {
+    _board.init_buses();
+  }
   _board.init_spi();
   DisplayService &disp = _board.display();
 
@@ -701,7 +705,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // Returns in ~10 ms.  Worker task handles the SPI full refresh (~3 s).
   disp.init(wake_values, /* defer_refresh= */ true);
 
-  // Stop LP Core after SPI/display init, before I2C init.
+  // Stop LP Core before main-CPU watchdog setup.
   _board.ulp_stop();
 
   // -----------------------------------------------------------------------
@@ -890,11 +894,14 @@ void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff
                             const char *boot_message) {
   const char *splash_text = boot_message != nullptr ? boot_message : BOOT_SPLASH_TEXT;
   // --- Early display paint ---
-  // Start the e-paper refresh before the slower I2C, BMS, sensor, and NAND
-  // initialization. The display worker owns SPI while it refreshes; NAND
-  // initialization naturally waits for that refresh before using the bus.
+  // Start the e-paper refresh before BMS, sensor, and NAND initialization.
+  // V2 needs I2C and the expander first; V1 can defer I2C initialization.
+  // The display worker owns SPI while it refreshes.
   bool boot_splash_requested = false;
   if (!handoff.display_painted) {
+    if (_board.variant() == BoardVariant::V2) {
+      _board.init_buses();
+    }
     _board.init_spi();
     DisplayService &early_display = _board.display();
 
