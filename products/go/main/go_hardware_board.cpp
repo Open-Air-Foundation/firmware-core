@@ -572,6 +572,16 @@ LedService &GoHardwareBoard::led_service() {
     LedService::Config cfg{};
     _lp5036 = new LP5036(_i2c_bus, {});
     cfg.driver = _lp5036;
+    if (variant() == BoardVariant::V2) {
+      cfg.back_channels = {0, 3, 6, 9};
+      cfg.back_channel_count = 4;
+      cfg.touch_channel_count = 0;
+    } else if (variant() == BoardVariant::V1) {
+      cfg.back_channels = {6, 12, 15, 18, 24};
+      cfg.back_channel_count = 5;
+      cfg.touch_channels = {27, 3, 0};
+      cfg.touch_channel_count = 3;
+    }
     _led_service = new LedService(cfg);
   }
   return *_led_service;

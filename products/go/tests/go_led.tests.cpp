@@ -16,6 +16,7 @@
 #include <trompeloeil/mock.hpp>
 
 #include <limits>
+#include <vector>
 
 #include "air_quality.h"
 #include "go_led.h"
@@ -65,6 +66,10 @@ struct TestFixture {
     config.driver = &driver;
     config.touch_flash_ms = 120;
     config.frame_interval_ms = 30;
+    config.back_channels = {6, 12, 15, 18, 24};
+    config.back_channel_count = 5;
+    config.touch_channels = {27, 3, 0};
+    config.touch_channel_count = 3;
   }
 
   void build() {
@@ -82,6 +87,17 @@ struct TestFixture {
 // ============================================================================
 
 TEST_CASE("LedService: lifecycle", "[LedService][lifecycle]") {
+  SECTION("counts beyond the channel arrays are rejected before driver initialization") {
+    MockLedDriver driver;
+    LedService::Config cfg{};
+    cfg.driver = &driver;
+    SECTION("back") { cfg.back_channel_count = LedService::MAX_BACK_LEDS + 1; }
+    SECTION("touch") { cfg.touch_channel_count = LedService::MAX_TOUCH_LEDS + 1; }
+    LedService svc(cfg);
+    CHECK_FALSE(svc.init());
+    CHECK_FALSE(svc.start());
+  }
+
   SECTION("init returns driver init result; second call returns cached") {
     MockLedDriver driver;
     LedService::Config cfg{};
@@ -127,6 +143,105 @@ TEST_CASE("LedService: lifecycle", "[LedService][lifecycle]") {
 // ============================================================================
 // Back -- Solid
 // ============================================================================
+
+TEST_CASE("LedService: V2 has four back LEDs and no touch LEDs", "[LedService][v2]") {
+  TestFixture f;
+  f.config.back_channels = {0, 3, 6, 9};
+  f.config.back_channel_count = 4;
+  f.config.touch_channel_count = 0;
+  f.build();
+
+  struct Write {
+    uint8_t channel;
+    Rgb color;
+  };
+  std::vector<Write> writes;
+  ALLOW_CALL(f.driver, set_rgb(trompeloeil::_, trompeloeil::_, trompeloeil::_, trompeloeil::_))
+      .LR_SIDE_EFFECT(writes.push_back({_1, {_2, _3, _4}}))
+      .RETURN(true);
+
+  const auto check_frame = [&](const std::array<Rgb, 4> &colors) {
+    const std::array<uint8_t, 4> channels = {0, 3, 6, 9};
+    REQUIRE(writes.size() == channels.size());
+    for (size_t i = 0; i < channels.size(); ++i) {
+      CHECK(writes[i].channel == channels[i]);
+      CHECK(writes[i].color.r == colors[i].r);
+      CHECK(writes[i].color.g == colors[i].g);
+      CHECK(writes[i].color.b == colors[i].b);
+    }
+    writes.clear();
+  };
+  const Rgb off{0, 0, 0};
+  const Rgb white{255, 255, 255};
+  const Rgb green{0, 255, 0};
+  f.svc->back_set_brightness(LedBrightness::Bright);
+
+  SECTION("solid color, brightness, and off address only the four populated groups") {
+    f.svc->back_solid(green);
+    f.svc->pump_for_test(0);
+    check_frame({green, green, green, green});
+    f.svc->back_set_brightness(LedBrightness::Dim);
+    f.svc->pump_for_test(10);
+    const Rgb dim{0, 64, 0};
+    check_frame({dim, dim, dim, dim});
+    f.svc->back_off();
+    f.svc->pump_for_test(20);
+    check_frame({off, off, off, off});
+  }
+
+  SECTION("chase fills LED1 through LED4 and completes after four steps") {
+    f.svc->back_chase(white, 100);
+    f.svc->pump_for_test(0);
+    check_frame({white, off, off, off});
+    f.svc->pump_for_test(100);
+    check_frame({white, white, off, off});
+    f.svc->pump_for_test(200);
+    check_frame({white, white, white, off});
+    f.svc->pump_for_test(300);
+    check_frame({white, white, white, white});
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, 300) == f.config.frame_interval_ms);
+    f.svc->pump_for_test(400);
+    check_frame({white, white, white, white});
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, 400) == UINT32_MAX);
+    f.svc->pump_for_test(500);
+    CHECK(writes.empty());
+  }
+
+  SECTION("sequence advances after four chase steps and restores the previous color") {
+    f.svc->back_solid(green);
+    f.svc->pump_for_test(0);
+    check_frame({green, green, green, green});
+    const Rgb red{255, 0, 0};
+    const BackStep steps[] = {
+        {BackStep::Effect::Chase, white, 100},
+        {BackStep::Effect::Solid, red, 200},
+    };
+    f.svc->back_play(steps, 2);
+    f.svc->pump_for_test(0);
+    check_frame({white, off, off, off});
+    f.svc->pump_for_test(400);
+    check_frame({red, red, red, red});
+    f.svc->pump_for_test(600);
+    check_frame({green, green, green, green});
+  }
+
+  SECTION("touch commands leave back LEDs and worker sleep unchanged") {
+    f.svc->back_solid(green);
+    f.svc->pump_for_test(0);
+    check_frame({green, green, green, green});
+    f.svc->touch_set_intensity(TouchLedIntensity::Bright);
+    f.svc->touch_set_all(true);
+    for (auto pad : {TouchPad::Select, TouchPad::Left, TouchPad::Right}) {
+      f.svc->touch_flash(pad);
+      f.svc->pump_for_test(10);
+    }
+    f.svc->touch_set_all(false);
+    f.svc->pump_for_test(20);
+    f.svc->pump_for_test(200);
+    CHECK(writes.empty());
+    CHECK(LedServiceTestAccess::next_wait_timeout_ms(*f.svc, 200) == UINT32_MAX);
+  }
+}
 
 TEST_CASE("LedService: back solid", "[LedService][back][solid]") {
   TestFixture f;
