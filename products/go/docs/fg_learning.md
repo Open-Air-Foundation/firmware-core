@@ -13,8 +13,8 @@ run survives the end-of-discharge ship-mode power-off and resumes on re-plug
 with no operator input, then verifies once after the final cycle and hands back
 to normal operation.
 
-V2 uses BQ27742 and skips this factory boot path. Its pack provisioning remains
-deferred.
+V2 uses BQ27742, hides Battery Calibration, and skips this factory boot path.
+Its pack provisioning remains deferred.
 
 ## Files
 

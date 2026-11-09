@@ -181,6 +181,7 @@ public:
     /// Captive-portal AP password — must match WifiService::Config::ap_password
     /// so the Wi-Fi QR and instruction line agree.
     const char *ap_password = "cleanair";
+    bool battery_calibration_available = true;
   };
 
   explicit UIManager(const Config &config);
@@ -483,6 +484,7 @@ private:
   void move_about(int delta);
   void move_confirm(int delta);
   void move_hardware_test(int delta);
+  uint8_t hardware_test_row_count() const;
   void move_provisioning(int delta);
   void move_provisioning_confirm(int delta);
   void browse_metric(int delta);

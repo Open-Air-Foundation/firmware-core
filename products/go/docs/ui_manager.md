@@ -61,6 +61,13 @@ and its context must match the synchronized state.
 `WifiService::Config::ap_password` so the Wi-Fi QR descriptor and the
 on-screen password line agree.
 
+| Field | Default | Purpose |
+|---|---|---|
+| `battery_calibration_available` | `true` | Show Battery Calibration in Hardware Test; application wiring sets this to `false` on V2 |
+
+Without calibration, Play Melody follows Accelerometer Test directly; navigation
+and selection use the shorter menu.
+
 ## Public API
 
 | Method | Purpose |
@@ -188,7 +195,7 @@ rows follow this order:
 | Settings | Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide, About Device |
 | Operations | Measurement Interval, CO2 Calibration, GPS Mode, Buzzer, Local Server (Stationary only) |
 | Display & Touch | Pinned Chart, Temperature Unit, Altitude Unit, PM Display, Auto Lock, LED Indicator, LED Brightness, Touch LED |
-| Hardware Test | Peripheral Test, GPS Test, Accelerometer Test, Battery Calibration, Play Melody |
+| Hardware Test | Peripheral Test, GPS Test, Accelerometer Test, Battery Calibration (V1 only), Play Melody |
 
 Settings and its groups fit on one page. Opening Settings selects Operations;
 Operations selects Measurement Interval, Display & Touch selects Pinned Chart,

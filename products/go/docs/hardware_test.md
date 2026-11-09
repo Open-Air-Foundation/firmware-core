@@ -4,7 +4,7 @@ On-device diagnostics surface for AirGradient Go, reachable from
 **Settings → Hardware Test**. It groups four operator-run flows behind one
 submenu: a guided **Peripheral Test** (actuators then air-quality sensors), a
 live **GPS Test**, a live **Accelerometer Test**, and an in-menu arm for the
-existing **Battery Calibration** factory routine. `UIManager` stays hardware-free — it
+V1-only **Battery Calibration** factory routine. `UIManager` stays hardware-free — it
 renders the submenu and per-flow views from a pushed snapshot — while the
 orchestrator owns every hardware side effect, the flow state machines, and the
 buzzer / LED cues. All flows run in-app on already-initialised services; only
@@ -75,6 +75,8 @@ Settings. It opens `Screen::HardwareTest`. The submenu rows, in order:
 Exit(0), Back(1), Peripheral Test(2), GPS Test(3), Accelerometer Test(4),
 Battery Calibration(5), Play Melody(6)
 ```
+
+V2 omits Battery Calibration, so Play Melody occupies row 5.
 
 Exit returns Home; Back returns to Settings on the Hardware Test row. Each live
 screen exits back to the submenu on **any tap**, a **double-press Back**, or a
@@ -189,7 +191,8 @@ The screen shows `WHO_AM_I` (OK/BAD), X/Y/Z (mg), `|a|` (mg), and Result.
 
 ### Battery Calibration Arm
 
-The Battery Calibration row is a destructive action guarded by the shared `Confirm`
+Battery Calibration is available only on V1; V2 hides the menu option.
+The row is a destructive action guarded by the shared `Confirm`
 screen ("Start Battery Calibration?"). On **Yes** the orchestrator writes
 `FactorySettings{ fg_learning_stage = Charge, cycle = 1, itpor_losses = 0 }` and
 reboots; the next boot routes into the existing `FgLearningRunner` unchanged.

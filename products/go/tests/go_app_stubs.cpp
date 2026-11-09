@@ -89,6 +89,8 @@ bool input_started = false;
 bool input_stopped = false;
 InputService::Config input_config{};
 
+UIManager::Config ui_config{};
+
 // --- StorageService ---
 bool cache_measurement_called = false;
 MeasuresAGo last_cached_measurement{};
@@ -220,6 +222,7 @@ void reset() {
   input_started = false;
   input_stopped = false;
   input_config = {};
+  ui_config = {};
 
   cache_measurement_called = false;
   last_cached_measurement = MeasuresAGo{};
@@ -986,7 +989,7 @@ void OtaService::teardown_ble() {}
 
 #include "go_ui.h"
 
-UIManager::UIManager(const Config & /*config*/) {}
+UIManager::UIManager(const Config &config) { test_spy::ui_config = config; }
 
 UIActionResult UIManager::handle_input(InputSource /*source*/, InputType /*type*/) { return {}; }
 

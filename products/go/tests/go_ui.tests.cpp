@@ -1925,6 +1925,39 @@ TEST_CASE("UIManager: Hardware Test submenu navigation", "[UIManager][hwtest]") 
   }
 }
 
+TEST_CASE("UIManager: V2 hides Battery Calibration without breaking Hardware Test navigation",
+          "[UIManager][hwtest][v2]") {
+  auto config = DEFAULT_UI_CONFIG;
+  config.battery_calibration_available = false;
+  UIManager ui(config);
+  go_to_group(ui, "Hardware Test");
+
+  check_rows(ui,
+             {"Exit", "Back", "Peripheral Test", "GPS Test", "Accelerometer Test", "Play Melody"});
+
+  SECTION("navigation wraps between Play Melody and Exit") {
+    select_row(ui, "Play Melody");
+    press(ui, InputSource::TouchDown);
+    auto values = ui.build_values(make_default_ctx());
+    CHECK(std::string(values.rows[values.selected_row].text) == "Exit");
+    press(ui, InputSource::TouchUp);
+    values = ui.build_values(make_default_ctx());
+    CHECK(std::string(values.rows[values.selected_row].text) == "Play Melody");
+  }
+
+  SECTION("the former calibration row opens Play Melody and returns to its selection") {
+    select_row(ui, "Accelerometer Test");
+    press(ui, InputSource::TouchDown);
+    CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
+    REQUIRE(ui.current_screen() == Screen::SettingsChoice);
+    check_rows(ui, {"Exit", "Back", "Chime", "Tetris"});
+    CHECK(open_row(ui, "Chime").action == UIAction::PlayMelody);
+    REQUIRE(ui.current_screen() == Screen::HardwareTest);
+    const auto values = ui.build_values(make_default_ctx());
+    CHECK(std::string(values.rows[values.selected_row].text) == "Play Melody");
+  }
+}
+
 TEST_CASE("UIManager: FG Learning arm confirm dialog", "[UIManager][hwtest][fg]") {
   UIManager ui(DEFAULT_UI_CONFIG);
 

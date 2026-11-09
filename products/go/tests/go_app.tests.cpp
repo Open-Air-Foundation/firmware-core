@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "go_app.h"
+#include "go_ui.h"
 #include "gps/gps_power_policy.h"
 #include "go_board.h"
 #include "go_input.h"
@@ -112,6 +113,7 @@ extern uint64_t gps_initial_deadline_ms;
 extern bool gps_fast_path_sleep_probe;
 extern bool input_started;
 extern InputService::Config input_config;
+extern UIManager::Config ui_config;
 extern bool cache_measurement_called;
 extern MeasuresAGo last_cached_measurement;
 extern std::vector<MeasuresAGo> cached_measurements;
@@ -2201,6 +2203,26 @@ TEST_CASE("run_interactive: exhausted BMS retries restart before orchestrator") 
   CHECK_FALSE(test_spy::orchestrator_run_called);
   CHECK(board.call_index("power") < 0);
   CHECK(board.call_index("sensors") < 0);
+}
+
+TEST_CASE("Battery Calibration availability follows the board on both interactive boot paths") {
+  for (const auto variant : {BoardVariant::V1, BoardVariant::V2}) {
+    for (const bool button_wake : {false, true}) {
+      CAPTURE(variant, button_wake);
+      test_spy::reset();
+      MockBoard board;
+      board.board_variant = variant;
+      GoApp app(board);
+      GoAppTestAccess access(app);
+
+      if (button_wake) {
+        access.run_button_wake_path(RtcAppState{});
+      } else {
+        access.run_interactive(WakeCause::PowerOn);
+      }
+      CHECK(test_spy::ui_config.battery_calibration_available == (variant == BoardVariant::V1));
+    }
+  }
 }
 
 TEST_CASE("input wiring uses board configuration on both interactive boot paths") {
