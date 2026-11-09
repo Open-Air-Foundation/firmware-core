@@ -187,8 +187,9 @@ static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource sou
 
 Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services,
                            GoSettings settings, ConfigStore &config_store, const char *serial)
-    : _event_queue(event_queue), _svc(services), _settings(std::move(settings)),
-      _config_store(config_store), _serial(serial), _raw_measures(), _corrected_measures() {}
+    : _event_queue(event_queue), _svc(services), _capabilities(services.board.capabilities()),
+      _settings(std::move(settings)), _config_store(config_store), _serial(serial), _raw_measures(),
+      _corrected_measures() {}
 
 // ---------------------------------------------------------------------------
 // Boot initialization
@@ -1838,7 +1839,7 @@ void Orchestrator::peripheral_step_result(bool pass) {
   switch (_periph.step) {
   case Step::BackLed:
     _periph.back_led = pass;
-    _periph.step = _svc.board.variant() == BoardVariant::V2 ? Step::Buzzer : Step::TouchLed;
+    _periph.step = _capabilities.supports(BoardFeature::TouchLed) ? Step::TouchLed : Step::Buzzer;
     drive_peripheral_actuator();
     break;
   case Step::TouchLed:
@@ -1888,7 +1889,7 @@ void Orchestrator::on_sensor_test_done(const SensorTestResults &results) {
   _periph.sensors = results;
   _periph.step = PeripheralTestState::Step::Summary;
 
-  const bool touch_led_pass = _svc.board.variant() == BoardVariant::V2 || _periph.touch_led;
+  const bool touch_led_pass = !_capabilities.supports(BoardFeature::TouchLed) || _periph.touch_led;
   const bool overall = _periph.back_led && touch_led_pass && _periph.buzzer && results.all_pass();
   AG_LOGI(TAG, "peripheral test: summary overall=%s", overall ? "PASS" : "FAIL");
 

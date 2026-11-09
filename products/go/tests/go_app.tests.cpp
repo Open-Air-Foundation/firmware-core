@@ -756,6 +756,22 @@ TEST_CASE("Board identity: only a successful V2 ID selects V2", "[board][efuse]"
   }
 }
 
+TEST_CASE("Board capabilities: V1 supports touch LEDs and battery calibration", "[board]") {
+  MockBoard board;
+  board.board_variant = BoardVariant::V1;
+  const auto capabilities = board.capabilities();
+  CHECK(capabilities.supports(BoardFeature::TouchLed));
+  CHECK(capabilities.supports(BoardFeature::BatteryCalibration));
+}
+
+TEST_CASE("Board capabilities: V2 has neither optional feature", "[board]") {
+  MockBoard board;
+  board.board_variant = BoardVariant::V2;
+  const auto capabilities = board.capabilities();
+  CHECK_FALSE(capabilities.supports(BoardFeature::TouchLed));
+  CHECK_FALSE(capabilities.supports(BoardFeature::BatteryCalibration));
+}
+
 TEST_CASE("GoApp::run: V2 starts the normal application", "[board][efuse]") {
   test_spy::reset();
   MockBoard board;
@@ -2327,8 +2343,10 @@ TEST_CASE("UI hardware availability follows the board on both interactive boot p
       } else {
         access.run_interactive(WakeCause::PowerOn);
       }
-      CHECK(test_spy::ui_config.battery_calibration_available == (variant == BoardVariant::V1));
-      CHECK(test_spy::ui_config.touch_led_available == (variant == BoardVariant::V1));
+      CHECK(test_spy::ui_config.capabilities.supports(BoardFeature::BatteryCalibration) ==
+            (variant == BoardVariant::V1));
+      CHECK(test_spy::ui_config.capabilities.supports(BoardFeature::TouchLed) ==
+            (variant == BoardVariant::V1));
     }
   }
 }

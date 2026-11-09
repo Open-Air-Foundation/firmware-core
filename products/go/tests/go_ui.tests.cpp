@@ -40,6 +40,7 @@
 static constexpr UIManager::Config DEFAULT_UI_CONFIG = {
     .firmware_version = "0.1.0",
     .serial_number = "AABBCCDDEEFF",
+    .capabilities = board_capabilities(BoardVariant::V1),
 };
 
 /// Build a minimal BuildContext with default invalid sensor data.
@@ -165,7 +166,7 @@ TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
 TEST_CASE("UIManager: V2 hides Touch LED without breaking Display & Touch navigation",
           "[UIManager][settings][v2]") {
   auto config = DEFAULT_UI_CONFIG;
-  config.touch_led_available = false;
+  config.capabilities = board_capabilities(BoardVariant::V2);
   UIManager ui(config);
   go_to_group(ui, "Display & Touch");
 
@@ -1959,7 +1960,7 @@ TEST_CASE("UIManager: Hardware Test submenu navigation", "[UIManager][hwtest]") 
 TEST_CASE("UIManager: V2 hides Battery Calibration without breaking Hardware Test navigation",
           "[UIManager][hwtest][v2]") {
   auto config = DEFAULT_UI_CONFIG;
-  config.battery_calibration_available = false;
+  config.capabilities = board_capabilities(BoardVariant::V2);
   UIManager ui(config);
   go_to_group(ui, "Hardware Test");
 
@@ -1986,6 +1987,43 @@ TEST_CASE("UIManager: V2 hides Battery Calibration without breaking Hardware Tes
     REQUIRE(ui.current_screen() == Screen::HardwareTest);
     const auto values = ui.build_values(make_default_ctx());
     CHECK(std::string(values.rows[values.selected_row].text) == "Play Melody");
+  }
+}
+
+TEST_CASE("UIManager: hardware menu items follow independent board capabilities",
+          "[UIManager][capabilities]") {
+  struct Case {
+    BoardCapabilities capabilities;
+    bool touch_led;
+    bool battery_calibration;
+  };
+  const Case cases[] = {
+      {{}, false, false},
+      {{BoardFeature::TouchLed}, true, false},
+      {{BoardFeature::BatteryCalibration}, false, true},
+      {{BoardFeature::TouchLed, BoardFeature::BatteryCalibration}, true, true},
+  };
+  for (const auto &test : cases) {
+    CAPTURE(test.touch_led, test.battery_calibration);
+    auto config = DEFAULT_UI_CONFIG;
+    config.capabilities = test.capabilities;
+    for (const auto *group : {"Display & Touch", "Hardware Test"}) {
+      UIManager ui(config);
+      go_to_group(ui, group);
+      const auto values = ui.build_values(make_default_ctx());
+      bool touch_led_found = false;
+      bool battery_calibration_found = false;
+      for (uint8_t row = 0; row < values.row_count; ++row) {
+        const std::string text = values.rows[row].text;
+        touch_led_found |= text.rfind("Touch LED:", 0) == 0;
+        battery_calibration_found |= text == "Battery Calibration";
+      }
+      if (ui.current_screen() == Screen::DisplayTouch) {
+        CHECK(touch_led_found == test.touch_led);
+      } else {
+        CHECK(battery_calibration_found == test.battery_calibration);
+      }
+    }
   }
 }
 

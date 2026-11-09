@@ -3,6 +3,7 @@
 
 #include <cstdint>
 
+#include "go_board_capabilities.h"
 #include "go_display.h"
 #include "go_melody.h"
 #include "go_settings.h"
@@ -181,8 +182,7 @@ public:
     /// Captive-portal AP password — must match WifiService::Config::ap_password
     /// so the Wi-Fi QR and instruction line agree.
     const char *ap_password = "cleanair";
-    bool battery_calibration_available = true;
-    bool touch_led_available = true;
+    BoardCapabilities capabilities{};
   };
 
   explicit UIManager(const Config &config);

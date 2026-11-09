@@ -999,7 +999,7 @@ void UIManager::move_hardware_test(int delta) {
 }
 
 uint8_t UIManager::hardware_test_row_count() const {
-  if (_config.battery_calibration_available) {
+  if (_config.capabilities.supports(BoardFeature::BatteryCalibration)) {
     return HW_TEST_TOTAL;
   }
   return HW_TEST_TOTAL - 1;
@@ -1044,8 +1044,8 @@ const UIManager::SettingId *UIManager::group_items(Screen screen, uint8_t &count
   }
   if (screen == Screen::DisplayTouch) {
     count = sizeof(DISPLAY_TOUCH) / sizeof(DISPLAY_TOUCH[0]);
-    if (!_config.touch_led_available) {
-      --count; // Touch LED is the final item and only available on V1.
+    if (!_config.capabilities.supports(BoardFeature::TouchLed)) {
+      --count; // Touch LED is the final item.
     }
     return DISPLAY_TOUCH;
   }
@@ -1635,7 +1635,7 @@ UIActionResult UIManager::dispatch_hardware_test(InputSource source, InputType t
       // Accel Test → open the live screen (orchestrator polls + classifies).
       open_accel_test();
       result.action = UIAction::OpenAccelTest;
-    } else if (_config.battery_calibration_available &&
+    } else if (_config.capabilities.supports(BoardFeature::BatteryCalibration) &&
                _hardware_test_index == HW_TEST_FG_LEARNING) {
       // FG Learning → strong confirm dialog (Back/No return here).
       open_confirm(SettingId::FgLearning);
@@ -2167,7 +2167,7 @@ void UIManager::populate_hardware_test_rows(DisplayValues &v) const {
   copy_row(v, HW_TEST_PERIPHERAL, "Peripheral Test", false);
   copy_row(v, HW_TEST_GPS, "GPS Test", false);
   copy_row(v, HW_TEST_ACCEL, "Accelerometer Test", false);
-  if (_config.battery_calibration_available) {
+  if (_config.capabilities.supports(BoardFeature::BatteryCalibration)) {
     copy_row(v, HW_TEST_FG_LEARNING, "Battery Calibration", false);
   }
   v.row_count = hardware_test_row_count();
@@ -2205,7 +2205,7 @@ void UIManager::populate_peripheral_test_rows(DisplayValues &v) const {
     };
     uint8_t next_row = 1;
     row(next_row++, "Back LED", pv.back_led);
-    if (_config.touch_led_available) {
+    if (_config.capabilities.supports(BoardFeature::TouchLed)) {
       row(next_row++, "Touch LED", pv.touch_led);
     }
     row(next_row++, "Buzzer", pv.buzzer);

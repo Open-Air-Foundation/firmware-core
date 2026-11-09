@@ -1,13 +1,12 @@
 #pragma once
 
 #include "airgradient_gpio.h"
+#include "go_board_capabilities.h"
 #include "go_types.h"
 #include "types/bms_types.h"
 
 #include <cstdint>
 #include <string>
-
-enum class BoardVariant : uint8_t { V1 = 1, V2 = 2 };
 
 /// Blank, unknown, or unreadable eFuse IDs retain legacy V1 behavior.
 inline BoardVariant board_variant_from_efuse(uint8_t id, bool read_ok) {
@@ -176,6 +175,7 @@ struct GoBoard {
 
   /// Read board identity on first access, before any peripheral initialization.
   virtual BoardVariant variant() = 0;
+  BoardCapabilities capabilities() { return board_capabilities(variant()); }
   virtual std::string serial_number() = 0;
   virtual const char *firmware_version() = 0;
   virtual const gpio::Hal &gpio_hal() = 0;

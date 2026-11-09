@@ -181,7 +181,7 @@ void GoApp::run() {
   retained_uptime::init();
   log_heap(TAG, "boot:run-entry");
 
-  const BoardVariant variant = _board.variant();
+  const BoardCapabilities capabilities = _board.capabilities();
 
   // Factory fuel-gauge learning pre-empts every normal boot path. Only the
   // lightweight, idempotent init_nvs() is needed to read FactorySettings; the
@@ -191,8 +191,8 @@ void GoApp::run() {
   _board.init_nvs();
   FactorySettings fs{};
   load_factory_settings(_board.config_store(), fs);
-  // The factory learning sequence is specific to V1's BQ27427.
-  if (variant == BoardVariant::V1 && is_factory_learning_stage_active(fs.fg_learning_stage)) {
+  if (capabilities.supports(BoardFeature::BatteryCalibration) &&
+      is_factory_learning_stage_active(fs.fg_learning_stage)) {
     run_factory_learning_path(load_rtc_app_state()); // never returns
   }
 
@@ -784,8 +784,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   auto *ui_manager = new UIManager({
       .firmware_version = firmware_version,
       .serial_number = serial.c_str(),
-      .battery_calibration_available = _board.variant() == BoardVariant::V1,
-      .touch_led_available = _board.variant() == BoardVariant::V1,
+      .capabilities = _board.capabilities(),
   });
 
   // Start producer tasks — touch and sensors operational from here (~310 ms)
@@ -1028,8 +1027,7 @@ void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff
   auto *ui_manager = new UIManager({
       .firmware_version = firmware_version,
       .serial_number = serial.c_str(),
-      .battery_calibration_available = _board.variant() == BoardVariant::V1,
-      .touch_led_available = _board.variant() == BoardVariant::V1,
+      .capabilities = _board.capabilities(),
   });
 
   // Seed UI state after the early splash paint. Orchestrator opens the guide
