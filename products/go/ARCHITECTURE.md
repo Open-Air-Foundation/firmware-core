@@ -14,12 +14,14 @@ NOx, temperature, humidity), logs routes with GPS coordinates, and streams
 data over BLE. In Stationary mode it also posts raw measurements to the cloud
 and serves corrected snapshots and selected controls over the local network.
 
-The firmware supports the **V1** board.
+The firmware supports **V1 and V2**, selected at runtime from the eFuse board ID.
+Blank, unknown, or unreadable IDs fall back to V1.
 
 ## Hardware Configuration
 
-GPIO26 (EN_PM) provides active-low SPS30 I2C bus isolation. The BQ27427 fuel
-gauge at I2C address `0x55` provides SOC, capacity, and temperature telemetry.
+EN_PM provides active-low SPS30 I2C bus isolation through GPIO26 on V1 or
+TCA6408A P1 on V2. Fuel-gauge telemetry comes from BQ27427 on V1 or BQ27742
+on V2, both at I2C address `0x55`.
 Peripheral availability does not change the board configuration or GPIO
 polarity. When gauge data is unavailable, battery estimation falls back to
 the BQ25629. See [Hardware Init](docs/hardware_init.md) for initialization
@@ -320,16 +322,16 @@ orchestrator-level state changes.
 |---|---|---|---|---|
 | Orchestrator | Main event loop | Yes | -- | Usually waits on its event queue; also performs explicit bounded lifecycle waits and foreground OTA calls |
 | Sensor Producer | Wraps SensorManager | Yes | `SensorDataReady`, PM boundary and diagnostic events | Waits for RTOS task notification from orchestrator |
-| Accelerometer Worker | Interrupt-burst motion capture and Hardware Test access | Yes | `ShakeDetected` | No idle XYZ polling; stops burst on shake, then waits through a 1 s cooldown |
+| Accelerometer Worker | Interrupt-burst motion capture and Hardware Test access | Yes | `ShakeDetected` | V1: interrupt capture and 1 s cooldown; V2: Hardware Test only, no background polling |
 | GPS Producer | UART NMEA read loop | Yes | `GpsFixUpdate` | Product-specific, uses `airgradient-gps` (`GpsSensor` / `NmeaGps`) |
-| Input Producer | Classifies raw ISR events | Yes | `InputPress` | Debounce + long-press detection |
+| Input Producer | Classifies button and touch activity | Yes | `InputPress` | Native button interrupts; V1 touch interrupt or V2 20 ms polling; debounce and gestures |
 | Cloud Task | POST, FETCH, and OTA availability | Yes | `PostMeasuresResult`, `FetchConfigResult`, `WifiOtaAvailable` | Stationary + online only; heap deferred to `start()` |
 | HTTP Server | Serves captive provisioning or Local Server routes | Yes | `LocalApiRequestReady` | One httpd task; no dedicated Go local-server task |
 | Display Worker | Drives e-paper refresh | Yes | -- | Receives render commands from orchestrator |
 
 BMS is polled directly by the orchestrator on a 30-second timer (I2C read,
 fast and non-blocking). No dedicated task. `poll_bms()` also
-reads FG telemetry from the BQ27427.
+reads telemetry from the board-selected fuel gauge.
 
 OTA likewise has **no dedicated task**: the blocking `OtaBleService::run()` /
 `OtaUpdater::run()` run on the orchestrator task itself, triggered by the BLE
@@ -364,12 +366,14 @@ its own request. See [Sensor Producer](docs/sensor_producer.md) for details.
 ### Accelerometer Worker
 
 `AccelService` owns LIS2DH12 access, including Hardware Test configuration and
-reads. GPIO3 interrupts start filtered 100 Hz capture; a Y-axis side-to-side
+reads. On V1, GPIO3 interrupts start filtered 100 Hz capture; a Y-axis side-to-side
 shake posts `ShakeDetected` and immediately ends polling. The detector owns
 the one-second cooldown timing, and the service keeps the interrupt masked
 during that wait. Application startup starts the worker; the orchestrator
 handles accepted-shake ACK and measurement requests. No accelerometer wake
-from deep sleep is configured. See [Accelerometer Service](docs/accel_service.md).
+from deep sleep is configured. V2 has no shake detection: its accelerometer
+is powered down outside Hardware Test, and the worker waits for commands
+without background polling. See [Accelerometer Service](docs/accel_service.md).
 
 ### Gas Index in Offline Mode
 
@@ -566,7 +570,7 @@ display and polling path. See
 Hardware initialization is managed by **GoHardwareBoard** through
 fine-grained init methods and lazy service accessors. `init_nvs()`,
 `init_buses()`, and `init_spi()` are idempotent and grouped by `init_core()`.
-Optional BQ27427 initialization remains explicit through
+Optional fuel-gauge initialization (BQ27427 on V1, BQ27742 on V2) is explicit through
 `init_fuel_gauge()`. BQ25629 initialization remains explicit through the
 retryable `init_bms()` method, and `GoApp` gives transient communication
 failures two attempts separated by 100 ms.

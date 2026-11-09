@@ -41,9 +41,44 @@ flowchart TD
 | **GoBoard** | Abstract interface for hardware object creation | N/A (interface) |
 | **GoHardwareBoard** | All ESP-IDF init, driver creation, bus management | No |
 
+## Board Variants
+
+`variant()` caches the eFuse board ID before peripheral initialization: `1`
+selects V1 and `2` selects V2. Blank (`0`), unknown, or unreadable IDs select V1.
+Peripheral detection does not override board identity.
+
+| Signal / Device | V1 | V2 |
+|---|---|---|
+| PM bus enable (active-low) | GPIO26 | TCA6408A P1 |
+| NAND CS | GPIO4 | TCA6408A P2 |
+| Display D/C | GPIO15 | TCA6408A P3 |
+| Touch INT | GPIO1 interrupt | TCA6408A P4, 20 ms polling |
+| Motion | GPIO3 shake capture + diagnostics | Diagnostics only; P5 unused |
+| Pressure | DPS368 | SPL07-003 |
+| Fuel gauge | BQ27427 | BQ27742 |
+| LEDs | Five back, three touch | Four back, no touch |
+
+V2's expander is at I2C address `0x20`. Its context and HAL live on the board;
+`init_buses()` must precede V2 display or NAND access.
+
+From the repository root, use the ESP-IDF Python environment:
+
+```sh
+python tools/go_board.py --port /dev/ttyACM0 check
+python tools/go_board.py --port /dev/ttyACM0 set v2
+```
+
+`set v1` explicitly identifies V1. Programming is permanent; the script refuses
+to modify an already-programmed user-data block and retains the burn confirmation.
+The field definition and generated table live in `main/efuse/`.
+
+**Current limitation:** button-wake and software-reset interactive boots can
+reach the early display before `init_buses()`. On V2 this violates the display's
+expander prerequisite. That boot-order fix and hardware verification remain pending.
+
 ## Boot Path Selection
 
-After checking for active factory fuel-gauge learning, `GoApp::run()` probes
+After checking for active factory fuel-gauge learning on V1, `GoApp::run()` probes
 charging-only eligibility with `detect_charging_only_boot()`. It passes that
 result, the wake cause, and RTC state to the pure function
 `select_boot_path(cause, state, charging_only_eligible)`:
@@ -103,7 +138,7 @@ their hardware sequencing requires.
 | `init_nvs()` | NVS flash |
 | `init_buses()` | SPS30 bus isolation + I2C bus + settling delays + SPS30 bus connection |
 | `init_spi()` | SPI bus |
-| `init_fuel_gauge()` | BQ27427 driver (requires buses), with corruption recovery + idempotent cell-config; independent from the charger |
+| `init_fuel_gauge()` | V1 BQ27427 recovery/configuration or V2 BQ27742 initialization; requires buses, independent from the charger |
 | `init_bms()` | BQ25629 charger driver (requires buses); returns availability and remains retryable after failure |
 | `init_wifi_subsystem()` | ESP-IDF Wi-Fi stack: netif, event loop, `esp_wifi_init`, storage mode, event handlers, single-shot timers. **Not** called by `init_core()` — only `Orchestrator::enter_stationary()` invokes it, so Portable-only boots never pay the cost. Idempotent at both the board layer (`_wifi_inited` flag) and the HAL layer. |
 | `init_core()` | Convenience gate: calls `init_nvs` + `init_buses` + `init_spi` (skips what's done). Deliberately excludes fuel-gauge, BMS, and Wi-Fi initialization. |
@@ -119,8 +154,8 @@ process lifetime (never freed — the app never returns).
 | `load_settings()` | Loads GoSettings from NVS | NVS (via config_store) |
 | `bms()` | Returns the initialized `BmsDevice`, or `nullptr` after failed initialization | BMS init attempted |
 | `sensors(warm)` | All sensor drivers + SensorManager | Buses, BMS attempted, PowerService constructed |
-| `storage()` | PayloadCache + NAND + StorageService | SPI |
-| `display()` | DisplayService | SPI |
+| `storage()` | PayloadCache + NAND + StorageService | SPI; buses on V2 |
+| `display()` | DisplayService | SPI; buses on V2 |
 | `led_service()` | LedService with LP5036 driver | Buses |
 | `power()` | PowerService + ext watchdog; accepts a nullable BMS and optional fuel gauge | Fuel-gauge and BMS init attempted |
 | `wifi_hal()` | `EspWifiHal` instance | — (lazy C++ construction only; ESP-IDF Wi-Fi init runs in `init_wifi_subsystem()`) |
@@ -141,6 +176,11 @@ runtime overhead in production.
 |---|---|---|---|
 | `new_gps_driver()` | `GpsDriver *` | — | Allocates serial + driver (process lifetime) |
 | `new_touch_sensor()` | `CapTouchSensor *` | Buses | Allocates + calls `init()`, logs failure |
+| `new_accel_sensor()` | `AccelSensor *` | Buses | Probes LIS2DH12 on both boards; returns null on failure |
+
+`input_config()` supplies board-specific touch wiring and channel mapping.
+`accel_interrupt_pin()` returns GPIO3 on V1 and `INVALID_PIN` on V2, keeping
+the accelerometer available for diagnostics without shake polling.
 
 ### Platform info and hardware operations
 
@@ -290,7 +330,7 @@ for the full sequence.
 
 ## Bus Initialization
 
-`init_buses()` isolates the SPS30 I2C bus by driving EN_PM HIGH, waits
+On V1, `init_buses()` isolates the SPS30 I2C bus by driving EN_PM HIGH, waits
 100 ms, creates the shared I2C bus, and waits another 100 ms. It then drives
 EN_PM LOW to connect the SPS30 and waits 100 ms before marking the buses ready.
 The GPIO levels are defined by `PM_POWER_OFF_LEVEL` and `PM_POWER_ON_LEVEL`
@@ -298,9 +338,17 @@ in the host-safe `go_board.h` header.
 
 Fuel-gauge availability does not affect this sequence or PM polarity.
 
+On V2, I2C initialization precedes TCA6408A initialization. The board configures
+P1 LOW (PM bus connected), P2 HIGH (NAND deselected), and P3 HIGH (display D/C
+idle). Other expander pins are configured by their consumers when needed.
+Expander initialization or required output setup failure aborts boot.
+
 ## Fuel Gauge Bring-Up
 
-`init_fuel_gauge()` constructs the BQ27427 driver and runs the
+On V2, `init_fuel_gauge()` initializes BQ27742 without rewriting pack settings.
+Pack provisioning and the BQ27427 factory-learning workflow are not run on V2.
+
+On V1, `init_fuel_gauge()` constructs the BQ27427 driver and runs the
 `evaluate_fg_state` pure helper (inline in `go_board.h`). The helper examines
 the chip's persistent Data Memory and decides whether a factory reset and/or
 cell-config write is needed. Fuel-gauge bring-up is independent from the
@@ -350,10 +398,11 @@ All pin assignments in `board_config.h`. Known I2C addresses:
 | STCC4 CO2 | 0x64 | Both |
 | SHT40 | 0x44 | Dedicated temperature and humidity |
 | SGP41 | 0x59 | Both |
-| DPS368 | 0x77 | Both |
+| DPS368 / SPL07-003 | 0x77 | V1 / V2 pressure sensor |
 | BQ25629 | 0x6A | Both |
 | CAP1203 | 0x28 | Both |
-| BQ27427 | 0x55 | Fuel gauge |
+| BQ27427 / BQ27742 | 0x55 | V1 / V2 fuel gauge |
+| TCA6408A | 0x20 | V2 GPIO expander |
 
 ## Serial Number
 

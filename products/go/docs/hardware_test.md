@@ -92,6 +92,10 @@ screen retains ordinary settings auto-lock behavior.
 
 ### Peripheral Test
 
+V2 has four back LEDs and no touch LEDs. The existing Touch LED operator step
+is still displayed, but its LED commands produce no output on V2; this step is
+not yet adapted to V2 hardware.
+
 Operator-guided actuator steps (tap **Pass**, or toggle + tap **Fail**) run
 first, then the automatic AQ sweep, then a summary. Overall pass requires all
 three actuators **and** all five sensor roles. The summary contains nine rows:
@@ -157,14 +161,17 @@ See [`gps_service.md`](gps_service.md) for the receiver lifecycle.
 
 ### Accelerometer Test
 
+Available on both boards. V2 has no shake detection or background motion
+polling; this screen enables diagnostic sampling only.
+
 The application creates the LIS2DH12 and starts `AccelService` at startup.
-`start_accel_test()` asks that worker to switch from filtered motion capture
-to unfiltered ±4 g test readings, classifies the first sample, and fires a
+`start_accel_test()` asks that worker to enable unfiltered ±4 g test readings,
+classifies the first sample, and fires a
 one-shot cue. A 500 ms poll from
 `check_timers()` refreshes the live X/Y/Z while the screen is open (no re-cue).
 All test configuration and reads use synchronous worker requests; the
-orchestrator does not access the driver directly. On exit, the worker restores
-interrupt capture and honors any remaining shake cooldown. See
+orchestrator does not access the driver directly. On exit, V1 restores capture
+and honors any remaining shake cooldown; V2 powers down the sensor. See
 [Accelerometer Service](accel_service.md).
 
 ```text

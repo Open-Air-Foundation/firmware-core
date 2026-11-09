@@ -80,64 +80,26 @@ with runtime SOC, voltage, current, and capacity reads.
 Public BMS types live in `types/` and never carry ESP-IDF symbols, so
 host tests can construct and validate them without the I2C master.
 
-### BmsDevice Virtuals
+### Shared Interfaces
 
-| Method | Purpose |
+| Interface | Contract |
 |---|---|
-| `init()` | Initialize hardware |
-| `read_telemetry(out)` | ADC snapshot (voltages, currents, temps) |
-| `set_adc_enabled(enabled)` | Optional ADC control; defaults to `false`. BQ25629 telemetry reads re-enable conversions when needed |
-| `read_status(out)` | Charging state + power source + fault flags |
-| `get_charging_state(state)` | Lightweight single-register read |
-| `get_battery_percentage(output)` | SOC estimate (0-100%) |
-| `update_watchdog()` | Reset HW watchdog |
-| `feature_ship_available()` | Query ship-mode capability |
-| `enter_ship_mode()` | Power off (should not return) |
-| `request_system_power_reset()` | Request a system power cycle; default implementation returns `false` |
-| `set_pmid_enabled(enabled)` | Enable/disable PMID boost converter (EN_OTG) |
-| `resync_pmid()` | Re-apply full PMID configuration sequence + verify (recovery) |
-| `set_charge_enable(enabled)` | Enable/disable battery charging current path |
-| `set_charge_current_ma(mA)` | Set fast-charge current limit (CC mode) |
-| `set_watchdog_timeout_ms(ms)` | Configure chip-level watchdog timeout |
+| [`BmsDevice`](hal/bms_device.h) | Charger telemetry, status, SOC estimation, watchdog, and power controls |
+| [`FuelGaugeDevice`](hal/fuel_gauge_device.h) | Gauge readiness, SOC, voltage, current, power, capacity, temperature, and flags |
+| [`BmsTelemetry` / `BmsStatus`](types/bms_types.h) | Default invalid values and field-specific validation helpers |
 
-`BQ25629Bms::request_system_power_reset()` requests a BATFET reset through
-`BQ25629::system_power_reset()`, preserving unrelated charger-control bits.
-Persist required state before calling: `true` means the command was written,
-not that power cycled. Go uses this only on battery; with external USB power,
-it waits for GPS instead. See [GPS Service](../../products/go/docs/gps_service.md#starting-tracking-while-gps-sleeps).
+Check read results and validate each field before use; a successful telemetry
+read does not guarantee every field is available. Unsupported optional
+operations, such as ADC control or system reset, return `false`.
 
-The `set_pmid_enabled` primitive is retained for explicit PMID lifecycle
-control (e.g. shutdown sequencing). It is no longer driven by
-per-measurement PM cycling on AGo: `BQ25629Bms::init()` arms `EN_OTG=1`
-once for the session and the chip handles buck↔boost transitions
-autonomously.
+Fuel-gauge learning operations are also exposed through `FuelGaugeDevice`,
+but support depends on the driver. Cell configuration and factory reset stay
+on concrete drivers. The caller supplies battery parameters and decides when
+to change them.
 
-`resync_pmid()` re-applies the full PMID configuration sequence (the
-same preamble + arm + verify used by `init()`). Used by the product
-layer when an external observation suggests the chip may have
-autonomously cleared `EN_OTG` (BAT_OTGZ / OTG hiccup / TS faults per
-datasheet §8.3.10.3-4). Blocking call; includes a settle delay.
-
-See `products/go/docs/power_management.md` for the cell-OCP rationale
-behind session-armed PMID and the PM-invalid-hint recovery mechanism.
-
-### FuelGaugeDevice Virtuals
-
-| Method | Purpose |
-|---|---|
-| `ready()` | True when chip is attached and identified |
-| `read_soc_percent(out)` | Predicted state-of-charge (0-100%) |
-| `read_voltage_mv(out)` | Battery terminal voltage |
-| `read_average_current_ma(out)` | Average current (signed) |
-| `read_average_power_mw(out)` | Average power (signed) |
-| `read_remaining_capacity_mah(out)` | Filtered remaining capacity |
-| `read_full_charge_capacity_mah(out)` | Filtered full-charge capacity |
-| `read_internal_temperature_c(out)` | Die temperature in degrees C |
-| `read_flags(out)` | Gauge status flags (see driver notes) |
-
-The runtime-poll surface and BQ27427 learning operations are virtual.
-Cell configuration stays on the concrete drivers; product code supplies the
-battery parameters. Factory reset is a concrete `BQ27427` method.
+Power-control calls are hardware requests. Persist required state before ship
+mode or system reset. A successful reset request means the command was written,
+not that power cycled; the caller owns recovery if execution continues.
 
 ### Drivers
 
@@ -147,6 +109,34 @@ battery parameters. Factory reset is a concrete `BQ27427` method.
 | `drivers/bq25629` | TI BQ25629 | Single-cell charger; wraps the vendor `bq25629` component |
 | `drivers/bq27427` | TI BQ27427 | Single-cell Impedance Track fuel gauge; implements `FuelGaugeDevice` |
 | `drivers/bq27742` | TI BQ27742-G1 | Single-cell fuel gauge with protection; telemetry and cell configuration |
+
+### BQ25629 Driver
+
+`BQ25629Bms` wraps the vendor driver and accepts a shared I2C bus, charger
+configuration, and device address at construction. Its concrete behavior is:
+
+- `init()` disables the chip watchdog and arms PMID boost. The chip handles
+  external-input pass-through versus battery boost autonomously.
+- `set_pmid_enabled()` changes `EN_OTG` without a settling delay.
+  `resync_pmid()` repeats the initialization sequence with settling and readback.
+- `set_adc_enabled()` controls conversions; telemetry reads re-enable them
+  when needed. Invalid NTC results remain invalid battery-temperature readings.
+- `request_system_power_reset()` requests BATFET reset while preserving
+  unrelated charger-control bits.
+
+The caller must supply `BQ25629_NTC_Config` values matching its circuit; there
+are no board-specific defaults:
+
+| Field | Unit | Purpose |
+|---|---|---|
+| `pullup_ohm` | Ω | Thermistor-divider pull-up resistance |
+| `pulldown_ohm` | Ω | Thermistor-divider pull-down resistance |
+| `r25_ohm` | Ω | Thermistor resistance at 25 °C |
+| `beta_k` | K | Thermistor beta for temperature conversion |
+
+Watchdog cadence, charging limits, recovery triggers, and sleep/shutdown policy
+belong to the caller. See [the adapter API](drivers/bq25629/bq25629_bms.h)
+for supported controls.
 
 ### BQ27427 Driver
 
@@ -166,9 +156,8 @@ Key invariants enforced internally:
 
 Polling constraints per TRM SLUUCD5 section 6.3.1.3:
 
-- Per-command 2 Hz cap on Standard Commands (per-command, not
-  aggregate). At the product's 30 s outer cadence each command runs at
-  0.033 Hz — well below the ceiling.
+- Standard Commands have a per-command 2 Hz cap. The caller must choose
+  a polling cadence that respects this limit.
 - `t(BUF) >= 66 us` inter-packet bus-free time at 400 kHz. The ESP-IDF
   I2C driver's transaction framing provides this implicitly.
 
@@ -182,25 +171,30 @@ Implements `FuelGaugeDevice` runtime reads. Power is calculated from voltage
 and average current; flags expose only DSG, CHG, and FC mapped to `FgFlags`.
 Failed reads leave outputs unchanged.
 
-`init()` preserves pack configuration. Before polling starts, call `unseal()`,
-then `read_cell_config()` / `write_cell_config()` with `FgCellConfig`, and
-`seal()` afterward, including on failure. A custom unseal key can be supplied.
+`init()` preserves pack configuration; runtime reads do not require a
+cell-configuration write. To change settings, call `unseal()`, then
+`read_cell_config()` / `write_cell_config()` with `FgCellConfig`, and `seal()`
+afterward, including on failure. A custom unseal key can be supplied.
 Writes validate ranges, preserve unrelated settings and the energy scale,
 skip unchanged blocks, and verify readback. The three flash blocks commit
 independently; a failure can leave a partial update.
 
 `read_design_capacity_mah()` also works while sealed. Chemistry, calibration,
 protection provisioning, and the BQ27427 learning workflow remain outside
-this driver's scope. See [TI's technical reference, chapter 5](https://www.ti.com/lit/ug/sluuax0c/sluuax0c.pdf).
+this driver's scope. BQ27427-specific learning methods return `false`. See
+[TI's technical reference, chapter 5](https://www.ti.com/lit/ug/sluuax0c/sluuax0c.pdf).
 
 ## Usage
 
 ```cpp
+// The caller initializes the bus and supplies charger/NTC configuration.
 BQ25629Bms bms(i2c_bus, config, address);
-if (!bms.init()) { /* handle */ }
+if (!bms.init()) { return; }
 
-BmsTelemetry telemetry;
-bms.read_telemetry(telemetry);
+BmsTelemetry telemetry{};
+if (bms.read_telemetry(telemetry) && telemetry.is_battery_voltage_valid()) {
+    consume_voltage(telemetry.battery_voltage);
+}
 ```
 
 See [`drivers/bq25629/bq25629_bms.h`](drivers/bq25629/bq25629_bms.h),
@@ -225,6 +219,5 @@ the [tests runner](../../tests/README.md). Current coverage focuses on
 sentinel and validation behavior of the public BMS types.
 
 The BQ27427 and BQ27742 drivers have no automated host tests; bus-protocol
-verification is performed on hardware. Product-level fuel-gauge logic
-(`evaluate_fg_state`, SOC source switching) is tested in the Go product
-test suite.
+verification is performed on hardware. Callers can mock `BmsDevice` and
+`FuelGaugeDevice` to test policy independently of the physical devices.

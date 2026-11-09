@@ -1184,9 +1184,10 @@ for the full cycle, edge cases, and method documentation.
 ### Shake-To-Refresh
 
 `AccelService` starts in the application wiring alongside the other workers.
-It detects motion without application policy; the orchestrator handles the
+On V1 it detects motion without application policy; the orchestrator handles the
 timestamped `ShakeDetected` event. See [Accelerometer Service](accel_service.md)
-for the gesture, interrupt capture, and one-second cooldown.
+for the gesture, interrupt capture, and one-second cooldown. V2 keeps the
+worker for Hardware Test commands only and does not generate shake events.
 
 `on_shake_detected()` ignores events older than 500 ms, further shakes while a
 refresh is pending, and shakes during paused provisioning services, committed
