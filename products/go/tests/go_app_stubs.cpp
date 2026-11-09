@@ -87,6 +87,7 @@ std::function<void()> on_gps_sleep_request;
 // --- InputService ---
 bool input_started = false;
 bool input_stopped = false;
+InputService::Config input_config{};
 
 // --- StorageService ---
 bool cache_measurement_called = false;
@@ -218,6 +219,7 @@ void reset() {
 
   input_started = false;
   input_stopped = false;
+  input_config = {};
 
   cache_measurement_called = false;
   last_cached_measurement = MeasuresAGo{};
@@ -507,7 +509,9 @@ void GpsService::set_aiding_data(const GpsAidingData & /*data*/) {}
 
 InputService::InputService(CapTouchSensor &touch, const gpio::Hal &gpio,
                            RtosQueueHandle event_queue, const Config &config)
-    : _touch(touch), _gpio(gpio), _event_queue(event_queue), _config(config) {}
+    : _touch(touch), _gpio(gpio), _event_queue(event_queue), _config(config) {
+  test_spy::input_config = config;
+}
 
 InputService::~InputService() = default;
 

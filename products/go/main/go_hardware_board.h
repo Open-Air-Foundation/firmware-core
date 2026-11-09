@@ -54,6 +54,7 @@ public:
   // --- Per-call factories ---
   GpsDriver *new_gps_driver() override;
   CapTouchSensor *new_touch_sensor() override;
+  GoInputConfig input_config() override;
   AccelSensor *new_accel_sensor() override;
 
   // --- Platform ---

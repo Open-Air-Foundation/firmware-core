@@ -115,7 +115,9 @@ inline constexpr gpio_num_t PIN_BUTTON_POWER = GPIO_NUM_5; // QON, active-low
 // ---------------------------------------------------------------------------
 
 inline constexpr gpio_num_t PIN_CAP_INT = GPIO_NUM_1; // active-low
-inline constexpr uint8_t TOUCH_DELTA_SENSE = 0;       // 0-7, 0 = 128x max sensitivity
+inline constexpr int V2_EXPANDER_CAP_INT = 4;
+inline constexpr uint32_t V2_TOUCH_POLL_MS = 20;
+inline constexpr uint8_t TOUCH_DELTA_SENSE = 0; // 0-7, 0 = 128x max sensitivity
 
 // ---------------------------------------------------------------------------
 // Accelerometer (LIS2DH12, I2C) — INT1 line

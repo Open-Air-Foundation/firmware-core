@@ -72,6 +72,7 @@ class StorageService;
 class WifiHal;
 class WifiManager;
 struct GoSettings;
+struct GoInputConfig;
 
 /// Abstract factory / BSP interface for the AGo board.
 ///
@@ -160,6 +161,7 @@ struct GoBoard {
 
   virtual GpsDriver *new_gps_driver() = 0;
   virtual CapTouchSensor *new_touch_sensor() = 0;
+  virtual GoInputConfig input_config() = 0;
 
   /// Create the accelerometer on the shared I2C bus and init() it. Returns
   /// nullptr if the part is absent / init fails (WHO_AM_I mismatch); callers

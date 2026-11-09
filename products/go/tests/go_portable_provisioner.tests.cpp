@@ -19,6 +19,7 @@
 #include <string>
 
 #include "go_board.h"
+#include "go_input.h"
 #include "go_portable_provisioner.h"
 #include "go_settings.h"
 #include "fake_config_store.h"
@@ -161,6 +162,7 @@ public:
   AgClient &ag_client() override { return *reinterpret_cast<AgClient *>(_buf); }
   GpsDriver *new_gps_driver() override { return nullptr; }
   CapTouchSensor *new_touch_sensor() override { return nullptr; }
+  InputService::Config input_config() override { return {}; }
   AccelSensor *new_accel_sensor() override { return nullptr; }
   std::string serial_number() override { return "TEST00"; }
   const char *firmware_version() override { return "test"; }

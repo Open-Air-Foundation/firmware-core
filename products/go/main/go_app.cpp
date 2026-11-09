@@ -24,8 +24,6 @@
 #else
 // Minimal pin/bus constants for host test compilation.
 inline constexpr int PIN_BUTTON_POWER = 5;
-inline constexpr int PIN_BUTTON_BOOT = 28;
-inline constexpr int PIN_CAP_INT = 1;
 inline constexpr int PIN_ACCEL_INT = 3;
 inline constexpr int GPS_BAUD = 115200;
 // Stub esp_reset_reason for host builds.
@@ -757,13 +755,9 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       });
 
   // InputService: suppress the first ButtonPower event (the wake press)
-  auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue,
-                                         {
-                                             .pin_cap_int = PIN_CAP_INT,
-                                             .pin_button_power = PIN_BUTTON_POWER,
-                                             .pin_button_boot = PIN_BUTTON_BOOT,
-                                             .suppress_button_wake = true,
-                                         });
+  auto input_config = _board.input_config();
+  input_config.suppress_button_wake = true;
+  auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue, input_config);
 
   auto *accel_service = new AccelService(_board.new_accel_sensor(), _board.gpio_hal(), event_queue,
                                          {.pin_int = PIN_ACCEL_INT});
@@ -1014,11 +1008,9 @@ void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff
                       .expected_baud = expected_gps_baud_at_boot(cause, settings, boot_state),
                       .wake_deadline_ms = boot_state.gps_wake_deadline_ms});
 
-  auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue,
-                                         {.pin_cap_int = PIN_CAP_INT,
-                                          .pin_button_power = PIN_BUTTON_POWER,
-                                          .pin_button_boot = PIN_BUTTON_BOOT,
-                                          .suppress_button_wake = handoff.suppress_wake_press});
+  auto input_config = _board.input_config();
+  input_config.suppress_button_wake = handoff.suppress_wake_press;
+  auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue, input_config);
 
   auto *accel_service = new AccelService(_board.new_accel_sensor(), _board.gpio_hal(), event_queue,
                                          {.pin_int = PIN_ACCEL_INT});

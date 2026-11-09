@@ -12,6 +12,7 @@
  */
 
 #include "go_hardware_board.h"
+#include "go_input.h"
 
 #include <cassert>
 #include <driver/gpio.h>
@@ -688,12 +689,34 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
   assert(_buses_ready && "new_touch_sensor() requires init_buses()");
   CAP1203::Config cfg;
   cfg.delta_sense = TOUCH_DELTA_SENSE;
-  cfg.repeat_rate_channels = TouchChannel::CH2 | TouchChannel::CH3;
+  const auto input = input_config();
+  cfg.repeat_rate_channels = input.touch_up_channel | input.touch_down_channel;
   auto *touch = new CAP1203(_i2c_bus, I2C_ADDR_CAP1203, cfg);
   if (!touch->init()) {
     AG_LOGE(TAG, "CAP1203 touch init failed");
   }
   return touch;
+}
+
+GoInputConfig GoHardwareBoard::input_config() {
+  assert(_buses_ready && "input_config() requires init_buses()");
+  InputService::Config config{};
+  config.pin_button_power = PIN_BUTTON_POWER;
+  config.pin_button_boot = PIN_BUTTON_BOOT;
+  if (variant() == BoardVariant::V2) {
+    config.pin_cap_int = V2_EXPANDER_CAP_INT;
+    config.touch_gpio = &_expander_gpio;
+    config.touch_poll_ms = V2_TOUCH_POLL_MS;
+    config.touch_enter_channel = TouchChannel::CH3;
+    config.touch_up_channel = TouchChannel::CH1;
+    config.touch_down_channel = TouchChannel::CH2;
+  } else if (variant() == BoardVariant::V1) {
+    config.pin_cap_int = PIN_CAP_INT;
+    config.touch_enter_channel = TouchChannel::CH1;
+    config.touch_up_channel = TouchChannel::CH2;
+    config.touch_down_channel = TouchChannel::CH3;
+  }
+  return config;
 }
 
 AccelSensor *GoHardwareBoard::new_accel_sensor() {

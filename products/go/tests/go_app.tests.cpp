@@ -15,6 +15,7 @@
 #include "go_app.h"
 #include "gps/gps_power_policy.h"
 #include "go_board.h"
+#include "go_input.h"
 #include "go_ble_advertisement.h"
 #include "hal/ble_server.h"
 #include "go_events.h"
@@ -110,6 +111,7 @@ extern int gps_initial_baud;
 extern uint64_t gps_initial_deadline_ms;
 extern bool gps_fast_path_sleep_probe;
 extern bool input_started;
+extern InputService::Config input_config;
 extern bool cache_measurement_called;
 extern MeasuresAGo last_cached_measurement;
 extern std::vector<MeasuresAGo> cached_measurements;
@@ -372,6 +374,8 @@ public:
 class MockBoard : public GoBoard {
 public:
   BoardVariant board_variant = BoardVariant::V1;
+  InputService::Config input_settings{};
+  InputService::Config input_config() override { return input_settings; }
   BoardVariant variant() override {
     call_log.push_back("variant");
     return board_variant;
@@ -2190,6 +2194,41 @@ TEST_CASE("run_interactive: exhausted BMS retries restart before orchestrator") 
   CHECK_FALSE(test_spy::orchestrator_run_called);
   CHECK(board.call_index("power") < 0);
   CHECK(board.call_index("sensors") < 0);
+}
+
+TEST_CASE("input wiring uses board configuration on both interactive boot paths") {
+  test_spy::reset();
+  MockBoard board;
+  board.board_variant = BoardVariant::V2;
+  board.input_settings.pin_cap_int = 4;
+  board.input_settings.pin_button_power = 5;
+  board.input_settings.pin_button_boot = 28;
+  board.input_settings.touch_gpio = &board.gpio_hal();
+  board.input_settings.touch_poll_ms = 20;
+  board.input_settings.touch_enter_channel = TouchChannel::CH3;
+  board.input_settings.touch_up_channel = TouchChannel::CH1;
+  board.input_settings.touch_down_channel = TouchChannel::CH2;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  SECTION("interactive boot") {
+    access.run_interactive(WakeCause::PowerOn);
+    CHECK_FALSE(test_spy::input_config.suppress_button_wake);
+  }
+  SECTION("button wake") {
+    access.run_button_wake_path(RtcAppState{});
+    CHECK(test_spy::input_config.suppress_button_wake);
+  }
+
+  REQUIRE(test_spy::input_started);
+  CHECK(test_spy::input_config.pin_cap_int == 4);
+  CHECK(test_spy::input_config.pin_button_power == 5);
+  CHECK(test_spy::input_config.pin_button_boot == 28);
+  CHECK(test_spy::input_config.touch_gpio == board.input_settings.touch_gpio);
+  CHECK(test_spy::input_config.touch_poll_ms == 20);
+  CHECK(test_spy::input_config.touch_enter_channel == TouchChannel::CH3);
+  CHECK(test_spy::input_config.touch_up_channel == TouchChannel::CH1);
+  CHECK(test_spy::input_config.touch_down_channel == TouchChannel::CH2);
 }
 
 TEST_CASE("button wake path wires a valid local API with shared identity") {
