@@ -11,6 +11,7 @@ Boot path logic lives in `GoApp`. Pin assignments are in `board_config.h`.
 |---|---|
 | `main/main.cpp` | Thin shell: constructs `GoHardwareBoard` + `GoApp`, calls `run()` |
 | `main/go_board.h` | Abstract `GoBoard` interface (init methods, service accessors, factories) |
+| `main/go_board_capabilities.h` | Typed feature set and central board-to-capability mapping |
 | `main/go_hardware_board.h` | `GoHardwareBoard` class declaration |
 | `main/go_hardware_board.cpp` | Real ESP-IDF init calls, driver creation, bus management |
 | `main/go_app.h` | `GoApp` class, `select_boot_path()`, pure utility functions |
@@ -46,6 +47,14 @@ flowchart TD
 `variant()` caches the eFuse board ID before peripheral initialization: `1`
 selects V1 and `2` selects V2. Blank (`0`), unknown, or unreadable IDs select V1.
 Peripheral detection does not override board identity.
+
+`GoBoard::capabilities()` returns a `BoardCapabilities` bitmask. V1 supports
+`TouchLed` and `BatteryCalibration`; V2 supports neither. UI, configuration
+admission, and diagnostic flows query `supports(BoardFeature::...)` instead of
+checking board versions. These capabilities describe the board design, not
+runtime peripheral health. Define future feature combinations in
+[`go_board_capabilities.h`](../main/go_board_capabilities.h); hardware wiring
+remains in the BSP.
 
 | Signal / Device | V1 | V2 |
 |---|---|---|

@@ -16,6 +16,7 @@
 #include <type_traits>
 
 #include "go_config_types.h"
+#include "go_board_capabilities.h"
 #include "go_settings.h"
 #include "hal/action_handler.h"
 #include "hal/config_provider.h"
@@ -52,6 +53,7 @@ public:
     const char *serial_number = nullptr;
     const char *firmware_version = nullptr;
     const char *model = STATIONARY_AGO_MODEL_CODE;
+    BoardCapabilities capabilities{};
   };
 
   GoLocalApiService(RtosQueueHandle event_queue, const Config &config);
@@ -100,7 +102,7 @@ private:
   static Measures map_measures(const MeasuresAGo &corrected);
   static ActiveConfigSnapshot make_active_config(const GoSettings &settings);
   static LocalServerConfig map_config(const ActiveConfigSnapshot &active);
-  static ConfigFieldId first_unsupported_field(const LocalServerConfig &partial);
+  ConfigFieldId first_unsupported_field(const LocalServerConfig &partial) const;
   static bool is_exact_control_recovery(const LocalServerConfig &partial);
   static ConfigSubmitResult translate_config(const LocalServerConfig &partial,
                                              const ActiveConfigSnapshot &active,
@@ -116,6 +118,7 @@ private:
   bool lock() const;
 
   RtosQueueHandle _event_queue;
+  const BoardCapabilities _capabilities;
   mutable RtosMutex _mutex;
 
   Measures _measures{};

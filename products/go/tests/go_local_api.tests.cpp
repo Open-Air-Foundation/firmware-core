@@ -53,7 +53,7 @@ public:
 };
 
 struct Fixture {
-  Fixture() {
+  explicit Fixture(BoardCapabilities capabilities = board_capabilities(BoardVariant::V1)) {
     RTOS::set_instance(&rtos);
     retained_uptime::reset_state_for_test();
     retained_uptime::init();
@@ -63,6 +63,7 @@ struct Fixture {
     GoLocalApiService::Config config{};
     config.serial_number = TEST_SERIAL;
     config.firmware_version = TEST_FIRMWARE;
+    config.capabilities = capabilities;
     service = std::make_unique<GoLocalApiService>(event_queue, config);
   }
 
@@ -483,6 +484,59 @@ TEST_CASE("Go local API accepts custom updates while factory calibration is acti
     CHECK(request.config.corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
     CHECK(request.config.corrections.pm25.scaling_factor == 1.25f);
     CHECK(request.config.corrections.pm25.intercept == -0.5f);
+  }
+}
+
+TEST_CASE("Go local API V2 rejects touch LED writes without queuing partial changes") {
+  for (const auto intensity :
+       {TouchLedIntensity::Off, TouchLedIntensity::Dim, TouchLedIntensity::Bright}) {
+    for (const bool mixed : {false, true}) {
+      CAPTURE(intensity, mixed);
+      Fixture fixture(board_capabilities(BoardVariant::V2));
+      fixture.service->set_access(ConfigAccess::ReadWrite);
+      LocalServerConfig partial{};
+      partial.touch_led_intensity = static_cast<int>(intensity);
+      if (mixed) {
+        partial.buzzer_enabled = true;
+      }
+      require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::NotSupported,
+                     ConfigFieldId::TouchLedIntensity);
+      CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
+      Event event{};
+      CHECK_FALSE(RTOS::queue_receive(fixture.event_queue, &event, 0));
+      const auto config = fixture.service->get_config();
+      CHECK(config.touch_led_intensity == static_cast<int>(TouchLedIntensity::Off));
+      CHECK(config.buzzer_enabled == false);
+
+      partial.touch_led_intensity.reset();
+      partial.buzzer_enabled = true;
+      require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+      const auto request = fixture.receive_request();
+      CHECK(request.config.update_mask == field_mask(GoConfigField::BuzzerEnabled));
+      CHECK(request.config.buzzer_enabled);
+    }
+  }
+}
+
+TEST_CASE("Go local API touch LED support is independent of battery calibration") {
+  const BoardCapabilities capability_sets[] = {
+      {BoardFeature::TouchLed},
+      {BoardFeature::BatteryCalibration},
+  };
+  for (const auto capabilities : capability_sets) {
+    Fixture fixture(capabilities);
+    fixture.service->set_access(ConfigAccess::ReadWrite);
+    LocalServerConfig partial{};
+    partial.touch_led_intensity = static_cast<int>(TouchLedIntensity::Bright);
+    const auto result = fixture.service->submit_config(partial);
+    if (capabilities.supports(BoardFeature::TouchLed)) {
+      require_status(result, ConfigSubmitStatus::Accepted);
+      const auto request = fixture.receive_request();
+      CHECK(request.config.touch_led_intensity == TouchLedIntensity::Bright);
+    } else {
+      require_status(result, ConfigSubmitStatus::NotSupported, ConfigFieldId::TouchLedIntensity);
+      CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
+    }
   }
 }
 

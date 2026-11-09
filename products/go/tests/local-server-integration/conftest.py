@@ -69,6 +69,12 @@ class _ServiceCollector(ServiceListener):
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("ago", "AirGradient Go Local Server options")
     group.addoption(
+        "--ago-board-variant",
+        choices=("v1", "v2"),
+        default="v1",
+        help="Board under test; V2 rejects touch LED settings (default: v1).",
+    )
+    group.addoption(
         "--ago-url",
         default=None,
         help="Explicit Local Server base URL, for example http://192.168.1.20.",
@@ -316,10 +322,16 @@ def ago_convergence_timeout(request: pytest.FixtureRequest) -> float:
 
 
 @pytest.fixture
+def ago_board_variant(request: pytest.FixtureRequest) -> str:
+    return request.config.getoption("--ago-board-variant")
+
+
+@pytest.fixture
 def preserved_config_setting(
     request: pytest.FixtureRequest,
     ago_http_client: httpx.Client,
     ago_convergence_timeout: float,
+    ago_board_variant: str,
 ) -> Generator[tuple[str, object, object], None, None]:
     if not request.config.getoption("--ago-allow-config-write"):
         pytest.skip("requires --ago-allow-config-write")
@@ -332,6 +344,8 @@ def preserved_config_setting(
         field = parameter
     if not isinstance(field, str) or field not in api.CONFIG_ROUND_TRIP_VALUES:
         raise ValueError(f"unsupported config restoration field: {field!r}")
+    if field == "touchLedIntensity" and ago_board_variant == "v2":
+        pytest.skip("V2 touch LED rejection is covered separately; no setting to restore")
 
     baseline = api.get_config(ago_http_client)
     if baseline["configurationControl"] != "local":

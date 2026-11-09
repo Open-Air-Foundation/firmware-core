@@ -159,13 +159,19 @@ objects from the same subset. Device behavior fields are:
 | `gpsMode` | `off`, `tracking`, `always` | Disable GPS, run it only while tracking, or keep it active |
 | `backLedIndicator` | `aqi`, `co2` | Select the back LED indicator; default `aqi` |
 | `backLedBrightness` | Integer 0 .. 3 | Set back LED brightness: off, dim, mid, or bright |
-| `touchLedIntensity` | Integer 0 .. 2 | Set touch LED intensity: off, dim, or bright |
+| `touchLedIntensity` | Integer 0 .. 2 | V1 only: set touch LED intensity to off, dim, or bright |
 | `buzzerEnabled` | Boolean | Enable or disable buzzer playback |
 
 PUT `{"backLedIndicator":"co2"}` changes the indicator without changing brightness.
 Invalid names or types return `400 invalid_value` with field `backLedIndicator`.
 The selection appears in GET after successful persistence; existing
 `configurationControl` rules apply. See [LED behavior](led_service.md#selected-indicator).
+
+V2 retains `touchLedIntensity` in GET (default `0`). PUT containing this field
+returns `404 not_found` with `field: "touchLedIntensity"`, including writes of
+`0`. The whole request is rejected before queuing, so other supplied fields
+remain unchanged. Availability comes from `Config::capabilities`; access and
+source-policy checks still run first.
 
 For example, PUT `{"pinnedChart":"co2"}` selects CO2. The choice is persisted
 and shared with the UI and BLE. Names are case-sensitive strings; invalid names

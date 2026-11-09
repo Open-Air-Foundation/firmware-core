@@ -756,6 +756,22 @@ TEST_CASE("Board identity: only a successful V2 ID selects V2", "[board][efuse]"
   }
 }
 
+TEST_CASE("Board capabilities: V1 supports touch LEDs and battery calibration", "[board]") {
+  MockBoard board;
+  board.board_variant = BoardVariant::V1;
+  const auto capabilities = board.capabilities();
+  CHECK(capabilities.supports(BoardFeature::TouchLed));
+  CHECK(capabilities.supports(BoardFeature::BatteryCalibration));
+}
+
+TEST_CASE("Board capabilities: V2 has neither optional feature", "[board]") {
+  MockBoard board;
+  board.board_variant = BoardVariant::V2;
+  const auto capabilities = board.capabilities();
+  CHECK_FALSE(capabilities.supports(BoardFeature::TouchLed));
+  CHECK_FALSE(capabilities.supports(BoardFeature::BatteryCalibration));
+}
+
 TEST_CASE("GoApp::run: V2 starts the normal application", "[board][efuse]") {
   test_spy::reset();
   MockBoard board;
@@ -2312,7 +2328,7 @@ TEST_CASE("run_interactive: exhausted BMS retries restart before orchestrator") 
   CHECK(board.call_index("sensors") < 0);
 }
 
-TEST_CASE("Battery Calibration availability follows the board on both interactive boot paths") {
+TEST_CASE("Hardware availability follows the board on both interactive boot paths") {
   for (const auto variant : {BoardVariant::V1, BoardVariant::V2}) {
     for (const bool button_wake : {false, true}) {
       CAPTURE(variant, button_wake);
@@ -2327,7 +2343,17 @@ TEST_CASE("Battery Calibration availability follows the board on both interactiv
       } else {
         access.run_interactive(WakeCause::PowerOn);
       }
-      CHECK(test_spy::ui_config.battery_calibration_available == (variant == BoardVariant::V1));
+      CHECK(test_spy::ui_config.capabilities.supports(BoardFeature::BatteryCalibration) ==
+            (variant == BoardVariant::V1));
+      CHECK(test_spy::ui_config.capabilities.supports(BoardFeature::TouchLed) ==
+            (variant == BoardVariant::V1));
+      REQUIRE(test_spy::orchestrator_local_api != nullptr);
+      test_spy::orchestrator_local_api->set_access(ConfigAccess::ReadWrite);
+      LocalServerConfig partial{};
+      partial.touch_led_intensity = static_cast<int>(TouchLedIntensity::Bright);
+      const auto result = test_spy::orchestrator_local_api->submit_config(partial);
+      CHECK(result.status == (variant == BoardVariant::V1 ? ConfigSubmitStatus::Accepted
+                                                          : ConfigSubmitStatus::NotSupported));
     }
   }
 }

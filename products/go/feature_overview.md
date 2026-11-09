@@ -336,7 +336,7 @@ Data, Setup Guide, and the existing About Device page.
 
 Operations groups measurement interval, CO2 calibration, GPS mode, and buzzer.
 Display & Touch starts with Pinned Chart, followed by temperature/altitude units,
-PM display, auto-lock, LED Indicator, LED Brightness, and Touch LED. Submenus
+PM display, auto-lock, LED Indicator, LED Brightness, and Touch LED (V1 only). Submenus
 keep Exit and Back; opening Tracking selects Status to show session details. Settings
 and its list submenus select their first content item, while value choices
 select the saved value. Back restores the row that opened the child page.
@@ -364,7 +364,7 @@ Common configurable settings include:
 - Operating mode: Portable, Stationary, or Offline.
 - Auto-lock timeout.
 - LED Indicator (AQI or CO2) and LED Brightness.
-- Touch LED brightness.
+- Touch LED brightness (V1 only).
 - Buzzer enabled or disabled.
 - Static IP and cloud preference for Stationary mode.
 
@@ -402,8 +402,9 @@ from the device menu or the app.
 ## Product Notes For Team Members
 
 - The firmware supports Go V1 and V2, selected by the eFuse board ID.
-- V2 has four back LEDs and no touch LEDs. Touch LED settings and the
-  Peripheral Test touch-light step currently remain visible but have no output.
+- V2 has four back LEDs and no touch LEDs. It hides the Touch LED setting and
+  skips that Peripheral Test step and result. BLE and local-server touch LED
+  writes are rejected; cloud updates ignore the field.
 - V2 keeps the Accelerometer Test but has no shake-to-refresh.
 - CO2 sensor hardware can vary by build; the product behavior is still presented
   to users as CO2 measurement.

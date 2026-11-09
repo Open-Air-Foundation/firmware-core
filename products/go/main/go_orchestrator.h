@@ -32,6 +32,7 @@
 #include "go_storage.h"
 #include "go_types.h"
 #include "go_ui.h"
+#include "go_board_capabilities.h"
 #include "go_ulp.h"
 #include "gps/gps_service.h"
 #include "rtos.h"
@@ -100,6 +101,7 @@ private:
 
   RtosQueueHandle _event_queue;
   Services _svc;
+  const BoardCapabilities _capabilities;
   GoSettings _settings;
   ConfigStore &_config_store;
   const char *_serial; ///< Device serial string for BLE advertising

@@ -118,7 +118,7 @@ bool is_source_allowed(ConfigurationControl control, const GoConfigUpdate &updat
 } // namespace
 
 GoLocalApiService::GoLocalApiService(RtosQueueHandle event_queue, const Config &config)
-    : _event_queue(event_queue) {
+    : _event_queue(event_queue), _capabilities(config.capabilities) {
   copy_string(_system_info.serial_number, sizeof(_system_info.serial_number), config.serial_number);
   copy_string(_system_info.model, sizeof(_system_info.model), config.model);
   copy_string(_system_info.firmware, sizeof(_system_info.firmware), config.firmware_version);
@@ -497,7 +497,7 @@ LocalServerConfig GoLocalApiService::map_config(const ActiveConfigSnapshot &acti
   return config;
 }
 
-ConfigFieldId GoLocalApiService::first_unsupported_field(const LocalServerConfig &partial) {
+ConfigFieldId GoLocalApiService::first_unsupported_field(const LocalServerConfig &partial) const {
   if (partial.front_led_brightness.has_value()) {
     return ConfigFieldId::FrontLedBrightness;
   }
@@ -521,6 +521,9 @@ ConfigFieldId GoLocalApiService::first_unsupported_field(const LocalServerConfig
   }
   if (partial.http_domain.has_value()) {
     return ConfigFieldId::HttpDomain;
+  }
+  if (!_capabilities.supports(BoardFeature::TouchLed) && partial.touch_led_intensity.has_value()) {
+    return ConfigFieldId::TouchLedIntensity;
   }
   return ConfigFieldId::None;
 }

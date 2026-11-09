@@ -30,7 +30,7 @@ sleep cycle.
 | `WifiService` | product (`go_wifi.h`) | Stationary Wi-Fi lifecycle: saved-credentials connect, factory fallback, provisioning, disconnect routing |
 | `GoLocalApiService` | product (`go_local_api.h`) | Cached local HTTP snapshots, request admission, and FIFO config/action handoff |
 | `OtaService` | product (`go_ota.h`) | Blocking BLE/Wi-Fi transfers; cloud owns Wi-Fi availability checks |
-| `GoBoard` | product (`go_board.h`) | Borrowed for `init_wifi_subsystem()` on first Stationary entry |
+| `GoBoard` | product (`go_board.h`) | Provides board capabilities and initializes Wi-Fi on first Stationary entry |
 | `ConfigStore` | `airgradient-config` | Load/save `GoSettings` to NVS |
 | `GoSettings` | product (`go_settings.h`) | Product configuration |
 | `Event`, `EventType` | product (`go_events.h`) | Event queue types |

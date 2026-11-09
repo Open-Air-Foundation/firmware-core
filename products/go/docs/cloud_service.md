@@ -179,6 +179,9 @@ and queues a value-only `FetchConfigEventPayload`. Supported fields map into
 | `ledTestRequested` | Boolean | One-shot LED diagnostic request; not persisted |
 | `gpsTestRequested` | Boolean | One-shot GPS test screen request; not persisted |
 
+On V2, the orchestrator ignores `touchLedIntensity` when merging the update,
+while applying other supported fields. The cloud parser remains board-independent.
+
 `backLedIndicator` changes the selection independently of brightness. The Cloud
 backend must send this field, and the dashboard needs a control to edit it;
 firmware support does not add that control. See [LED behavior](led_service.md#selected-indicator).
