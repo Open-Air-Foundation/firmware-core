@@ -247,19 +247,18 @@ bool GoHardwareBoard::init_bms() {
   }
   _bms_init_attempted = true;
 
-  drivers::BQ25629_Config config = {
-      .charge_voltage_mv = 4200,
-      .charge_current_ma = 500,
-      .input_current_limit_ma = 1500,
-      .input_voltage_limit_mv = 4600,
-      .min_system_voltage_mv = 3520,
-      .precharge_current_ma = 30,
-      .term_current_ma = 20,
-      .enable_charging = true,
-      .enable_adc = true,
-      .ntc = {},
-  };
+  drivers::BQ25629_Config config{};
+  config.input_current_limit_ma = 1500;
+  config.input_voltage_limit_mv = 4600;
+  config.min_system_voltage_mv = 3520;
+  config.precharge_current_ma = 30;
+  config.enable_charging = true;
+  config.enable_adc = true;
   if (variant() == BoardVariant::V2) {
+    config.charge_voltage_mv = 4200;
+    config.charge_current_ma = 520;
+    // 2600 mAh cell: 0.02C termination (52 mA), rounded to a 5 mA step.
+    config.term_current_ma = 50;
     // NCP15XH103F03RC: 10kΩ at 25°C, B25/50 = 3380K.
     config.ntc = {
         .pullup_ohm = 5230.0f,
@@ -268,6 +267,10 @@ bool GoHardwareBoard::init_bms() {
         .beta_k = 3380.0f,
     };
   } else if (variant() == BoardVariant::V1) {
+    config.charge_voltage_mv = 4200;
+    config.charge_current_ma = 500;
+    // Preserve the threshold programmed by the previous termination encoding.
+    config.term_current_ma = 15;
     config.ntc = {
         .pullup_ohm = 4120.0f,
         .pulldown_ohm = 17330.0f,

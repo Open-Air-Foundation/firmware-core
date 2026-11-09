@@ -150,6 +150,20 @@ V1 controls EN_PM through GPIO26; V2 uses TCA6408A P1. Both are active-low
 and isolate the SPS30 I2C bus, not its power rail. V2 initializes P1 directly
 LOW; subsequent changes use `pm_gpio` in task context.
 
+Charger settings are selected in `GoHardwareBoard::init_bms()`:
+
+| Parameter | V1 | V2 |
+|---|---|---|
+| Charge voltage | 4,200 mV | 4,200 mV |
+| Charge current request | 500 mA | 520 mA |
+| Termination current | 15 mA | 50 mA |
+
+The charger's 40 mA charge-current steps round V1's request down to 480 mA;
+V2's 520 mA is exact. V2 uses the 2600 mAh cell's standard 0.2C charge rate
+and rounds its 52 mA end-of-charge specification to a 50 mA setting.
+V1's explicit 15 mA termination setting preserves its previous programmed
+threshold, which resulted from an encoding error in the old 20 mA request.
+
 The board also supplies explicit BQ25629 battery-temperature conversion values:
 
 | Parameter | V1 | V2 |

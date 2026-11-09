@@ -266,8 +266,8 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
     return ret;
   }
 
-  // Configure termination current
-  uint16_t iterm_value = (config.term_current_ma - 5) / 5;
+  // Configure termination current: ITERM_mA = code * 5.
+  uint16_t iterm_value = config.term_current_ma / 5;
   iterm_value = iterm_value > 0x3E ? 0x3E : iterm_value;
   if (iterm_value < 1)
     iterm_value = 1;
