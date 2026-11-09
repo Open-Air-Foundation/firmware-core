@@ -14,25 +14,25 @@ repos:
       - id: clang-format
         args: ["-style=file"]
         files: \.(c|cc|cpp|cxx|h|hh|hpp|hxx)$
-        exclude: ^(components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629|sensirion-gas-index-algorithm)/|components/airgradient-client/lib/|components/airgradient-provisioning/vendor/)
+        exclude: ^(components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629|spi_nand_flash|sensirion-gas-index-algorithm)/|components/airgradient-client/lib/|components/airgradient-provisioning/vendor/)
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
         types: [markdown]
-        exclude: ^components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629|sensirion-gas-index-algorithm)/
+        exclude: ^components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629|spi_nand_flash|sensirion-gas-index-algorithm)/
       - id: end-of-file-fixer
         types: [markdown]
-        exclude: ^components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629|sensirion-gas-index-algorithm)/
+        exclude: ^components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629|spi_nand_flash|sensirion-gas-index-algorithm)/
       - id: mixed-line-ending
         args: [--fix=lf]
         types: [markdown]
-        exclude: ^components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629|sensirion-gas-index-algorithm)/
+        exclude: ^components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629|spi_nand_flash|sensirion-gas-index-algorithm)/
 
   - repo: https://github.com/DavidAnson/markdownlint-cli2
     rev: v0.13.0
     hooks:
       - id: markdownlint-cli2
         args: ["--config", ".markdownlint.json"]
-        exclude: ^components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629|sensirion-gas-index-algorithm)/
+        exclude: ^components/(esp-nimble-cpp|embedded-i2c-scd4x|libnmea-esp32|u8g2|bq25629|spi_nand_flash|sensirion-gas-index-algorithm)/

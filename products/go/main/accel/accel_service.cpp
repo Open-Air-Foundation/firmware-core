@@ -39,9 +39,8 @@ bool AccelService::start() {
     }
     stop(); // Reap a worker that exited on a sensor error.
   }
-  if (_sensor == nullptr || _event_queue == nullptr || _config.pin_int == gpio::INVALID_PIN ||
-      _interrupt_handler_attached) {
-    AG_LOGW(TAG, "shake detection unavailable");
+  if (_sensor == nullptr || _event_queue == nullptr || _interrupt_handler_attached) {
+    AG_LOGW(TAG, "accelerometer unavailable");
     return false;
   }
   _work_queue = RTOS::queue_create(WORK_QUEUE_DEPTH, sizeof(Command));
@@ -54,7 +53,7 @@ bool AccelService::start() {
   if (!RTOS::task_create(task_entry, "accel_task", _config.task_stack_size, this,
                          _config.task_priority, &_task)) {
     stop();
-    AG_LOGE(TAG, "failed to start shake worker");
+    AG_LOGE(TAG, "failed to start accelerometer worker");
     return false;
   }
   return true;
@@ -140,26 +139,39 @@ void AccelService::process_command(Command command) {
   case Command::Stop:
     _running.store(false);
     return;
-  case Command::BeginTest:
+  case Command::BeginTest: {
     _burst_active = false;
     _interrupt_pending = false;
     _detector.reset_capture();
     _mode = Mode::HardwareTestError;
-    // Keep the task and ISR registration; mask GPIO while the sensor's filter
-    // and interrupt output are reconfigured by this same worker.
-    if (_sensor != nullptr && _gpio.disable_interrupt(_config.pin_int) &&
-        _sensor->configure(HARDWARE_TEST_CONFIG)) {
-      _mode = Mode::HardwareTest;
-      reply.ok = true;
+    // Mask native capture while the same worker configures diagnostics.
+    bool ready = _sensor != nullptr;
+    if (ready && _config.pin_int != gpio::INVALID_PIN) {
+      ready = _gpio.disable_interrupt(_config.pin_int);
+    }
+    if (ready) {
+      _sensor_cleanup_pending = true;
+      if (_sensor->configure(HARDWARE_TEST_CONFIG)) {
+        _mode = Mode::HardwareTest;
+        reply.ok = true;
+      }
     }
     reply.reading = read_test_sample();
     AG_LOGI(TAG, "Hardware Test: +/-4 g unfiltered; configured=%d", reply.ok);
     break;
+  }
   case Command::ReadTest:
     reply.reading = read_test_sample();
     reply.ok = _mode == Mode::HardwareTest;
     break;
   case Command::EndTest:
+    if (_config.pin_int == gpio::INVALID_PIN) {
+      _mode = Mode::CaptureUnavailable;
+      reply.ok = _sensor != nullptr && _sensor->power_down();
+      _sensor_cleanup_pending = !reply.ok;
+      AG_LOGI(TAG, "Hardware Test finished; sensor powered down=%d", reply.ok);
+      break;
+    }
     reply.ok = _mode == Mode::Capture || _mode == Mode::Cooldown;
     if (!reply.ok) {
       _burst_active = false;
@@ -208,14 +220,13 @@ void AccelService::run() {
   }
   while (_running.load()) {
     Command command;
-    if (RTOS::queue_receive(_work_queue, &command, _burst_active ? 0 : IDLE_WAIT_MS) &&
-        _running.load()) {
+    if (RTOS::queue_receive(_work_queue, &command, work_wait_ms()) && _running.load()) {
       process_command(command);
     }
     if (!_running.load()) {
       break;
     }
-    if (!poll_capture()) {
+    if (_config.pin_int != gpio::INVALID_PIN && !poll_capture()) {
       AG_LOGE(TAG, "capture failed; disabling shake detection");
       _running.store(false);
       break;
@@ -228,12 +239,30 @@ void AccelService::run() {
   _done.give(); // Last access to this instance before the task self-deletes.
 }
 
+uint32_t AccelService::work_wait_ms() const {
+  if (_config.pin_int == gpio::INVALID_PIN) {
+    return UINT32_MAX;
+  }
+  if (_burst_active) {
+    return 0;
+  }
+  return IDLE_WAIT_MS;
+}
+
 bool AccelService::initialize_capture() {
   if (_sensor == nullptr) {
     return false;
   }
   _sensor_cleanup_pending = true;
   _mode = Mode::CaptureUnavailable;
+  if (_config.pin_int == gpio::INVALID_PIN) {
+    if (!_sensor->power_down()) {
+      return false;
+    }
+    _sensor_cleanup_pending = false;
+    AG_LOGI(TAG, "shake disabled; hardware test available");
+    return true;
+  }
   if (!_sensor->configure(CAPTURE_CONFIG)) {
     return false;
   }

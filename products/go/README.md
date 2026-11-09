@@ -11,22 +11,23 @@ portable air quality monitor with GPS, e-paper display, BLE, and battery.
 - **TVOC / NOx** — Sensirion SGP41
 - **Temp / Humidity** — SHT40 on V1, then fallback from CO2 and pressure
   sensors
-- **Pressure** — Infineon DPS368
-- **Motion** — ST LIS2DH12 accelerometer (interrupt-driven shake detection)
-- **Battery** — TI BQ25629 charger IC; TI BQ27427 Impedance Track fuel gauge
+- **Pressure** — DPS368 (V1) or SPL07-003 (V2)
+- **Motion** — LIS2DH12; V1 shake detection, both boards support diagnostics
+- **Battery** — BQ25629 charger driver; BQ27427 (V1) or BQ27742 (V2) fuel gauge
 
 ## Hardware Notes
 
-The firmware supports the **V1** board. GPIO26 (EN_PM) provides active-low
-SPS30 I2C bus isolation. The BQ27427 fuel gauge provides state of charge, with
-a BQ25629 voltage-curve fallback when gauge data is unavailable.
-Peripheral failures do not change the board configuration.
+The firmware selects **V1 or V2** from eFuse at runtime. Blank, unknown, or
+unreadable IDs select V1; peripheral failures never change the selection.
+V2 uses a TCA6408A expander, four back LEDs, and no touch LEDs or shake detection.
+See [Hardware Initialization](docs/hardware_init.md#board-variants) for wiring,
+board-ID tooling, and display initialization prerequisites.
 
 ### Temperature and Humidity Source
 
 Go probes SHT40 during `sensors()`. `SensorManager` resolves
 `temp_hum_a` in this priority order: dedicated SHT40, CO2-integrated T/RH
-(SCD4x or STCC4), then DPS368 temperature-only fallback.
+(SCD4x or STCC4), then the board's pressure sensor for temperature only.
 
 ### PMID Power Rail
 
@@ -38,7 +39,7 @@ autonomously based on its own VBUS-detect:
 - VBUS present → buck pass-through (`EN_OTG` masked internally by the chip)
 - VBUS absent → boost runs to drive PMID = 5 V from VBAT
 
-`set_pm_power(true/false)` drives the EN_PM GPIO (GPIO26), never `EN_OTG`.
+`set_pm_power(true/false)` drives EN_PM (V1 GPIO26; V2 expander P1), never `EN_OTG`.
 It isolates the SPS30 from the shared I2C bus — the sensor stays powered
 by always-on PMID.
 
@@ -126,16 +127,19 @@ factory credentials automatically.
   shutdown.
 - **Full-charge pause:** when the battery is full and USB is present,
   charging is disabled to reduce cell stress. Resumes when SOC drops
-  to 95 %. Uses the BQ27427 FC flag when a ready gauge is attached; falls back
+  to 95 %. Uses the gauge's normalized FC flag when a ready gauge is attached; falls back
   to BQ25629 `ChargeTerminationDone` + 100 % SOC when no gauge is attached.
 - **BATFET_DLY:** explicitly cleared to 0 (25 ms fast disconnect)
   during BQ25629 init for deterministic ship-mode timing.
 
 ### Fuel Gauge
 
-`init_fuel_gauge()` initializes the BQ27427 independently from the
-BQ25629, using a two-pass corruption-recovery sequence and idempotent
-cell-config write. At runtime, `poll_bms()` prefers FG-derived SOC and surfaces
+`init_fuel_gauge()` initializes the gauge independently from the charger.
+V1 performs BQ27427 corruption recovery and an idempotent cell-config write.
+V2 applies BQ27742 capacity, energy, and empty-voltage parameters while preserving
+the sleep threshold and learned data. Remaining pack provisioning is deferred;
+see [Fuel Gauge Bring-Up](docs/hardware_init.md#fuel-gauge-bring-up).
+At runtime, `poll_bms()` prefers FG-derived SOC and surfaces
 FG telemetry in `PowerSnapshot`, even when the charger is unavailable. Fast-path
 route points and display rendering use the same snapshot. Three log lines are
 emitted per poll: charger status, BQ25629 ADC telemetry, and FG telemetry with

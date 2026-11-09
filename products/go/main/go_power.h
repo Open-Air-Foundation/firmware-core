@@ -170,6 +170,7 @@ public:
     int pin_pm_power = -1;                     ///< SPS30 bus-enable GPIO (-1 = no hold)
     uint32_t sensor_hold_max_sleep_ms = 20000; ///< Max sleep (ms) to keep PM measuring
     uint32_t pm_sleep_threshold_ms = 20000;    ///< Min measure interval (ms) to sleep PM
+    const gpio::Hal *pm_gpio = nullptr;        ///< Borrowed expander HAL; null uses native GPIO
   };
 
   // -------------------------------------------------------------------------

@@ -1,11 +1,12 @@
 {
   "schema_version": "1.0",
-  "rev": "2ace4a8",
+  "rev": "9b559d0",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
     "variants": [
-      "V1"
+      "V1",
+      "V2"
     ]
   },
   "tests": [
@@ -16,7 +17,8 @@
       "category": "Boot & Onboarding",
       "sub_category": "Boot",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Onboarding has already been completed."
@@ -51,7 +53,8 @@
       "category": "Boot & Onboarding",
       "sub_category": "First Use",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable."
@@ -91,7 +94,8 @@
       "category": "Boot & Onboarding",
       "sub_category": "First Use",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
@@ -131,7 +135,8 @@
       "category": "Boot & Onboarding",
       "sub_category": "First Use",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
@@ -172,7 +177,8 @@
       "category": "Boot & Onboarding",
       "sub_category": "First Use",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable."
@@ -202,7 +208,8 @@
       "category": "Display & Controls",
       "sub_category": "Navigation",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [],
       "steps": [
@@ -238,7 +245,8 @@
       "category": "Display & Controls",
       "sub_category": "Navigation",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [],
       "steps": [
@@ -270,7 +278,8 @@
       "category": "Display & Controls",
       "sub_category": "Navigation",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [],
       "steps": [
@@ -303,7 +312,8 @@
       "category": "Display & Controls",
       "sub_category": "Navigation",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [],
       "steps": [
@@ -331,7 +341,8 @@
       "category": "Display & Controls",
       "sub_category": "Identity",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "The device's serial-number label.",
@@ -368,7 +379,8 @@
       "category": "Display & Controls",
       "sub_category": "Identity",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Onboarding has already been completed."
@@ -397,7 +409,8 @@
       "category": "Display & Controls",
       "sub_category": "Settings",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "The Portable/Stationary measurement interval is not a custom value."
@@ -439,7 +452,8 @@
       "category": "Display & Controls",
       "sub_category": "Settings",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [],
       "steps": [
@@ -479,7 +493,8 @@
       "category": "Display & Controls",
       "sub_category": "Settings",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [],
       "steps": [
@@ -519,7 +534,8 @@
       "category": "Display & Controls",
       "sub_category": "Auto Lock",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "A stopwatch or a camera capable of timestamped video."
@@ -568,7 +584,8 @@
       "category": "Display & Controls",
       "sub_category": "Indicators",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "A dim room."
@@ -584,7 +601,7 @@
         },
         {
           "action": "Open Settings > Display & Touch > LED Brightness. Select Dim, Mid, and Bright in turn, inspecting the rear LEDs after each selection. Keep the device position and room lighting unchanged. After confirming illumination at all three levels, select Off.",
-          "expected_result": "Dim, Mid, and Bright produce visibly increasing brightness. Selecting Off then turns the rear LEDs off."
+          "expected_result": "All five rear LEDs on V1 or all four on V2 illuminate at each level. Dim, Mid, and Bright produce visibly increasing brightness. Selecting Off turns every rear LED off."
         },
         {
           "action": "Select Mid, or Dim if the original setting was Mid. Note the selected level and observe its brightness.",
@@ -610,7 +627,8 @@
       "category": "Display & Controls",
       "sub_category": "Indicators",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "A dim room."
@@ -630,7 +648,7 @@
         },
         {
           "action": "Return Home and observe the displayed CO2 reading and rear LEDs for 30 seconds. Compare the color after each completed display refresh.",
-          "expected_result": "The rear LEDs show the color for the current CO2 reading: green at 0–800 ppm, yellow at 801–1000, orange at 1001–1500, red at 1501–2000, purple at 2001–3000, or brown at 3001–10000."
+          "expected_result": "All five rear LEDs on V1 or all four on V2 show the same color for the current CO2 reading: green at 0–800 ppm, yellow at 801–1000, orange at 1001–1500, red at 1501–2000, purple at 2001–3000, or brown at 3001–10000."
         },
         {
           "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release, and wait 10 seconds. Press and release Power to start, allowing up to five minutes for Home with a numeric CO2 reading. Inspect the rear LEDs, then reopen LED Indicator and LED Brightness.",
@@ -692,7 +710,8 @@
       "category": "Display & Controls",
       "sub_category": "Audio",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Onboarding has already been completed.",
@@ -731,7 +750,8 @@
       "category": "Display & Controls",
       "sub_category": "Audio",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "A quiet environment.",
@@ -773,7 +793,8 @@
       "category": "Power",
       "sub_category": "USB",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Home shows battery charge above 5% and at most 95%.",
@@ -808,7 +829,8 @@
       "category": "Power",
       "sub_category": "USB",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Home shows battery charge above 5% and at most 95%.",
@@ -843,7 +865,8 @@
       "category": "Power",
       "sub_category": "Charging-Only",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Home shows battery charge above 5% and at most 95%.",
@@ -877,7 +900,8 @@
       "category": "Power",
       "sub_category": "Charging-Only",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Home shows battery charge above 5% and at most 95%.",
@@ -911,7 +935,8 @@
       "category": "Power",
       "sub_category": "Charging-Only",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Go is powered off with USB connected, and the charging screen shows Battery Full."
@@ -940,7 +965,8 @@
       "category": "Power",
       "sub_category": "USB",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Home shows 100% battery charge.",
@@ -972,7 +998,8 @@
       "category": "Power",
       "sub_category": "Shutdown",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [],
       "steps": [
@@ -1003,7 +1030,8 @@
       "category": "Power",
       "sub_category": "Shutdown",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "A USB power source."
@@ -1040,7 +1068,8 @@
       "category": "Measurements",
       "sub_category": "Charts",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "The Portable/Stationary measurement interval is not a custom value."
@@ -1079,7 +1108,8 @@
       "category": "Measurements",
       "sub_category": "Charts",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "The Portable/Stationary measurement interval is not a custom value."
@@ -1123,7 +1153,8 @@
       "category": "Measurements",
       "sub_category": "Charts",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [],
       "steps": [
@@ -1155,7 +1186,8 @@
       "category": "Measurements",
       "sub_category": "Charts",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "The Portable/Stationary measurement interval is not a custom value."
@@ -1193,7 +1225,8 @@
       "category": "Measurements",
       "sub_category": "Charts",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "The Portable/Stationary measurement interval is not a custom value."
@@ -1240,7 +1273,8 @@
       "category": "Measurements",
       "sub_category": "Display Recovery",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Go has saved credentials for an available Wi-Fi network.",
@@ -1297,7 +1331,8 @@
       "category": "Measurements",
       "sub_category": "Scheduling",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "A USB data cable.",
@@ -1481,7 +1516,8 @@
       "category": "Diagnostics",
       "sub_category": "GPS",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "No recording or paused tracking session is active.",
@@ -1520,11 +1556,12 @@
     {
       "id": "go.diagnostics.accelerometer-orientation",
       "title": "Accelerometer readings respond to device orientation",
-      "objective": "Verify that physical rotation changes the displayed axes while stationary readings remain valid.",
+      "objective": "Verify that physical rotation changes the displayed axes, stationary readings remain valid, and live readings resume after closing and reopening the test.",
       "category": "Diagnostics",
       "sub_category": "Motion",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "A flat, stable surface."
@@ -1543,6 +1580,14 @@
           "expected_result": "Axis values and signs respond to orientation. In each stationary position, magnitude returns to 850–1150 mg and Result shows PASS."
         },
         {
+          "action": "Tap to exit the test and return Home.",
+          "expected_result": "The selected indicator resumes at its saved brightness (off if brightness is Off or the selected reading is unavailable)."
+        },
+        {
+          "action": "Reopen Settings > Hardware Test > Accelerometer Test. Place the device flat for five seconds, then upright for five seconds without touching the controls.",
+          "expected_result": "Live axis readings resume and change with orientation. In both stationary positions, WHO_AM_I shows 0x33 OK, magnitude is 850–1150 mg and Result shows PASS. Values and labels remain readable."
+        },
+        {
           "action": "Tap to exit, return Home and check the recorded settings.",
           "expected_result": "Settings remain unchanged and the selected indicator resumes at its saved brightness (off if brightness is Off or the selected reading is unavailable)."
         }
@@ -1552,7 +1597,8 @@
         "Confirm the recorded settings; restore any that changed. Return Home and record any restoration failure."
       ],
       "references": [
-        "products/go/docs/hardware_test.md"
+        "products/go/docs/hardware_test.md",
+        "products/go/docs/accel_service.md"
       ]
     },
     {
@@ -1562,7 +1608,8 @@
       "category": "Portable BLE",
       "sub_category": "Pairing",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "All routes, charts, settings, and bonds on this unit are expendable.",
@@ -1607,7 +1654,8 @@
       "category": "Portable BLE",
       "sub_category": "Pairing",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "All routes, charts, settings, and bonds on this unit are expendable.",
@@ -1652,7 +1700,8 @@
       "category": "Portable BLE",
       "sub_category": "Pairing",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "An Android phone with nRF Connect for Mobile and Bluetooth enabled."
@@ -1699,7 +1748,8 @@
       "category": "Tracking & Storage",
       "sub_category": "Route Lifecycle",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Tracking is idle.",
@@ -1756,7 +1806,8 @@
       "category": "Tracking & Storage",
       "sub_category": "Persistence",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Existing temporary chart history is expendable.",
@@ -1798,7 +1849,8 @@
       "category": "Tracking & Storage",
       "sub_category": "Clear Data",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "All routes and chart history on this unit are expendable.",
@@ -1842,7 +1894,8 @@
       "category": "Tracking & Storage",
       "sub_category": "Tracking Status",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Tracking is idle.",
@@ -1883,7 +1936,8 @@
       "category": "Stationary Network",
       "sub_category": "Provisioning",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
@@ -1943,7 +1997,8 @@
       "category": "Stationary Network",
       "sub_category": "Provisioning",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
@@ -1993,7 +2048,8 @@
       "category": "Stationary Network",
       "sub_category": "mDNS",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Go has saved credentials for the test Wi-Fi network.",
@@ -2036,7 +2092,8 @@
       "category": "Stationary Network",
       "sub_category": "Reconnect",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Go has saved credentials for the test Wi-Fi network.",
@@ -2078,7 +2135,8 @@
       "category": "Stationary Network",
       "sub_category": "Reconnect",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Go has saved credentials for the test Wi-Fi network.",
@@ -2114,7 +2172,8 @@
       "category": "Stationary Network",
       "sub_category": "Reconnect",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
@@ -2167,7 +2226,8 @@
       "category": "Stationary Network",
       "sub_category": "Cloud",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Go has saved credentials for the test Wi-Fi network.",
@@ -2218,7 +2278,8 @@
       "category": "Stationary Network",
       "sub_category": "Cloud",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Go has saved credentials for the test Wi-Fi network.",
@@ -2279,7 +2340,8 @@
       "category": "Modes & Sleep",
       "sub_category": "Mode Transitions",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Go has saved credentials for the test Wi-Fi network.",
@@ -2322,7 +2384,8 @@
       "category": "Modes & Sleep",
       "sub_category": "Mode Transitions",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Go has saved credentials for the test Wi-Fi network.",
@@ -2369,7 +2432,8 @@
       "category": "Modes & Sleep",
       "sub_category": "Mode Transitions",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "An Android phone with nRF Connect and Bluetooth enabled.",
@@ -2423,7 +2487,8 @@
       "category": "Modes & Sleep",
       "sub_category": "Mode Transitions",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "An Android phone with nRF Connect and Bluetooth enabled.",
@@ -2459,7 +2524,8 @@
       "category": "Modes & Sleep",
       "sub_category": "Mode Transitions",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Go has saved credentials for the test Wi-Fi network.",
@@ -2511,7 +2577,8 @@
       "category": "Modes & Sleep",
       "sub_category": "Mode Transitions",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Go has saved credentials for the test Wi-Fi network.",
@@ -2549,7 +2616,8 @@
       "category": "Modes & Sleep",
       "sub_category": "Mode Persistence",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "An Android phone with nRF Connect and Bluetooth enabled.",
@@ -2597,7 +2665,8 @@
       "category": "Modes & Sleep",
       "sub_category": "Timer Wake",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "A USB data cable.",
@@ -2641,7 +2710,8 @@
       "category": "Modes & Sleep",
       "sub_category": "Timer Wake",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "A phone with Bluetooth enabled and the AirGradient app supporting Energy Saving broadcasts.",
@@ -2675,7 +2745,8 @@
       "category": "Modes & Sleep",
       "sub_category": "Button Wake",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "The saved Energy Saving measurement interval is not a custom value."
@@ -2720,7 +2791,8 @@
       "category": "Manufacturing",
       "sub_category": "Wi-Fi",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
@@ -2751,7 +2823,8 @@
       "category": "Manufacturing",
       "sub_category": "Wi-Fi",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
@@ -2820,7 +2893,8 @@
       "category": "Calibration",
       "sub_category": "CO2 Calibration",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "A unit whose CO2 calibration may be changed.",
@@ -2866,7 +2940,8 @@
       "category": "Reset & Update",
       "sub_category": "Factory Reset",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "All routes, charts, settings and bonds on this unit are expendable.",
@@ -2910,7 +2985,8 @@
       "category": "Reset & Update",
       "sub_category": "Wi-Fi OTA",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Tracking is idle.",
@@ -2920,7 +2996,7 @@
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
         "Access to the registered Go in AirGradient Dashboard.",
         "The installed Go firmware version is available for assignment in the dashboard.",
-        "An approved newer Go firmware version is available for assignment in the dashboard.",
+        "An approved newer Go firmware version supporting the tested board revision is available for assignment in the dashboard.",
         "A USB power source."
       ],
       "steps": [
@@ -2975,7 +3051,8 @@
       "category": "Reset & Update",
       "sub_category": "Wi-Fi OTA",
       "applicability": [
-        "V1"
+        "V1",
+        "V2"
       ],
       "setup": [
         "Tracking is idle.",
@@ -2985,7 +3062,7 @@
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
         "Access to the registered Go in AirGradient Dashboard.",
         "The installed Go firmware version is available for assignment in the dashboard.",
-        "An approved older Go firmware version compatible with the device and the settings checked by this procedure is available for assignment in the dashboard.",
+        "An approved older Go firmware version supporting the tested board revision and the settings checked by this procedure is available for assignment in the dashboard.",
         "A USB power source."
       ],
       "steps": [

@@ -138,6 +138,16 @@ struct BQ25629_Fault {
 };
 
 /**
+ * @brief TS divider and thermistor parameters for temperature conversion
+ */
+struct BQ25629_NTC_Config {
+  float pullup_ohm;
+  float pulldown_ohm;
+  float r25_ohm;
+  float beta_k;
+};
+
+/**
  * @brief BQ25629 Configuration Structure
  */
 struct BQ25629_Config {
@@ -150,6 +160,7 @@ struct BQ25629_Config {
   uint16_t term_current_ma;        // Termination current (5-310mA)
   bool enable_charging;            // Enable battery charging
   bool enable_adc;                 // Enable ADC conversion
+  BQ25629_NTC_Config ntc;
 };
 
 /**
@@ -438,11 +449,8 @@ public:
   /**
    * @brief Read NTC temperature and zone
    *
-   * Reads TS ADC value, converts to temperature using Steinhart-Hart equation,
-   * and determines the current temperature zone.
-   *
-   * NTC: KNTC0805/10KF (R25=10kΩ, B=3950K)
-   * Divider: RT1=4.12kΩ, RT2=17.33kΩ
+   * Reads TS ADC value, converts to temperature using the beta equation and
+   * configured divider/thermistor parameters, and determines the temperature zone.
    *
    * @param data Output: NTC temperature data
    * @return ESP_OK on success
@@ -511,6 +519,7 @@ private:
   i2c_master_dev_handle_t dev_handle_;
   uint8_t device_address_;
   bool initialized_;
+  BQ25629_NTC_Config ntc_config_{};
 
   // Helper functions
   esp_err_t modify_register(uint8_t reg_addr, uint8_t mask, uint8_t value);

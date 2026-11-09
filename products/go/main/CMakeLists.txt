@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS "main.cpp"
+         "efuse/esp_efuse_custom_table.c"
          "go_app.cpp"
          "go_hardware_board.cpp"
          "go_ble.cpp"
@@ -35,6 +36,8 @@ idf_component_register(
          "fg_learning/fg_learning_runner.cpp"
          "fg_learning/fg_learning_journal.cpp"
     INCLUDE_DIRS "." "led" "buzzer" "accel" "fg_learning"
+    PRIV_INCLUDE_DIRS "efuse/include"
+    PRIV_REQUIRES efuse
     REQUIRES airgradient-bms
              bq25629
     REQUIRES airgradient-ble

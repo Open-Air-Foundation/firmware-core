@@ -39,6 +39,8 @@ public:
     return RTOS::queue_send(service._work_queue, &command, 0);
   }
   static bool running(const AccelService &service) { return service._running.load(); }
+  static uint32_t work_wait_ms(const AccelService &service) { return service.work_wait_ms(); }
+  static void run(AccelService &service) { service.run(); }
   static RtosQueueHandle work_queue(const AccelService &service) { return service._work_queue; }
   static bool burst(const AccelService &service) { return service._burst_active; }
 };

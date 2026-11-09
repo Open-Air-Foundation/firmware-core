@@ -1,0 +1,2 @@
+# field_name, efuse_block, bit_start, bit_count, comment
+USER_DATA.GO_BOARD_ID, EFUSE_BLK3, 0, 8, Go board ID: 0=legacy V1 1=V1 2=V2

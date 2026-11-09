@@ -27,6 +27,7 @@
 #include "go_app.h"
 #include "go_ble_protocol.h"
 #include "go_board.h"
+#include "go_input.h"
 #include "go_local_api.h"
 #include "go_orchestrator.h"
 #include "go_tracking_session.h"
@@ -447,6 +448,7 @@ public:
 // dummies that are never dereferenced.
 class StubGoBoard : public GoBoard {
 public:
+  BoardVariant variant() override { return BoardVariant::V1; }
   int init_wifi_subsystem_calls = 0;
 
   void init_nvs() override {}
@@ -473,6 +475,8 @@ public:
   AgClient &ag_client() override { return _ag_client; }
   GpsDriver *new_gps_driver() override { return nullptr; }
   CapTouchSensor *new_touch_sensor() override { return nullptr; }
+  int accel_interrupt_pin() override { return 3; }
+  InputService::Config input_config() override { return {}; }
   AccelSensor *accel_to_return = nullptr; // injectable; null = absent
   int new_accel_sensor_calls = 0;
   AccelSensor *new_accel_sensor() override {

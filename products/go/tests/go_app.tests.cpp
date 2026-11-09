@@ -13,8 +13,10 @@
 #include <vector>
 
 #include "go_app.h"
+#include "go_ui.h"
 #include "gps/gps_power_policy.h"
 #include "go_board.h"
+#include "go_input.h"
 #include "go_ble_advertisement.h"
 #include "hal/ble_server.h"
 #include "go_events.h"
@@ -110,6 +112,8 @@ extern int gps_initial_baud;
 extern uint64_t gps_initial_deadline_ms;
 extern bool gps_fast_path_sleep_probe;
 extern bool input_started;
+extern InputService::Config input_config;
+extern UIManager::Config ui_config;
 extern bool cache_measurement_called;
 extern MeasuresAGo last_cached_measurement;
 extern std::vector<MeasuresAGo> cached_measurements;
@@ -371,6 +375,21 @@ public:
 
 class MockBoard : public GoBoard {
 public:
+  BoardVariant board_variant = BoardVariant::V1;
+  int accel_interrupt_pin() override {
+    call_log.push_back("accel_interrupt_pin");
+    if (board_variant == BoardVariant::V1) {
+      return 3;
+    }
+    return gpio::INVALID_PIN;
+  }
+  InputService::Config input_settings{};
+  InputService::Config input_config() override { return input_settings; }
+  BoardVariant variant() override {
+    call_log.push_back("variant");
+    return board_variant;
+  }
+
   // Call ordering log — records every method call in sequence.
   std::vector<std::string> call_log;
 
@@ -474,10 +493,18 @@ public:
     return _sensor_manager;
   }
   StorageService &storage() override {
+    REQUIRE(spi_init_called);
+    if (board_variant == BoardVariant::V2) {
+      REQUIRE(buses_init_called);
+    }
     call_log.push_back("storage");
     return _storage;
   }
   DisplayService &display() override {
+    REQUIRE(spi_init_called);
+    if (board_variant == BoardVariant::V2) {
+      REQUIRE(buses_init_called);
+    }
     call_log.push_back("display");
     return _display;
   }
@@ -718,6 +745,154 @@ TEST_CASE("Charging-only detection: probes eligibility without running a boot pa
   CHECK_FALSE(board.sensors_called);
   CHECK(board.call_index("gpio_hal") == -1);
   CHECK_FALSE(board.isr_installed);
+}
+
+TEST_CASE("Board identity: only a successful V2 ID selects V2", "[board][efuse]") {
+  for (unsigned int id = 0; id <= UINT8_MAX; ++id) {
+    CAPTURE(id);
+    const auto expected = id == 2 ? BoardVariant::V2 : BoardVariant::V1;
+    CHECK(board_variant_from_efuse(static_cast<uint8_t>(id), true) == expected);
+    CHECK(board_variant_from_efuse(static_cast<uint8_t>(id), false) == BoardVariant::V1);
+  }
+}
+
+TEST_CASE("GoApp::run: V2 starts the normal application", "[board][efuse]") {
+  test_spy::reset();
+  MockBoard board;
+  board.board_variant = BoardVariant::V2;
+  GoApp app(board);
+
+  app.run();
+
+  REQUIRE_FALSE(board.call_log.empty());
+  CHECK(board.call_log.front() == "variant");
+  CHECK(board.buses_init_called);
+  CHECK(board.spi_init_called);
+  CHECK(board.bms_init_called);
+  CHECK(board.fuel_gauge_init_called);
+  CHECK(board.sensors_called);
+  CHECK(test_spy::orchestrator_run_called);
+}
+
+TEST_CASE("GoApp: early display respects board prerequisites after reset and button wake",
+          "[GoApp][boot-order]") {
+  for (const auto variant : {BoardVariant::V1, BoardVariant::V2}) {
+    for (const auto cause : {WakeCause::PowerOn, WakeCause::Button}) {
+      CAPTURE(variant, cause);
+      test_spy::reset(); // Non-power-on reset: charging detection cannot initialize buses first.
+      test_spy::wake_cause = cause;
+      test_spy::rtc_state.mode = OperatingMode::Offline;
+      MockBoard board;
+      board.board_variant = variant;
+      board.settings.operating_mode = OperatingMode::Offline;
+      GoApp app(board);
+
+      app.run();
+
+      REQUIRE(test_spy::orchestrator_run_called);
+      REQUIRE(board.call_index("display") >= 0);
+      REQUIRE(board.call_index("storage") >= 0);
+      REQUIRE(board.call_index("init_buses") >= 0);
+      CHECK(board.call_index("init_spi") < board.call_index("display"));
+      CHECK(board.call_index("display") < board.call_index("storage"));
+      if (variant == BoardVariant::V2) {
+        CHECK(board.call_index("init_buses") < board.call_index("display"));
+      } else {
+        CHECK(board.call_index("display") < board.call_index("init_buses"));
+      }
+    }
+  }
+}
+
+TEST_CASE("GoApp: V2 cold boot and timer paths initialize shared-SPI prerequisites",
+          "[GoApp][boot-order]") {
+  test_spy::reset();
+  MockBoard board;
+  board.board_variant = BoardVariant::V2;
+  bool expect_sleep = false;
+
+  SECTION("cold battery boot") { test_spy::power_on_reset = true; }
+  SECTION("timer wake") {
+    board.settings.operating_mode = OperatingMode::Offline;
+    test_spy::wake_cause = WakeCause::Timer;
+    test_spy::rtc_state.mode = OperatingMode::Offline;
+    test_spy::rtc_state.lock_state = LockState::Locked;
+    test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+    expect_sleep = true;
+  }
+  SECTION("timer wake promoted by Power") {
+    board.settings.operating_mode = OperatingMode::Offline;
+    test_spy::wake_cause = WakeCause::Timer;
+    test_spy::rtc_state.mode = OperatingMode::Offline;
+    test_spy::rtc_state.lock_state = LockState::Locked;
+    board.press_button_on_isr_install = true;
+  }
+  GoApp app(board);
+  app.run();
+
+  CHECK(test_spy::enter_sleep_called == expect_sleep);
+  CHECK(test_spy::orchestrator_run_called == !expect_sleep);
+  REQUIRE(board.call_index("display") >= 0);
+  REQUIRE(board.call_index("storage") >= 0);
+  REQUIRE(board.call_index("init_buses") >= 0);
+  REQUIRE(board.call_index("init_spi") >= 0);
+  CHECK(board.call_index("init_buses") < board.call_index("display"));
+  CHECK(board.call_index("init_spi") < board.call_index("display"));
+  CHECK(board.call_index("init_buses") < board.call_index("storage"));
+  CHECK(board.call_index("init_spi") < board.call_index("storage"));
+}
+
+TEST_CASE("GoApp: V2 charging-screen restart initializes a fresh board before display access",
+          "[GoApp][boot-order]") {
+  test_spy::reset();
+  test_spy::power_on_reset = true;
+  MockBoard charging_board;
+  charging_board.board_variant = BoardVariant::V2;
+  charging_board._bms.status.power_source = BmsPowerSource::UsbDcp;
+  test_spy::light_sleep_callback = [] { return true; }; // Power starts normal operation.
+  GoApp charging_app(charging_board);
+  charging_app.run();
+
+  REQUIRE(charging_board.restart_called);
+  CHECK_FALSE(test_spy::orchestrator_run_called);
+  REQUIRE(charging_board.call_index("display") >= 0);
+  CHECK(charging_board.call_index("init_buses") < charging_board.call_index("display"));
+
+  // esp_restart reconstructs the board. Reusing charging_board would hide missing init.
+  test_spy::reset();
+  MockBoard restarted_board;
+  restarted_board.board_variant = BoardVariant::V2;
+  restarted_board._bms.status.power_source = BmsPowerSource::UsbDcp;
+  GoApp restarted_app(restarted_board);
+  restarted_app.run();
+
+  REQUIRE(test_spy::orchestrator_run_called);
+  REQUIRE(restarted_board.call_index("display") >= 0);
+  REQUIRE(restarted_board.call_index("init_buses") >= 0);
+  CHECK(restarted_board.call_index("init_buses") < restarted_board.call_index("display"));
+  CHECK(test_spy::light_sleep_count == 0);
+}
+
+TEST_CASE("GoApp::run: V1 eFuse fallbacks retain normal boot", "[board][efuse]") {
+  for (const auto id : {0, 1, 3, 255}) {
+    test_spy::reset();
+    MockBoard board;
+    board.board_variant = board_variant_from_efuse(id, true);
+    GoApp app(board);
+
+    app.run();
+
+    REQUIRE_FALSE(board.call_log.empty());
+    CHECK(board.call_log.front() == "variant");
+    CHECK(test_spy::orchestrator_run_called);
+  }
+  test_spy::reset();
+  MockBoard board;
+  board.board_variant = board_variant_from_efuse(2, false);
+  GoApp app(board);
+  app.run();
+  CHECK(board.call_log.front() == "variant");
+  CHECK(test_spy::orchestrator_run_called);
 }
 
 TEST_CASE("GoApp::run: ineligible charging boots start the application normally") {
@@ -2135,6 +2310,61 @@ TEST_CASE("run_interactive: exhausted BMS retries restart before orchestrator") 
   CHECK_FALSE(test_spy::orchestrator_run_called);
   CHECK(board.call_index("power") < 0);
   CHECK(board.call_index("sensors") < 0);
+}
+
+TEST_CASE("Battery Calibration availability follows the board on both interactive boot paths") {
+  for (const auto variant : {BoardVariant::V1, BoardVariant::V2}) {
+    for (const bool button_wake : {false, true}) {
+      CAPTURE(variant, button_wake);
+      test_spy::reset();
+      MockBoard board;
+      board.board_variant = variant;
+      GoApp app(board);
+      GoAppTestAccess access(app);
+
+      if (button_wake) {
+        access.run_button_wake_path(RtcAppState{});
+      } else {
+        access.run_interactive(WakeCause::PowerOn);
+      }
+      CHECK(test_spy::ui_config.battery_calibration_available == (variant == BoardVariant::V1));
+    }
+  }
+}
+
+TEST_CASE("input wiring uses board configuration on both interactive boot paths") {
+  test_spy::reset();
+  MockBoard board;
+  board.board_variant = BoardVariant::V2;
+  board.input_settings.pin_cap_int = 4;
+  board.input_settings.pin_button_power = 5;
+  board.input_settings.pin_button_boot = 28;
+  board.input_settings.touch_gpio = &board.gpio_hal();
+  board.input_settings.touch_poll_ms = 20;
+  board.input_settings.touch_enter_channel = TouchChannel::CH3;
+  board.input_settings.touch_up_channel = TouchChannel::CH1;
+  board.input_settings.touch_down_channel = TouchChannel::CH2;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+
+  SECTION("interactive boot") {
+    access.run_interactive(WakeCause::PowerOn);
+    CHECK_FALSE(test_spy::input_config.suppress_button_wake);
+  }
+  SECTION("button wake") {
+    access.run_button_wake_path(RtcAppState{});
+    CHECK(test_spy::input_config.suppress_button_wake);
+  }
+
+  REQUIRE(test_spy::input_started);
+  CHECK(test_spy::input_config.pin_cap_int == 4);
+  CHECK(test_spy::input_config.pin_button_power == 5);
+  CHECK(test_spy::input_config.pin_button_boot == 28);
+  CHECK(test_spy::input_config.touch_gpio == board.input_settings.touch_gpio);
+  CHECK(test_spy::input_config.touch_poll_ms == 20);
+  CHECK(test_spy::input_config.touch_enter_channel == TouchChannel::CH3);
+  CHECK(test_spy::input_config.touch_up_channel == TouchChannel::CH1);
+  CHECK(test_spy::input_config.touch_down_channel == TouchChannel::CH2);
 }
 
 TEST_CASE("button wake path wires a valid local API with shared identity") {

@@ -50,12 +50,14 @@ inline constexpr gpio_num_t PIN_DISPLAY_CS = GPIO_NUM_0;
 inline constexpr gpio_num_t PIN_DISPLAY_DC = GPIO_NUM_15;
 inline constexpr gpio_num_t PIN_DISPLAY_RST = GPIO_NUM_9;
 inline constexpr gpio_num_t PIN_DISPLAY_BUSY = GPIO_NUM_10;
+inline constexpr int V2_EXPANDER_DISPLAY_DC = 3;
 
 // ---------------------------------------------------------------------------
 // NAND flash (SPI, shared bus)
 // ---------------------------------------------------------------------------
 
 inline constexpr gpio_num_t PIN_NAND_CS = GPIO_NUM_4;
+inline constexpr int V2_EXPANDER_NAND_CS = 2;
 
 // ---------------------------------------------------------------------------
 // UART — GPS (NmeaGps)
@@ -70,15 +72,18 @@ inline constexpr int GPS_BAUD = 115200;
 // I2C device addresses
 // ---------------------------------------------------------------------------
 
-inline constexpr uint8_t I2C_ADDR_S12 = 0x68;      // SenseAir S12 CO2
-inline constexpr uint8_t I2C_ADDR_SCD4X = 0x62;    // Sensirion SCD4x CO2 + T/RH
-inline constexpr uint8_t I2C_ADDR_STCC4 = 0x64;    // Sensirion STCC4 CO2 + T/RH
-inline constexpr uint8_t I2C_ADDR_SHT40 = 0x44;    // Dedicated temp/humidity (V1)
-inline constexpr uint8_t I2C_ADDR_SGP41 = 0x59;    // TVOC & NOx
-inline constexpr uint8_t I2C_ADDR_DPS368 = 0x77;   // Pressure + altitude
-inline constexpr uint8_t I2C_ADDR_BMS = 0x6A;      // BQ25629 battery charger
-inline constexpr uint8_t I2C_ADDR_CAP1203 = 0x28;  // Capacitive touch
-inline constexpr uint8_t I2C_ADDR_LIS2DH12 = 0x18; // ST accelerometer (SA0 = GND)
+inline constexpr uint8_t I2C_ADDR_S12 = 0x68;       // SenseAir S12 CO2
+inline constexpr uint8_t I2C_ADDR_SCD4X = 0x62;     // Sensirion SCD4x CO2 + T/RH
+inline constexpr uint8_t I2C_ADDR_STCC4 = 0x64;     // Sensirion STCC4 CO2 + T/RH
+inline constexpr uint8_t I2C_ADDR_SHT40 = 0x44;     // Dedicated temp/humidity (V1)
+inline constexpr uint8_t I2C_ADDR_SGP41 = 0x59;     // TVOC & NOx
+inline constexpr uint8_t I2C_ADDR_DPS368 = 0x77;    // Pressure + altitude
+inline constexpr uint8_t I2C_ADDR_SPL07_003 = 0x77; // V2 pressure + altitude
+inline constexpr uint8_t I2C_ADDR_BMS = 0x6A;       // BQ25629 battery charger
+inline constexpr uint8_t I2C_ADDR_CAP1203 = 0x28;   // Capacitive touch
+inline constexpr uint8_t I2C_ADDR_LIS2DH12 = 0x18;  // ST accelerometer (SA0 = GND)
+inline constexpr uint8_t I2C_ADDR_V2_EXPANDER =
+    0x20; // TCA6408A (/INT unconnected, /RESET pulled high)
 // SPS30 PM sensor uses a fixed address (0x69) defined in the driver.
 
 // ---------------------------------------------------------------------------
@@ -89,6 +94,7 @@ inline constexpr uint8_t I2C_ADDR_LIS2DH12 = 0x18; // ST accelerometer (SA0 = GN
 // ---------------------------------------------------------------------------
 
 inline constexpr gpio_num_t PIN_PM_POWER = GPIO_NUM_26;
+inline constexpr int V2_EXPANDER_PM_POWER = 1;
 
 // ---------------------------------------------------------------------------
 // Buzzer — HYG-8503A (LEDC PWM via NPN low-side switch Q3)
@@ -109,7 +115,9 @@ inline constexpr gpio_num_t PIN_BUTTON_POWER = GPIO_NUM_5; // QON, active-low
 // ---------------------------------------------------------------------------
 
 inline constexpr gpio_num_t PIN_CAP_INT = GPIO_NUM_1; // active-low
-inline constexpr uint8_t TOUCH_DELTA_SENSE = 0;       // 0-7, 0 = 128x max sensitivity
+inline constexpr int V2_EXPANDER_CAP_INT = 4;
+inline constexpr uint32_t V2_TOUCH_POLL_MS = 20;
+inline constexpr uint8_t TOUCH_DELTA_SENSE = 0; // 0-7, 0 = 128x max sensitivity
 
 // ---------------------------------------------------------------------------
 // Accelerometer (LIS2DH12, I2C) — INT1 line

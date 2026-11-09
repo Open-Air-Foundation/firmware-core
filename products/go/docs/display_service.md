@@ -23,7 +23,8 @@ which returns immediately; the slow EPD refresh runs in a dedicated task.
 | `go_types.h` | product | `Metric`, `OperatingMode`, `LockState` enums |
 | `measures_types.h` | `airgradient-common` | `MeasuresInvalid` sentinel values |
 | ESP-IDF SPI driver | ESP-IDF | `spi_device_*` API for EPD communication |
-| ESP-IDF GPIO driver | ESP-IDF | CS, DC, RST, BUSY pin control |
+| ESP-IDF GPIO driver | ESP-IDF | Native CS, DC, RST, BUSY pin control |
+| `gpio::Hal` | `airgradient-gpio` | Optional expander-backed D/C control |
 | RTOS task/notification | `airgradient-common` | Worker task, frame-ready signaling |
 
 ## Display Hardware
@@ -34,7 +35,15 @@ which returns immediately; the slow EPD refresh runs in a dedicated task.
 `spi_device_acquire_bus(portMAX_DELAY)` for exclusive access during display
 operations (ESP-IDF only supports infinite wait for bus acquisition).
 
-All pin assignments come from `board_config.h` via `Config` struct members.
+`GoHardwareBoard` supplies the pin assignments. V1 uses GPIO15 for D/C;
+V2 uses TCA6408A P3 through the borrowed `dc_gpio` backend. The board initializes
+the expander and drives P2 (NAND CS) and P3 HIGH before display use.
+
+During transfers, D/C changes run in task context while the shared SPI bus is
+held, before display CS is asserted. A failed D/C write aborts that transfer.
+See [Hardware Initialization](hardware_init.md#board-variants) for boot ordering and
+[NAND Storage](../../../components/airgradient-nand-storage/README.md) for
+expander-controlled NAND CS.
 
 ## Public API
 
@@ -44,7 +53,8 @@ All pin assignments come from `board_config.h` via `Config` struct members.
 |---|---|---|---|
 | `spi_host` | `spi_host_device_t` | (required) | SPI bus host |
 | `pin_cs` | `int` | (required) | Chip select GPIO |
-| `pin_dc` | `int` | (required) | Data/command GPIO |
+| `pin_dc` | `int` | (required) | Data/command pin on the selected backend |
+| `dc_gpio` | `const gpio::Hal *` | `nullptr` | Borrowed D/C backend; null uses native GPIO. Caller configures external D/C as output HIGH |
 | `pin_rst` | `int` | (required) | Hardware reset GPIO |
 | `pin_busy` | `int` | (required) | Busy status GPIO (input) |
 | `clock_hz` | `int` | 4000000 | SPI clock frequency |

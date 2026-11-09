@@ -2,12 +2,13 @@
 
 #include "go_board.h"
 #include "go_settings.h"
+#include "tca6408a.h"
 
 #include <driver/i2c_master.h>
 
 class AgClient;
 class BQ25629Bms;
-class BQ27427;
+class FuelGaugeDevice;
 class SPS30;
 class EspWifiHal;
 class IdfHttpServer;
@@ -53,9 +54,12 @@ public:
   // --- Per-call factories ---
   GpsDriver *new_gps_driver() override;
   CapTouchSensor *new_touch_sensor() override;
+  GoInputConfig input_config() override;
   AccelSensor *new_accel_sensor() override;
+  int accel_interrupt_pin() override;
 
   // --- Platform ---
+  BoardVariant variant() override;
   std::string serial_number() override;
   const char *firmware_version() override;
   const gpio::Hal &gpio_hal() override;
@@ -69,6 +73,9 @@ public:
   void stop_pm_fan() override;
 
 private:
+  BoardVariant _variant = BoardVariant::V1;
+  bool _variant_read = false;
+
   // Init tracking (idempotency)
   bool _nvs_ready = false;
   bool _buses_ready = false;
@@ -83,13 +90,15 @@ private:
 
   // Bus handles
   i2c_master_bus_handle_t _i2c_bus = nullptr;
+  gpio::tca6408a::Context _expander;
+  const gpio::Hal _expander_gpio = gpio::tca6408a::hal(_expander);
 
   // Owned objects (heap-allocated, never freed)
   NvsConfigStore *_config_store = nullptr;
   GoSettings _settings{};
   bool _settings_loaded = false;
   BQ25629Bms *_bms_driver = nullptr;
-  BQ27427 *_fuel_gauge = nullptr;
+  FuelGaugeDevice *_fuel_gauge = nullptr;
   SPS30 *_pm_fan = nullptr; // dedicated PM-fan load for factory learning discharge
   bool _pm_fan_inited = false;
   SensorManager *_sensor_manager = nullptr;

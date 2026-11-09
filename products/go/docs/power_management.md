@@ -23,7 +23,7 @@ For AGo, the power service also manages:
   `ShipModeRequest::UnderTemperature` or `ShipModeRequest::OverTemperature`.
   An invalid NTC reading disables charging only and does not request shutdown
 - **Full-charge pause:** disables charging when the battery is full and
-  USB is present. Resumes when SOC drops to 95 %. Uses the BQ27427 FC flag
+  USB is present. Resumes when SOC drops to 95 %. Uses the normalized fuel-gauge FC flag
   when a ready gauge is attached; without an attached gauge, falls back to
   `ChargeTerminationDone` + 100 % SOC. Interacts safely with the thermal charge guard
 - **BMS watchdog wrapper:** `set_watchdog_timeout_ms()` forwards to the
@@ -63,14 +63,14 @@ fields default to invalid sentinels (`BmsInvalid::VOLT` / `-1.0f` / `false`).
 | `charger_status` | `BmsStatus` | all defaults | Full charger status: power source, regulation flags, fault flags |
 | `telemetry` | `BmsTelemetry` | all invalid | Full ADC telemetry: currents, system/PMID voltages, thermistor, die and battery temperature |
 | `battery_percent_source` | `BatteryPercentSource` | `Unknown` | Where `battery_percentage` came from: `FuelGauge` or `BatteryCharger` |
-| `fg_soc_percent` | `uint8_t` | `255` | FG SOC (0--100%). V1 with FG attached only |
+| `fg_soc_percent` | `uint8_t` | `255` | FG SOC (0--100%) when a ready fuel gauge is attached |
 | `fg_voltage_mv` | `uint16_t` | `UINT16_MAX` | FG battery terminal voltage (mV) |
 | `fg_current_ma` | `int16_t` | `INT16_MIN` | FG average current (signed mA) |
 | `fg_power_mw` | `int16_t` | `INT16_MIN` | FG average power (signed mW) |
 | `fg_remaining_capacity_mah` | `uint16_t` | `UINT16_MAX` | FG remaining capacity (mAh) |
 | `fg_full_charge_capacity_mah` | `uint16_t` | `UINT16_MAX` | FG full charge capacity (mAh) |
 | `fg_internal_temperature_c` | `float` | `-273.16` | FG die temperature (C) |
-| `fg_flags` | `uint16_t` | `0` | FG flags register (decoded via `FgFlags::FC`, `CHG`, `DSG`, etc.) |
+| `fg_flags` | `uint16_t` | `0` | Normalized FG flags (decoded via `FgFlags::FC`, `CHG`, `DSG`, etc.) |
 | `full_charge_paused` | `bool` | `false` | True when charging is paused because battery is full + USB present |
 | `ship_mode_request` | `ShipModeRequest` | `None` | Non-`None` when a safety trip requires warning and ship mode: `OverDischarge`, `OverTemperature`, or `UnderTemperature`. Invalid NTC alone never sets this field |
 
@@ -102,8 +102,9 @@ only the failed field; the remaining FG fields populate normally.
 
 ### FG Flag Decode
 
-`FgFlags` (in `bms_types.h`) provides named constants for the BQ27427
-Flags register bits:
+`FgFlags` (in `bms_types.h`) uses the BQ27427 bit layout below. V2's BQ27742
+driver maps only `DSG`, `CHG`, and `FC` into this shared layout; its raw register
+bits must not be interpreted with this table.
 
 | Flag | Bit | Description |
 |---|---|---|
@@ -138,9 +139,42 @@ threshold:
 | `pin_wake_button_boot` | `int` | — | GPIO number for Button Boot deep-sleep wake (`-1` on ESP32-C5 — GPIO28 is not RTC-capable) |
 | `pin_ext_wdt` | `int` | `-1` | External watchdog GPIO (`-1` = disabled); pulsed HIGH 20 ms on reset |
 | `deep_sleep_threshold_ms` | `int` | `5000` | Minimum sleep duration (ms) to bother entering deep sleep; shorter remaining sleep durations stay awake. AGo sets this to `5000` |
-| `pin_pm_power` | `int` | `-1` | SPS30 bus-enable GPIO (`-1` = no GPIO hold during sleep) |
+| `pin_pm_power` | `int` | `-1` | SPS30 bus-enable pin on the selected backend (`-1` = disabled) |
+| `pm_gpio` | `const gpio::Hal *` | `nullptr` | Borrowed PM backend; null uses native GPIO |
 | `sensor_hold_max_sleep_ms` | `uint32_t` | `20000` | Maximum sleep duration (ms) for keeping the SPS30 measuring with EN_PM held LOW. Longer sleeps use the SPS30 sleep command |
 | `pm_sleep_threshold_ms` | `uint32_t` | `20000` | Minimum measurement interval (ms) to sleep the PM sensor between measurements in non-Offline modes. Accounts for ~10 s warmup plus minimum off-time |
+
+### Board-Specific Wiring
+
+V1 controls EN_PM through GPIO26; V2 uses TCA6408A P1. Both are active-low
+and isolate the SPS30 I2C bus, not its power rail. V2 initializes P1 directly
+LOW; subsequent changes use `pm_gpio` in task context.
+
+Charger settings are selected in `GoHardwareBoard::init_bms()`:
+
+| Parameter | V1 | V2 |
+|---|---|---|
+| Charge voltage | 4,200 mV | 4,200 mV |
+| Charge current request | 500 mA | 520 mA |
+| Termination current | 15 mA | 50 mA |
+
+The charger's 40 mA charge-current steps round V1's request down to 480 mA;
+V2's 520 mA is exact. V2 uses the 2600 mAh cell's standard 0.2C charge rate
+and rounds its 52 mA end-of-charge specification to a 50 mA setting.
+V1's explicit 15 mA termination setting preserves its previous programmed
+threshold, which resulted from an encoding error in the old 20 mA request.
+
+The board also supplies explicit BQ25629 battery-temperature conversion values:
+
+| Parameter | V1 | V2 |
+|---|---|---|
+| Pull-up resistance | 4,120 Ω | 5,230 Ω |
+| Pull-down resistance | 17,330 Ω | 30,100 Ω |
+| Thermistor resistance at 25 °C | 10,000 Ω | 10,000 Ω |
+| Beta | 3,950 K | 3,380 K |
+
+These values affect reported battery temperature and firmware thermal policy;
+they do not change the charger's hardware JEITA configuration.
 
 ## Sleep Type Selection
 
@@ -184,10 +218,9 @@ The remaining steps run when `decide_sleep()` returns `Deep`:
 
 1. If `should_hold_pm_sensor(sleep_duration_ms)` is true (sleep < `sensor_hold_max_sleep_ms`
    and `pin_pm_power >= 0`):
-   - `gpio_hold_en(pin_pm_power)` — latch the current output level.  On
-     ESP32-C5 (`SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP=1`) per-pin hold
-     automatically persists during deep sleep; no global
-     `gpio_deep_sleep_hold_en()` call is needed
+   - V1 latches the native output with `gpio_hold_en(pin_pm_power)`; the
+     ESP32-C5 hold persists through deep sleep
+   - V2 retains the expander output level without ESP32 GPIO hold calls
    - The PM sensor fan keeps spinning; the sensor stays warm
 2. Calls `configure_wake_sources(sleep_duration_ms)`:
    - Timer: `esp_sleep_enable_timer_wakeup()` (µs)
@@ -258,18 +291,16 @@ the one-shot RTC request described under [Shutdown](#shutdown-qon--ship-mode).
 ## PM Sensor Warm-Hold
 
 For short deep sleeps (< `sensor_hold_max_sleep_ms`, default 20 s) the SPS30
-enable GPIO retains its LOW level during sleep via `gpio_hold_en()`.
-On ESP32-C5,
-per-pin hold persists through deep sleep automatically, so no global
-`gpio_deep_sleep_hold_en()` call is needed. The fan keeps spinning and the
-sensor stays in measurement mode.
+bus-enable signal stays LOW: V1 uses native `gpio_hold_en()`, while V2
+retains the expander output latch. The fan keeps spinning and the sensor
+stays in measurement mode.
 
 On the next timer wake the fast path reads
 `state.has_flag(RtcAppFlag::SensorsWarm)`:
 
 | `SensorsWarm` | Behavior |
 |---|---|
-| `true` | Release the GPIO hold and reattach SPS30 without resetting; skip the PM warmup wait |
+| `true` | Release the native GPIO hold on V1, then reattach SPS30 without resetting on either board; skip PM warmup |
 | `false` | Reset/start SPS30 and allow 10 s of PM warmup, overlapping GPS work and gas conditioning |
 
 The same warm flag lets SCD4x reattach to periodic measurement retained across
@@ -290,7 +321,7 @@ for acquisition timing.
 return pin_pm_power >= 0 && duration_ms < sensor_hold_max_sleep_ms;
 ```
 
-`release_sleep_gpio_holds(pin_pm_power)` is a static method called in the
+`release_sleep_gpio_holds(pin_pm_power)` is called only on V1 in the
 boot path **after** `init_buses()` has configured the pin and selected LOW.
 While the hold is active the pad retains its latched level; the GPIO driver
 writes the new output configuration to registers underneath. Releasing the
@@ -668,7 +699,7 @@ resumes when SOC drops to `FULL_CHARGE_RESUME_SOC` (95 %).
 
 | Available Data | Full Condition |
 |---|---|
-| Ready fuel gauge attached | `fg_flags & FgFlags::FC` (BQ27427 Full Charge flag) |
+| Ready fuel gauge attached | `fg_flags & FgFlags::FC` (normalized Full Charge flag) |
 | No fuel gauge attached | `ChargeTerminationDone` + `battery_percentage >= 100` |
 
 The plugged condition requires `bms_power_source_has_external_input()`.

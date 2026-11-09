@@ -1,6 +1,6 @@
 # Fuel-Gauge Learning
 
-The AirGradient Go uses a BQ27427 Impedance-Track fuel gauge whose accuracy
+AirGradient Go V1 uses a BQ27427 Impedance-Track fuel gauge whose accuracy
 depends on two learned values — `Qmax` (true cell capacity) and the `Ra` table
 (per-SOC internal resistance). The gauge learns them only by observing clean
 charge → rest → discharge → rest cycles. This is a **per-unit, end-of-line
@@ -12,6 +12,9 @@ poll loop, and never constructs the `Orchestrator` or any normal producer. The
 run survives the end-of-discharge ship-mode power-off and resumes on re-plug
 with no operator input, then verifies once after the final cycle and hands back
 to normal operation.
+
+V2 uses BQ27742, hides Battery Calibration, and skips this factory boot path.
+Its pack provisioning remains deferred.
 
 ## Files
 

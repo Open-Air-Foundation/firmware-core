@@ -1,10 +1,10 @@
 # Accelerometer Service
 
-`AccelService` owns accelerometer access on a dedicated RTOS worker. While Go
-is awake, a motion interrupt starts a short capture that classifies side-to-side
-shakes and posts `ShakeDetected`. The orchestrator decides whether to accept
+`AccelService` owns accelerometer access on a dedicated RTOS worker. On V1,
+a motion interrupt starts a short capture that classifies side-to-side shakes and posts `ShakeDetected`. The orchestrator decides whether to accept
 the gesture, beep, and refresh measurements. Accelerometer wake from deep sleep
-is not implemented.
+is not implemented. V2 supports Hardware Test only, with no background motion
+polling or shake detection.
 
 ## Files
 
@@ -24,7 +24,7 @@ Paths above are relative to `products/go/`.
 |---|---|---|
 | `AccelSensor` | `accel/accel_sensor.h` | Configure and read the sensor; driver has no refresh policy |
 | `ShakeDetector` | `accel/shake_detector.h` | Classify filtered XYZ samples |
-| `gpio::Hal` | `airgradient-common` | Register, mask, rearm, and read the interrupt GPIO |
+| `gpio::Hal` | `airgradient-gpio` | Register, mask, rearm, and read the interrupt GPIO |
 | RTOS | `airgradient-common` | Worker, queues, timing, and shutdown synchronization |
 | `Event` | `go_events.h` | Deliver timestamped `ShakeDetected` to the orchestrator |
 
@@ -36,7 +36,7 @@ Paths above are relative to `products/go/`.
 | `stop()` | `void` | Join the worker, detach the interrupt, and power down the sensor |
 | `begin_hardware_test(out)` | `bool` | Switch to unfiltered ±4 g readings and return the first reading |
 | `read_hardware_test(out)` | `bool` | Read XYZ and identity through the worker |
-| `end_hardware_test()` | `bool` | Restore filtered interrupt capture, respecting any remaining cooldown |
+| `end_hardware_test()` | `bool` | V1: restore capture/cooldown; V2: power down the sensor |
 
 Hardware Test calls are synchronous and come from the orchestrator task.
 `TestReading::result` separately reports sample readiness or a read error.
@@ -44,7 +44,18 @@ See [`accel_service.h`](../main/accel/accel_service.h) for signatures.
 
 ## Behavior
 
-### Interrupt Capture
+### Board Configuration
+
+| Symbol | Default | Purpose |
+|---|---|---|
+| `Config::pin_int` | `gpio::INVALID_PIN` | Native shake IRQ; no pin means diagnostics only |
+
+The board supplies GPIO3 on V1 and `INVALID_PIN` on V2. Without an IRQ pin,
+the worker powers down the sensor and waits indefinitely for commands. It
+neither configures nor polls expander P5. Opening Hardware Test enables
+sampling; closing it powers down again and leaves the worker ready to reopen.
+
+### V1 Interrupt Capture
 
 The LIS2DH12 samples at 100 Hz with a ±4 g range and high-pass filtering.
 Its active-high, latched interrupt connects to GPIO3. The service enables
@@ -99,7 +110,8 @@ Intermediate off-axis samples do not count as peaks.
 
 The worker owns all driver access. Hardware Test temporarily ends capture and
 uses unfiltered ±4 g samples so gravity is available for the rest-magnitude
-check. Exiting restores capture configuration. See
+check. Read requests arrive every 500 ms while the screen is open. Exiting
+restores capture on V1 or powers down on V2. See
 [Hardware Test](hardware_test.md#accelerometer-test).
 
 The work queue carries interrupt and Hardware Test commands; a reply queue
@@ -125,6 +137,8 @@ info logs. Interrupt log timestamps are worker-service times, not ISR times.
 - Hardware Test configuration failure leaves the worker available for commands.
   A failed capture restore leaves capture unavailable until a later successful
   restore; it does not resume XYZ polling with test configuration.
+- V2 power-down failure is reported by `end_hardware_test()`; no background
+  retries or motion polling are started.
 - A full central queue drops the shake event with a warning. No ACK occurs for
   an event the orchestrator does not accept.
 - Bench tuning does not establish false-trigger performance while walking,

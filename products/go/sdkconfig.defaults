@@ -1,5 +1,8 @@
 # AirGradient Go product defaults.
 
+CONFIG_EFUSE_CUSTOM_TABLE=y
+CONFIG_EFUSE_CUSTOM_TABLE_FILENAME="main/efuse/esp_efuse_custom_table.csv"
+
 # AirGradient device model.
 CONFIG_AG_DEVICE_MODEL_GO=y
 

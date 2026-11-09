@@ -513,6 +513,10 @@ add_executable(go_portable_provisioner_tests
     go_portable_provisioner.tests.cpp
 )
 
+target_include_directories(go_portable_provisioner_tests PRIVATE
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-touch/hal"
+)
+
 target_link_libraries(go_portable_provisioner_tests PRIVATE
     go_portable_provisioner_test_support
     Catch2::Catch2WithMain

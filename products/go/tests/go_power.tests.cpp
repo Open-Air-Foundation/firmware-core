@@ -938,6 +938,30 @@ TEST_CASE("set_pm_power: EN_PM GPIO only, no BMS coupling", "[PowerService][pm_p
     CHECK(gpio_call_count == 0);
   }
 
+  SECTION("expander PM pin uses its own HAL for both levels") {
+    auto native_operations = test_gpio_hal_operations;
+    native_operations.set_level = [](void *, int, int) -> bool {
+      FAIL("PM control must not write to native GPIO when an expander is configured");
+      return false;
+    };
+    gpio::Hal native_gpio{native_operations};
+    PowerService::Config config = DEFAULT_CONFIG;
+    config.pin_pm_power = 1;
+    config.pm_gpio = &tracking_gpio;
+    PowerService svc(&mock_bms, native_gpio, config);
+
+    gpio_call_count = 0;
+    svc.set_pm_power(true);
+    CHECK(last_pin == 1);
+    CHECK(last_level == PM_POWER_ON_LEVEL);
+    svc.set_pm_power(false);
+    CHECK(last_pin == 1);
+    CHECK(last_level == PM_POWER_OFF_LEVEL);
+    CHECK(gpio_call_count == 2);
+    CHECK(svc.should_hold_pm_sensor(config.sensor_hold_max_sleep_ms - 1));
+    CHECK(svc.should_sleep_pm_sensor(config.pm_sleep_threshold_ms));
+  }
+
   SECTION("N consecutive cycles: zero BMS calls, GPIO toggles each time") {
     PowerService::Config config = DEFAULT_CONFIG;
     config.pin_pm_power = 26;

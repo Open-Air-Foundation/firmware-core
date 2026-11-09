@@ -57,13 +57,13 @@ The wiring layer (`go_hardware_board.cpp`) populates a `Sensors` struct and pass
 | `pms_a` | `SPS30` | Single particulate matter sensor |
 | `pms_b` | `nullptr` | No second PM sensor on AGo |
 | `tvoc_nox` | `SGP41` | TVOC + NOx sensor |
-| `pressure` | `DPS368` | Barometric pressure + altitude sensor |
+| `pressure` | `DPS368` (V1), `SPL07-003` (V2) | Barometric pressure + altitude sensor |
 | `o3_no2` | `nullptr` | No AlphaSense electrodes on AGo |
 
 `temp_hum_a` uses the product fallback order `DEDICATED` → `CO2` →
 `PRESSURE`. SHT40 is probed during sensor initialization. If it is unavailable,
 SCD4x/STCC4 CO2-integrated T/RH can supply temperature and humidity; S12 cannot.
-DPS368 is the final temperature-only fallback.
+The selected pressure sensor is the final temperature-only fallback.
 
 Battery management is handled separately by `PowerService` via the
 `airgradient-bms` component and is not part of the `Sensors` struct.
@@ -364,7 +364,7 @@ After `stop()` returns, `_task_handle` is `nullptr`.  A subsequent call to
 The wiring layer must follow this sequence:
 
 1. Initialise I2C/UART buses.
-2. Construct concrete driver instances (`SHT40` on V1, CO2, SPS30, SGP41).
+2. Construct concrete driver instances (`SHT40` when present, CO2, SPS30, SGP41).
 3. Call `driver.init()` on each.
 4. Populate a `Sensors` struct (unused pointers set to `nullptr`).
 5. Construct `SensorManager(sensors)`.

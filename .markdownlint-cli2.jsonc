@@ -16,6 +16,7 @@
     "components/embedded-i2c-scd4x/**",
     "components/libnmea-esp32/**",
     "components/u8g2/**",
+    "components/spi_nand_flash/**",
 
     // Vendor driver pending replacement (see docs/STYLE.md scope decision)
     "components/bq25629/**",

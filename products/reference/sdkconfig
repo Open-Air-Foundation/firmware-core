@@ -2666,6 +2666,12 @@ CONFIG_NIMBLE_CPP_IDF=y
 # end of ESP-NimBLE-CPP configuration
 
 #
+# SPI NAND Flash configuration
+#
+# CONFIG_NAND_FLASH_VERIFY_WRITE is not set
+# end of SPI NAND Flash configuration
+
+#
 # mDNS
 #
 CONFIG_MDNS_MAX_INTERFACES=3
@@ -2701,12 +2707,6 @@ CONFIG_MDNS_PREDEF_NETIF_STA=y
 CONFIG_MDNS_PREDEF_NETIF_AP=y
 # end of MDNS Predefined interfaces
 # end of mDNS
-
-#
-# SPI NAND Flash configuration
-#
-# CONFIG_NAND_FLASH_VERIFY_WRITE is not set
-# end of SPI NAND Flash configuration
 # end of Component config
 
 # CONFIG_IDF_EXPERIMENTAL_FEATURES is not set

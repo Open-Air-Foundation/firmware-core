@@ -4,7 +4,7 @@ On-device diagnostics surface for AirGradient Go, reachable from
 **Settings → Hardware Test**. It groups four operator-run flows behind one
 submenu: a guided **Peripheral Test** (actuators then air-quality sensors), a
 live **GPS Test**, a live **Accelerometer Test**, and an in-menu arm for the
-existing **Battery Calibration** factory routine. `UIManager` stays hardware-free — it
+V1-only **Battery Calibration** factory routine. `UIManager` stays hardware-free — it
 renders the submenu and per-flow views from a pushed snapshot — while the
 orchestrator owns every hardware side effect, the flow state machines, and the
 buzzer / LED cues. All flows run in-app on already-initialised services; only
@@ -76,6 +76,8 @@ Exit(0), Back(1), Peripheral Test(2), GPS Test(3), Accelerometer Test(4),
 Battery Calibration(5), Play Melody(6)
 ```
 
+V2 omits Battery Calibration, so Play Melody occupies row 5.
+
 Exit returns Home; Back returns to Settings on the Hardware Test row. Each live
 screen exits back to the submenu on **any tap**, a **double-press Back**, or a
 **long-press Home** — the orchestrator snapshots `current_screen()` around
@@ -91,6 +93,10 @@ saved buzzer setting, rear brightness, and selected indicator afterward. The cho
 screen retains ordinary settings auto-lock behavior.
 
 ### Peripheral Test
+
+V2 has four back LEDs and no touch LEDs. The existing Touch LED operator step
+is still displayed, but its LED commands produce no output on V2; this step is
+not yet adapted to V2 hardware.
 
 Operator-guided actuator steps (tap **Pass**, or toggle + tap **Fail**) run
 first, then the automatic AQ sweep, then a summary. Overall pass requires all
@@ -157,14 +163,17 @@ See [`gps_service.md`](gps_service.md) for the receiver lifecycle.
 
 ### Accelerometer Test
 
+Available on both boards. V2 has no shake detection or background motion
+polling; this screen enables diagnostic sampling only.
+
 The application creates the LIS2DH12 and starts `AccelService` at startup.
-`start_accel_test()` asks that worker to switch from filtered motion capture
-to unfiltered ±4 g test readings, classifies the first sample, and fires a
+`start_accel_test()` asks that worker to enable unfiltered ±4 g test readings,
+classifies the first sample, and fires a
 one-shot cue. A 500 ms poll from
 `check_timers()` refreshes the live X/Y/Z while the screen is open (no re-cue).
 All test configuration and reads use synchronous worker requests; the
-orchestrator does not access the driver directly. On exit, the worker restores
-interrupt capture and honors any remaining shake cooldown. See
+orchestrator does not access the driver directly. On exit, V1 restores capture
+and honors any remaining shake cooldown; V2 powers down the sensor. See
 [Accelerometer Service](accel_service.md).
 
 ```text
@@ -182,7 +191,8 @@ The screen shows `WHO_AM_I` (OK/BAD), X/Y/Z (mg), `|a|` (mg), and Result.
 
 ### Battery Calibration Arm
 
-The Battery Calibration row is a destructive action guarded by the shared `Confirm`
+Battery Calibration is available only on V1; V2 hides the menu option.
+The row is a destructive action guarded by the shared `Confirm`
 screen ("Start Battery Calibration?"). On **Yes** the orchestrator writes
 `FactorySettings{ fg_learning_stage = Charge, cycle = 1, itpor_losses = 0 }` and
 reboots; the next boot routes into the existing `FgLearningRunner` unchanged.

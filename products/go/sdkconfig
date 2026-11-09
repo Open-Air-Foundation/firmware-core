@@ -1267,7 +1267,8 @@ CONFIG_BT_LE_DFT_CH39_TX_POWER_LEVEL_DBM_EFF=0
 #
 # eFuse Bit Manager
 #
-# CONFIG_EFUSE_CUSTOM_TABLE is not set
+CONFIG_EFUSE_CUSTOM_TABLE=y
+CONFIG_EFUSE_CUSTOM_TABLE_FILENAME="main/efuse/esp_efuse_custom_table.csv"
 # CONFIG_EFUSE_VIRTUAL is not set
 CONFIG_EFUSE_MAX_BLK_LEN=256
 # end of eFuse Bit Manager
@@ -2674,6 +2675,12 @@ CONFIG_NIMBLE_CPP_IDF=y
 # end of ESP-NimBLE-CPP configuration
 
 #
+# SPI NAND Flash configuration
+#
+# CONFIG_NAND_FLASH_VERIFY_WRITE is not set
+# end of SPI NAND Flash configuration
+
+#
 # mDNS
 #
 CONFIG_MDNS_MAX_INTERFACES=3
@@ -2709,12 +2716,6 @@ CONFIG_MDNS_PREDEF_NETIF_STA=y
 CONFIG_MDNS_PREDEF_NETIF_AP=y
 # end of MDNS Predefined interfaces
 # end of mDNS
-
-#
-# SPI NAND Flash configuration
-#
-# CONFIG_NAND_FLASH_VERIFY_WRITE is not set
-# end of SPI NAND Flash configuration
 # end of Component config
 
 # CONFIG_IDF_EXPERIMENTAL_FEATURES is not set

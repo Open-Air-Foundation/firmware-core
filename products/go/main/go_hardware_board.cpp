@@ -12,12 +12,14 @@
  */
 
 #include "go_hardware_board.h"
+#include "go_input.h"
 
 #include <cassert>
 #include <driver/gpio.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
 #include <esp_app_desc.h>
+#include <esp_efuse.h>
 #include <esp_system.h>
 #include <nvs_flash.h>
 
@@ -28,13 +30,16 @@
 #include "common.h"
 #include "drivers/bq25629/bq25629_bms.h"
 #include "drivers/bq27427/bq27427.h"
+#include "drivers/bq27742/bq27742.h"
 #include "drivers/dps368/dps368.h"
 #include "drivers/s12/s12.h"
 #include "drivers/scd4x/scd4x.h"
 #include "drivers/sgp41/sgp41.h"
 #include "drivers/sht40/sht40.h"
+#include "drivers/spl07_003/spl07_003.h"
 #include "drivers/sps30/sps30.h"
 #include "drivers/stcc4/stcc4.h"
+#include "esp_efuse_custom_table.h"
 #include "accel/lis2dh12.h"
 #include "gps/gps_driver.h"
 #include "native_gpio.h"
@@ -62,16 +67,18 @@
 static constexpr const char *TAG = "board";
 
 // ---------------------------------------------------------------------------
-// Fuel-gauge cell configuration — validated on hardware against AGo's
-// single-cell 2000 mAh Li-ion pack.  Revisit if cell sourcing changes.
+// Fuel-gauge cell configuration. V1's 2000 mAh profile is hardware-validated;
+// V2 uses the 2600 mAh cell specification and preserves its sleep threshold.
 // ---------------------------------------------------------------------------
 
-static constexpr FgCellConfig AGO_CELL_CONFIG = {
-    .design_capacity_mah = 2000,
-    .design_energy_mwh = 7400,
-    .terminate_voltage_mv = 3000,
-    .sleep_current_ma = 50,
-};
+static constexpr uint16_t AGO_V1_DESIGN_CAPACITY_MAH = 2000;
+static constexpr uint16_t AGO_V1_DESIGN_ENERGY_MWH = 7400;
+static constexpr uint16_t AGO_V1_TERMINATE_VOLTAGE_MV = 3000;
+static constexpr uint16_t AGO_V1_SLEEP_CURRENT_MA = 50;
+
+static constexpr uint16_t AGO_V2_DESIGN_CAPACITY_MAH = 2600;
+static constexpr uint16_t AGO_V2_DESIGN_ENERGY_MWH = 9620;
+static constexpr uint16_t AGO_V2_TERMINATE_VOLTAGE_MV = 3000;
 
 // FG DM corruption sanity ranges.  A reading outside any of these
 // ranges is treated as evidence of a corrupted persistent block
@@ -120,6 +127,29 @@ static CO2Sensor *init_co2_sensor(i2c_master_bus_handle_t i2c_bus, bool sensors_
 // Init methods (idempotent)
 // ===========================================================================
 
+BoardVariant GoHardwareBoard::variant() {
+  if (_variant_read)
+    return _variant;
+
+  uint8_t id = 0;
+  const esp_err_t err =
+      esp_efuse_read_field_blob(ESP_EFUSE_USER_DATA_GO_BOARD_ID, &id, sizeof(id) * 8);
+  _variant = board_variant_from_efuse(id, err == ESP_OK);
+  _variant_read = true;
+
+  if (err != ESP_OK) {
+    AG_LOGW(TAG, "Board ID read failed (%s); using V1", esp_err_to_name(err));
+  } else if (id == 0) {
+    AG_LOGI(TAG, "Board: V1 (unprogrammed eFuse)");
+  } else if (id == static_cast<uint8_t>(BoardVariant::V1) ||
+             id == static_cast<uint8_t>(BoardVariant::V2)) {
+    AG_LOGI(TAG, "Board: V%u (eFuse)", static_cast<unsigned int>(id));
+  } else {
+    AG_LOGW(TAG, "Unknown board ID 0x%02x; using V1", static_cast<unsigned int>(id));
+  }
+  return _variant;
+}
+
 void GoHardwareBoard::init_nvs() {
   if (_nvs_ready)
     return;
@@ -138,10 +168,13 @@ void GoHardwareBoard::init_buses() {
 
   // Isolate the SPS30 bus until I2C initialization has settled.
   auto &hal = gpio::native::hal;
-  hal.configure(PIN_PM_POWER, gpio::Mode::Output, gpio::PullMode::Floating,
-                gpio::InterruptType::Disabled);
-  gpio_set_drive_capability(PIN_PM_POWER, GPIO_DRIVE_CAP_3);
-  hal.set_level(PIN_PM_POWER, PM_POWER_OFF_LEVEL);
+  const bool v2 = variant() == BoardVariant::V2;
+  if (!v2) {
+    hal.configure(PIN_PM_POWER, gpio::Mode::Output, gpio::PullMode::Floating,
+                  gpio::InterruptType::Disabled);
+    gpio_set_drive_capability(PIN_PM_POWER, GPIO_DRIVE_CAP_3);
+    hal.set_level(PIN_PM_POWER, PM_POWER_OFF_LEVEL);
+  }
 
   RTOS::delay_ms(100);
 
@@ -165,7 +198,29 @@ void GoHardwareBoard::init_buses() {
 
   RTOS::delay_ms(100);
 
-  hal.set_level(PIN_PM_POWER, PM_POWER_ON_LEVEL);
+  if (v2) {
+    if (!gpio::tca6408a::init(_expander, _i2c_bus, {.address = I2C_ADDR_V2_EXPANDER})) {
+      ESP_ERROR_CHECK(ESP_FAIL);
+    }
+    if (!_expander_gpio.configure(V2_EXPANDER_PM_POWER, gpio::Mode::Output,
+                                  gpio::PullMode::Floating, gpio::InterruptType::Disabled,
+                                  PM_POWER_ON_LEVEL)) {
+      ESP_ERROR_CHECK(ESP_FAIL);
+    }
+    // Deselect NAND before display SPI traffic.
+    if (!_expander_gpio.configure(V2_EXPANDER_NAND_CS, gpio::Mode::Output, gpio::PullMode::Floating,
+                                  gpio::InterruptType::Disabled, 1)) {
+      ESP_ERROR_CHECK(ESP_FAIL);
+    }
+    // Start display D/C at its idle level.
+    if (!_expander_gpio.configure(V2_EXPANDER_DISPLAY_DC, gpio::Mode::Output,
+                                  gpio::PullMode::Floating, gpio::InterruptType::Disabled, 1)) {
+      ESP_ERROR_CHECK(ESP_FAIL);
+    }
+    AG_LOGI(TAG, "V2 GPIO expander ready");
+  } else if (variant() == BoardVariant::V1) {
+    hal.set_level(PIN_PM_POWER, PM_POWER_ON_LEVEL);
+  }
 
   RTOS::delay_ms(100);
   _buses_ready = true;
@@ -194,17 +249,37 @@ bool GoHardwareBoard::init_bms() {
   }
   _bms_init_attempted = true;
 
-  constexpr drivers::BQ25629_Config config = {
-      .charge_voltage_mv = 4200,
-      .charge_current_ma = 500,
-      .input_current_limit_ma = 1500,
-      .input_voltage_limit_mv = 4600,
-      .min_system_voltage_mv = 3520,
-      .precharge_current_ma = 30,
-      .term_current_ma = 20,
-      .enable_charging = true,
-      .enable_adc = true,
-  };
+  drivers::BQ25629_Config config{};
+  config.input_current_limit_ma = 1500;
+  config.input_voltage_limit_mv = 4600;
+  config.min_system_voltage_mv = 3520;
+  config.precharge_current_ma = 30;
+  config.enable_charging = true;
+  config.enable_adc = true;
+  if (variant() == BoardVariant::V2) {
+    config.charge_voltage_mv = 4200;
+    config.charge_current_ma = 520;
+    // 2600 mAh cell: 0.02C termination (52 mA), rounded to a 5 mA step.
+    config.term_current_ma = 50;
+    // NCP15XH103F03RC: 10kΩ at 25°C, B25/50 = 3380K.
+    config.ntc = {
+        .pullup_ohm = 5230.0f,
+        .pulldown_ohm = 30100.0f,
+        .r25_ohm = 10000.0f,
+        .beta_k = 3380.0f,
+    };
+  } else if (variant() == BoardVariant::V1) {
+    config.charge_voltage_mv = 4200;
+    config.charge_current_ma = 500;
+    // Preserve the threshold programmed by the previous termination encoding.
+    config.term_current_ma = 15;
+    config.ntc = {
+        .pullup_ohm = 4120.0f,
+        .pulldown_ohm = 17330.0f,
+        .r25_ohm = 10000.0f,
+        .beta_k = 3950.0f,
+    };
+  }
   _bms_driver = new BQ25629Bms(_i2c_bus, config, I2C_ADDR_BMS);
   if (!_bms_driver->init()) {
     AG_LOGE(TAG, "BMS init failed");
@@ -225,22 +300,71 @@ void GoHardwareBoard::init_fuel_gauge() {
   }
   _fuel_gauge_init_attempted = true;
 
-  _fuel_gauge = new BQ27427(_i2c_bus);
-  if (!_fuel_gauge->init()) {
+  if (variant() == BoardVariant::V2) {
+    auto *gauge = new BQ27742(_i2c_bus);
+    if (!gauge->init()) {
+      AG_LOGE(TAG, "BQ27742 init failed — using charger battery estimate");
+      delete gauge;
+      return;
+    }
+
+    bool config_ok = gauge->unseal();
+    FgCellConfig current{};
+    if (config_ok) {
+      config_ok = gauge->read_cell_config(current);
+    }
+    if (config_ok) {
+      const FgCellConfig expected = {
+          .design_capacity_mah = AGO_V2_DESIGN_CAPACITY_MAH,
+          .design_energy_mwh = AGO_V2_DESIGN_ENERGY_MWH,
+          .terminate_voltage_mv = AGO_V2_TERMINATE_VOLTAGE_MV,
+          .sleep_current_ma = current.sleep_current_ma,
+      };
+      if (current != expected) {
+        AG_LOGI(TAG, "BQ27742 applying cell config");
+        config_ok = gauge->write_cell_config(expected);
+      }
+    }
+
+    // Always attempt to reseal after configuration access, including on failure.
+    const bool seal_ok = gauge->seal();
+    if (!config_ok || !seal_ok) {
+      AG_LOGE(TAG,
+              "BQ27742 configuration failed (config_ok=%d seal_ok=%d) — "
+              "using charger battery estimate",
+              config_ok, seal_ok);
+      delete gauge;
+      return;
+    }
+
+    AG_LOGI(TAG, "BQ27742 cell config ready; gauge sealed");
+    _fuel_gauge = gauge;
+    return;
+  }
+
+  auto *gauge = new BQ27427(_i2c_bus);
+  _fuel_gauge = gauge;
+  if (!gauge->init()) {
     AG_LOGE(TAG, "BQ27427 init failed — FG offline");
     // Continue: _fuel_gauge stays non-null but ready() == false.
   } else {
+    const FgCellConfig expected = {
+        .design_capacity_mah = AGO_V1_DESIGN_CAPACITY_MAH,
+        .design_energy_mwh = AGO_V1_DESIGN_ENERGY_MWH,
+        .terminate_voltage_mv = AGO_V1_TERMINATE_VOLTAGE_MV,
+        .sleep_current_ma = AGO_V1_SLEEP_CURRENT_MA,
+    };
     // Pass 1: read state with validity flags.
     uint16_t dc = 0;
     uint16_t fcc = 0;
     FgCellConfig current{};
-    const bool dc_ok = _fuel_gauge->read_design_capacity_mah(dc);
-    const bool fcc_ok = _fuel_gauge->read_full_charge_capacity_mah(fcc);
-    const bool cfg_ok = _fuel_gauge->read_cell_config(current);
+    const bool dc_ok = gauge->read_design_capacity_mah(dc);
+    const bool fcc_ok = gauge->read_full_charge_capacity_mah(fcc);
+    const bool cfg_ok = gauge->read_cell_config(current);
 
     FgRecoveryDecision decision =
-        evaluate_fg_state(dc, dc_ok, fcc, fcc_ok, current, cfg_ok, AGO_CELL_CONFIG,
-                          FG_DC_SANITY_MIN_MAH, FG_DC_SANITY_MAX_MAH, FG_FCC_SANITY_MAX_MAH);
+        evaluate_fg_state(dc, dc_ok, fcc, fcc_ok, current, cfg_ok, expected, FG_DC_SANITY_MIN_MAH,
+                          FG_DC_SANITY_MAX_MAH, FG_FCC_SANITY_MAX_MAH);
 
     // Tracks whether `current` reflects a successful CellConfig read.
     bool cfg_current_ok = cfg_ok;
@@ -248,25 +372,25 @@ void GoHardwareBoard::init_fuel_gauge() {
     if (decision.needs_factory_reset) {
       AG_LOGW(TAG, "BQ27427 corrupted state (dc=%u fcc=%u dc_ok=%d fcc_ok=%d) — resetting", dc, fcc,
               dc_ok, fcc_ok);
-      if (!_fuel_gauge->reset_to_factory_defaults()) {
+      if (!gauge->reset_to_factory_defaults()) {
         AG_LOGE(TAG, "BQ27427 reset_to_factory_defaults() failed — "
                      "FG may be in inconsistent state; skipping config write");
         decision = {false, false};
       } else {
         // Pass 2: post-reset, re-read to drive needs_config_write.
-        const bool dc2_ok = _fuel_gauge->read_design_capacity_mah(dc);
-        const bool fcc2_ok = _fuel_gauge->read_full_charge_capacity_mah(fcc);
-        const bool cfg2_ok = _fuel_gauge->read_cell_config(current);
+        const bool dc2_ok = gauge->read_design_capacity_mah(dc);
+        const bool fcc2_ok = gauge->read_full_charge_capacity_mah(fcc);
+        const bool cfg2_ok = gauge->read_cell_config(current);
         cfg_current_ok = cfg2_ok;
         decision =
-            evaluate_fg_state(dc, dc2_ok, fcc, fcc2_ok, current, cfg2_ok, AGO_CELL_CONFIG,
+            evaluate_fg_state(dc, dc2_ok, fcc, fcc2_ok, current, cfg2_ok, expected,
                               FG_DC_SANITY_MIN_MAH, FG_DC_SANITY_MAX_MAH, FG_FCC_SANITY_MAX_MAH);
       }
     }
 
     if (decision.needs_config_write) {
       AG_LOGI(TAG, "BQ27427 applying cell config");
-      if (!_fuel_gauge->write_cell_config(AGO_CELL_CONFIG)) {
+      if (!gauge->write_cell_config(expected)) {
         AG_LOGW(TAG, "BQ27427 write_cell_config() failed — cell parameters "
                      "not updated; runtime polling continues with whatever "
                      "the chip currently has");
@@ -282,10 +406,10 @@ void GoHardwareBoard::init_fuel_gauge() {
     uint16_t mv = 0;
     int16_t ma = 0;
     float tc = 0.0f;
-    _fuel_gauge->read_soc_percent(soc);
-    _fuel_gauge->read_voltage_mv(mv);
-    _fuel_gauge->read_average_current_ma(ma);
-    _fuel_gauge->read_internal_temperature_c(tc);
+    gauge->read_soc_percent(soc);
+    gauge->read_voltage_mv(mv);
+    gauge->read_average_current_ma(ma);
+    gauge->read_internal_temperature_c(tc);
     AG_LOGI(TAG, "BQ27427 boot: soc=%u%% v=%umV i=%dmA t=%.1fC", soc, mv, ma, tc);
   }
 }
@@ -393,7 +517,12 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
   if (!_sensor_manager) {
     auto *sgp41 = new SGP41(_i2c_bus, I2C_ADDR_SGP41);
     auto *sps30 = new SPS30(_i2c_bus);
-    auto *dps368 = new DPS368(_i2c_bus, I2C_ADDR_DPS368);
+    PressureSensor *pressure = nullptr;
+    if (variant() == BoardVariant::V2) {
+      pressure = new SPL07_003(_i2c_bus, I2C_ADDR_SPL07_003);
+    } else {
+      pressure = new DPS368(_i2c_bus, I2C_ADDR_DPS368);
+    }
 
     auto *s = new Sensors{};
 
@@ -405,12 +534,12 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
     } else {
       AG_LOGE(TAG, "SPS30 init failed");
     }
-    // Init DPS368 before the remaining sensors: continuous mode starts immediately, giving the
-    // pressure sensor time to produce its first measurement (~120 ms)
-    if (dps368->init()) {
-      s->pressure = dps368;
+    // Start continuous pressure measurements before initializing the remaining sensors.
+    if (pressure->init()) {
+      s->pressure = pressure;
     } else {
-      AG_LOGE(TAG, "DPS368 init failed");
+      AG_LOGE(TAG, "Pressure sensor init failed");
+      delete pressure;
     }
 
     s->co2 = init_co2_sensor(_i2c_bus, warm);
@@ -440,13 +569,16 @@ SensorManager &GoHardwareBoard::sensors(bool warm) {
 
 StorageService &GoHardwareBoard::storage() {
   assert(_spi_ready && "storage() requires init_spi()");
+  const bool v2 = variant() == BoardVariant::V2;
+  assert((!v2 || _buses_ready) && "V2 storage() requires init_buses()");
   if (!_storage) {
     auto *rtc_storage = new RtcPayloadCacheStorage();
     auto *cache = new PayloadCache(*rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
 
     SpiNandStorage::Config nand_config{};
     nand_config.spi_host = SPI_HOST;
-    nand_config.cs_pin = PIN_NAND_CS;
+    nand_config.cs_pin = v2 ? V2_EXPANDER_NAND_CS : PIN_NAND_CS;
+    nand_config.cs_gpio = v2 ? &_expander_gpio : nullptr;
     auto *nand = new SpiNandStorage(nand_config);
 
     _storage = new StorageService(*cache, *nand);
@@ -460,13 +592,16 @@ StorageService &GoHardwareBoard::storage() {
 
 DisplayService &GoHardwareBoard::display() {
   assert(_spi_ready && "display() requires init_spi()");
+  const bool v2 = variant() == BoardVariant::V2;
+  assert((!v2 || _buses_ready) && "V2 display() requires init_buses()");
   if (!_display) {
     _display = new DisplayService({
         .spi_host = SPI_HOST,
         .pin_cs = PIN_DISPLAY_CS,
-        .pin_dc = PIN_DISPLAY_DC,
+        .pin_dc = v2 ? V2_EXPANDER_DISPLAY_DC : PIN_DISPLAY_DC,
         .pin_rst = PIN_DISPLAY_RST,
         .pin_busy = PIN_DISPLAY_BUSY,
+        .dc_gpio = v2 ? &_expander_gpio : nullptr,
     });
   }
   return *_display;
@@ -478,6 +613,16 @@ LedService &GoHardwareBoard::led_service() {
     LedService::Config cfg{};
     _lp5036 = new LP5036(_i2c_bus, {});
     cfg.driver = _lp5036;
+    if (variant() == BoardVariant::V2) {
+      cfg.back_channels = {0, 3, 6, 9};
+      cfg.back_channel_count = 4;
+      cfg.touch_channel_count = 0;
+    } else if (variant() == BoardVariant::V1) {
+      cfg.back_channels = {6, 12, 15, 18, 24};
+      cfg.back_channel_count = 5;
+      cfg.touch_channels = {27, 3, 0};
+      cfg.touch_channel_count = 3;
+    }
     _led_service = new LedService(cfg);
   }
   return *_led_service;
@@ -558,15 +703,20 @@ PowerService &GoHardwareBoard::power() {
   assert(_fuel_gauge_init_attempted && "power() requires init_fuel_gauge()");
   assert(_bms_init_attempted && "power() requires init_bms()");
   if (!_power) {
-    _power = new PowerService(_bms_driver, gpio::native::hal,
-                              {
-                                  .pin_wake_button_power = PIN_BUTTON_POWER,
-                                  .pin_wake_button_boot = -1,
-                                  .pin_ext_wdt = PIN_EXT_WDT,
-                                  .deep_sleep_threshold_ms = 5000,
-                                  .pin_pm_power = PIN_PM_POWER,
-                                  .sensor_hold_max_sleep_ms = 20000,
-                              });
+    PowerService::Config config = {
+        .pin_wake_button_power = PIN_BUTTON_POWER,
+        .pin_wake_button_boot = -1,
+        .pin_ext_wdt = PIN_EXT_WDT,
+        .deep_sleep_threshold_ms = 5000,
+        .sensor_hold_max_sleep_ms = 20000,
+    };
+    if (variant() == BoardVariant::V2) {
+      config.pin_pm_power = V2_EXPANDER_PM_POWER;
+      config.pm_gpio = &_expander_gpio;
+    } else if (variant() == BoardVariant::V1) {
+      config.pin_pm_power = PIN_PM_POWER;
+    }
+    _power = new PowerService(_bms_driver, gpio::native::hal, config);
     _power->init_ext_watchdog();
     _power->reset_ext_watchdog();
     if (_fuel_gauge != nullptr && _fuel_gauge->ready()) {
@@ -590,12 +740,41 @@ CapTouchSensor *GoHardwareBoard::new_touch_sensor() {
   assert(_buses_ready && "new_touch_sensor() requires init_buses()");
   CAP1203::Config cfg;
   cfg.delta_sense = TOUCH_DELTA_SENSE;
-  cfg.repeat_rate_channels = TouchChannel::CH2 | TouchChannel::CH3;
+  const auto input = input_config();
+  cfg.repeat_rate_channels = input.touch_up_channel | input.touch_down_channel;
   auto *touch = new CAP1203(_i2c_bus, I2C_ADDR_CAP1203, cfg);
   if (!touch->init()) {
     AG_LOGE(TAG, "CAP1203 touch init failed");
   }
   return touch;
+}
+
+GoInputConfig GoHardwareBoard::input_config() {
+  assert(_buses_ready && "input_config() requires init_buses()");
+  InputService::Config config{};
+  config.pin_button_power = PIN_BUTTON_POWER;
+  config.pin_button_boot = PIN_BUTTON_BOOT;
+  if (variant() == BoardVariant::V2) {
+    config.pin_cap_int = V2_EXPANDER_CAP_INT;
+    config.touch_gpio = &_expander_gpio;
+    config.touch_poll_ms = V2_TOUCH_POLL_MS;
+    config.touch_enter_channel = TouchChannel::CH3;
+    config.touch_up_channel = TouchChannel::CH1;
+    config.touch_down_channel = TouchChannel::CH2;
+  } else if (variant() == BoardVariant::V1) {
+    config.pin_cap_int = PIN_CAP_INT;
+    config.touch_enter_channel = TouchChannel::CH1;
+    config.touch_up_channel = TouchChannel::CH2;
+    config.touch_down_channel = TouchChannel::CH3;
+  }
+  return config;
+}
+
+int GoHardwareBoard::accel_interrupt_pin() {
+  if (variant() == BoardVariant::V1) {
+    return PIN_ACCEL_INT;
+  }
+  return gpio::INVALID_PIN;
 }
 
 AccelSensor *GoHardwareBoard::new_accel_sensor() {
@@ -627,7 +806,11 @@ const gpio::Hal &GoHardwareBoard::gpio_hal() { return gpio::native::hal; }
 // Hardware operations
 // ===========================================================================
 
-void GoHardwareBoard::release_gpio_holds() { PowerService::release_sleep_gpio_holds(PIN_PM_POWER); }
+void GoHardwareBoard::release_gpio_holds() {
+  if (variant() == BoardVariant::V1) {
+    PowerService::release_sleep_gpio_holds(PIN_PM_POWER);
+  }
+}
 
 void GoHardwareBoard::ulp_stop() { ulp_wdt_stop(); }
 

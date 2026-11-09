@@ -123,7 +123,6 @@ static constexpr uint8_t HW_TEST_PERIPHERAL = 2;
 static constexpr uint8_t HW_TEST_GPS = 3;
 static constexpr uint8_t HW_TEST_ACCEL = 4;
 static constexpr uint8_t HW_TEST_FG_LEARNING = 5;
-static constexpr uint8_t HW_TEST_PLAY_MELODY = 6;
 static constexpr uint8_t HW_TEST_TOTAL = 7;
 
 /// Visible content items per page (excluding Exit/Back header rows).
@@ -995,7 +994,15 @@ void UIManager::move_confirm(int delta) {
 
 void UIManager::move_hardware_test(int delta) {
   // Circular navigation across all submenu rows.
-  _hardware_test_index = (uint8_t)wrap((int)_hardware_test_index + delta, HW_TEST_TOTAL);
+  _hardware_test_index =
+      (uint8_t)wrap((int)_hardware_test_index + delta, hardware_test_row_count());
+}
+
+uint8_t UIManager::hardware_test_row_count() const {
+  if (_config.battery_calibration_available) {
+    return HW_TEST_TOTAL;
+  }
+  return HW_TEST_TOTAL - 1;
 }
 
 void UIManager::browse_metric(int delta) {
@@ -1625,10 +1632,11 @@ UIActionResult UIManager::dispatch_hardware_test(InputSource source, InputType t
       // Accel Test → open the live screen (orchestrator polls + classifies).
       open_accel_test();
       result.action = UIAction::OpenAccelTest;
-    } else if (_hardware_test_index == HW_TEST_FG_LEARNING) {
+    } else if (_config.battery_calibration_available &&
+               _hardware_test_index == HW_TEST_FG_LEARNING) {
       // FG Learning → strong confirm dialog (Back/No return here).
       open_confirm(SettingId::FgLearning);
-    } else if (_hardware_test_index == HW_TEST_PLAY_MELODY) {
+    } else if (_hardware_test_index == hardware_test_row_count() - 1) {
       open_settings_choice(SettingId::PlayMelody);
     }
     break;
@@ -2156,9 +2164,11 @@ void UIManager::populate_hardware_test_rows(DisplayValues &v) const {
   copy_row(v, HW_TEST_PERIPHERAL, "Peripheral Test", false);
   copy_row(v, HW_TEST_GPS, "GPS Test", false);
   copy_row(v, HW_TEST_ACCEL, "Accelerometer Test", false);
-  copy_row(v, HW_TEST_FG_LEARNING, "Battery Calibration", false);
-  copy_row(v, HW_TEST_PLAY_MELODY, "Play Melody", false);
-  v.row_count = HW_TEST_TOTAL;
+  if (_config.battery_calibration_available) {
+    copy_row(v, HW_TEST_FG_LEARNING, "Battery Calibration", false);
+  }
+  v.row_count = hardware_test_row_count();
+  copy_row(v, v.row_count - 1, "Play Melody", false);
   v.selected_row = _hardware_test_index;
 }
 

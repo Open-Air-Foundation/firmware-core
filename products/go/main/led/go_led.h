@@ -19,17 +19,25 @@
 #include "rtos.h"
 
 #include <cstdint>
+#include <array>
 #include <optional>
 
 class LedService {
 public:
+  static constexpr uint8_t MAX_BACK_LEDS = 5;
+  static constexpr uint8_t MAX_TOUCH_LEDS = 3;
+
   struct Config {
     LedDriver *driver = nullptr;
     uint16_t task_stack_size = 2048;
     uint8_t task_priority = 3;
     uint8_t queue_depth = 8;
     uint32_t touch_flash_ms = 120;
-    uint32_t frame_interval_ms = 30; // ~33 fps when animating
+    uint32_t frame_interval_ms = 30;                    // ~33 fps when animating
+    std::array<uint8_t, MAX_BACK_LEDS> back_channels{}; // Blue-channel bases, in animation order
+    uint8_t back_channel_count = 0;
+    std::array<uint8_t, MAX_TOUCH_LEDS> touch_channels{}; // Select, Left, Right
+    uint8_t touch_channel_count = 0;                      // Zero disables touch LED output
   };
 
   explicit LedService(const Config &config);

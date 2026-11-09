@@ -2050,7 +2050,7 @@ void Orchestrator::finish_accel_test() {
   // Restore the buzzer enable and the back LED (the cue overrode both).
   _svc.buzzer_service.set_enabled(_settings.buzzer_enabled);
   if (!_svc.accel_service.end_hardware_test()) {
-    AG_LOGW(TAG, "failed to restore accelerometer capture");
+    AG_LOGW(TAG, "failed to finish accelerometer test");
   }
   _svc.led_service.back_set_brightness(_settings.back_led_brightness);
   update_back_led_indicator();

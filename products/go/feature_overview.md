@@ -120,7 +120,7 @@ shows “Pin a chart here” for None or “Not available” for a hidden therma
 
 ### Shake-To-Refresh
 
-While Go is awake, shake it side to side using a natural forearm swing, roughly
+On V1, while Go is awake, shake it side to side using a natural forearm swing, roughly
 three left/right pairs in about one second. An accepted shake gives a short
 beep when the buzzer is enabled and requests fresh readings. If a regular
 measurement is already requested, its result satisfies the refresh.
@@ -133,7 +133,8 @@ is pending do not queue more measurements or beep again.
 Manual refresh updates current readings without adding chart-history samples
 or route points, changing the regular measurement timer, or triggering an extra
 cloud upload. PM warmup can delay the result. Shake-to-wake from deep sleep is
-not implemented.
+not implemented. V2 has no shake feature; its accelerometer is used only by
+the Accelerometer Test.
 
 ## Lock And Power Button Behavior
 
@@ -400,7 +401,10 @@ from the device menu or the app.
 
 ## Product Notes For Team Members
 
-- The firmware supports Go V1 hardware, including LEDs, buzzer, and fuel gauge.
+- The firmware supports Go V1 and V2, selected by the eFuse board ID.
+- V2 has four back LEDs and no touch LEDs. Touch LED settings and the
+  Peripheral Test touch-light step currently remain visible but have no output.
+- V2 keeps the Accelerometer Test but has no shake-to-refresh.
 - CO2 sensor hardware can vary by build; the product behavior is still presented
   to users as CO2 measurement.
 - Temperature and humidity may come from a dedicated sensor or from another

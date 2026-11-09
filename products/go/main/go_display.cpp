@@ -99,7 +99,8 @@ struct DriverState {
   int spi_clock_hz = 4000000;
 
   gpio_num_t pin_cs = GPIO_NUM_NC;
-  gpio_num_t pin_dc = GPIO_NUM_NC;
+  int pin_dc = gpio::INVALID_PIN;
+  const gpio::Hal *dc_gpio = nullptr;
   gpio_num_t pin_rst = GPIO_NUM_NC;
   gpio_num_t pin_busy = GPIO_NUM_NC;
 
@@ -112,7 +113,15 @@ DriverState g_driver;
 // --- Low-level GPIO helpers ---
 
 inline void set_cs(int level) { gpio_set_level(g_driver.pin_cs, level); }
-inline void set_dc(int level) { gpio_set_level(g_driver.pin_dc, level); }
+inline esp_err_t set_dc(int level) {
+  if (g_driver.dc_gpio != nullptr) {
+    if (!g_driver.dc_gpio->set_level(g_driver.pin_dc, level)) {
+      return ESP_FAIL;
+    }
+    return ESP_OK;
+  }
+  return gpio_set_level(static_cast<gpio_num_t>(g_driver.pin_dc), level);
+}
 inline void set_rst(int level) { gpio_set_level(g_driver.pin_rst, level); }
 
 void delay_ms(uint32_t ms) {
@@ -159,24 +168,24 @@ esp_err_t spi_write_bulk(const uint8_t *data, size_t len) {
 // --- SSD1680 command/data protocol ---
 
 esp_err_t write_cmd(uint8_t command) {
+  DISP_RETURN_ON_ERR(set_dc(0));
   set_cs(0);
-  set_dc(0);
   const esp_err_t err = spi_write_byte(command);
   set_cs(1);
   return err;
 }
 
 esp_err_t write_data(uint8_t data) {
+  DISP_RETURN_ON_ERR(set_dc(1));
   set_cs(0);
-  set_dc(1);
   const esp_err_t err = spi_write_byte(data);
   set_cs(1);
   return err;
 }
 
 esp_err_t write_data_bytes(const uint8_t *data, size_t len) {
+  DISP_RETURN_ON_ERR(set_dc(1));
   set_cs(0);
-  set_dc(1);
   const esp_err_t err = spi_write_bulk(data, len);
   set_cs(1);
   return err;
@@ -191,13 +200,17 @@ esp_err_t driver_init(const DisplayService::Config &cfg) {
   g_driver.spi_host = cfg.spi_host;
   g_driver.spi_clock_hz = cfg.clock_hz;
   g_driver.pin_cs = static_cast<gpio_num_t>(cfg.pin_cs);
-  g_driver.pin_dc = static_cast<gpio_num_t>(cfg.pin_dc);
+  g_driver.pin_dc = cfg.pin_dc;
+  g_driver.dc_gpio = cfg.dc_gpio;
   g_driver.pin_rst = static_cast<gpio_num_t>(cfg.pin_rst);
   g_driver.pin_busy = static_cast<gpio_num_t>(cfg.pin_busy);
 
-  // Configure output GPIOs (CS, DC, RST)
+  // Configure native outputs. Expanded D/C is already configured by the board.
   gpio_config_t out_cfg = {};
-  out_cfg.pin_bit_mask = (1ULL << cfg.pin_cs) | (1ULL << cfg.pin_dc) | (1ULL << cfg.pin_rst);
+  out_cfg.pin_bit_mask = (1ULL << cfg.pin_cs) | (1ULL << cfg.pin_rst);
+  if (cfg.dc_gpio == nullptr) {
+    out_cfg.pin_bit_mask |= 1ULL << cfg.pin_dc;
+  }
   out_cfg.mode = GPIO_MODE_OUTPUT;
   out_cfg.pull_up_en = GPIO_PULLUP_DISABLE;
   out_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -214,7 +227,7 @@ esp_err_t driver_init(const DisplayService::Config &cfg) {
   DISP_RETURN_ON_ERR(gpio_config(&in_cfg));
 
   set_cs(1);
-  set_dc(1);
+  DISP_RETURN_ON_ERR(set_dc(1));
   set_rst(1);
 
   // Attach SPI device (CS managed manually, not by ESP-IDF driver)

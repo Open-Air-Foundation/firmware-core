@@ -24,9 +24,6 @@
 #else
 // Minimal pin/bus constants for host test compilation.
 inline constexpr int PIN_BUTTON_POWER = 5;
-inline constexpr int PIN_BUTTON_BOOT = 28;
-inline constexpr int PIN_CAP_INT = 1;
-inline constexpr int PIN_ACCEL_INT = 3;
 inline constexpr int GPS_BAUD = 115200;
 // Stub esp_reset_reason for host builds.
 enum esp_reset_reason_t { ESP_RST_UNKNOWN = 0 };
@@ -184,6 +181,8 @@ void GoApp::run() {
   retained_uptime::init();
   log_heap(TAG, "boot:run-entry");
 
+  const BoardVariant variant = _board.variant();
+
   // Factory fuel-gauge learning pre-empts every normal boot path. Only the
   // lightweight, idempotent init_nvs() is needed to read FactorySettings; the
   // heavy hardware initialization and BMS retry happen inside the factory
@@ -192,7 +191,8 @@ void GoApp::run() {
   _board.init_nvs();
   FactorySettings fs{};
   load_factory_settings(_board.config_store(), fs);
-  if (is_factory_learning_stage_active(fs.fg_learning_stage)) {
+  // The factory learning sequence is specific to V1's BQ27427.
+  if (variant == BoardVariant::V1 && is_factory_learning_stage_active(fs.fg_learning_stage)) {
     run_factory_learning_path(load_rtc_app_state()); // never returns
   }
 
@@ -677,9 +677,13 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   AG_LOGI(TAG, "run_button_wake_path: entering button-wake boot");
 
   // -----------------------------------------------------------------------
-  // Phase 1: Early paint (~10 ms)
+  // Phase 1: Early paint
   // -----------------------------------------------------------------------
 
+  // V2 display D/C requires the I2C expander before any display access.
+  if (_board.variant() == BoardVariant::V2) {
+    _board.init_buses();
+  }
   _board.init_spi();
   DisplayService &disp = _board.display();
 
@@ -701,7 +705,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   // Returns in ~10 ms.  Worker task handles the SPI full refresh (~3 s).
   disp.init(wake_values, /* defer_refresh= */ true);
 
-  // Stop LP Core after SPI/display init, before I2C init.
+  // Stop LP Core before main-CPU watchdog setup.
   _board.ulp_stop();
 
   // -----------------------------------------------------------------------
@@ -754,16 +758,12 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       });
 
   // InputService: suppress the first ButtonPower event (the wake press)
-  auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue,
-                                         {
-                                             .pin_cap_int = PIN_CAP_INT,
-                                             .pin_button_power = PIN_BUTTON_POWER,
-                                             .pin_button_boot = PIN_BUTTON_BOOT,
-                                             .suppress_button_wake = true,
-                                         });
+  auto input_config = _board.input_config();
+  input_config.suppress_button_wake = true;
+  auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue, input_config);
 
   auto *accel_service = new AccelService(_board.new_accel_sensor(), _board.gpio_hal(), event_queue,
-                                         {.pin_int = PIN_ACCEL_INT});
+                                         {.pin_int = _board.accel_interrupt_pin()});
 
   PowerService &pwr = _board.power();
 
@@ -784,6 +784,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   auto *ui_manager = new UIManager({
       .firmware_version = firmware_version,
       .serial_number = serial.c_str(),
+      .battery_calibration_available = _board.variant() == BoardVariant::V1,
   });
 
   // Start producer tasks — touch and sensors operational from here (~310 ms)
@@ -894,11 +895,14 @@ void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff
                             const char *boot_message) {
   const char *splash_text = boot_message != nullptr ? boot_message : BOOT_SPLASH_TEXT;
   // --- Early display paint ---
-  // Start the e-paper refresh before the slower I2C, BMS, sensor, and NAND
-  // initialization. The display worker owns SPI while it refreshes; NAND
-  // initialization naturally waits for that refresh before using the bus.
+  // Start the e-paper refresh before BMS, sensor, and NAND initialization.
+  // V2 needs I2C and the expander first; V1 can defer I2C initialization.
+  // The display worker owns SPI while it refreshes.
   bool boot_splash_requested = false;
   if (!handoff.display_painted) {
+    if (_board.variant() == BoardVariant::V2) {
+      _board.init_buses();
+    }
     _board.init_spi();
     DisplayService &early_display = _board.display();
 
@@ -1011,20 +1015,19 @@ void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff
                       .expected_baud = expected_gps_baud_at_boot(cause, settings, boot_state),
                       .wake_deadline_ms = boot_state.gps_wake_deadline_ms});
 
-  auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue,
-                                         {.pin_cap_int = PIN_CAP_INT,
-                                          .pin_button_power = PIN_BUTTON_POWER,
-                                          .pin_button_boot = PIN_BUTTON_BOOT,
-                                          .suppress_button_wake = handoff.suppress_wake_press});
+  auto input_config = _board.input_config();
+  input_config.suppress_button_wake = handoff.suppress_wake_press;
+  auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue, input_config);
 
   auto *accel_service = new AccelService(_board.new_accel_sensor(), _board.gpio_hal(), event_queue,
-                                         {.pin_int = PIN_ACCEL_INT});
+                                         {.pin_int = _board.accel_interrupt_pin()});
 
   PowerService &pwr = _board.power();
 
   auto *ui_manager = new UIManager({
       .firmware_version = firmware_version,
       .serial_number = serial.c_str(),
+      .battery_calibration_available = _board.variant() == BoardVariant::V1,
   });
 
   // Seed UI state after the early splash paint. Orchestrator opens the guide

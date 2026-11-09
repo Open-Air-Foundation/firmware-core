@@ -269,6 +269,7 @@ struct RtcDisplaySnapshot {
 
 #ifndef TEST_HOST
 
+#include "airgradient_gpio.h"
 #include <driver/spi_master.h>
 
 extern "C" {
@@ -291,6 +292,9 @@ public:
     int pin_dc;
     int pin_rst;
     int pin_busy;
+    // Optional borrowed HAL; the board configures pin_dc before init().
+    // nullptr uses native GPIO, configured by the display driver.
+    const gpio::Hal *dc_gpio = nullptr;
     int clock_hz = 4000000;
 
     // Worker task

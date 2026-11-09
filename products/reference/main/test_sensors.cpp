@@ -31,6 +31,13 @@ void run_test_sensors(i2c_master_bus_handle_t i2c_bus) {
       .term_current_ma = 20,
       .enable_charging = true,
       .enable_adc = true,
+      .ntc =
+          {
+              .pullup_ohm = 4120.0f,
+              .pulldown_ohm = 17330.0f,
+              .r25_ohm = 10000.0f,
+              .beta_k = 3950.0f,
+          },
   };
   BQ25629Bms bms(i2c_bus, bms_config);
 
