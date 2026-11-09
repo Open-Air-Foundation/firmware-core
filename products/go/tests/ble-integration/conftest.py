@@ -117,6 +117,12 @@ class _LoggingBleakClient:
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("ago", "AirGradient Go BLE options")
     group.addoption(
+        "--ago-board-variant",
+        choices=("v1", "v2"),
+        default="v1",
+        help="Board under test; V2 rejects touch LED settings (default: v1).",
+    )
+    group.addoption(
         "--ago-address",
         default=None,
         help="BLE address (or name) of the AGo device. "
@@ -183,6 +189,11 @@ async def _scan_for_ago(timeout: float) -> BLEDevice:
 # ---------------------------------------------------------------------------
 # Session-scoped fixtures
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def ago_board_variant(request: pytest.FixtureRequest) -> str:
+    return request.config.getoption("--ago-board-variant")
+
 
 @pytest.fixture(scope="session")
 def ago_scan_timeout(request: pytest.FixtureRequest) -> float:

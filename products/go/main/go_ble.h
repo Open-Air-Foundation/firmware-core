@@ -27,6 +27,7 @@
 // ---------------------------------------------------------------------------
 
 #include "go_power.h"
+#include "go_config_types.h"
 #include "go_settings.h"
 #include "go_types.h"
 #include "hal/ble_server.h"
@@ -105,6 +106,7 @@ struct BleConfigDecodeResult {
   BleCommand cmd = BleCommand::Unknown;   ///< Valid when op == Command
   bool has_unknown_keys = false;          ///< True if any unrecognized config key was present
   bool has_invalid_config_values = false; ///< True if a recognized config value was malformed
+  uint32_t requested_fields = 0; ///< GoConfigField bits present; excludes BLE-only settings
   size_t recognized_config_key_count = 0; ///< Count of recognized config-key occurrences in a "set"
   GpsAidingData aiding;                   ///< Valid when cmd == SetAiding
 };

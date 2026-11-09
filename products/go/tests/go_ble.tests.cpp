@@ -1775,6 +1775,8 @@ TEST_CASE("BLE: LED indicator and brightness count as separate config fields") {
       BleService::decode_config_write(buf, cbor_encoder_get_buffer_size(&encoder, buf), settings);
   CHECK(result.op == BleConfigOp::Set);
   CHECK(result.recognized_config_key_count == 2);
+  CHECK(result.requested_fields == (static_cast<uint32_t>(GoConfigField::BackLedIndicator) |
+                                    static_cast<uint32_t>(GoConfigField::BackLedBrightness)));
   CHECK_FALSE(result.has_unknown_keys);
   CHECK_FALSE(result.has_invalid_config_values);
 }
@@ -1810,6 +1812,22 @@ TEST_CASE("BLE: pinned chart rejects out-of-range values and incorrect CBOR type
   CHECK(settings.pinned_chart == previous.pinned_chart);
 }
 
+TEST_CASE("BLE: decode_config_write identifies touch LED writes even when unchanged") {
+  for (const auto intensity :
+       {TouchLedIntensity::Off, TouchLedIntensity::Dim, TouchLedIntensity::Bright}) {
+    CAPTURE(intensity);
+    uint8_t buf[64];
+    GoSettings settings{};
+    const size_t len = encode_set_uint(buf, sizeof(buf), "tled", static_cast<uint64_t>(intensity));
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(result.op == BleConfigOp::Set);
+    CHECK(result.requested_fields == static_cast<uint32_t>(GoConfigField::TouchLedIntensity));
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK_FALSE(result.has_invalid_config_values);
+    CHECK(settings.touch_led_intensity == intensity);
+  }
+}
+
 TEST_CASE("BLE: decode_config_write decodes compact device config fields") {
   uint8_t buf[64];
   GoSettings settings;
@@ -1818,6 +1836,7 @@ TEST_CASE("BLE: decode_config_write decodes compact device config fields") {
     const size_t len = encode_set_bool(buf, sizeof(buf), "buz", true);
     const auto result = BleService::decode_config_write(buf, len, settings);
     CHECK(settings.buzzer_enabled);
+    CHECK(result.requested_fields == static_cast<uint32_t>(GoConfigField::BuzzerEnabled));
     CHECK(result.recognized_config_key_count == 1);
     CHECK_FALSE(result.has_invalid_config_values);
   }

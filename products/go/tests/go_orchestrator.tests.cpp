@@ -818,7 +818,9 @@ struct TestFixture {
         ag_client(), ota_service(stub_ble_server, power_service, OtaService::Config{}),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service, ota_service},
                       CloudService::Config{}),
-        local_api(event_queue, {.serial_number = "TEST00", .firmware_version = "test"}),
+        local_api(event_queue, {.serial_number = "TEST00",
+                                .firmware_version = "test",
+                                .capabilities = board_capabilities(variant)}),
         serial_command(event_queue, serial_command_channel),
         portable_provisioner(nullptr,
                              {*reinterpret_cast<WifiManager *>(_stub_buf),
@@ -5295,7 +5297,8 @@ TEST_CASE("BLE config set: reschedules timer when interval changes",
 }
 
 TEST_CASE("BLE config set: applies altitude display unit", "[Orchestrator][settings][ble]") {
-  TestFixture f;
+  const auto variant = GENERATE(BoardVariant::V1, BoardVariant::V2);
+  TestFixture f(nullptr, variant);
   auto orch = f.make_orchestrator();
 
   test_spy::ble_connected = true;
@@ -5494,6 +5497,86 @@ TEST_CASE("dispatch: unsupported PM correction cannot replace active calibration
 
   CHECK(A::settings(orch).equals(f.settings));
   CHECK(A::corrected_measures(orch).pm_a.pm_25 == 21.0f);
+}
+
+TEST_CASE("BLE config set: touch LED writes are supported only on V1",
+          "[Orchestrator][settings][ble][v2]") {
+  const auto variant = GENERATE(BoardVariant::V1, BoardVariant::V2);
+  const auto intensity =
+      GENERATE(TouchLedIntensity::Off, TouchLedIntensity::Dim, TouchLedIntensity::Bright);
+  CAPTURE(variant, intensity);
+  TestFixture f(nullptr, variant);
+  auto orch = f.make_orchestrator();
+
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_config_decode_result.requested_fields =
+      static_cast<uint32_t>(GoConfigField::TouchLedIntensity);
+  test_spy::ble_config_decode_result.recognized_config_key_count = 1;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = f.settings;
+  test_spy::ble_decoded_settings.touch_led_intensity = intensity;
+
+  if (variant == BoardVariant::V1) {
+    ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+        .RETURN(ConfigStoreResult::OK);
+    ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+    Event evt{};
+    evt.type = EventType::BleConfigWrite;
+    A::dispatch(orch, evt);
+    CHECK(A::settings(orch).touch_led_intensity == intensity);
+    CHECK_FALSE(test_spy::ble_notify_command_result_called);
+  } else {
+    FORBID_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_));
+    FORBID_CALL(f.mock_config, commit());
+    Event evt{};
+    evt.type = EventType::BleConfigWrite;
+    A::dispatch(orch, evt);
+    CHECK(A::settings(orch).equals(f.settings));
+    REQUIRE(test_spy::ble_notify_command_result_called);
+    CHECK(test_spy::ble_last_command == BleCommand::Set);
+    CHECK_FALSE(test_spy::ble_last_command_success);
+    REQUIRE(test_spy::ble_last_command_error != nullptr);
+    CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_UNSUPPORTED);
+    CHECK_FALSE(test_spy::ble_notify_config_called);
+    CHECK(test_spy::ble_update_config_called);
+  }
+}
+
+TEST_CASE("BLE config set: V2 touch LED rejection preserves validation error precedence",
+          "[Orchestrator][settings][ble][v2]") {
+  TestFixture f(nullptr, BoardVariant::V2);
+  auto orch = f.make_orchestrator();
+  test_spy::ble_pending_config_len = 1;
+  auto &result = test_spy::ble_config_decode_result;
+  result.op = BleConfigOp::Set;
+  result.requested_fields = static_cast<uint32_t>(GoConfigField::TouchLedIntensity);
+  result.recognized_config_key_count = 1;
+  const char *expected_error = nullptr;
+  SECTION("unknown key") {
+    result.has_unknown_keys = true;
+    expected_error = BLE_VAL_ERR_UNKNOWN_CONFIG_KEY;
+  }
+  SECTION("malformed value") {
+    result.has_invalid_config_values = true;
+    expected_error = BLE_VAL_ERR_INVALID_CONFIG_VALUE;
+  }
+  SECTION("multiple fields") {
+    result.recognized_config_key_count = 2;
+    expected_error = BLE_VAL_ERR_SINGLE_FIELD_ONLY;
+  }
+  Event evt{};
+  evt.type = EventType::BleConfigWrite;
+  A::dispatch(orch, evt);
+  CHECK(A::settings(orch).equals(f.settings));
+  REQUIRE(test_spy::ble_notify_command_result_called);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  REQUIRE(test_spy::ble_last_command_error != nullptr);
+  CHECK(std::string(test_spy::ble_last_command_error) == expected_error);
 }
 
 TEST_CASE("BLE config set: rejected when unknown config key present",
@@ -5832,10 +5915,12 @@ TEST_CASE("dispatch: routes SensorDataReady to on_sensor_data", "[Orchestrator][
 
 TEST_CASE("dispatch: cloud applies shared config fields and ignores policy fields",
           "[Orchestrator][dispatch][config][correction]") {
+  const auto variant = GENERATE(BoardVariant::V1, BoardVariant::V2);
+  CAPTURE(variant);
   auto pm_algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
   SECTION("custom PM") {}
   SECTION("factory PM") { pm_algorithm = Pm25CorrectionAlgorithm::FactoryCalibration; }
-  TestFixture f;
+  TestFixture f(nullptr, variant);
   auto orch = f.make_orchestrator();
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -5898,7 +5983,8 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   CHECK(A::settings(orch).measure_interval_seconds == 30);
   CHECK(A::settings(orch).gps_mode == GpsMode::AlwaysOn);
   CHECK(A::settings(orch).back_led_brightness == LedBrightness::Mid);
-  CHECK(A::settings(orch).touch_led_intensity == TouchLedIntensity::Bright);
+  CHECK(A::settings(orch).touch_led_intensity ==
+        (variant == BoardVariant::V1 ? TouchLedIntensity::Bright : TouchLedIntensity::Off));
   CHECK(A::settings(orch).buzzer_enabled);
   CHECK(test_spy::gps_posting_interval_ms == 0);
   CHECK(test_spy::gps_started);
@@ -5910,6 +5996,24 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   REQUIRE_FALSE(test_spy::ble_notify_measures_called);
   CHECK(test_spy::cloud_set_disable_count == 0);
   CHECK(test_spy::cloud_set_fetch_enabled_count == 0);
+}
+
+TEST_CASE("dispatch: V2 ignores touch-only cloud config without saving settings",
+          "[Orchestrator][dispatch][config][v2]") {
+  const auto intensity =
+      GENERATE(TouchLedIntensity::Off, TouchLedIntensity::Dim, TouchLedIntensity::Bright);
+  TestFixture f(nullptr, BoardVariant::V2);
+  auto orch = f.make_orchestrator();
+  FORBID_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_));
+  FORBID_CALL(f.mock_config, commit());
+  Event evt{};
+  evt.type = EventType::FetchConfigResult;
+  evt.fetch_config.result = static_cast<CloudResultByte>(AgClientResult::Ok);
+  evt.fetch_config.update.update_mask = static_cast<uint32_t>(GoConfigField::TouchLedIntensity);
+  evt.fetch_config.update.touch_led_intensity = intensity;
+  A::dispatch(orch, evt);
+  CHECK(A::settings(orch).equals(f.settings));
+  CHECK_FALSE(test_spy::ble_notify_config_called);
 }
 
 TEST_CASE("dispatch: Cloud Fetch actions run calibration and LED test before opening GPS test",
@@ -8022,7 +8126,9 @@ struct PmSleepFixture {
         ag_client(), ota_service(stub_ble_server, power_service, OtaService::Config{}),
         cloud_service(nullptr, CloudService::Deps{ag_client, wifi_service, ota_service},
                       CloudService::Config{}),
-        local_api(nullptr, {.serial_number = "TEST00", .firmware_version = "test"}),
+        local_api(nullptr, {.serial_number = "TEST00",
+                            .firmware_version = "test",
+                            .capabilities = board_capabilities(BoardVariant::V1)}),
         serial_command(nullptr, serial_command_channel),
         portable_provisioner(nullptr,
                              {*reinterpret_cast<WifiManager *>(_stub_buf),

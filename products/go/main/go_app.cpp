@@ -776,6 +776,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
                                              .serial_number = serial.c_str(),
                                              .firmware_version = firmware_version,
                                              .model = STATIONARY_AGO_MODEL_CODE,
+                                             .capabilities = _board.capabilities(),
                                          });
   auto *local_server =
       new LocalServer(_board.http_server(), {*local_api_service, local_api_service,
@@ -970,6 +971,7 @@ void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff
                                              .serial_number = serial.c_str(),
                                              .firmware_version = firmware_version,
                                              .model = STATIONARY_AGO_MODEL_CODE,
+                                             .capabilities = _board.capabilities(),
                                          });
   auto *local_server =
       new LocalServer(_board.http_server(), {*local_api_service, local_api_service,

@@ -19,6 +19,8 @@ from bleak import BleakClient
 import ago_protocol as proto
 from conftest import NotificationCollector
 
+CONFIG_QUIET_WINDOW_SECONDS = 1.0
+
 
 # ---------------------------------------------------------------------------
 # Module-scoped fixture: read Config once
@@ -139,6 +141,74 @@ class TestConfigRead:
 
 class TestConfigWrite:
     """Verify writing config changes and receiving notifications."""
+
+    @pytest.mark.parametrize("intensity", [0, 1, 2], ids=["off", "dim", "bright"])
+    async def test_touch_led_write_matches_board(
+        self,
+        intensity: int,
+        ago_board_variant: str,
+        ago_client: BleakClient,
+        config_notifications: NotificationCollector,
+        ago_notify_timeout: float,
+    ):
+        """V1 applies touch LED writes; V2 rejects them, including unchanged values."""
+        original = proto.decode_cbor(
+            bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+        )
+        if ago_board_variant == "v2":
+            assert original["tled"] == 0
+        config_notifications.drain()
+        try:
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID,
+                proto.encode_config_set(tled=intensity),
+                response=True,
+            )
+            expected = dict(original)
+            if ago_board_variant == "v2":
+                payload = proto.decode_cbor(
+                    await config_notifications.wait_for(timeout=ago_notify_timeout)
+                )
+                assert payload == {
+                    "type": "cmd_result",
+                    "cmd": "set",
+                    "ok": False,
+                    "err": proto.ERR_UNSUPPORTED,
+                }
+            elif intensity != original["tled"]:
+                payload = proto.decode_cbor(
+                    await config_notifications.wait_for(timeout=ago_notify_timeout)
+                )
+                assert payload == {"type": proto.CONFIG_NOTIFY_TYPE, "tled": intensity}
+                expected["tled"] = intensity
+
+            # No delta after rejection, no notification for a V1 no-op, and no
+            # extra notification after a successful V1 delta.
+            with pytest.raises(asyncio.TimeoutError):
+                await config_notifications.wait_for(timeout=CONFIG_QUIET_WINDOW_SECONDS)
+            updated = proto.decode_cbor(
+                bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+            )
+            assert updated == expected
+        finally:
+            if ago_board_variant == "v1":
+                current = proto.decode_cbor(
+                    bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+                )
+                if current["tled"] != original["tled"]:
+                    config_notifications.drain()
+                    await ago_client.write_gatt_char(
+                        proto.CHAR_CONFIG_UUID,
+                        proto.encode_config_set(tled=original["tled"]),
+                        response=True,
+                    )
+                    restored = proto.decode_cbor(
+                        await config_notifications.wait_for(timeout=ago_notify_timeout)
+                    )
+                    assert restored == {
+                        "type": proto.CONFIG_NOTIFY_TYPE,
+                        "tled": original["tled"],
+                    }
 
     @pytest.mark.parametrize("key", ["temp_f", "alt_ft"])
     async def test_set_presentation_config_notification(

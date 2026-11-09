@@ -83,6 +83,38 @@ def test_invalid_extended_config_value(
 
 
 @pytest.mark.config_write
+@pytest.mark.parametrize("preserved_config_setting", ["buzzerEnabled"], indirect=True)
+@pytest.mark.parametrize("intensity", [0, 1, 2, 3])
+@pytest.mark.parametrize("mixed", [False, True])
+def test_v2_touch_led_is_unsupported_without_changing_config(
+    ago_http_client: httpx.Client,
+    preserved_config_setting: tuple[str, object, object],
+    ago_convergence_timeout: float,
+    ago_board_variant: str,
+    intensity: int,
+    mixed: bool,
+) -> None:
+    if ago_board_variant != "v2":
+        pytest.skip("requires --ago-board-variant=v2")
+    field, _original, updated = preserved_config_setting
+    baseline = api.get_config(ago_http_client)
+    assert baseline["touchLedIntensity"] == 0
+    request: dict[str, object] = {"touchLedIntensity": intensity}
+    if mixed:
+        request[field] = updated
+    response = ago_http_client.put(api.CONFIG_PATH, json=request)
+    api.assert_error(response, 404, "not_found", "not found", field="touchLedIntensity")
+
+    deadline = time.monotonic() + ago_convergence_timeout
+    while True:
+        assert api.get_config(ago_http_client) == baseline
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(CONFIG_REJECTION_POLL_INTERVAL, remaining))
+
+
+@pytest.mark.config_write
 @pytest.mark.parametrize("preserved_config_setting", ["measurementInterval"], indirect=True)
 @pytest.mark.parametrize("include_valid_setting", [False, True], ids=["epa-only", "mixed"])
 def test_epa_correction_is_rejected_without_changing_config(

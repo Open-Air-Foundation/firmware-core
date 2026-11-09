@@ -2227,6 +2227,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     }
     // --- uint config fields ---
     else if (key_is(BLE_KEY_MEAS_INT)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::MeasurementInterval);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       uint64_t v = 0;
@@ -2243,6 +2244,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       cbor_value_advance(&it);
       handled = true;
     } else if (key_is(BLE_KEY_PINNED_CHART)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::PinnedChart);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       uint64_t v = 0;
@@ -2262,6 +2264,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       }
       handled = true;
     } else if (key_is(BLE_KEY_BACK_LED)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::BackLedBrightness);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       uint64_t v = 0;
@@ -2273,6 +2276,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       }
       handled = true;
     } else if (key_is(BLE_KEY_TOUCH_LED)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::TouchLedIntensity);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       uint64_t v = 0;
@@ -2284,6 +2288,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       }
       handled = true;
     } else if (key_is(BLE_KEY_ABC_DAYS)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::Co2AbcDays);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       int64_t v = 0;
@@ -2295,6 +2300,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       }
       handled = true;
     } else if (key_is(BLE_KEY_TVOC_LEARNING_OFFSET)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::TvocLearningOffset);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       uint64_t v = 0;
@@ -2306,6 +2312,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       }
       handled = true;
     } else if (key_is(BLE_KEY_NOX_LEARNING_OFFSET)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::NoxLearningOffset);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       uint64_t v = 0;
@@ -2317,6 +2324,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       }
       handled = true;
     } else if (key_is(BLE_KEY_PM25_CORRECTION)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::Pm25Correction);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       bool unknown = false;
@@ -2329,6 +2337,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
         continue;
       }
     } else if (key_is(BLE_KEY_TEMP_CORRECTION)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::TemperatureCorrection);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       bool unknown = false;
@@ -2342,6 +2351,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
         continue;
       }
     } else if (key_is(BLE_KEY_HUM_CORRECTION)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::HumidityCorrection);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       bool unknown = false;
@@ -2357,6 +2367,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     }
     // --- bool config fields ---
     else if (key_is(BLE_KEY_TEMP_F)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::TemperatureUnit);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       bool v = false;
@@ -2365,6 +2376,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       }
       handled = true;
     } else if (key_is(BLE_KEY_ALT_FT)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::AltitudeUnit);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       bool v = false;
@@ -2373,6 +2385,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       }
       handled = true;
     } else if (key_is(BLE_KEY_PM_AQI)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::PmStandard);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       bool v = false;
@@ -2381,6 +2394,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       }
       handled = true;
     } else if (key_is(BLE_KEY_BUZZER)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::BuzzerEnabled);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       bool v = false;
@@ -2393,6 +2407,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     }
     // --- text config fields ---
     else if (key_is(BLE_KEY_BACK_LED_INDICATOR)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::BackLedIndicator);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       bool is_aqi = false;
@@ -2409,6 +2424,7 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       }
       handled = true;
     } else if (key_is(BLE_KEY_GPS_MODE)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::GpsMode);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       char text[16] = {};

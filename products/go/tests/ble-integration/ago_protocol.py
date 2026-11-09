@@ -194,6 +194,7 @@ ERR_SINGLE_FIELD_ONLY = "single_field_only"
 ERR_UNKNOWN_CONFIG_KEY = "unknown_config_key"
 ERR_INVALID_CONFIG_VALUE = "invalid_config_value"
 ERR_CONFIG_SAVE_FAILED = "config_save_failed"
+ERR_UNSUPPORTED = "unsupported"
 
 # ---------------------------------------------------------------------------
 # History characteristic

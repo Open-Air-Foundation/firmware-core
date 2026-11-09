@@ -98,7 +98,7 @@ static BleDiscReason disc_reason_for_shutdown(ShipModeRequest reason) {
 }
 
 static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource source,
-                                GoSettings &candidate) {
+                                GoSettings &candidate, BoardCapabilities capabilities) {
   bool has_update = false;
 
   if (has_go_config_field(update.update_mask, GoConfigField::PmStandard)) {
@@ -133,7 +133,8 @@ static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource sou
     candidate.back_led_indicator = update.back_led_indicator;
     has_update = true;
   }
-  if (has_go_config_field(update.update_mask, GoConfigField::TouchLedIntensity)) {
+  if (capabilities.supports(BoardFeature::TouchLed) &&
+      has_go_config_field(update.update_mask, GoConfigField::TouchLedIntensity)) {
     candidate.touch_led_intensity = update.touch_led_intensity;
     has_update = true;
   }
@@ -1006,7 +1007,7 @@ void Orchestrator::apply_config_update(const GoConfigUpdate &update, GoConfigSou
   }
 
   GoSettings candidate = _settings;
-  if (!merge_config_update(update, source, candidate)) {
+  if (!merge_config_update(update, source, candidate, _capabilities)) {
     return;
   }
   if (!is_go_settings_valid(candidate)) {
@@ -2485,9 +2486,8 @@ void Orchestrator::on_ble_config_write() {
   // paths rely on this call to keep READ returning the config snapshot.
   _svc.ble_service.update_config(_settings);
 
-  // Reject before adopting any value, in precedence order (first match wins):
-  // 1. unknown config key, 2. more than one config field per write (NOTIFY
-  // deltas are bounded to a single field per event).
+  // Reject before adopting any value: unknown key, invalid value, multiple
+  // fields (NOTIFY deltas allow one field), then unsupported board hardware.
   if (result.op == BleConfigOp::Set && result.has_unknown_keys) {
     AG_LOGW(TAG, "BLE config set rejected: unknown config key");
     _svc.ble_service.notify_command_result(BleCommand::Set, false, BLE_VAL_ERR_UNKNOWN_CONFIG_KEY);
@@ -2507,6 +2507,11 @@ void Orchestrator::on_ble_config_write() {
 
   switch (result.op) {
   case BleConfigOp::Set: {
+    if (has_go_config_field(result.requested_fields, GoConfigField::TouchLedIntensity) &&
+        !_capabilities.supports(BoardFeature::TouchLed)) {
+      _svc.ble_service.notify_command_result(BleCommand::Set, false, BLE_VAL_ERR_UNSUPPORTED);
+      return;
+    }
     AG_LOGI(TAG, "BLE config set");
     if (temp.operating_mode != _settings.operating_mode) {
       temp.onboarding_done = true;
