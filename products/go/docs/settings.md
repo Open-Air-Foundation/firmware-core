@@ -64,6 +64,11 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 Missing or invalid `bli` defaults to AQI. Indicator and brightness persist
 independently.
 
+Touch LED intensity defaults to Off. On V2, its UI control is hidden, BLE and
+local-server writes are rejected, and cloud updates ignore the field. The NVS
+key and read fields remain for compatibility; valid values saved by older
+firmware are still loaded, with no automatic reset to Off.
+
 ### Measurement Interval Presentation
 
 Portable and Stationary share `measure_interval_seconds`; Energy Saving uses

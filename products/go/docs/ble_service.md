@@ -443,6 +443,14 @@ keeps this value updated whenever the orchestrator calls `update_config()`.
 `meas_int` reads and writes the shared Portable/Stationary interval. The separate
 Energy Saving interval is not exposed through BLE configuration.
 
+`tled` remains readable on V2 (default `0`), but valid writes, including `0`,
+return `cmd_result` with `cmd: "set"`, `ok: false`, and `err: "unsupported"`.
+Settings stay unchanged and no Config delta is sent. Unknown keys, invalid values, and
+multiple-field errors take precedence. `BleConfigDecodeResult::requested_fields`
+records shared `GoConfigField` bits even for unchanged values; the orchestrator
+checks these against board capabilities before saving. The recognized-key count
+still covers all fields, including BLE-only settings, and detects duplicates.
+
 `bledi` reads and writes the indicator independently of `bled` brightness.
 Changes emit a `bledi` delta; unchanged writes emit none. Invalid names or
 CBOR types return `invalid_config_value`. The single-field-per-write rule applies.
@@ -666,6 +674,7 @@ Error strings are defined in `go_ble_protocol.h` and passed to
 
 | Error string | Command | Cause |
 |---|---|---|
+| `"unsupported"` | `set` | Touch LED configuration requested on a board without `TouchLed` capability |
 | `"unsupported"` | `co2_cal` | No CO2 sensor is selected or the selected driver does not support manual calibration; S12 and SCD4x support it, while the current STCC4 driver does not |
 | `"calibration_failed"` | `co2_cal` | CO2 calibration procedure failed |
 | `"clear_failed"` | `clear_data` | Route data erase did not complete fully |
@@ -1157,7 +1166,7 @@ can mean either an existing empty route or a missing route. History delete uses
 |---|---|
 | `BleConnected` | Update display, push current measures/status/config, dismiss passkey overlay. |
 | `BleDisconnected` | Update display, clear any active history export, dismiss passkey overlay. |
-| `BleConfigWrite` | `take_pending_config_write()` -> decode CBOR -> re-assert the Config snapshot via `update_config()` (a GATT write stores the raw written bytes as the characteristic value, so READ would otherwise echo the write or an `op:cmd` payload) -> if `"set"`: reject before adoption when an unknown key is present (`unknown_config_key`) or more than one recognized config key is present (`single_field_only`), else merge, save NVS, `notify_config(prev, cur)`. If `"cmd"`: `co2_cal` sends progress and signals `SensorProducer`, with a later `Co2CalibrationDone` attempting the result; other commands produce their result synchronously. |
+| `BleConfigWrite` | Decode CBOR and restore the Config READ snapshot. For `set`, reject unknown keys, invalid values, multiple fields, then unsupported hardware settings before saving and notifying. For `cmd`, dispatch the command; CO2 calibration completes asynchronously. |
 | `BleHistoryWrite` | `take_pending_history_write()` -> decode CBOR -> dispatch to `handle_history_list/start/fill/end/delete()`. For `delete`: check active tracking conflict first, then call `handle_history_delete()` and `update_status()`. |
 | `BlePairingRequest` | Render passkey on display (pairing overlay). |
 | `BleAuthComplete` | Carries `ble_auth_ok` (link encrypted). On success: mark onboarding done, leave setup session to Home (or dismiss overlay). On failure: leave onboarding untouched; in a setup session return to `Screen::GettingStarted` (session stays active so a retry shows a fresh PIN), otherwise dismiss overlay to Home. |

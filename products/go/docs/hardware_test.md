@@ -94,19 +94,17 @@ screen retains ordinary settings auto-lock behavior.
 
 ### Peripheral Test
 
-V2 has four back LEDs and no touch LEDs. The existing Touch LED operator step
-is still displayed, but its LED commands produce no output on V2; this step is
-not yet adapted to V2 hardware.
-
 Operator-guided actuator steps (tap **Pass**, or toggle + tap **Fail**) run
 first, then the automatic AQ sweep, then a summary. Overall pass requires all
-three actuators **and** all five sensor roles. The summary contains nine rows:
-one overall header, three actuator results, and five sensor results.
+supported actuators **and** all five sensor roles. V1 tests back LEDs, touch
+LEDs, and buzzer, with nine summary rows. V2 skips Touch LED in both the flow
+and summary, leaving eight rows; its absent touch LEDs cannot fail the test.
 
 ```mermaid
 stateDiagram-v2
     [*] --> BackLed
-    BackLed --> TouchLeds: tap confirms
+    BackLed --> TouchLeds: V1 confirms
+    BackLed --> Buzzer: V2 confirms
     TouchLeds --> Buzzer: tap confirms
     Buzzer --> WaitingForSensors: tap confirms
     WaitingForSensors --> Testing: PM ready and producer available

@@ -63,10 +63,12 @@ on-screen password line agree.
 
 | Field | Default | Purpose |
 |---|---|---|
-| `battery_calibration_available` | `true` | Show Battery Calibration in Hardware Test; application wiring sets this to `false` on V2 |
+| `capabilities` | Empty set | Board features supplied by application wiring; controls Touch LED and Battery Calibration visibility |
 
 Without calibration, Play Melody follows Accelerometer Test directly; navigation
-and selection use the shorter menu.
+and selection use the shorter menu. Without touch LEDs, Display & Touch ends
+at LED Brightness and the Peripheral Test summary omits Touch LED. See
+[board capabilities](hardware_init.md#board-variants).
 
 ## Public API
 
@@ -194,7 +196,7 @@ rows follow this order:
 | Tracking | Status, Pause Tracking or Resume Tracking, Stop Tracking |
 | Settings | Operations, Display & Touch, Hardware Test, Clear Data, Setup Guide, About Device |
 | Operations | Measurement Interval, CO2 Calibration, GPS Mode, Buzzer, Local Server (Stationary only) |
-| Display & Touch | Pinned Chart, Temperature Unit, Altitude Unit, PM Display, Auto Lock, LED Indicator, LED Brightness, Touch LED |
+| Display & Touch | Pinned Chart, Temperature Unit, Altitude Unit, PM Display, Auto Lock, LED Indicator, LED Brightness, Touch LED (V1 only) |
 | Hardware Test | Peripheral Test, GPS Test, Accelerometer Test, Battery Calibration (V1 only), Play Melody |
 
 Settings and its groups fit on one page. Opening Settings selects Operations;
@@ -349,7 +351,7 @@ pairs so display ordering cannot change persisted mode identities.
 | Auto Lock | `Auto Lock: Off / 10s / 30s / 60s` | Off, 10 Seconds, 30 Seconds, 60 Seconds |
 | Back LED Indicator | `LED Indicator: AQI / CO2` | AQI, CO2 |
 | Back LED Brightness | `LED Brightness` | Off, Dim, Mid, Bright |
-| Touch LED | `Touch LED: ...` | Off, Dim, Bright |
+| Touch LED (V1 only) | `Touch LED: ...` | Off, Dim, Bright |
 | CO2 Calibration | Action row | Opens confirm dialog |
 | Clear Data | Action row | Opens confirm dialog |
 | Buzzer | `Buzzer: Off / On` | Off, On |

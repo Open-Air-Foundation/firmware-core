@@ -38,6 +38,19 @@ pytest products/go/tests/ble-integration/test_measures.py -v
 | `--ago-address` | _(auto-scan)_ | BLE address or name of the AGo device |
 | `--ago-scan-timeout` | `10` | Seconds to scan before giving up |
 | `--ago-notify-timeout` | `30` | Max seconds to wait for a notification |
+| `--ago-board-variant` | `v1` | Expected board: `v1` or `v2`; does not change firmware board detection |
+
+Run configuration-write tests with UV from the repository root:
+
+```sh
+uv run --project products/go/tests/ble-integration pytest \
+  products/go/tests/ble-integration/test_config.py::TestConfigWrite \
+  -v --ago-board-variant=v2
+```
+
+Touch LED cases verify V1 updates and restores the setting. On V2 they require
+an initial Off value, rejection of Off/Dim/Bright writes with `unsupported`,
+unchanged configuration, and no Config delta. Use `v1` for a V1 board.
 
 ### Viewing BLE Payloads
 

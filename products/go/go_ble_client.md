@@ -711,7 +711,7 @@ silently ignored for backward compatibility. They do not modify any setting.
 | `"op_mode"` | text | `"portable"`, `"stationary"`, or `"offline"` |
 | `"bledi"` | text | `"aqi"` or `"co2"` |
 | `"bled"` | uint | 0–3 (back LED brightness) |
-| `"tled"` | uint | 0–2 (touch LED intensity) |
+| `"tled"` | uint | 0–2 (touch LED intensity; writes supported on V1 only) |
 | `"buz"` | bool | Buzzer enabled |
 | `"abc"` | int | `-1` disables ABC; otherwise 1–200 days |
 | `"tlo"` | uint | 1–1000 hours |
@@ -746,7 +746,9 @@ The write is rejected before any value is applied if it contains an
 **unrecognized config key** (`unknown_config_key`, checked first), an invalid
 interval, GPS mode, LED, buzzer, ABC, learning-offset, or correction value
 (`invalid_config_value`), or **more than one recognized config key**
-(`single_field_only`). A settings persistence failure returns
+(`single_field_only`). After these checks, V2 rejects `tled` writes with
+`unsupported`, including writes of `0`. The field remains readable (default
+`0`); rejected writes emit no Config delta. A settings persistence failure returns
 `config_save_failed`. On rejection no settings are modified and the device
 sends an error notification instead:
 
@@ -990,6 +992,7 @@ description is available.
 
 | Error String | Command | Cause |
 |---|---|---|
+| `"unsupported"` | `set` | Touch LED writes are unavailable on V2 |
 | `"unsupported"` | `co2_cal` | No CO2 sensor is selected or the selected driver does not support manual calibration; S12 and SCD4x support it, while the current STCC4 driver does not |
 | `"calibration_failed"` | `co2_cal` | CO2 calibration procedure failed |
 | `"clear_failed"` | `clear_data` | Route data erase did not complete fully |

@@ -141,8 +141,8 @@ Brightness Off preserves the selection and logical color for later use.
 ### Composite LED Test
 
 The orchestrator provides a blocking diagnostic that exercises every mapped
-LED group. All three touch LEDs remain bright while
-the five back LEDs show red, green, and blue for one second each. After three
+LED group. Back LEDs show red, green, and blue for one second each: five on V1,
+four on V2. V1's three touch LEDs remain bright during the test. After three
 seconds, the orchestrator restores the configured group levels and the latest
 valid selected indicator color, or clears the back LEDs when its reading is invalid.
 
@@ -249,7 +249,7 @@ back_update_aqi(pm25);          // kills sequence immediately, clears saved stat
 - `touch_set_all(true)` lights all three touch pads white at the current
   intensity with no off-edge; they hold until `touch_set_all(false)`.
 - Independent of the flash path (`_touch_steady` render gate), so it does
-  not interfere with `touch_flash()`. Used by the hardware peripheral test
+  not interfere with `touch_flash()`. Used by the V1 hardware peripheral test
   so an operator can visually confirm the touch LEDs.
 
 ### V1 Input Source To Touch Pad Mapping

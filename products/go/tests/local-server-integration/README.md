@@ -55,6 +55,22 @@ pytest products/go/tests/local-server-integration/test_measures.py -v \
 | `--ago-allow-config-write` | off | Enable persisted config round trips and restoration |
 | `--ago-allow-calibration` | off | Enable physical CO2 calibration |
 | `--ago-ota-active` | off | Confirm committed OTA is active |
+| `--ago-board-variant` | `v1` | Expected board: `v1` or `v2`; does not change firmware board detection |
+
+Run configuration tests with UV from the repository root. Enable the server in
+Stationary mode and set `configurationControl=local`:
+
+```sh
+uv run --project products/go/tests/local-server-integration pytest \
+  products/go/tests/local-server-integration/test_config.py \
+  products/go/tests/local-server-integration/test_errors.py \
+  -v --ago-board-variant=v2 --ago-allow-config-write
+```
+
+V2 skips touch LED round trips. Dedicated cases require an initial Off value
+and check that writes of `0`–`3` return `404 not_found`, including mixed requests
+with a valid buzzer change. Configuration must remain unchanged for the full
+convergence window. Use `v1` for V1 write/restore coverage.
 
 ### Viewing HTTP Traffic
 
@@ -75,7 +91,7 @@ exit.
 
 Persisted mutation tests require `--ago-allow-config-write`. They round-trip the
 temperature and altitude units, Pinned Chart, measurement and GPS settings,
-back LED indicator (`aqi`/`co2`), back and touch LED levels, buzzer, CO2 ABC period,
+back LED indicator (`aqi`/`co2`), back LED and V1 touch LED levels, buzzer, CO2 ABC period,
 and TVOC/NOx learning offsets.
 Each parameterized case
 changes one field, polls the asynchronous GET snapshot for convergence, and
