@@ -184,11 +184,7 @@ void GoApp::run() {
   retained_uptime::init();
   log_heap(TAG, "boot:run-entry");
 
-  // V2 routing is a separate integration step; do not use V1 pins on V2.
-  if (_board.variant() == BoardVariant::V2) {
-    AG_LOGE(TAG, "V2 board detected; peripheral support is not yet enabled");
-    return;
-  }
+  const BoardVariant variant = _board.variant();
 
   // Factory fuel-gauge learning pre-empts every normal boot path. Only the
   // lightweight, idempotent init_nvs() is needed to read FactorySettings; the
@@ -198,7 +194,8 @@ void GoApp::run() {
   _board.init_nvs();
   FactorySettings fs{};
   load_factory_settings(_board.config_store(), fs);
-  if (is_factory_learning_stage_active(fs.fg_learning_stage)) {
+  // The factory learning sequence is specific to V1's BQ27427.
+  if (variant == BoardVariant::V1 && is_factory_learning_stage_active(fs.fg_learning_stage)) {
     run_factory_learning_path(load_rtc_app_state()); // never returns
   }
 

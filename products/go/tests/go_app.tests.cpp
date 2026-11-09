@@ -735,7 +735,7 @@ TEST_CASE("Board identity: only a successful V2 ID selects V2", "[board][efuse]"
   }
 }
 
-TEST_CASE("GoApp::run: V2 is identified before V1 peripherals are initialized", "[board][efuse]") {
+TEST_CASE("GoApp::run: V2 starts the normal application", "[board][efuse]") {
   test_spy::reset();
   MockBoard board;
   board.board_variant = BoardVariant::V2;
@@ -743,8 +743,14 @@ TEST_CASE("GoApp::run: V2 is identified before V1 peripherals are initialized", 
 
   app.run();
 
-  REQUIRE(board.call_log == std::vector<std::string>{"variant"});
-  CHECK_FALSE(test_spy::orchestrator_run_called);
+  REQUIRE_FALSE(board.call_log.empty());
+  CHECK(board.call_log.front() == "variant");
+  CHECK(board.buses_init_called);
+  CHECK(board.spi_init_called);
+  CHECK(board.bms_init_called);
+  CHECK(board.fuel_gauge_init_called);
+  CHECK(board.sensors_called);
+  CHECK(test_spy::orchestrator_run_called);
 }
 
 TEST_CASE("GoApp::run: V1 eFuse fallbacks retain normal boot", "[board][efuse]") {

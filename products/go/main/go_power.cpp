@@ -705,7 +705,17 @@ void PowerService::set_pm_power(bool on) {
   if (_config.pin_pm_power < 0) {
     return;
   }
-  _gpio.set_level(_config.pin_pm_power, on ? PM_POWER_ON_LEVEL : PM_POWER_OFF_LEVEL);
+  const int level = on ? PM_POWER_ON_LEVEL : PM_POWER_OFF_LEVEL;
+  bool success;
+  if (_config.pm_gpio != nullptr) {
+    success = _config.pm_gpio->set_level(_config.pin_pm_power, level);
+  } else {
+    success = _gpio.set_level(_config.pin_pm_power, level);
+  }
+  if (!success) {
+    AG_LOGW(TAG, "set_pm_power: GPIO write failed");
+    return;
+  }
   AG_LOGI(TAG, "set_pm_power: %s", on ? "ON" : "OFF");
 }
 
@@ -722,7 +732,8 @@ void PowerService::enter_sleep(uint32_t sleep_duration_ms) {
 #ifndef TEST_HOST
   // Hold PM sensor power GPIO during short sleeps so the sensor stays warm
   // and the next fast-path boot can skip the 10 s warmup.
-  if (should_hold_pm_sensor(sleep_duration_ms)) {
+  // Expander outputs retain their level without ESP32 GPIO holds.
+  if (_config.pm_gpio == nullptr && should_hold_pm_sensor(sleep_duration_ms)) {
     auto pin = static_cast<gpio_num_t>(_config.pin_pm_power);
     gpio_hold_en(pin);
     AG_LOGI(TAG, "enter_sleep: holding PM power GPIO %d for warm wake", _config.pin_pm_power);

@@ -94,6 +94,7 @@ inline constexpr uint8_t I2C_ADDR_V2_EXPANDER =
 // ---------------------------------------------------------------------------
 
 inline constexpr gpio_num_t PIN_PM_POWER = GPIO_NUM_26;
+inline constexpr int V2_EXPANDER_PM_POWER = 1;
 
 // ---------------------------------------------------------------------------
 // Buzzer — HYG-8503A (LEDC PWM via NPN low-side switch Q3)

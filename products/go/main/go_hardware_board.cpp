@@ -199,6 +199,11 @@ void GoHardwareBoard::init_buses() {
     if (!gpio::tca6408a::init(_expander, _i2c_bus, {.address = I2C_ADDR_V2_EXPANDER})) {
       ESP_ERROR_CHECK(ESP_FAIL);
     }
+    if (!_expander_gpio.configure(V2_EXPANDER_PM_POWER, gpio::Mode::Output,
+                                  gpio::PullMode::Floating, gpio::InterruptType::Disabled,
+                                  PM_POWER_ON_LEVEL)) {
+      ESP_ERROR_CHECK(ESP_FAIL);
+    }
     // Deselect NAND before display SPI traffic.
     if (!_expander_gpio.configure(V2_EXPANDER_NAND_CS, gpio::Mode::Output, gpio::PullMode::Floating,
                                   gpio::InterruptType::Disabled, 1)) {
@@ -210,7 +215,7 @@ void GoHardwareBoard::init_buses() {
       ESP_ERROR_CHECK(ESP_FAIL);
     }
     AG_LOGI(TAG, "V2 GPIO expander ready");
-  } else {
+  } else if (variant() == BoardVariant::V1) {
     hal.set_level(PIN_PM_POWER, PM_POWER_ON_LEVEL);
   }
 
@@ -646,15 +651,20 @@ PowerService &GoHardwareBoard::power() {
   assert(_fuel_gauge_init_attempted && "power() requires init_fuel_gauge()");
   assert(_bms_init_attempted && "power() requires init_bms()");
   if (!_power) {
-    _power = new PowerService(_bms_driver, gpio::native::hal,
-                              {
-                                  .pin_wake_button_power = PIN_BUTTON_POWER,
-                                  .pin_wake_button_boot = -1,
-                                  .pin_ext_wdt = PIN_EXT_WDT,
-                                  .deep_sleep_threshold_ms = 5000,
-                                  .pin_pm_power = PIN_PM_POWER,
-                                  .sensor_hold_max_sleep_ms = 20000,
-                              });
+    PowerService::Config config = {
+        .pin_wake_button_power = PIN_BUTTON_POWER,
+        .pin_wake_button_boot = -1,
+        .pin_ext_wdt = PIN_EXT_WDT,
+        .deep_sleep_threshold_ms = 5000,
+        .sensor_hold_max_sleep_ms = 20000,
+    };
+    if (variant() == BoardVariant::V2) {
+      config.pin_pm_power = V2_EXPANDER_PM_POWER;
+      config.pm_gpio = &_expander_gpio;
+    } else if (variant() == BoardVariant::V1) {
+      config.pin_pm_power = PIN_PM_POWER;
+    }
+    _power = new PowerService(_bms_driver, gpio::native::hal, config);
     _power->init_ext_watchdog();
     _power->reset_ext_watchdog();
     if (_fuel_gauge != nullptr && _fuel_gauge->ready()) {
@@ -715,7 +725,11 @@ const gpio::Hal &GoHardwareBoard::gpio_hal() { return gpio::native::hal; }
 // Hardware operations
 // ===========================================================================
 
-void GoHardwareBoard::release_gpio_holds() { PowerService::release_sleep_gpio_holds(PIN_PM_POWER); }
+void GoHardwareBoard::release_gpio_holds() {
+  if (variant() == BoardVariant::V1) {
+    PowerService::release_sleep_gpio_holds(PIN_PM_POWER);
+  }
+}
 
 void GoHardwareBoard::ulp_stop() { ulp_wdt_stop(); }
 
