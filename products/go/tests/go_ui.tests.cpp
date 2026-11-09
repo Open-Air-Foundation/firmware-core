@@ -162,6 +162,37 @@ TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
                   "Battery Calibration", "Play Melody"});
 }
 
+TEST_CASE("UIManager: V2 hides Touch LED without breaking Display & Touch navigation",
+          "[UIManager][settings][v2]") {
+  auto config = DEFAULT_UI_CONFIG;
+  config.touch_led_available = false;
+  UIManager ui(config);
+  go_to_group(ui, "Display & Touch");
+
+  check_rows(ui, {"Exit", "Back", "Pinned Chart", "Temperature Unit: C", "Altitude Unit: m",
+                  "PM Display: ug/m3", "Auto Lock: Off", "LED Indicator: AQI", "LED Brightness"});
+
+  select_row(ui, "LED Brightness");
+  press(ui, InputSource::TouchDown);
+  auto values = ui.build_values(make_default_ctx());
+  CHECK(std::string(values.rows[values.selected_row].text) == "Exit");
+  press(ui, InputSource::TouchUp);
+  values = ui.build_values(make_default_ctx());
+  CHECK(std::string(values.rows[values.selected_row].text) == "LED Brightness");
+
+  press(ui, InputSource::TouchEnter);
+  REQUIRE(ui.current_screen() == Screen::SettingsChoice);
+  CHECK(open_row(ui, "Dim").action == UIAction::SettingsChanged);
+  REQUIRE(ui.current_screen() == Screen::DisplayTouch);
+  values = ui.build_values(make_default_ctx());
+  CHECK(std::string(values.rows[values.selected_row].text) == "LED Brightness");
+
+  GoSettings settings{};
+  ui.apply_to_settings(settings);
+  CHECK(settings.back_led_brightness == LedBrightness::Dim);
+  CHECK(settings.touch_led_intensity == TouchLedIntensity::Off);
+}
+
 TEST_CASE("UIManager: mode choices preserve identities across every transition",
           "[UIManager][settings][mode]") {
   const OperatingMode modes[] = {OperatingMode::Portable, OperatingMode::Stationary,

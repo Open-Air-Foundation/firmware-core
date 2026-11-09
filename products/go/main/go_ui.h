@@ -182,6 +182,7 @@ public:
     /// so the Wi-Fi QR and instruction line agree.
     const char *ap_password = "cleanair";
     bool battery_calibration_available = true;
+    bool touch_led_available = true;
   };
 
   explicit UIManager(const Config &config);

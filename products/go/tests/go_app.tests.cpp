@@ -2312,7 +2312,7 @@ TEST_CASE("run_interactive: exhausted BMS retries restart before orchestrator") 
   CHECK(board.call_index("sensors") < 0);
 }
 
-TEST_CASE("Battery Calibration availability follows the board on both interactive boot paths") {
+TEST_CASE("UI hardware availability follows the board on both interactive boot paths") {
   for (const auto variant : {BoardVariant::V1, BoardVariant::V2}) {
     for (const bool button_wake : {false, true}) {
       CAPTURE(variant, button_wake);
@@ -2328,6 +2328,7 @@ TEST_CASE("Battery Calibration availability follows the board on both interactiv
         access.run_interactive(WakeCause::PowerOn);
       }
       CHECK(test_spy::ui_config.battery_calibration_available == (variant == BoardVariant::V1));
+      CHECK(test_spy::ui_config.touch_led_available == (variant == BoardVariant::V1));
     }
   }
 }

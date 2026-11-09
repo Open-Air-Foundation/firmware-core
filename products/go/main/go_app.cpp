@@ -785,6 +785,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
       .firmware_version = firmware_version,
       .serial_number = serial.c_str(),
       .battery_calibration_available = _board.variant() == BoardVariant::V1,
+      .touch_led_available = _board.variant() == BoardVariant::V1,
   });
 
   // Start producer tasks — touch and sensors operational from here (~310 ms)
@@ -1028,6 +1029,7 @@ void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff
       .firmware_version = firmware_version,
       .serial_number = serial.c_str(),
       .battery_calibration_available = _board.variant() == BoardVariant::V1,
+      .touch_led_available = _board.variant() == BoardVariant::V1,
   });
 
   // Seed UI state after the early splash paint. Orchestrator opens the guide

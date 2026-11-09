@@ -1044,6 +1044,9 @@ const UIManager::SettingId *UIManager::group_items(Screen screen, uint8_t &count
   }
   if (screen == Screen::DisplayTouch) {
     count = sizeof(DISPLAY_TOUCH) / sizeof(DISPLAY_TOUCH[0]);
+    if (!_config.touch_led_available) {
+      --count; // Touch LED is the final item and only available on V1.
+    }
     return DISPLAY_TOUCH;
   }
   count = 0;
@@ -2200,15 +2203,18 @@ void UIManager::populate_peripheral_test_rows(DisplayValues &v) const {
       (void)snprintf(buf, sizeof(buf), "%s: %s", name, pass ? "PASS" : "FAIL");
       copy_row(v, i, buf, false);
     };
-    row(1, "Back LED", pv.back_led);
-    row(2, "Touch LED", pv.touch_led);
-    row(3, "Buzzer", pv.buzzer);
-    row(4, "Temp/Hum", pv.temp_hum);
-    row(5, "CO2", pv.co2);
-    row(6, "PM", pv.pm);
-    row(7, "TVOC/NOx", pv.tvoc_nox);
-    row(8, "Pressure", pv.pressure);
-    v.row_count = 9;
+    uint8_t next_row = 1;
+    row(next_row++, "Back LED", pv.back_led);
+    if (_config.touch_led_available) {
+      row(next_row++, "Touch LED", pv.touch_led);
+    }
+    row(next_row++, "Buzzer", pv.buzzer);
+    row(next_row++, "Temp/Hum", pv.temp_hum);
+    row(next_row++, "CO2", pv.co2);
+    row(next_row++, "PM", pv.pm);
+    row(next_row++, "TVOC/NOx", pv.tvoc_nox);
+    row(next_row++, "Pressure", pv.pressure);
+    v.row_count = next_row;
     v.selected_row = 0; // header disabled; any tap exits
     break;
   }

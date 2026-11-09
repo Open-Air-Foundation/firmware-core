@@ -1838,7 +1838,7 @@ void Orchestrator::peripheral_step_result(bool pass) {
   switch (_periph.step) {
   case Step::BackLed:
     _periph.back_led = pass;
-    _periph.step = Step::TouchLed;
+    _periph.step = _svc.board.variant() == BoardVariant::V2 ? Step::Buzzer : Step::TouchLed;
     drive_peripheral_actuator();
     break;
   case Step::TouchLed:
@@ -1888,8 +1888,8 @@ void Orchestrator::on_sensor_test_done(const SensorTestResults &results) {
   _periph.sensors = results;
   _periph.step = PeripheralTestState::Step::Summary;
 
-  const bool overall =
-      _periph.back_led && _periph.touch_led && _periph.buzzer && results.all_pass();
+  const bool touch_led_pass = _svc.board.variant() == BoardVariant::V2 || _periph.touch_led;
+  const bool overall = _periph.back_led && touch_led_pass && _periph.buzzer && results.all_pass();
   AG_LOGI(TAG, "peripheral test: summary overall=%s", overall ? "PASS" : "FAIL");
 
   // Overall pass/fail cue (buzzer + back LED colour).

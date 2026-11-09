@@ -15,6 +15,7 @@
  */
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <trompeloeil.hpp>
 #include <trompeloeil/mock.hpp>
 
@@ -448,7 +449,8 @@ public:
 // dummies that are never dereferenced.
 class StubGoBoard : public GoBoard {
 public:
-  BoardVariant variant() override { return BoardVariant::V1; }
+  BoardVariant board_variant = BoardVariant::V1;
+  BoardVariant variant() override { return board_variant; }
   int init_wifi_subsystem_calls = 0;
 
   void init_nvs() override {}
@@ -796,7 +798,7 @@ struct TestFixture {
   std::unique_ptr<trompeloeil::expectation> _exp_get_float;
   std::unique_ptr<trompeloeil::expectation> _exp_set_float;
 
-  explicit TestFixture(AccelSensor *accel_sensor = nullptr)
+  explicit TestFixture(AccelSensor *accel_sensor = nullptr, BoardVariant variant = BoardVariant::V1)
       : event_queue(mock_rtos.queue_create_impl(EVENT_QUEUE_DEPTH, sizeof(Event))),
         payload_cache(stub_cache_storage, 16),
         sensor_producer(reinterpret_cast<SensorManager &>(stub_sensor_mgr), nullptr,
@@ -805,7 +807,8 @@ struct TestFixture {
         input_service(stub_touch, test_gpio_hal, nullptr, InputService::Config{}),
         display_service(DisplayService::Config{}), storage_service(payload_cache, stub_nand),
         power_service(&stub_bms, test_gpio_hal, PowerService::Config{}),
-        ui_manager(UIManager::Config{}), ble_service(nullptr, storage_service, stub_ble_server),
+        ui_manager({.touch_led_available = variant == BoardVariant::V1}),
+        ble_service(nullptr, storage_service, stub_ble_server),
         wifi_service(nullptr,
                      {*reinterpret_cast<WifiManager *>(_stub_buf),
                       *reinterpret_cast<AgBleServer *>(_stub_buf),
@@ -827,6 +830,7 @@ struct TestFixture {
                  ui_manager,        ble_service,          wifi_service,         cloud_service,
                  local_api,         serial_command,       portable_provisioner, stub_board,
                  ota_service,       accel_service} {
+    stub_board.board_variant = variant;
     test_spy::reset();
     reboot_count = 0;
     during_reboot = nullptr;
@@ -6766,7 +6770,10 @@ TEST_CASE("LED test does not interrupt an interactive hardware test",
 
 TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
           "[Orchestrator][hwtest][peripheral]") {
-  TestFixture f;
+  const auto variant = GENERATE(BoardVariant::V1, BoardVariant::V2);
+  CAPTURE(variant);
+  const bool has_touch_led = variant == BoardVariant::V1;
+  TestFixture f(nullptr, variant);
   auto orch = f.make_orchestrator();
 
   A::unlock(orch);
@@ -6782,16 +6789,25 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   const auto first_view = f.ui_manager.build_values(A::build_context(orch));
   CHECK(std::string(first_view.rows[0].text) == "Back LED cycling?");
   bool back_pass = true;
+  bool sensors_pass = true;
   SECTION("all actuators pass") {}
   SECTION("back LED failure fails the overall result") {
     back_pass = false;
     A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress});
   }
+  SECTION("sensor failure fails the overall result") { sensors_pass = false; }
 
-  // Three actuator confirmations precede the AQ sweep.
+  // Only populated actuators require confirmation before the AQ sweep.
   CHECK_FALSE(test_spy::self_test_requested);
   A::on_input(orch, touch_enter); // Back LED result
-  A::on_input(orch, touch_enter); // Touch LED pass
+  if (has_touch_led) {
+    const auto touch_view = f.ui_manager.build_values(A::build_context(orch));
+    CHECK(std::string(touch_view.rows[0].text) == "Touch LEDs on?");
+    A::on_input(orch, touch_enter); // Touch LED pass
+  }
+  CHECK(test_spy::led_touch_all_on_seen == has_touch_led);
+  const auto buzzer_view = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(std::string(buzzer_view.rows[0].text) == "Buzzer beeping?");
   CHECK_FALSE(test_spy::self_test_requested);
   A::on_input(orch, touch_enter); // Buzzer pass → triggers AQ sweep
   CHECK(test_spy::self_test_requested);
@@ -6801,15 +6817,25 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   Event evt{};
   evt.type = EventType::SensorTestDone;
   evt.sensor_test_results = SensorTestResults{true, true, true, true, true};
+  evt.sensor_test_results.temp_hum_pass = sensors_pass;
   A::dispatch(orch, evt);
   CHECK(f.ui_manager.current_screen() == Screen::PeripheralTest);
   const auto summary = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(summary.row_count == 9);
+  REQUIRE(summary.row_count == (has_touch_led ? 9 : 8));
   CHECK(std::string(summary.rows[0].text) ==
-        (back_pass ? "PASS - tap to exit" : "FAIL - tap to exit"));
+        (back_pass && sensors_pass ? "PASS - tap to exit" : "FAIL - tap to exit"));
   CHECK(std::string(summary.rows[1].text) == (back_pass ? "Back LED: PASS" : "Back LED: FAIL"));
-  CHECK(std::string(summary.rows[2].text) == "Touch LED: PASS");
-  CHECK(std::string(summary.rows[3].text) == "Buzzer: PASS");
+  uint8_t row = 2;
+  if (has_touch_led) {
+    CHECK(std::string(summary.rows[row++].text) == "Touch LED: PASS");
+  }
+  CHECK(std::string(summary.rows[row++].text) == "Buzzer: PASS");
+  CHECK(std::string(summary.rows[row++].text) ==
+        (sensors_pass ? "Temp/Hum: PASS" : "Temp/Hum: FAIL"));
+  CHECK(std::string(summary.rows[row++].text) == "CO2: PASS");
+  CHECK(std::string(summary.rows[row++].text) == "PM: PASS");
+  CHECK(std::string(summary.rows[row++].text) == "TVOC/NOx: PASS");
+  CHECK(std::string(summary.rows[row++].text) == "Pressure: PASS");
 
   // Tap on the summary exits back to the Hardware Test submenu.
   A::on_input(orch, touch_enter);
