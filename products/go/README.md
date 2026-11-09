@@ -136,7 +136,9 @@ factory credentials automatically.
 
 `init_fuel_gauge()` initializes the gauge independently from the charger.
 V1 performs BQ27427 corruption recovery and an idempotent cell-config write.
-V2 preserves the BQ27742 pack configuration; pack provisioning remains deferred.
+V2 applies BQ27742 capacity, energy, and empty-voltage parameters while preserving
+the sleep threshold and learned data. Remaining pack provisioning is deferred;
+see [Fuel Gauge Bring-Up](docs/hardware_init.md#fuel-gauge-bring-up).
 At runtime, `poll_bms()` prefers FG-derived SOC and surfaces
 FG telemetry in `PowerSnapshot`, even when the charger is unavailable. Fast-path
 route points and display rendering use the same snapshot. Three log lines are

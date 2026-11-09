@@ -67,16 +67,18 @@
 static constexpr const char *TAG = "board";
 
 // ---------------------------------------------------------------------------
-// Fuel-gauge cell configuration — validated on hardware against AGo's
-// single-cell 2000 mAh Li-ion pack.  Revisit if cell sourcing changes.
+// Fuel-gauge cell configuration. V1's 2000 mAh profile is hardware-validated;
+// V2 uses the 2600 mAh cell specification and preserves its sleep threshold.
 // ---------------------------------------------------------------------------
 
-static constexpr FgCellConfig AGO_CELL_CONFIG = {
-    .design_capacity_mah = 2000,
-    .design_energy_mwh = 7400,
-    .terminate_voltage_mv = 3000,
-    .sleep_current_ma = 50,
-};
+static constexpr uint16_t AGO_V1_DESIGN_CAPACITY_MAH = 2000;
+static constexpr uint16_t AGO_V1_DESIGN_ENERGY_MWH = 7400;
+static constexpr uint16_t AGO_V1_TERMINATE_VOLTAGE_MV = 3000;
+static constexpr uint16_t AGO_V1_SLEEP_CURRENT_MA = 50;
+
+static constexpr uint16_t AGO_V2_DESIGN_CAPACITY_MAH = 2600;
+static constexpr uint16_t AGO_V2_DESIGN_ENERGY_MWH = 9620;
+static constexpr uint16_t AGO_V2_TERMINATE_VOLTAGE_MV = 3000;
 
 // FG DM corruption sanity ranges.  A reading outside any of these
 // ranges is treated as evidence of a corrupted persistent block
@@ -299,14 +301,44 @@ void GoHardwareBoard::init_fuel_gauge() {
   _fuel_gauge_init_attempted = true;
 
   if (variant() == BoardVariant::V2) {
-    // BQ27742 uses pack-specific provisioning, not BQ27427 reset/config recovery.
     auto *gauge = new BQ27742(_i2c_bus);
-    if (gauge->init()) {
-      _fuel_gauge = gauge;
-    } else {
+    if (!gauge->init()) {
       AG_LOGE(TAG, "BQ27742 init failed — using charger battery estimate");
       delete gauge;
+      return;
     }
+
+    bool config_ok = gauge->unseal();
+    FgCellConfig current{};
+    if (config_ok) {
+      config_ok = gauge->read_cell_config(current);
+    }
+    if (config_ok) {
+      const FgCellConfig expected = {
+          .design_capacity_mah = AGO_V2_DESIGN_CAPACITY_MAH,
+          .design_energy_mwh = AGO_V2_DESIGN_ENERGY_MWH,
+          .terminate_voltage_mv = AGO_V2_TERMINATE_VOLTAGE_MV,
+          .sleep_current_ma = current.sleep_current_ma,
+      };
+      if (current != expected) {
+        AG_LOGI(TAG, "BQ27742 applying cell config");
+        config_ok = gauge->write_cell_config(expected);
+      }
+    }
+
+    // Always attempt to reseal after configuration access, including on failure.
+    const bool seal_ok = gauge->seal();
+    if (!config_ok || !seal_ok) {
+      AG_LOGE(TAG,
+              "BQ27742 configuration failed (config_ok=%d seal_ok=%d) — "
+              "using charger battery estimate",
+              config_ok, seal_ok);
+      delete gauge;
+      return;
+    }
+
+    AG_LOGI(TAG, "BQ27742 cell config ready; gauge sealed");
+    _fuel_gauge = gauge;
     return;
   }
 
@@ -316,6 +348,12 @@ void GoHardwareBoard::init_fuel_gauge() {
     AG_LOGE(TAG, "BQ27427 init failed — FG offline");
     // Continue: _fuel_gauge stays non-null but ready() == false.
   } else {
+    const FgCellConfig expected = {
+        .design_capacity_mah = AGO_V1_DESIGN_CAPACITY_MAH,
+        .design_energy_mwh = AGO_V1_DESIGN_ENERGY_MWH,
+        .terminate_voltage_mv = AGO_V1_TERMINATE_VOLTAGE_MV,
+        .sleep_current_ma = AGO_V1_SLEEP_CURRENT_MA,
+    };
     // Pass 1: read state with validity flags.
     uint16_t dc = 0;
     uint16_t fcc = 0;
@@ -325,8 +363,8 @@ void GoHardwareBoard::init_fuel_gauge() {
     const bool cfg_ok = gauge->read_cell_config(current);
 
     FgRecoveryDecision decision =
-        evaluate_fg_state(dc, dc_ok, fcc, fcc_ok, current, cfg_ok, AGO_CELL_CONFIG,
-                          FG_DC_SANITY_MIN_MAH, FG_DC_SANITY_MAX_MAH, FG_FCC_SANITY_MAX_MAH);
+        evaluate_fg_state(dc, dc_ok, fcc, fcc_ok, current, cfg_ok, expected, FG_DC_SANITY_MIN_MAH,
+                          FG_DC_SANITY_MAX_MAH, FG_FCC_SANITY_MAX_MAH);
 
     // Tracks whether `current` reflects a successful CellConfig read.
     bool cfg_current_ok = cfg_ok;
@@ -345,14 +383,14 @@ void GoHardwareBoard::init_fuel_gauge() {
         const bool cfg2_ok = gauge->read_cell_config(current);
         cfg_current_ok = cfg2_ok;
         decision =
-            evaluate_fg_state(dc, dc2_ok, fcc, fcc2_ok, current, cfg2_ok, AGO_CELL_CONFIG,
+            evaluate_fg_state(dc, dc2_ok, fcc, fcc2_ok, current, cfg2_ok, expected,
                               FG_DC_SANITY_MIN_MAH, FG_DC_SANITY_MAX_MAH, FG_FCC_SANITY_MAX_MAH);
       }
     }
 
     if (decision.needs_config_write) {
       AG_LOGI(TAG, "BQ27427 applying cell config");
-      if (!gauge->write_cell_config(AGO_CELL_CONFIG)) {
+      if (!gauge->write_cell_config(expected)) {
         AG_LOGW(TAG, "BQ27427 write_cell_config() failed — cell parameters "
                      "not updated; runtime polling continues with whatever "
                      "the chip currently has");

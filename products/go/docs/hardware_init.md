@@ -138,7 +138,7 @@ their hardware sequencing requires.
 | `init_nvs()` | NVS flash |
 | `init_buses()` | SPS30 bus isolation + I2C bus + settling delays + SPS30 bus connection |
 | `init_spi()` | SPI bus |
-| `init_fuel_gauge()` | V1 BQ27427 recovery/configuration or V2 BQ27742 initialization; requires buses, independent from the charger |
+| `init_fuel_gauge()` | V1 BQ27427 recovery/configuration or V2 BQ27742 cell configuration; requires buses, independent from the charger |
 | `init_bms()` | BQ25629 charger driver (requires buses); returns availability and remains retryable after failure |
 | `init_wifi_subsystem()` | ESP-IDF Wi-Fi stack: netif, event loop, `esp_wifi_init`, storage mode, event handlers, single-shot timers. **Not** called by `init_core()` — only `Orchestrator::enter_stationary()` invokes it, so Portable-only boots never pay the cost. Idempotent at both the board layer (`_wifi_inited` flag) and the HAL layer. |
 | `init_core()` | Convenience gate: calls `init_nvs` + `init_buses` + `init_spi` (skips what's done). Deliberately excludes fuel-gauge, BMS, and Wi-Fi initialization. |
@@ -346,8 +346,26 @@ Expander initialization or required output setup failure aborts boot.
 
 ## Fuel Gauge Bring-Up
 
-On V2, `init_fuel_gauge()` initializes BQ27742 without rewriting pack settings.
-Pack provisioning and the BQ27427 factory-learning workflow are not run on V2.
+On V2, `init_fuel_gauge()` initializes BQ27742, unseals it with the driver's
+default key, and reads its cell configuration. It applies these values only
+when they differ, preserving the existing sleep-current threshold:
+
+| Parameter | V2 Value |
+|---|---|
+| Design capacity | 2600 mAh |
+| Design energy | 9620 mWh |
+| Terminate voltage | 3000 mV |
+
+The driver verifies changed flash blocks and preserves unrelated settings and
+learned data. The board attempts resealing even after configuration failure.
+Any initialization, configuration, or resealing failure leaves the gauge
+detached, so `PowerService` uses the charger's battery estimate. A partial write
+is checked again at the next boot; it does not trigger a factory reset.
+
+Charging voltage and taper detection, chemistry, calibration, protection
+provisioning, and learning remain separate work. These basic cell parameters
+alone do not establish SOC accuracy. The BQ27427 factory-learning workflow
+does not run on V2.
 
 On V1, `init_fuel_gauge()` constructs the BQ27427 driver and runs the
 `evaluate_fg_state` pure helper (inline in `go_board.h`). The helper examines
