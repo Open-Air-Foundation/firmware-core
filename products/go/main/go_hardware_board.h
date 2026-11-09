@@ -56,6 +56,7 @@ public:
   CapTouchSensor *new_touch_sensor() override;
   GoInputConfig input_config() override;
   AccelSensor *new_accel_sensor() override;
+  int accel_interrupt_pin() override;
 
   // --- Platform ---
   BoardVariant variant() override;

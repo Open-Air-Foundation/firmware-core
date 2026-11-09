@@ -167,6 +167,8 @@ struct GoBoard {
   /// nullptr if the part is absent / init fails (WHO_AM_I mismatch); callers
   /// must null-check. WHO_AM_I detects absence.
   virtual AccelSensor *new_accel_sensor() = 0;
+  /// Native shake interrupt pin; INVALID_PIN keeps only accelerometer diagnostics.
+  virtual int accel_interrupt_pin() = 0;
 
   // -----------------------------------------------------------------
   // Platform info

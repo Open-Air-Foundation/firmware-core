@@ -12,7 +12,7 @@
 class AccelService {
 public:
   struct Config {
-    int pin_int = gpio::INVALID_PIN;
+    int pin_int = gpio::INVALID_PIN; // No native IRQ: diagnostics only, no shake polling
     uint32_t task_stack_size = 4096;
     uint8_t task_priority = 5;
     bool log_polls = true;
@@ -38,7 +38,8 @@ public:
     uint8_t expected_who_am_i = 0;
   };
   /// Synchronous worker requests; called only by the orchestrator task.
-  /// Begin selects unfiltered +/-4 g; end restores filtered interrupt capture.
+  /// Begin selects unfiltered +/-4 g; end restores capture or powers down
+  /// when no interrupt pin is configured.
   bool begin_hardware_test(TestReading &out);
   bool read_hardware_test(TestReading &out);
   bool end_hardware_test();
@@ -98,6 +99,7 @@ private:
   static void on_interrupt(void *arg);
   static void task_entry(void *arg);
   void run();
+  uint32_t work_wait_ms() const;
   bool initialize_capture();
   void process_command(Command command);
   bool request_test(Command command, TestReading &out);

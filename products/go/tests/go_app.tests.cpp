@@ -374,6 +374,13 @@ public:
 class MockBoard : public GoBoard {
 public:
   BoardVariant board_variant = BoardVariant::V1;
+  int accel_interrupt_pin() override {
+    call_log.push_back("accel_interrupt_pin");
+    if (board_variant == BoardVariant::V1) {
+      return 3;
+    }
+    return gpio::INVALID_PIN;
+  }
   InputService::Config input_settings{};
   InputService::Config input_config() override { return input_settings; }
   BoardVariant variant() override {

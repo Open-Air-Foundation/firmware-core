@@ -140,6 +140,8 @@ TEST_CASE("Shake: cooldown lasts one second without requiring quiet samples", "[
 namespace {
 struct GpioState {
   int level = 0;
+  int configurations = 0;
+  int reads = 0;
   int enables = 0;
   int disables = 0;
   int removes = 0;
@@ -150,8 +152,14 @@ struct GpioState {
   void *arg = nullptr;
 } gpio_state;
 
-bool configure(void *, int, gpio::Mode, gpio::PullMode, gpio::InterruptType, int) { return true; }
-int get_level(void *, int) { return gpio_state.level; }
+bool configure(void *, int, gpio::Mode, gpio::PullMode, gpio::InterruptType, int) {
+  ++gpio_state.configurations;
+  return true;
+}
+int get_level(void *, int) {
+  ++gpio_state.reads;
+  return gpio_state.level;
+}
 bool set_level(void *, int, int) { return true; }
 bool attach(void *, int, gpio::InterruptHandler handler, void *arg) {
   gpio_state.handler = handler;
@@ -183,6 +191,8 @@ public:
   AccelService *service = nullptr;
   uint32_t now = 1000;
   bool fail_reply_delivery = false;
+  bool stop_on_work_wait = false;
+  uint32_t work_wait_ms = 0;
   bool queue_send_impl(RtosQueueHandle queue, const void *item, uint32_t timeout_ms) override {
     if (fail_reply_delivery && service != nullptr &&
         AccelServiceTestAccess::is_reply_queue(*service, queue)) {
@@ -191,6 +201,12 @@ public:
     return RTOS::queue_send_impl(queue, item, timeout_ms);
   }
   bool queue_receive_impl(RtosQueueHandle queue, void *item, uint32_t timeout_ms) override {
+    if (stop_on_work_wait && service != nullptr &&
+        queue == AccelServiceTestAccess::work_queue(*service)) {
+      work_wait_ms = timeout_ms;
+      stop_on_work_wait = false;
+      AccelServiceTestAccess::queue_stop(*service);
+    }
     if (service != nullptr && AccelServiceTestAccess::is_reply_queue(*service, queue)) {
       AccelServiceTestAccess::process_pending(*service);
     }
@@ -206,6 +222,7 @@ public:
   bool configure_ok = true;
   bool source_ok = true;
   bool init_ok = true;
+  bool power_down_ok = true;
   AccelConfig last_config{};
   int reads = 0;
   int source_reads = 0;
@@ -226,7 +243,7 @@ public:
   }
   bool power_down() override {
     operations.push_back("stop");
-    return true;
+    return power_down_ok;
   }
   bool read_interrupt(bool &out) override {
     ++source_reads;
@@ -247,9 +264,9 @@ struct Fixture {
   RtosQueueHandle events;
   AccelService service;
 
-  Fixture()
+  explicit Fixture(int pin_int = 3)
       : events(clock.queue_create_impl(4, sizeof(Event))),
-        service(&sensor, gpio_hal, events, {.pin_int = 3, .log_polls = false}) {
+        service(&sensor, gpio_hal, events, {.pin_int = pin_int, .log_polls = false}) {
     gpio_state = {};
     RTOS::set_instance(&clock);
     clock.service = &service;
@@ -263,6 +280,109 @@ struct Fixture {
   bool poll(bool notified = false) { return AccelServiceTestAccess::poll(service, notified); }
 };
 } // namespace
+
+TEST_CASE("Accel: diagnostics-only worker sleeps without motion polling", "[Accel][v2]") {
+  Fixture f(gpio::INVALID_PIN);
+  f.init();
+  REQUIRE(f.sensor.operations.size() == 1);
+  CHECK(std::string(f.sensor.operations.back()) == "stop");
+  CHECK(AccelServiceTestAccess::work_wait_ms(f.service) == UINT32_MAX);
+
+  // A queued interrupt cannot activate shake capture without a native IRQ pin.
+  REQUIRE(f.poll(true));
+  CHECK_FALSE(AccelServiceTestAccess::burst(f.service));
+  f.clock.stop_on_work_wait = true;
+  AccelServiceTestAccess::run(f.service);
+  CHECK(f.clock.work_wait_ms == UINT32_MAX);
+  CHECK_FALSE(AccelServiceTestAccess::running(f.service));
+  CHECK(f.sensor.reads == 0);
+  CHECK(f.sensor.source_reads == 0);
+  CHECK(gpio_state.configurations == 0);
+  CHECK(gpio_state.reads == 0);
+  CHECK(gpio_state.enables == 0);
+  CHECK(gpio_state.disables == 0);
+  CHECK(gpio_state.removes == 0);
+  CHECK(gpio_state.handler == nullptr);
+  Event event{};
+  CHECK_FALSE(RTOS::queue_receive(f.events, &event, 0));
+}
+
+TEST_CASE("Accel: diagnostics-only test can open, read, close, and reopen", "[Accel][v2]") {
+  Fixture f(gpio::INVALID_PIN);
+  f.init();
+  const auto queue = AccelServiceTestAccess::work_queue(f.service);
+  AccelService::TestReading reading;
+  for (int cycle = 0; cycle < 2; ++cycle) {
+    f.sensor.next = sample(0, 0, 1000);
+    REQUIRE(f.service.begin_hardware_test(reading));
+    CHECK(reading.who_am_i == 0x33);
+    CHECK(reading.expected_who_am_i == 0x33);
+    CHECK(reading.result == AccelReadResult::Ready);
+    CHECK(reading.sample.z_mg == 1000);
+    CHECK_FALSE(f.sensor.last_config.high_pass);
+    CHECK(f.sensor.last_config.range == AccelRange::G4);
+    CHECK(f.sensor.last_config.interrupt.high_axes == 0);
+    CHECK(AccelServiceTestAccess::work_wait_ms(f.service) == UINT32_MAX);
+    const int reads = f.sensor.reads;
+    REQUIRE(f.poll(true));
+    CHECK(f.sensor.reads == reads);
+    f.sensor.next = sample(1000);
+    REQUIRE(f.service.read_hardware_test(reading));
+    CHECK(reading.sample.y_mg == 1000);
+    REQUIRE(f.service.end_hardware_test());
+    CHECK(std::string(f.sensor.operations.back()) == "stop");
+    CHECK_FALSE(f.service.read_hardware_test(reading));
+    CHECK_FALSE(reading.sample.is_valid());
+    CHECK(AccelServiceTestAccess::running(f.service));
+    CHECK(AccelServiceTestAccess::work_queue(f.service) == queue);
+  }
+  CHECK(gpio_state.configurations == 0);
+  CHECK(gpio_state.reads == 0);
+  CHECK(gpio_state.enables == 0);
+  CHECK(gpio_state.disables == 0);
+  CHECK(gpio_state.handler == nullptr);
+  CHECK(f.sensor.source_reads == 0);
+  Event event{};
+  CHECK_FALSE(RTOS::queue_receive(f.events, &event, 0));
+}
+
+TEST_CASE("Accel: diagnostics-only failures retain invalid readings and allow retry",
+          "[Accel][v2]") {
+  Fixture f(gpio::INVALID_PIN);
+  f.init();
+  AccelService::TestReading reading;
+  SECTION("configuration failure") {
+    f.sensor.configure_ok = false;
+    CHECK_FALSE(f.service.begin_hardware_test(reading));
+    CHECK_FALSE(reading.sample.is_valid());
+    CHECK(reading.result == AccelReadResult::Error);
+    CHECK(f.sensor.reads == 0);
+    REQUIRE(f.service.end_hardware_test());
+    f.sensor.configure_ok = true;
+    REQUIRE(f.service.begin_hardware_test(reading));
+  }
+  SECTION("read failure") {
+    REQUIRE(f.service.begin_hardware_test(reading));
+    f.sensor.result = AccelReadResult::Error;
+    REQUIRE(f.service.read_hardware_test(reading));
+    CHECK(reading.result == AccelReadResult::Error);
+    CHECK_FALSE(reading.sample.is_valid());
+  }
+  SECTION("power-down failure is reported and retry succeeds") {
+    REQUIRE(f.service.begin_hardware_test(reading));
+    f.sensor.power_down_ok = false;
+    CHECK_FALSE(f.service.end_hardware_test());
+    CHECK_FALSE(f.service.read_hardware_test(reading));
+    CHECK_FALSE(reading.sample.is_valid());
+    f.sensor.power_down_ok = true;
+  }
+  REQUIRE(f.service.end_hardware_test());
+  CHECK(AccelServiceTestAccess::running(f.service));
+  CHECK(AccelServiceTestAccess::work_wait_ms(f.service) == UINT32_MAX);
+  CHECK(gpio_state.enables == 0);
+  CHECK(gpio_state.disables == 0);
+  CHECK(gpio_state.reads == 0);
+}
 
 TEST_CASE("Accel: service supplies the tested capture settings", "[Accel]") {
   Fixture f;

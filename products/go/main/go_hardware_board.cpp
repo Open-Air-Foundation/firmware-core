@@ -729,6 +729,13 @@ GoInputConfig GoHardwareBoard::input_config() {
   return config;
 }
 
+int GoHardwareBoard::accel_interrupt_pin() {
+  if (variant() == BoardVariant::V1) {
+    return PIN_ACCEL_INT;
+  }
+  return gpio::INVALID_PIN;
+}
+
 AccelSensor *GoHardwareBoard::new_accel_sensor() {
   assert(_buses_ready && "new_accel_sensor() requires init_buses()");
   LIS2DH12::Config cfg;

@@ -475,6 +475,7 @@ public:
   AgClient &ag_client() override { return _ag_client; }
   GpsDriver *new_gps_driver() override { return nullptr; }
   CapTouchSensor *new_touch_sensor() override { return nullptr; }
+  int accel_interrupt_pin() override { return 3; }
   InputService::Config input_config() override { return {}; }
   AccelSensor *accel_to_return = nullptr; // injectable; null = absent
   int new_accel_sensor_calls = 0;

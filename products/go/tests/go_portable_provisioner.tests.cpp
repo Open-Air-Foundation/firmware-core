@@ -162,6 +162,7 @@ public:
   AgClient &ag_client() override { return *reinterpret_cast<AgClient *>(_buf); }
   GpsDriver *new_gps_driver() override { return nullptr; }
   CapTouchSensor *new_touch_sensor() override { return nullptr; }
+  int accel_interrupt_pin() override { return gpio::INVALID_PIN; }
   InputService::Config input_config() override { return {}; }
   AccelSensor *new_accel_sensor() override { return nullptr; }
   std::string serial_number() override { return "TEST00"; }

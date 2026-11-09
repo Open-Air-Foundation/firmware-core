@@ -24,7 +24,6 @@
 #else
 // Minimal pin/bus constants for host test compilation.
 inline constexpr int PIN_BUTTON_POWER = 5;
-inline constexpr int PIN_ACCEL_INT = 3;
 inline constexpr int GPS_BAUD = 115200;
 // Stub esp_reset_reason for host builds.
 enum esp_reset_reason_t { ESP_RST_UNKNOWN = 0 };
@@ -760,7 +759,7 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
   auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue, input_config);
 
   auto *accel_service = new AccelService(_board.new_accel_sensor(), _board.gpio_hal(), event_queue,
-                                         {.pin_int = PIN_ACCEL_INT});
+                                         {.pin_int = _board.accel_interrupt_pin()});
 
   PowerService &pwr = _board.power();
 
@@ -1013,7 +1012,7 @@ void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff
   auto *input_service = new InputService(*touch, _board.gpio_hal(), event_queue, input_config);
 
   auto *accel_service = new AccelService(_board.new_accel_sensor(), _board.gpio_hal(), event_queue,
-                                         {.pin_int = PIN_ACCEL_INT});
+                                         {.pin_int = _board.accel_interrupt_pin()});
 
   PowerService &pwr = _board.power();
 
