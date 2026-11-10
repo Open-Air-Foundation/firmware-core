@@ -129,6 +129,9 @@ private:
   uint32_t _last_input_ms = 0; ///< Inactivity baseline: input or explicit UI exit
   bool _shutting_down = false;
   uint32_t _snackbar_refresh_deadline_ms = 0; ///< 0 = inactive; non-zero = absolute deadline
+  bool _display_feedback_pending = false;
+  uint32_t _display_feedback_retry_ms = 0;
+  bool _display_has_snackbar = false; ///< Last accepted frame, including an in-flight refresh
   bool _first_measurement_done = false;
   bool _tracking_status_was_visible = false; ///< Detect Status exit once; not RTC-persisted
   bool _tracking_status_refresh_armed = false;
@@ -258,6 +261,8 @@ private:
   static constexpr uint32_t LOCAL_API_ACTIVATION_RETRY_MS = 5000;
   static constexpr uint32_t TRACKING_STATUS_REFRESH_INTERVAL_MS = 5000;
   static constexpr uint32_t TRACKING_STATUS_REFRESH_RETRY_MS = 100;
+  static constexpr uint32_t DISPLAY_FEEDBACK_RETRY_MS = 100;
+  static constexpr uint32_t SNACKBAR_CLEAR_GRACE_MS = 200;
 
   // --- Event dispatch ---
   void dispatch(const Event &event);
@@ -348,6 +353,7 @@ private:
   /// fire-once edges (charging / BLE state) so a worker-busy drop can't leave
   /// the screen stale until touch.
   void request_background_display_update(bool wait = false);
+  bool background_display_update_allowed() const;
   BuildContext build_context() const;
 
   // --- Sleep ---

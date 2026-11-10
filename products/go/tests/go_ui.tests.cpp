@@ -1488,8 +1488,8 @@ TEST_CASE("UIManager: snackbar lifecycle", "[UIManager][snackbar]") {
   SECTION("show_snackbar sets text, cleared after duration") {
     ui.show_snackbar("Hello");
 
-    // First clear call arms the deadline.
-    ui.clear_expired_snackbar(1000);
+    // Only successful submission arms the deadline.
+    ui.mark_snackbar_submitted(1000);
 
     auto ctx = make_default_ctx();
     ctx.now_ms = 1000;
@@ -1514,10 +1514,36 @@ TEST_CASE("UIManager: snackbar lifecycle", "[UIManager][snackbar]") {
     CHECK(v.snackbar_text == nullptr);
   }
 
+  SECTION("pending messages survive time passing until first successful submission") {
+    ui.show_snackbar("Unlocked");
+    CHECK(ui.snackbar_pending());
+    CHECK_FALSE(ui.clear_expired_snackbar(10000));
+    REQUIRE(ui.build_values(make_default_ctx()).snackbar_text != nullptr);
+    CHECK(ui.mark_snackbar_submitted(10000));
+    CHECK_FALSE(ui.snackbar_pending());
+    CHECK_FALSE(ui.mark_snackbar_submitted(11000)); // Redraw does not extend visibility.
+    CHECK_FALSE(ui.clear_expired_snackbar(10000 + SNACKBAR_DURATION_MS - 1));
+    CHECK(ui.clear_expired_snackbar(10000 + SNACKBAR_DURATION_MS));
+    CHECK(ui.build_values(make_default_ctx()).snackbar_text == nullptr);
+  }
+
+  SECTION("expiry supports deadlines at zero and UINT32_MAX") {
+    for (const uint32_t deadline : {0u, UINT32_MAX}) {
+      CAPTURE(deadline);
+      ui.show_snackbar("Unlocked");
+      REQUIRE(ui.mark_snackbar_submitted(deadline - SNACKBAR_DURATION_MS));
+      CHECK_FALSE(ui.snackbar_pending());
+      CHECK_FALSE(ui.snackbar_persistent());
+      CHECK_FALSE(ui.clear_expired_snackbar(deadline - 1));
+      CHECK(ui.clear_expired_snackbar(deadline));
+      CHECK(ui.build_values(make_default_ctx()).snackbar_text == nullptr);
+    }
+  }
+
   SECTION("opening Main Menu dismisses Unlocked before expiry") {
     const auto ctx = make_default_ctx();
     ui.show_snackbar("Unlocked");
-    ui.clear_expired_snackbar(ctx.now_ms);
+    ui.mark_snackbar_submitted(ctx.now_ms);
     REQUIRE(ui.build_values(ctx).snackbar_text != nullptr);
 
     press(ui, InputSource::TouchEnter);
@@ -1532,7 +1558,7 @@ TEST_CASE("UIManager: snackbar lifecycle", "[UIManager][snackbar]") {
     const auto ctx = make_default_ctx();
     ui.show_snackbar("Unlocked");
     ui.show_snackbar("Tag saved");
-    ui.clear_expired_snackbar(ctx.now_ms);
+    ui.mark_snackbar_submitted(ctx.now_ms);
 
     press(ui, InputSource::TouchEnter);
     REQUIRE(ui.current_screen() == Screen::MainMenu);
@@ -2481,7 +2507,7 @@ TEST_CASE("UIManager: snackbar is suppressed on all session screens",
   // Home — snackbar visible.
   auto ctx = make_default_ctx();
   ctx.now_ms = 100;
-  ui.clear_expired_snackbar(ctx.now_ms);
+  ui.mark_snackbar_submitted(ctx.now_ms);
   REQUIRE(ui.build_values(ctx).snackbar_text != nullptr);
 
   ui.show_info("Preparing stationary mode...");

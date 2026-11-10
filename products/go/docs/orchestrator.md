@@ -248,7 +248,8 @@ the nearest deadline.
 | External watchdog | `EXT_WDT_INTERVAL_MS` (60000 ms) | Always — never suppressed during a setup session |
 | Inactivity | `auto_lock_seconds * 1000` | `auto_lock_allowed()`: unlocked, auto-lock > 0, no setup session, focus screen, Hardware Test screen, or Tracking Status |
 | Tracking Status | `TRACKING_STATUS_REFRESH_INTERVAL_MS` (5000 ms); rejected submissions retry after `TRACKING_STATUS_REFRESH_RETRY_MS` (100 ms) | Status visible, unlocked, and Recording or Paused |
-| Snackbar refresh | `SNACKBAR_DURATION_MS + 200` (one-shot) | Non-persistent snackbar active, sensitive services not paused |
+| Snackbar refresh | `SNACKBAR_DURATION_MS + SNACKBAR_CLEAR_GRACE_MS` (3200 ms, one-shot) | Transient snackbar submitted, sensitive services not paused |
+| Home feedback retry | `DISPLAY_FEEDBACK_RETRY_MS` (100 ms) | Rejected feedback pending on Home, background updates allowed |
 | Wi-Fi initial-connect / fallback | `WifiService::next_deadline_ms()` | While the service has armed a deadline (Stationary bring-up) |
 | Local endpoint activation retry | `LOCAL_API_ACTIVATION_RETRY_MS` (5000 ms) | Stationary + online after local HTTP or mDNS activation fails |
 | BLE OTA poll | `OTA_BLE_POLL_INTERVAL_MS` (2000 ms) | Portable + (authenticated client or latched `is_ble_active()`). See [Firmware Update (OTA)](#firmware-update-ota) |
@@ -343,18 +344,10 @@ Calibration → Yes**. The `ArmFgLearning` UI action saves factory state (`Charg
 cycle 1) and reboots into the dedicated factory path. The orchestrator owns none
 of the learning run; see [`fg_learning.md`](fg_learning.md).
 
-The catch-all render at the tail of `on_input()` uses
-`update_display(/*wait=*/true)` for every input-driven render. Because
-`handle_input()` already advanced the UI model, a dropped paint would
-leave the model ahead of the screen with no repaint until the next
-input (the user sees the touch register but the display stays put). This
-became reachable once the display worker's `BUSY` poll started blocking
-(`vTaskDelay >= 1` tick) instead of busy-spinning: the priority-1 main
-task now runs during the worker's refresh and would otherwise hit the
-`wait=false` drop in `DisplayService::update()` while the worker is
-mid-paint. `wait=true` yields to the worker, then queues the latest
-frame once it is free, so menu navigation and session transitions are
-both drop-free.
+Menu navigation and locking use `update_display(wait=true)` to wait for the
+previous refresh before submitting the new frame. Unlock submits without waiting
+and retains rejected feedback for a Home retry. Neither path waits for its new
+frame to finish painting. See [Display Update](#display-update).
 
 The `UIAction::ConfirmSwitchProvisioningTransport` case is handled
 inside the dispatch switch and returns early, bypassing the catch-all
@@ -975,8 +968,8 @@ for the component-facing contract and edge cases.
 ### `update_display()`
 
 Builds and submits a UI frame, returning whether the display accepted it.
-Status lifecycle and refresh scheduling belong to the timer handlers, not this
-function. Frame preparation uses a `BuildContext` and `DisplayValues` snapshot:
+Tracking Status lifecycle stays with its timer handlers. Frame preparation uses
+a `BuildContext` and `DisplayValues` snapshot:
 
 1. Clear expired snackbar
 2. `build_context()` — convert cached `MeasuresAGo` to `Measures`, read
@@ -986,10 +979,19 @@ function. Frame preparation uses a `BuildContext` and `DisplayValues` snapshot:
    reflects link state via `wifi_connected = wifi.is_online()`. Temperature,
    altitude, and PM presentation flags come from the active `GoSettings`
 3. `UIManager::build_values(ctx)` — produce `DisplayValues`
-4. `DisplayService::update(values)` — non-blocking render submission
-5. If a non-persistent snackbar is active and no refresh timer is pending,
-   schedule a one-shot `_snackbar_refresh_deadline_ms` to request visual clearing
-   through the background-update path, subject to its screen suppression
+4. `DisplayService::update(values, wait)` — submit, optionally waiting for the
+   previous refresh
+5. On acceptance, clear pending feedback and start any new transient snackbar's
+   lifetime. Cancel obsolete expiry timers when a message is dismissed or replaced
+
+Rejected unlock feedback, new transient messages, and snackbar removal are
+retained for retry every 100 ms on Home when background updates are allowed.
+Retries rebuild current state; any accepted render satisfies them, so newer
+input can replace or dismiss pending feedback without replaying an old frame.
+Snackbar expiry starts after submission succeeds, not after painting completes.
+The expiry handler requests clearing only when a message actually expired and
+the last accepted frame contained one. Menu and special-screen suppression stay
+in effect; see [Snackbar Lifecycle](ui_manager.md#snackbar-lifecycle).
 
 The `BuildContext` requires a `const Measures &` reference. The orchestrator
 maintains a `mutable Measures _display_measures` member that is populated
@@ -999,7 +1001,7 @@ from the cached `MeasuresAGo` each time `build_context()` is called.
 
 Ordinary display-update call sites are split into two categories:
 
-**User-initiated** — call `update_display()` directly (always repaint):
+**Direct** — call `update_display()` without the background-screen gate:
 `on_input()`, `lock()`, `unlock()`, `start_tracking()`, `pause_tracking()`,
 `resume_tracking()`, `stop_tracking()`,
 `change_mode()`, `clear_data()`, `factory_reset()`, `save_tag()`,
@@ -1011,20 +1013,8 @@ Ordinary display-update call sites are split into two categories:
 `on_ble_auth_complete()`, `on_ble_config_write()` (Set branch),
 `on_bms_status_timer()`, snackbar refresh timer in `check_timers()`.
 
-`request_background_display_update()` short-circuits when a setup
-session is active and otherwise delegates to
-`UIManager::is_on_menu_screen()`:
-
-```cpp
-void Orchestrator::request_background_display_update() {
-  if (_setup_session_active) {
-    return; // session screens only re-render on explicit transitions
-  }
-  if (!_svc.ui_manager.is_on_menu_screen()) {
-    update_display();
-  }
-}
-```
+`request_background_display_update()` uses `background_display_update_allowed()`
+to skip active setup sessions, pairing focus, and menu screens.
 
 When the user is on any menu-navigation screen (MainMenu, Settings, Operations,
 DisplayTouch, SettingsChoice, TagList, Confirm, About) or anywhere inside the
@@ -1056,7 +1046,8 @@ helpers), the call is followed by `DisplayService::flush()` which spins
 until `_worker_busy` clears.
 
 The orchestrator does not choose refresh tiers (Full/Fast/Partial).
-That decision belongs entirely to `DisplayService::update()`.
+That decision belongs to `DisplayService::update()`, including the
+[Home cooldown](display_service.md#home-cooldown).
 
 ## Sleep Cycle
 

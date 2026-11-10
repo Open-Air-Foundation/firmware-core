@@ -128,9 +128,6 @@ static constexpr uint8_t HW_TEST_TOTAL = 7;
 /// Visible content items per page (excluding Exit/Back header rows).
 static constexpr uint8_t PAGE_SIZE = 8;
 
-/// Sentinel deadline: snackbar was just shown, not yet armed.
-static constexpr uint32_t SNACKBAR_PENDING = UINT32_MAX;
-
 // Indexed by the persisted Metric enum, including the no-selection dashboard.
 static const char *const CHART_OPTIONS[] = {"None", "PM2.5", "CO2",      "Temperature", "Humidity",
                                             "TVOC", "NOx",   "Pressure", "Altitude"};
@@ -522,33 +519,34 @@ void UIManager::show_snackbar(const char *text, bool persistent) {
   }
   if (text == nullptr) {
     _snackbar_text[0] = '\0';
-    _snackbar_deadline_ms = 0;
-    return;
+  } else {
+    (void)snprintf(_snackbar_text, sizeof(_snackbar_text), "%s", text);
   }
-  (void)snprintf(_snackbar_text, sizeof(_snackbar_text), "%s", text);
-  _snackbar_deadline_ms = persistent ? 0 : SNACKBAR_PENDING;
+  _snackbar_deadline_ms = 0;
+  _snackbar_pending = snackbar_active() && !persistent;
+  _snackbar_persistent = snackbar_active() && persistent;
 }
 
-bool UIManager::snackbar_persistent() const {
-  return _snackbar_text[0] != '\0' && _snackbar_deadline_ms == 0;
+bool UIManager::snackbar_persistent() const { return _snackbar_persistent; }
+
+bool UIManager::snackbar_pending() const { return _snackbar_pending; }
+
+bool UIManager::mark_snackbar_submitted(uint32_t now_ms) {
+  if (!_snackbar_pending) {
+    return false;
+  }
+  _snackbar_pending = false;
+  _snackbar_deadline_ms = now_ms + SNACKBAR_DURATION_MS;
+  return true;
 }
 
-void UIManager::clear_expired_snackbar(uint32_t now_ms) {
-  if (_snackbar_text[0] == '\0') {
-    return;
+bool UIManager::clear_expired_snackbar(uint32_t now_ms) {
+  if (snackbar_active() && !_snackbar_pending && !_snackbar_persistent &&
+      static_cast<int32_t>(_snackbar_deadline_ms - now_ms) <= 0) {
+    show_snackbar(nullptr);
+    return true;
   }
-
-  // Arm the deadline on first clear call after show_snackbar.
-  if (_snackbar_deadline_ms == SNACKBAR_PENDING) {
-    _snackbar_deadline_ms = now_ms + SNACKBAR_DURATION_MS;
-    return;
-  }
-
-  // Check expiry (wraparound-safe).
-  if (_snackbar_deadline_ms != 0 && (int32_t)(_snackbar_deadline_ms - now_ms) <= 0) {
-    _snackbar_text[0] = '\0';
-    _snackbar_deadline_ms = 0;
-  }
+  return false;
 }
 
 void UIManager::sync_settings(const GoSettings &s) {
