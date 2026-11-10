@@ -71,6 +71,7 @@ constexpr uint8_t SUBCLASS_IT_CFG = 80;    // Terminate Voltage @64
 constexpr uint8_t SUBCLASS_STATE = 82;     // Qmax Cell 0 @0, Update Status @2
 constexpr uint8_t SUBCLASS_RA0 = 88;       // flag @0, Ra 0..14 @2..30
 constexpr uint8_t SUBCLASS_RA0X = 89;      // the alternate profile, same layout
+constexpr uint8_t SUBCLASS_CALIBRATION = 104; // CC Gain @0, CC Delta @4 (F4)
 constexpr uint8_t OFFSET_OV_PROT_THRESHOLD = 0;
 constexpr uint8_t OFFSET_OV_PROT_RECOVERY = 3;
 constexpr uint8_t OFFSET_UV_PROT_THRESHOLD = 5;
@@ -101,6 +102,17 @@ constexpr uint16_t QMAX_CELL0_MAX_MAH = 14500; // TRM Table 5-5
 // Charging Voltage accepted range (TRM §5.3.2.1).
 constexpr uint16_t CHARGING_VOLTAGE_MIN_MV = 4000;
 constexpr uint16_t CHARGING_VOLTAGE_MAX_MV = 5000;
+
+// Coulomb-counter calibration (TRM §5.8.1, §A.8).  CC Gain is 4.768 / R in mΩ
+// (TI's 0.9536 default is 5 mΩ) and CC Delta = CC Gain × 1,193,046.
+constexpr uint8_t OFFSET_CC_GAIN = 0;
+constexpr uint8_t OFFSET_CC_DELTA = 4;
+constexpr double CC_GAIN_PER_INV_MOHM = 4.768;
+constexpr double CC_DELTA_PER_GAIN = 1193046.0;
+constexpr double CC_GAIN_MIN = 0.1;
+constexpr double CC_GAIN_MAX = 40.0;
+constexpr double CC_DELTA_MIN = 2.98e4;
+constexpr double CC_DELTA_MAX = 1.19e6;
 
 // Update Status bits (TRM §5.5.3.2).
 constexpr uint8_t UPDATE_STATUS_QMAX_INITIAL = (1u << 0);
@@ -698,6 +710,59 @@ bool BQ27742::write_charging_voltage_mv(uint16_t mv) {
     return false;
   }
   ESP_LOGI(TAG, "Charging Voltage set to %u mV", mv);
+  return true;
+}
+
+bool BQ27742::read_cc_sense_mohm(float &gain_mohm, float &delta_mohm) {
+  uint8_t block[DF_BLOCK_SIZE] = {};
+  if (!_read_df_block(SUBCLASS_CALIBRATION, 0, block)) {
+    return false;
+  }
+  const double gain = fg_ti_float_decode(&block[OFFSET_CC_GAIN]);
+  const double delta = fg_ti_float_decode(&block[OFFSET_CC_DELTA]);
+  if (gain <= 0.0 || delta <= 0.0) {
+    ESP_LOGE(TAG, "CC Gain/Delta not positive: %02X%02X%02X%02X / %02X%02X%02X%02X",
+             block[0], block[1], block[2], block[3], block[4], block[5], block[6], block[7]);
+    return false;
+  }
+  gain_mohm = static_cast<float>(CC_GAIN_PER_INV_MOHM / gain);
+  delta_mohm = static_cast<float>(CC_GAIN_PER_INV_MOHM * CC_DELTA_PER_GAIN / delta);
+  return true;
+}
+
+bool BQ27742::write_cc_sense_mohm(float r_mohm) {
+  if (!ready()) {
+    return false;
+  }
+  const double gain = CC_GAIN_PER_INV_MOHM / r_mohm;
+  const double delta = gain * CC_DELTA_PER_GAIN;
+  if (!(gain >= CC_GAIN_MIN && gain <= CC_GAIN_MAX && delta >= CC_DELTA_MIN &&
+        delta <= CC_DELTA_MAX)) {
+    ESP_LOGE(TAG, "sense %.3f mOhm gives CC Gain %.4f / CC Delta %.0f, outside TRM range - refusing",
+             r_mohm, gain, delta);
+    return false;
+  }
+
+  uint8_t block[DF_BLOCK_SIZE] = {};
+  if (!_read_df_block(SUBCLASS_CALIBRATION, 0, block)) {
+    return false;
+  }
+  uint8_t want[8] = {};
+  fg_ti_float_encode(static_cast<float>(gain), &want[OFFSET_CC_GAIN]);
+  fg_ti_float_encode(static_cast<float>(delta), &want[OFFSET_CC_DELTA]);
+  memcpy(&block[OFFSET_CC_GAIN], want, sizeof(want));
+  if (!_write_df_block(SUBCLASS_CALIBRATION, 0, block)) {
+    return false;
+  }
+
+  RTOS::delay_ms(50);
+  uint8_t verify[DF_BLOCK_SIZE] = {};
+  if (!_read_df_block(SUBCLASS_CALIBRATION, 0, verify) ||
+      memcmp(&verify[OFFSET_CC_GAIN], want, sizeof(want)) != 0) {
+    ESP_LOGE(TAG, "CC Gain/Delta write did NOT stick");
+    return false;
+  }
+  ESP_LOGI(TAG, "CC Gain %.4f / CC Delta %.0f set for %.3f mOhm", gain, delta, r_mohm);
   return true;
 }
 

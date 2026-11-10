@@ -8,6 +8,7 @@
 #ifndef BMS_TYPES_H
 #define BMS_TYPES_H
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 
@@ -301,6 +302,51 @@ struct FgProtectorConfig {
 /// checksum used to commit data flash.
 inline uint16_t fg_protector_checksum(uint8_t prot_oc_config, uint8_t prot_ov_config) {
   return static_cast<uint16_t>(prot_oc_config) + static_cast<uint16_t>(prot_ov_config);
+}
+
+/// BQ27742-G1 data-flash float (F4), used by CC Gain and CC Delta: byte 0 is
+/// the exponent + 128, bytes 1–3 a big-endian 24-bit mantissa in [0.5, 1)
+/// whose always-set top bit carries the sign instead (TRM SLUUAX0C §A.11).
+inline void fg_ti_float_encode(float value, uint8_t out[4]) {
+  const double mod = std::fabs(static_cast<double>(value));
+  int exp = 0;
+  // TI's flow sizes the exponent on a value nudged up by 2^-25.
+  double tmp = mod * (1.0 + std::ldexp(1.0, -25));
+  if (tmp > 0.0) {
+    while (tmp < 0.5) {
+      tmp *= 2.0;
+      --exp;
+    }
+    while (tmp >= 1.0) {
+      tmp /= 2.0;
+      ++exp;
+    }
+  }
+  exp = exp > 127 ? 127 : (exp < -128 ? -128 : exp);
+  tmp = std::ldexp(mod, 8 - exp) - 128.0;
+  if (tmp < 0.0) {
+    tmp = 0.0; // the nudge can push the exponent one step past a value just under 2^n
+  }
+  uint8_t b2 = static_cast<uint8_t>(tmp);
+  tmp = 256.0 * (tmp - b2);
+  const uint8_t b1 = static_cast<uint8_t>(tmp);
+  tmp = 256.0 * (tmp - b1);
+  const uint8_t b0 = static_cast<uint8_t>(tmp);
+  if (value < 0.0f) {
+    b2 |= 0x80;
+  }
+  out[0] = static_cast<uint8_t>(exp + 128);
+  out[1] = b2;
+  out[2] = b1;
+  out[3] = b0;
+}
+
+inline float fg_ti_float_decode(const uint8_t in[4]) {
+  const int exp = static_cast<int>(in[0]) - 128;
+  const uint32_t mantissa = (static_cast<uint32_t>(in[1] | 0x80) << 16) |
+                            (static_cast<uint32_t>(in[2]) << 8) | in[3];
+  const double v = std::ldexp(static_cast<double>(mantissa), exp - 24);
+  return static_cast<float>((in[1] & 0x80) != 0 ? -v : v);
 }
 
 // ---------------------------------------------------------------------------

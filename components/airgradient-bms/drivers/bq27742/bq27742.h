@@ -121,6 +121,13 @@ public:
   bool read_charging_voltage_mv(uint16_t &out);
   bool write_charging_voltage_mv(uint16_t mv); ///< range-checked, read back
 
+  /// CC Gain and CC Delta (Calibration subclass 104), each reported as the
+  /// sense resistance it scales the coulomb counter for, in mΩ.  TI's
+  /// defaults assume 5 mΩ.  Gain scales AverageCurrent(), Delta passed charge.
+  bool read_cc_sense_mohm(float &gain_mohm, float &delta_mohm);
+  /// Write both for `r_mohm`, as TRM §A.8 derives them.  Range-checked, read back.
+  bool write_cc_sense_mohm(float r_mohm);
+
   /// Data-flash read of the firmware-layer protection thresholds (Safety
   /// subclass).  Unseals the gauge (idempotent; it stays unsealed).
   bool read_protection_config(FgProtectionConfig &out);

@@ -309,6 +309,33 @@ TEST_CASE("fg_protector_checksum is the plain sum the gauge checks", "[BmsTypes]
   REQUIRE(fg_protector_checksum(0xFF, 0xFF) == 0x01FE); // no 8-bit wrap
 }
 
+TEST_CASE("fg_ti_float encodes the gauge's F4 layout", "[BmsTypes]") {
+  uint8_t raw[4] = {};
+  SECTION("powers of two have an empty mantissa") {
+    fg_ti_float_encode(0.5f, raw);
+    REQUIRE((raw[0] == 0x80 && raw[1] == 0x00 && raw[2] == 0x00 && raw[3] == 0x00));
+    fg_ti_float_encode(1.0f, raw);
+    REQUIRE((raw[0] == 0x81 && raw[1] == 0x00 && raw[2] == 0x00 && raw[3] == 0x00));
+  }
+  SECTION("sign rides in the mantissa's top bit") {
+    fg_ti_float_encode(-1.0f, raw);
+    REQUIRE((raw[0] == 0x81 && raw[1] == 0x80 && raw[2] == 0x00 && raw[3] == 0x00));
+  }
+  SECTION("decode reads hand-built patterns") {
+    const uint8_t three_quarters[4] = {0x80, 0x40, 0x00, 0x00};
+    REQUIRE(fg_ti_float_decode(three_quarters) == 0.75f);
+    const uint8_t minus_six[4] = {0x83, 0xC0, 0x00, 0x00};
+    REQUIRE(fg_ti_float_decode(minus_six) == -6.0f);
+  }
+  SECTION("CC Gain and CC Delta values survive a round trip") {
+    // TI defaults (5 mΩ) and the v2.0 calibration (6.4 mΩ).
+    for (const float v : {0.9536f, 1119000.0f, 0.745f, 888818.0f}) {
+      fg_ti_float_encode(v, raw);
+      REQUIRE_THAT(fg_ti_float_decode(raw), Catch::Matchers::WithinRel(v, 1e-6f));
+    }
+  }
+}
+
 TEST_CASE("fg_qmax_q14_to_mah converts the BQ27427 fixed-point Qmax", "[BmsTypes]") {
   // Captured from a real device: 17211 * 2000 / 16384 = 2100 mAh.
   REQUIRE(fg_qmax_q14_to_mah(17211, 2000) == 2100);
