@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "8331431",
+  "rev": "c30a62a",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -203,8 +203,8 @@
     },
     {
       "id": "go.ui.lock",
-      "title": "Locked Home rejects touch navigation",
-      "objective": "Verify that locked Home ignores touch navigation and unlocking restores access to Main Menu without leftover message text.",
+      "title": "Lock and unlock feedback matches navigation access",
+      "objective": "Verify matching lock icons and messages, blocked navigation while locked, and clean Menu entry after unlocking.",
       "category": "Display & Controls",
       "sub_category": "Navigation",
       "applicability": [
@@ -214,28 +214,116 @@
       "setup": [],
       "steps": [
         {
-          "action": "Unlock with a short Power press if needed. Select Portable mode, then return Home.",
-          "expected_result": "Home is displayed in Portable mode."
+          "action": "Select Portable mode. Record Settings > Display & Touch > Auto Lock, then set it to Off.",
+          "expected_result": "The original Auto Lock setting is recorded."
         },
         {
-          "action": "If Home is unlocked, short-press Power to lock it.",
-          "expected_result": "Home shows the locked state."
+          "action": "Open Settings > Operations. Short-press Power to lock and watch Home for 10 seconds.",
+          "expected_result": "The first completed Home refresh shows the locked icon and Locked message together. The message clears while the icon stays locked, without leftover menu content."
         },
         {
           "action": "Tap the left, center (Menu), and right touch controls individually. Inspect the screen after each tap.",
-          "expected_result": "Each tap shows Unlock First. Home remains displayed; no menu or chart browsing opens."
+          "expected_result": "Each tap shows Unlock First. Home remains displayed with the locked icon; no menu or chart browsing opens."
         },
         {
-          "action": "Short-press Power to unlock. Immediately tap Menu while Unlocked is visible, then inspect Main Menu after the refresh finishes.",
-          "expected_result": "Main Menu opens without leftover Unlocked text or its message rectangle. If the message disappeared before tapping Menu, this observation is incomplete."
+          "action": "Short-press Power to unlock. As soon as Unlocked appears, tap Menu and inspect the completed refresh.",
+          "expected_result": "The unlocked icon and Unlocked message appear together. Main Menu then opens without leftover message text or its rectangle. If the message disappeared before the Menu tap, the message-removal check is incomplete."
         }
       ],
       "cleanup": [
-        "Return to Home, including after interruption."
+        "Restore the recorded Auto Lock setting, including after interruption.",
+        "Confirm the restored choice and return Home. Record any restoration failure."
       ],
       "references": [
         "products/go/docs/ui_manager.md",
-        "products/go/docs/input_service.md"
+        "products/go/docs/input_service.md",
+        "products/go/docs/display_service.md",
+        "products/go/docs/settings.md"
+      ]
+    },
+    {
+      "id": "go.ui.unlock-during-refresh",
+      "title": "Unlock during a running refresh still shows feedback",
+      "objective": "Verify that an unlock requested while the panel is refreshing produces readable feedback without another Power press.",
+      "category": "Display & Controls",
+      "sub_category": "Navigation",
+      "applicability": [
+        "V1",
+        "V2"
+      ],
+      "setup": [],
+      "steps": [
+        {
+          "action": "Select Portable mode. Record Settings > Display & Touch > Auto Lock, set it to Off, and return Home unlocked.",
+          "expected_result": "The original Auto Lock setting is recorded and Home is unlocked."
+        },
+        {
+          "action": "Short-press Power to lock. As the screen starts refreshing, short-press Power again to unlock.",
+          "expected_result": "The second press occurs during the lock refresh. If that refresh finished before the second press, this scenario was not exercised."
+        },
+        {
+          "action": "Stop pressing buttons and watch the screen for 10 seconds.",
+          "expected_result": "The unlocked icon and a readable Unlocked message appear without another press. The message clears cleanly and the icon stays unlocked.",
+          "evidence": [
+            "If feedback is missing or incorrect, record the failure and capture video if available."
+          ]
+        }
+      ],
+      "cleanup": [
+        "Restore the recorded Auto Lock setting, including after interruption.",
+        "Confirm the restored choice and return Home. Record any restoration failure."
+      ],
+      "references": [
+        "products/go/docs/ui_manager.md",
+        "products/go/docs/input_service.md",
+        "products/go/docs/display_service.md",
+        "products/go/docs/orchestrator.md",
+        "products/go/docs/settings.md"
+      ]
+    },
+    {
+      "id": "go.display.refresh-cooldown",
+      "title": "USB disconnect followed by lock avoids repeated long refreshes",
+      "objective": "Verify that disconnecting USB and locking in quick succession gives clear feedback without repeated long refreshes, and later menu navigation keeps the unlocked icon stable.",
+      "category": "Display & Controls",
+      "sub_category": "Navigation",
+      "applicability": [
+        "V1",
+        "V2"
+      ],
+      "setup": [
+        "USB power and a compatible cable.",
+        "Battery charge is above 5% and at or below 95%."
+      ],
+      "steps": [
+        {
+          "action": "Select Portable mode. Record Settings > Display & Touch > Auto Lock and set it to Off. Connect USB, return Home unlocked and watch for the charging bolt for up to 20 seconds.",
+          "expected_result": "The original Auto Lock setting is recorded. Home is unlocked with the charging bolt visible."
+        },
+        {
+          "action": "Disconnect USB. Watch for the charging bolt to disappear for up to 15 seconds. As soon as it disappears, short-press Power to lock.",
+          "expected_result": "The charging bolt clears, then the locked icon and Locked message appear together. These two changes do not cause two long screen refreshes in succession.",
+          "evidence": [
+            "If the screen repeatedly refreshes slowly or an icon is wrong, record the failure and capture video if available."
+          ]
+        },
+        {
+          "action": "When the lock refresh finishes, short-press Power to unlock, then open Main Menu > Settings > Display & Touch.",
+          "expected_result": "Unlocked appears with the unlocked icon. The menu opens normally and the icon remains unlocked."
+        },
+        {
+          "action": "Tap up then down three times, inspecting the icon after each completed refresh. Return Home using the on-screen Exit option.",
+          "expected_result": "The icon stays unlocked throughout navigation and on Home; it never alternates between locked and unlocked. Text and highlighting remain readable."
+        }
+      ],
+      "cleanup": [
+        "Restore the recorded Auto Lock setting, including after interruption.",
+        "Confirm the restored choice, disconnect USB and return Home. Record any restoration failure."
+      ],
+      "references": [
+        "products/go/docs/display_service.md",
+        "products/go/docs/ui_manager.md",
+        "products/go/docs/settings.md"
       ]
     },
     {
@@ -1104,7 +1192,7 @@
     {
       "id": "go.display.chart-reset-lock",
       "title": "Pinned chart returns after locking and remains selected after a power cycle",
-      "objective": "Verify that locking clears chart-browsing details and restores the pinned chart cleanly.",
+      "objective": "Verify that locking restores the pinned chart cleanly, unlock feedback appears and clears over the chart, and the pinned selection survives a power cycle.",
       "category": "Measurements",
       "sub_category": "Charts",
       "applicability": [
@@ -1128,8 +1216,8 @@
           "expected_result": "The CO2 pinned chart returns. The browsing header, arrows, highlight and Min/Max disappear without leftover content."
         },
         {
-          "action": "Unlock with a short Power press.",
-          "expected_result": "The CO2 pinned chart remains visible without browsing details."
+          "action": "Unlock with a short Power press. Watch the message and chart for 10 seconds without touching the controls.",
+          "expected_result": "Unlocked appears with the unlocked indicator, then clears without leftover text or a message rectangle. The CO2 pinned chart remains readable without browsing details."
         },
         {
           "action": "Disconnect USB. Hold Power until Powered off is fully displayed, release, and wait 10 seconds. Press and release Power to start, allowing up to five minutes for Home. Inspect Home, then reopen Settings > Display & Touch > Pinned Chart.",
