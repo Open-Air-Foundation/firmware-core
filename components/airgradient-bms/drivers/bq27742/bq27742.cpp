@@ -10,6 +10,7 @@
 #include "ag_log.h"
 #include "rtos.h"
 #include "types/bms_types.h"
+#include <cmath>
 #include <cstring>
 #include <limits>
 
@@ -83,6 +84,45 @@ constexpr uint16_t MIN_CHARGING_VOLTAGE_MV = 4000;
 constexpr uint16_t MAX_CHARGING_VOLTAGE_MV = 5000;
 constexpr uint32_t DATA_FLASH_DELAY_MS = 20;
 constexpr uint32_t DATA_FLASH_COMMIT_DELAY_MS = 200;
+
+// TI SLUUAX0C sections 5.8.1, A.8 and A.11: F4 calibration, not IEEE float.
+constexpr uint8_t SUBCLASS_CALIBRATION = 104;
+constexpr uint8_t OFFSET_CC_GAIN = 0;
+constexpr uint8_t OFFSET_CC_DELTA = 4;
+constexpr size_t CC_CALIBRATION_SIZE = 8;
+constexpr double CC_GAIN_NUMERATOR = 4.768;
+constexpr double CC_DELTA_PER_GAIN = 1193046.0;
+constexpr double MIN_CC_GAIN = 0.1;
+constexpr double MAX_CC_GAIN = 40.0;
+constexpr double MIN_CC_DELTA = 29800.0;
+constexpr double MAX_CC_DELTA = 1190000.0;
+constexpr int TI_FLOAT_EXPONENT_BIAS = 128;
+constexpr int TI_FLOAT_MANTISSA_BITS = 24;
+constexpr uint8_t TI_FLOAT_SIGN = 0x80;
+
+bool valid_cc_calibration(double gain, double delta) {
+  return gain >= MIN_CC_GAIN && gain <= MAX_CC_GAIN && delta >= MIN_CC_DELTA &&
+         delta <= MAX_CC_DELTA;
+}
+
+double decode_ti_float(const uint8_t *data) {
+  const uint32_t mantissa = (static_cast<uint32_t>(data[1] | TI_FLOAT_SIGN) << 16) |
+                            (static_cast<uint32_t>(data[2]) << 8) | data[3];
+  const double value = std::ldexp(static_cast<double>(mantissa),
+                                  data[0] - TI_FLOAT_EXPONENT_BIAS - TI_FLOAT_MANTISSA_BITS);
+  return (data[1] & TI_FLOAT_SIGN) ? -value : value;
+}
+
+// Only called for validated, positive calibration values representable as F4.
+void encode_ti_float(double value, uint8_t *data) {
+  int exponent;
+  const float fraction = std::frexp(static_cast<float>(value), &exponent);
+  const uint32_t mantissa = static_cast<uint32_t>(std::ldexp(fraction, TI_FLOAT_MANTISSA_BITS));
+  data[0] = static_cast<uint8_t>(exponent + TI_FLOAT_EXPONENT_BIAS);
+  data[1] = static_cast<uint8_t>(mantissa >> 16) & ~TI_FLOAT_SIGN;
+  data[2] = static_cast<uint8_t>(mantissa >> 8);
+  data[3] = static_cast<uint8_t>(mantissa);
+}
 
 uint16_t unpack_word(const uint8_t *data, size_t offset) {
   return (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1];
@@ -423,6 +463,44 @@ bool BQ27742::disable_full_charge_cutoff() {
   }
   data[OFFSET_PACK_CONFIG_D] &= ~PACK_CONFIG_D_FCFET;
   return write_data_flash_block(SUBCLASS_REGISTERS, 0, data);
+}
+
+bool BQ27742::read_cc_sense_mohm(float &gain_mohm, float &delta_mohm) {
+  uint8_t data[DATA_FLASH_BLOCK_SIZE];
+  if (!data_flash_available() || !read_data_flash_block(SUBCLASS_CALIBRATION, 0, data)) {
+    return false;
+  }
+  const double gain = decode_ti_float(&data[OFFSET_CC_GAIN]);
+  const double delta = decode_ti_float(&data[OFFSET_CC_DELTA]);
+  if (gain <= 0.0 || delta <= 0.0) {
+    return false;
+  }
+  gain_mohm = static_cast<float>(CC_GAIN_NUMERATOR / gain);
+  delta_mohm = static_cast<float>(CC_GAIN_NUMERATOR * CC_DELTA_PER_GAIN / delta);
+  return true;
+}
+
+bool BQ27742::write_cc_sense_mohm(float sense_mohm) {
+  if (!std::isfinite(sense_mohm) || sense_mohm <= 0.0f) {
+    return false;
+  }
+  const double gain = CC_GAIN_NUMERATOR / sense_mohm;
+  const double delta = gain * CC_DELTA_PER_GAIN;
+  if (!valid_cc_calibration(gain, delta) || !data_flash_available()) {
+    return false;
+  }
+  uint8_t data[DATA_FLASH_BLOCK_SIZE];
+  if (!read_data_flash_block(SUBCLASS_CALIBRATION, 0, data)) {
+    return false;
+  }
+  uint8_t expected[CC_CALIBRATION_SIZE];
+  encode_ti_float(gain, &expected[OFFSET_CC_GAIN]);
+  encode_ti_float(delta, &expected[OFFSET_CC_DELTA]);
+  if (std::memcmp(data, expected, sizeof(expected)) == 0) {
+    return true;
+  }
+  std::memcpy(data, expected, sizeof(expected));
+  return write_data_flash_block(SUBCLASS_CALIBRATION, 0, data);
 }
 
 bool BQ27742::write_voltage_config(const VoltageConfig &config) {

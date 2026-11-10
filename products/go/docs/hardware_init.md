@@ -378,7 +378,18 @@ Any initialization, configuration, or resealing failure leaves the gauge
 detached, so `PowerService` uses the charger's battery estimate. A partial write
 is checked again at the next boot; it does not trigger a factory reset.
 
-Taper detection, chemistry, calibration, protection
+V2 automatically applies the 6.4 mΩ effective sense resistance from PR #133
+to CC Gain and CC Delta, accounting for the copper included by the sense taps.
+Both values are read at boot; a difference greater than 0.001 mΩ triggers a
+verified write. Matching calibration is preserved. Unreadable calibration is
+logged and left unchanged; a failed write follows the configuration-failure
+path above. Other calibration fields and learned data are not reset.
+
+The correction persists in gauge data flash and does not change hardware
+protection thresholds. Capture learned profiles only after this calibration
+has been applied.
+
+Taper detection, chemistry, protection
 provisioning, and learning remain separate work. These basic cell parameters
 alone do not establish SOC accuracy. The BQ27427 factory-learning workflow
 does not run on V2.

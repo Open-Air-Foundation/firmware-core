@@ -15,6 +15,7 @@
 #include "go_input.h"
 
 #include <cassert>
+#include <cmath>
 #include <driver/gpio.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
@@ -83,6 +84,9 @@ static constexpr BQ27742::VoltageConfig AGO_V2_GAUGE_VOLTAGES = {
     .design_voltage_mv = 3700,
     .charging_voltage_mv = 4200,
 };
+// The V2 sense taps include copper resistance in addition to the 5 mOhm shunt (#133).
+static constexpr float AGO_V2_GAUGE_SENSE_MOHM = 6.40f;
+static constexpr float AGO_V2_GAUGE_SENSE_MATCH_MOHM = 0.001f;
 
 // FG DM corruption sanity ranges.  A reading outside any of these
 // ranges is treated as evidence of a corrupted persistent block
@@ -335,6 +339,20 @@ void GoHardwareBoard::init_fuel_gauge() {
     }
     if (config_ok) {
       config_ok = gauge->disable_full_charge_cutoff();
+    }
+    if (config_ok) {
+      float gain_mohm = 0.0f;
+      float delta_mohm = 0.0f;
+      if (!gauge->read_cc_sense_mohm(gain_mohm, delta_mohm)) {
+        AG_LOGW(TAG, "BQ27742 CC Gain/Delta unreadable — left as-is");
+      } else if (std::fabs(gain_mohm - AGO_V2_GAUGE_SENSE_MOHM) > AGO_V2_GAUGE_SENSE_MATCH_MOHM ||
+                 std::fabs(delta_mohm - AGO_V2_GAUGE_SENSE_MOHM) > AGO_V2_GAUGE_SENSE_MATCH_MOHM) {
+        AG_LOGI(TAG, "BQ27742 applying sense calibration: gain %.3f / delta %.3f -> %.3f mOhm",
+                gain_mohm, delta_mohm, AGO_V2_GAUGE_SENSE_MOHM);
+        config_ok = gauge->write_cc_sense_mohm(AGO_V2_GAUGE_SENSE_MOHM);
+      } else {
+        AG_LOGI(TAG, "BQ27742 sense calibration already %.3f mOhm — preserved", gain_mohm);
+      }
     }
 
     // Always attempt to reseal after configuration access, including on failure.

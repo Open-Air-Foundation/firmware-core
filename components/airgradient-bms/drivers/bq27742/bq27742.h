@@ -13,7 +13,7 @@
 #include "hal/fuel_gauge_device.h"
 #include "types/bms_types.h"
 
-// BQ27742-G1 telemetry and cell configuration. Chemistry, calibration, and
+// BQ27742-G1 telemetry and cell configuration. Chemistry and
 // protection provisioning remain factory responsibilities.
 class BQ27742 : public FuelGaugeDevice {
 public:
@@ -59,6 +59,13 @@ public:
   /// Leave full-charge cutoff to the charger; preserve all gauge safety controls.
   /// Requires unseal(). Clears only Pack Configuration D[FCFET], with readback.
   bool disable_full_charge_cutoff();
+
+  /// CC Gain / Delta expressed as effective sense resistances. Requires unseal().
+  /// Failed reads leave both outputs unchanged; nonpositive calibration is rejected.
+  bool read_cc_sense_mohm(float &gain_mohm, float &delta_mohm);
+  /// Write the effective sense resistance with range checks and block readback.
+  /// Preserves unrelated fields and skips identical values. Caller reseals.
+  bool write_cc_sense_mohm(float sense_mohm);
 
   // These APIs describe the BQ27427 learning workflow, not this gauge.
   bool read_control_status(uint16_t &) override { return false; }
