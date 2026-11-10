@@ -214,14 +214,20 @@ Key points:
 `update()` claims the framebuffer before rendering and transfers ownership to
 the worker through its task notification. Until the worker clears
 `_worker_busy`, another non-waiting update is rejected and a waiting update
-blocks. This keeps the framebuffer immutable while Full and Fast refreshes
-read it for both SSD1680 RAM planes.
+blocks. This keeps the framebuffer immutable until the waveform and all
+SSD1680 RAM writes finish.
 
 Partial updates use a direct full-width framebuffer span. Body updates pass
 bytes 288–3999 (rows 18–249, 3712 bytes). Setup-session updates and Home
 header updates during cooldown pass bytes 0–3999 (the full 128×250 canvas). The driver copies either span into the DMA
 bounce buffer before its synchronous SPI transfer, so no intermediate region
 buffer is required.
+
+Each Partial update writes the selected region to RAM `0x24`, runs the
+waveform, then waits for BUSY to clear before rewriting that region to both
+`0x26` and `0x24`. Each write resets the RAM window and cursor. Synchronizing
+both planes prevents later body-only updates from restoring an old lock icon;
+it adds SPI writes but no extra visible refresh.
 
 ### Async Worker Task
 
@@ -255,7 +261,7 @@ The SSD1680 display driver is file-local (anonymous namespace in
 - `driver_hw_init_fast()` — Fast refresh init: SW reset + temperature override trick (forces 100 °C OTP LUT for faster waveform)
 - `driver_fast_write()` — Write full frame to both RAM planes (basemap coherence for subsequent partials)
 - `driver_fast_commit()` — Trigger fast update (`0xC7` waveform, non-differential, no flash)
-- `driver_part_begin/write_region/commit()` — Partial update protocol (`0xFF` waveform, differential)
+- `driver_part_begin/update()` — Partial refresh (`0xFF`) followed by RAM synchronization
 - `driver_deep_sleep()` — SSD1680 deep sleep mode 1
 - `driver_bus_acquire/release()` — Exclusive SPI bus access
 
@@ -280,21 +286,23 @@ The first matching rule wins:
 1. Destination `TrackingStatus`: body-only Partial.
 2. Crossing a setup-session boundary: Full.
 3. Within a setup session: full-canvas Partial.
-4. Menu navigation, including returning Home: body-only Partial. Entry to
+4. Home → Home, or a lock-state change returning to Home: apply the cooldown
+   policy below, including the header when it changes.
+5. Other menu navigation, including returning Home: body-only Partial. Entry to
    pairing or shutdown bypasses this rule.
-5. Home → Home: apply the cooldown policy below.
 6. Other updates: Full when cleanup is due; otherwise Fast for pending menu
    cleanup or non-navigable screens, and Partial for eligible navigable updates.
 
-Menus defer header changes and cleanup. Returning Home remains Partial; a
-later Home update handles the pending cleanup. Setup, pairing, and shutdown
-transitions retain their dedicated rules.
+Ordinary menu navigation defers header changes and cleanup. Locking from a menu,
+by Power button or auto-lock, updates the lock icon and snackbar together.
+Setup, pairing, and shutdown transitions retain their dedicated rules.
 
 ### Home Cooldown
 
 For five seconds after a successful Fast or Full completes, Home → Home updates
-use Partial. A changed header or pending menu cleanup expands that Partial to
-the full canvas, keeping lock and charging indicators current.
+and lock-state changes returning to Home use Partial. A changed header or
+pending menu cleanup expands that Partial to the full canvas, keeping lock
+and charging indicators current.
 
 After cooldown, the next requested Home update uses Full if cleanup is due,
 Fast for a header change or pending menu cleanup, and Partial otherwise.
