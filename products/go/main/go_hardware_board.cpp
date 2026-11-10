@@ -79,6 +79,10 @@ static constexpr uint16_t AGO_V1_SLEEP_CURRENT_MA = 50;
 static constexpr uint16_t AGO_V2_DESIGN_CAPACITY_MAH = 2600;
 static constexpr uint16_t AGO_V2_DESIGN_ENERGY_MWH = 9620;
 static constexpr uint16_t AGO_V2_TERMINATE_VOLTAGE_MV = 3000;
+static constexpr BQ27742::VoltageConfig AGO_V2_GAUGE_VOLTAGES = {
+    .design_voltage_mv = 3700,
+    .charging_voltage_mv = 4200,
+};
 
 // FG DM corruption sanity ranges.  A reading outside any of these
 // ranges is treated as evidence of a corrupted persistent block
@@ -324,6 +328,10 @@ void GoHardwareBoard::init_fuel_gauge() {
         AG_LOGI(TAG, "BQ27742 applying cell config");
         config_ok = gauge->write_cell_config(expected);
       }
+    }
+
+    if (config_ok) {
+      config_ok = gauge->write_voltage_config(AGO_V2_GAUGE_VOLTAGES);
     }
 
     // Always attempt to reseal after configuration access, including on failure.

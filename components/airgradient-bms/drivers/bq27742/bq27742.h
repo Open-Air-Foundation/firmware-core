@@ -46,6 +46,16 @@ public:
   /// A failure can leave earlier blocks updated; caller owns resealing.
   bool write_cell_config(const FgCellConfig &config);
 
+  struct VoltageConfig {
+    uint16_t design_voltage_mv;
+    uint16_t charging_voltage_mv;
+  };
+
+  /// Nominal cell voltage and full-charge detection reference (not charger control).
+  /// Requires unseal(); preserves unrelated flash and skips unchanged blocks.
+  bool read_voltage_config(VoltageConfig &out);
+  bool write_voltage_config(const VoltageConfig &config);
+
   // These APIs describe the BQ27427 learning workflow, not this gauge.
   bool read_control_status(uint16_t &) override { return false; }
   bool read_qmax_cell0(uint16_t &) override { return false; }
