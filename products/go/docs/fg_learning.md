@@ -484,13 +484,19 @@ What transfers, and what does not:
 | Qmax Cell 0 | subclass 82 offset 0 | yes |
 | Ra0 and Ra0x, both flags | subclasses 88 and 89 | yes |
 | Update Status | subclass 82 offset 2 | as `0x02`; bit 2 only ever via `IT_ENABLE` |
-| Cell config, Safety, protector, Charging Voltage | several | already written on every boot |
+| Cell config, Safety, protector, Charging Voltage, CC Gain/Delta | several | already written on every boot |
 | Chem ID | subclass 83 | **no** — writing it has no effect, it takes TI's bqCONFIG (TRM §5.6.1.1) |
 
 Chemistry is the one thing firmware cannot install, and the one thing that does
 not need installing: every gauge leaves the factory with the same chemistry, so
 the unit that learns and the units that receive its image already agree. The
 rule that follows is simply never to change it.
+
+Take the image only from a unit that already carries the CC Gain/Delta
+calibration ([bq27742_capability.md](bq27742_capability.md#subclass-104-calibration)).
+Qmax counts charge through CC Delta and Ra divides by current through CC Gain,
+so an image learned on TI's 5 mΩ defaults would carry a Qmax 1.28 times too
+high into every unit that installs it.
 
 ### The two builds
 

@@ -14,6 +14,7 @@
 #include "go_hardware_board.h"
 
 #include <cassert>
+#include <cmath>
 #include <driver/gpio.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
@@ -125,6 +126,16 @@ static void format_ra_profile(const FgRaProfile &p, char *out, size_t len) {
 // full-charge pause never engaged, and the learning run had no way out of its
 // Charge stage.  Matched to the charger's own regulation voltage above.
 static constexpr uint16_t AGO_FG_CHARGING_VOLTAGE_MV_V2 = 4200;
+
+// Sense resistance the coulomb counter is scaled for.  R8 is the 5 mΩ TI's
+// defaults assume, but the v2.0 SRP/SRN taps also take in copper: R5 reaches
+// /BAT+ at a second via upstream of R8, and R12 taps the Q3 pour short of R8's
+// pad (datasheet SLUSBV9D §10.1.2 warns of exactly this).  On TI's defaults the
+// gauge read 1.28x the charger's IBAT, and the charger is the one that balances
+// against IBUS x VBUS, so the taps see 5 x 1.28 = 6.4 mΩ.  It is set by the
+// layout, so one value serves every v2.0 board.
+static constexpr float AGO_FG_SENSE_MOHM_V2 = 6.40f;
+static constexpr float AGO_FG_SENSE_MATCH_MOHM = 0.001f;
 
 // Firmware-layer protection thresholds for the same cell.  TI's factory
 // defaults suit a generic cell that tolerates 4.35 V and 55 °C charging; the
@@ -584,6 +595,22 @@ void GoHardwareBoard::_init_fuel_gauge_v2() {
     }
   } else {
     AG_LOGI(TAG, "BQ27742 Charging Voltage already correct — preserved");
+  }
+
+  float cc_gain_mohm = 0.0f;
+  float cc_delta_mohm = 0.0f;
+  if (!_fuel_gauge_v2->read_cc_sense_mohm(cc_gain_mohm, cc_delta_mohm)) {
+    AG_LOGW(TAG, "BQ27742 CC Gain/Delta unreadable — left as-is");
+  } else if (std::fabs(cc_gain_mohm - AGO_FG_SENSE_MOHM_V2) > AGO_FG_SENSE_MATCH_MOHM ||
+             std::fabs(cc_delta_mohm - AGO_FG_SENSE_MOHM_V2) > AGO_FG_SENSE_MATCH_MOHM) {
+    AG_LOGI(TAG, "BQ27742 applying sense calibration: CC Gain %.3f / CC Delta %.3f → %.3f mΩ",
+            cc_gain_mohm, cc_delta_mohm, AGO_FG_SENSE_MOHM_V2);
+    if (!_fuel_gauge_v2->write_cc_sense_mohm(AGO_FG_SENSE_MOHM_V2)) {
+      AG_LOGW(TAG, "BQ27742 write_cc_sense_mohm() failed — current reads 1.28x high");
+      df_ok = false;
+    }
+  } else {
+    AG_LOGI(TAG, "BQ27742 sense calibration already %.3f mΩ — preserved", cc_gain_mohm);
   }
 
   FgProtectionConfig prot_current{};

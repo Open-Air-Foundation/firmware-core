@@ -31,7 +31,7 @@ confirmed on a bench unit it is marked "bench".
 | I²C address | 7-bit `0x55` (`0xAA` write / `0xAB` read) | TRM p.40 §3.4 |
 | I²C clock on Go v2.0 | 100 kHz on the gauge's own device handle; the other 11 devices stay at 400 kHz | [`go_hardware_board.cpp`](../main/go_hardware_board.cpp) |
 | Bus pull-ups | R30 / R26 = 10 kΩ | schematic |
-| Sense resistor | R8 = 5 mΩ across SRP/SRN | schematic |
+| Sense resistor | R8 = 5 mΩ 1 %, but the SRP/SRN taps see about 6.4 mΩ ([Subclass 104](#subclass-104-calibration)) | schematic, bench |
 | Pack thermistor (NTC2) | Murata NCP15XH103F, 103AT-class model | schematic, DS |
 | Cell | Cowon INR18490NP, 2600 mAh, 4.20 V, charge 0–45 °C, discharge −20–60 °C | cell datasheet |
 | RC2 interrupt pin | no-connect, polling only | schematic |
@@ -332,6 +332,31 @@ pre-learned pack for creating Golden Image Files". That is what
 `write_golden_image()` does, and why an image has to carry both profiles and
 both flags rather than just the fifteen numbers of the enabled one.
 
+### Subclass 104 Calibration
+
+| Offset | Field | Type | Min | Max | Default | Go v2.0 |
+|---|---|---|---|---|---|---|
+| 0 | CC Gain | F4 | 0.1 | 40 | 0.9536 (5 mΩ) | **0.7450 (6.40 mΩ)** |
+| 4 | CC Delta | F4 | 29 800 | 1 190 000 | 1 119 000 | **888 819** |
+| 8 | CC Offset | I2 | −32 768 | 32 767 | 1432 | — |
+
+TRM p.102 §5.8.1. CC Gain = 4.768 / R in mΩ and CC Delta = CC Gain ×
+1 193 046 (TRM p.116 §A.8). F4 is TI's float, not IEEE: exponent + 128, then a
+24-bit big-endian mantissa whose always-set top bit carries the sign (TRM p.119
+§A.11); `fg_ti_float_encode()` / `fg_ti_float_decode()` in `bms_types.h`
+handle it. CC Gain scales `AverageCurrent()` and every current threshold; CC
+Delta scales passed charge, so Qmax, `RemainingCapacity()` and FCC. Both live in
+the gauge, so a firmware without this write leaves the calibration in place.
+
+The rev 2.0 taps are not Kelvin (DS p.36 §10.1.2). R5 (SRN) also reaches
+`/BAT+` through a second via, at (112.67, 103.08), upstream of R8, and R12
+(SRP) taps the Q3-side pour about 2 mm short of R8's pad. On TI's defaults the
+gauge read 1.36 A while the charger's IBAT read 1.06 A in CV, a ratio of 1.28.
+The charger is the one consistent with the 4.79 W coming in (IBUS 0.99 A ×
+VBUS 4.84 V), so the taps see 5 × 1.28 = 6.4 mΩ. That reference has no
+accuracy spec of its own (ICHG regulation is ±5.5 % at 1 A), so 6.40 is not
+final until it is checked against a Joulescope (±0.25 %) on several boards.
+
 ### Subclass 112 Codes
 
 Offset 0 is the sealed-to-unsealed key (H4, default `0x36720414`), offset 4
@@ -392,19 +417,21 @@ the target for a 4.20 V cell.
 
 Prot OC Config, subclass 64 offset 5, default `0x0A`: bits 7:6 reserved,
 bit 5 `SCD`, bits 4:2 `OCD[2:0]`, bits 1:0 `OCC[1:0]` (TRM p.83 Table 5-19).
-Currents are for the board's 5 mΩ sense resistor.
+The comparators see the voltage between the SRP/SRN taps, not CC Gain, so the
+trip current is the threshold over the 6.4 mΩ those taps see on rev 2.0
+([Subclass 104](#subclass-104-calibration)). The 5 mΩ column is R8 alone.
 
-| Field | Code | Threshold | Current at 5 mΩ |
-|---|---|---|---|
-| OCC | 00 / 01 / **10** / 11 | 6 / 13 / **18** / 28 mV | 1.2 / 2.6 / **3.6** / 5.6 A |
-| OCD | 000 / 001 / **010** / 011 | 14 / 24 / **34** / 44 mV | 2.8 / 4.8 / **6.8** / 8.8 A |
-| OCD | 100 / 101 / 110 / 111 | 53 / 63 / 73 / 83 mV | 10.6 / 12.6 / 14.6 / 16.6 A |
-| SCD | **0** / 1 | **73** / 148 mV | **14.6** / 29.6 A |
+| Field | Code | Threshold | Current at 5 mΩ | Current at 6.4 mΩ |
+|---|---|---|---|---|
+| OCC | 00 / 01 / **10** / 11 | 6 / 13 / **18** / 28 mV | 1.2 / 2.6 / **3.6** / 5.6 A | 0.9 / 2.0 / **2.8** / 4.4 A |
+| OCD | 000 / 001 / **010** / 011 | 14 / 24 / **34** / 44 mV | 2.8 / 4.8 / **6.8** / 8.8 A | 2.2 / 3.8 / **5.3** / 6.9 A |
+| OCD | 100 / 101 / 110 / 111 | 53 / 63 / 73 / 83 mV | 10.6 / 12.6 / 14.6 / 16.6 A | 8.3 / 9.8 / 11.4 / 13.0 A |
+| SCD | **0** / 1 | **73** / 148 mV | **14.6** / 29.6 A | **11.4** / 23.1 A |
 
 Bold is the factory default. The datasheet's combined threshold table shifts
 the OCC/OCD/SCD millivolt values by about ±1 mV per OVP row; the numbers
-above are the default-OVP row. Retuning these codes waits on a 4-wire check
-of R8 and a measured system peak current.
+above are the default-OVP row. Retuning these codes waits on a measured system
+peak current and on confirming the 6.4 mΩ against a reference meter.
 
 ### Fixed Delays
 
@@ -567,6 +594,7 @@ Board wiring: [`go_hardware_board.cpp`](../main/go_hardware_board.cpp).
 | Safety subclass | `read_protection_config()`, `write_protection_config()` | written at boot when different; U1 delay fields preserved; out-of-range rejected; read back and logged |
 | Cell config | `read_cell_config()`, `write_cell_config()` | written at boot when different (2600 / 9620 / 3000 / 50); no `RESET` |
 | Charging Voltage | `read_charging_voltage_mv()`, `write_charging_voltage_mv()` | written at boot when different (4200); range-checked and read back |
+| CC Gain / CC Delta | `read_cc_sense_mohm()`, `write_cc_sense_mohm()` | written at boot when either differs from 6.40 mΩ by more than 0.001 mΩ; range-checked against TRM limits and read back byte for byte |
 | Status | `read_safety_status()`, `read_protector_status()`, `read_protector_state()` | logged at boot |
 | Learning reads | `read_learning_progress()` (Update Status + `CONTROL_STATUS[OCVTAKEN]`), `read_qmax_mah()`, `read_ra_table()` | polled every 5 s by the learning runner |
 | Golden image | `read_golden_image()`, `write_golden_image()` | captured on the characterised unit, installed on every other one while Update Status is `0x00`; see [Golden Image](fg_learning.md#golden-image) |
