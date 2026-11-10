@@ -2,8 +2,8 @@
 
 Product-specific display service for AirGradient Go. Manages e-paper rendering
 via u8g2, three-tier refresh decisions (full/fast/partial), and an async worker
-task for SPI hardware refresh. The orchestrator calls the Display Service API
-which returns immediately; the slow EPD refresh runs in a dedicated task.
+task for SPI hardware refresh. Submission can wait for an earlier refresh;
+the new frame is painted by the worker.
 
 ## Files
 
@@ -11,6 +11,7 @@ which returns immediately; the slow EPD refresh runs in a dedicated task.
 |---|---|
 | `products/go/main/go_display.h` | `DisplayService` class, `DisplayValues` struct, `RtcDisplaySnapshot` struct, `Screen` enum, free functions |
 | `products/go/main/go_display.cpp` | Rendering pipeline, refresh logic, worker task, display driver, RTC snapshot storage, session-screen draw routines |
+| `products/go/main/go_display_refresh.h` | Host-testable Home cooldown policy and completed-refresh counter |
 | `products/go/main/go_display_chart.h` | Shared history extraction for interactive and timer-wake rendering |
 | `products/go/main/go_text_wrap.h` | Pure host-testable word-wrap helper (`compute_wrapped_lines`) used by `_draw_info()` and the auto-wrapped Provisioning status line |
 | `products/go/main/go_text_wrap.cpp` | Implementation of the word-wrap helper |
@@ -60,7 +61,8 @@ expander-controlled NAND CS.
 | `clock_hz` | `int` | 4000000 | SPI clock frequency |
 | `task_stack_size` | `uint16_t` | 4096 | Worker task stack size |
 | `task_priority` | `uint8_t` | 4 | Worker task RTOS priority |
-| `max_partial_ops` | `uint8_t` | 20 | Differential op limit before forced full GC |
+| `max_partial_ops` | `uint8_t` | 20 | Completed Fast/Partial operations before Full cleanup is due |
+| `expensive_refresh_cooldown_ms` | `uint32_t` | 5000 | Home cooldown after a successful Fast/Full completes; zero disables it |
 
 ### Methods
 
@@ -216,8 +218,8 @@ blocks. This keeps the framebuffer immutable while Full and Fast refreshes
 read it for both SSD1680 RAM planes.
 
 Partial updates use a direct full-width framebuffer span. Body updates pass
-bytes 288–3999 (rows 18–249, 3712 bytes); setup-session updates pass bytes
-0–3999 (the full 128×250 canvas). The driver copies either span into the DMA
+bytes 288–3999 (rows 18–249, 3712 bytes). Setup-session updates and Home
+header updates during cooldown pass bytes 0–3999 (the full 128×250 canvas). The driver copies either span into the DMA
 bounce buffer before its synchronous SPI transfer, so no intermediate region
 buffer is required.
 
@@ -259,83 +261,62 @@ The SSD1680 display driver is file-local (anonymous namespace in
 
 ## Three-Tier Display Refresh
 
-The display uses three refresh tiers to balance image quality, speed, and
-user experience. See `products/go/specs/display_refresh_tiers.md` for the
-full design rationale.
-
-### RefreshMode Enum
-
-```cpp
-enum class RefreshMode : uint8_t {
-    Full,     ///< Full GC waveform (flash). Resets basemap in both RAM planes.
-    Fast,     ///< Full-screen 0xC7 waveform (no flash). Temperature-override trick.
-    Partial,  ///< Body-only differential 0xFF (no flash). Writes body region only.
-};
-```
+The display selects a waveform and, for Partial, a body-only or full-canvas
+region. Policy lives in [`go_display_refresh.h`](../main/go_display_refresh.h)
+and [`DisplayService::update()`](../main/go_display.cpp).
 
 ### Refresh Tiers
 
-| Tier | SSD1680 Waveform | Duration | Flash | When |
-|---|---|---|---|---|
-| **Full** | `0xF7` (GC, both RAM planes) | ~2–3 s | Yes | Init from deep sleep; anti-ghosting after 20 differential ops |
-| **Fast** | `0xC7` (non-differential, 100 °C OTP LUT) | ~1–1.5 s | No | Transitions to/from PairingPasskey or any `Shutdown*` screen; navigable screen transitions with header change |
-| **Partial** | `0xFF` (differential, body region only) | ~0.3–0.5 s | No | Menu navigation between navigable screens (header unchanged); same list screen updates |
+| Tier | Waveform | Typical Duration | Purpose |
+|---|---|---|---|
+| Full | `0xF7` | ~2.5 s, flashing | Initialization, setup boundaries, anti-ghosting cleanup |
+| Fast | `0xC7` | ~1–1.5 s | Header changes and post-menu cleanup when eligible |
+| Partial | `0xFF` | ~0.5 s | Menu navigation, body updates, and Home updates during cooldown |
 
 ### Decision Logic
 
-The `update()` method selects the refresh mode using this priority:
+The first matching rule wins:
 
-1. **Partial, body-only** — destination is `TrackingStatus`, regardless of
-   header changes or the partial-operation budget.
-2. **Full** — crossing the setup-session boundary (any non-session screen
-   ↔ `Info` / `Provisioning` / `ProvisioningConfirm`). Resets
-   `_diff_count` and `_menu_exited` so the next session starts with a
-   fresh partial budget.
-3. **Partial** — in-session transition (both previous and next are
-   session screens). The partial-op counter is **not** consulted inside
-   the session. Covers `Info` text updates, Provisioning status updates,
-   `Provisioning ↔ ProvisioningConfirm`, and No ↔ Yes toggling.
-4. **Partial** — menu-navigation transition (either previous or next is
-   a menu-navigation screen, and the next screen is not a `Shutdown*`
-   variant or PairingPasskey)
-5. **Full** — `_diff_count >= max_partial_ops` (anti-ghosting, default 20)
-6. **Fast** — `_menu_exited` is set (post-menu cleanup)
-7. **Partial** — both screens "navigable" and header unchanged, OR same
-   list screen
-8. **Fast** — everything else (fallback)
+1. Destination `TrackingStatus`: body-only Partial.
+2. Crossing a setup-session boundary: Full.
+3. Within a setup session: full-canvas Partial.
+4. Menu navigation, including returning Home: body-only Partial. Entry to
+   pairing or shutdown bypasses this rule.
+5. Home → Home: apply the cooldown policy below.
+6. Other updates: Full when cleanup is due; otherwise Fast for pending menu
+   cleanup or non-navigable screens, and Partial for eligible navigable updates.
 
-**Navigable** screens are Home and menu/list screens, including tracking,
-settings, and diagnostics. PairingPasskey and `Shutdown*` are not navigable.
-**Menu-navigation** means navigable but not Home. Unless a higher-priority rule
-applies, menu transitions use body-only Partial and defer header updates and
-anti-ghosting cleanup until exit.
+Menus defer header changes and cleanup. Returning Home remains Partial; a
+later Home update handles the pending cleanup. Setup, pairing, and shutdown
+transitions retain their dedicated rules.
 
-`_menu_exited` is set during any menu-navigation Partial and cleared when a
-full-screen refresh (Full or Fast) executes. After the user leaves the menu,
-the first non-menu update triggers Fast (or Full if the anti-ghosting
-threshold was reached during the menu session) to clean up accumulated
-artifacts and refresh the status bar.
+### Home Cooldown
 
-All non-`Shutdown*` screens share the same status bar at Y=0..17. Partial
-updates write the body region only (Y=18..249, 232 px height, full 128 px
-width), so the status bar is physically unchanged on the display. Header
-changes during menu navigation and same-list-screen interactions are silently
-deferred; the header self-corrects at the post-menu cleanup refresh or the
-next Full refresh (anti-ghosting).
+For five seconds after a successful Fast or Full completes, Home → Home updates
+use Partial. A changed header or pending menu cleanup expands that Partial to
+the full canvas, keeping lock and charging indicators current.
+
+After cooldown, the next requested Home update uses Full if cleanup is due,
+Fast for a header change or pending menu cleanup, and Partial otherwise.
+Partial refreshes do not extend cooldown. Cooldown expiry does not schedule a
+refresh or delay input; an already-running waveform still has to finish.
+
+For example, unplugging can use Fast and a following auto-lock can use Partial,
+including the new lock icon and snackbar. Successful synchronous and deferred
+initial Full refreshes also start cooldown.
 
 ### Anti-Ghosting Counter
 
-`_diff_count` counts all differential operations (both Fast and Partial).
-Both waveform types accumulate ghosting equally on the GDEY0213B74 panel.
-The counter resets to 0 on Full refresh and uses saturating increment on Fast
-or Partial (capped at `UINT8_MAX` to prevent wrap during long menu sessions).
-`Config::max_partial_ops` (default 20) controls the limit.
+Each successful Fast or Partial increments a saturating counter. Only a
+successful Full resets it. Reaching `max_partial_ops` marks cleanup due;
+menu navigation and Home cooldown can defer it without losing the count.
+Fast does not reset the counter. Failed refreshes do not change the count or
+cooldown timestamp.
 
-During menu navigation, the anti-ghosting threshold may be reached or
-exceeded, but the menu-navigation rule overrides it. The counter
-keeps incrementing. When a later non-menu update runs, `_diff_count >=
-max_partial_ops` promotes it to Full — an even stronger cleanup
-than the Fast from `_menu_exited`.
+The default threshold stays at 20; cleanup timing is time-aware rather than
+using adaptive per-frame weights. Host tests cover cooldown boundaries, header
+coverage, deferred cleanup, saturation, and clock wraparound in
+[`go_display_refresh.tests.cpp`](../tests/go_display_refresh.tests.cpp).
 
 ### Fast Refresh: Temperature Override
 
@@ -355,35 +336,17 @@ Writing both RAM planes ensures that after a Fast refresh, the basemap
 (RAM 0x26) matches the displayed content. Subsequent Partial refreshes
 (which diff 0x24 vs 0x26) produce correct results.
 
-### Decision Matrix
-
-| Condition | Refresh Mode |
-|---|---|
-| Crossing the setup-session boundary (non-session ↔ Info / Provisioning / ProvisioningConfirm) | Full |
-| In-session transition (Info ↔ Provisioning ↔ ProvisioningConfirm, including same-screen text updates) | Partial |
-| Menu-navigation transition (prev or next is menu-nav screen) | Partial |
-| Menu-navigation transition, even if `diff_count >= max_partial_ops` | Partial |
-| Menu-navigation transition with header change | Partial |
-| Transition **to** any `Shutdown*` variant or PairingPasskey from menu | Fast/Full (existing) |
-| `diff_count >= max_partial_ops` (non-menu, non-session) | Full |
-| Post-menu cleanup (`_menu_exited` set, non-menu update) | Fast |
-| Both navigable, header unchanged (non-menu, non-session) | Partial |
-| Same list screen (any header state) | Partial |
-| Screen transition involving PairingPasskey (non-menu) | Fast |
-| Screen transition involving any `Shutdown*` variant (non-menu) | Fast |
-| Navigable screen transition, header changed (non-menu, non-session) | Fast |
-
 ### Setup Session Refresh Policy
 
-`Screen::Info`, `Screen::Provisioning`, and `Screen::ProvisioningConfirm`
-are treated as one logical setup session. The refresh policy has two
-rules layered on top of the general matrix:
+`Screen::Info`, `Screen::Provisioning`, `Screen::ProvisioningConfirm`, and
+`Screen::GettingStarted` share the setup-session refresh policy:
 
 - **Crossing the session boundary in either direction forces Full.**
   Any non-session screen entering a session screen, or any session
   screen returning to Home / Portable, runs a full GC waveform. This
   prevents the prior layout from ghosting under the new one. The
-  partial-op counter and `_menu_exited` flag are reset at the boundary.
+  menu-cleanup flag is cleared at the boundary; successful Full completion
+  resets the counter.
 - **All intra-session transitions are Partial, regardless of layout
   change.** This includes `Info` text updates
   (`Connecting to saved Wi-Fi...` or manufacturing's `Trying default Wi-Fi...`
@@ -395,10 +358,9 @@ rules layered on top of the general matrix:
   text block versus Provisioning's full-canvas QR layout) clear
   cleanly without falling back to the Full waveform's ~3 s flash.
 
-Non-session partials still write only the body region (y = 18..249,
-232 px tall) to preserve the status bar without rewriting it. The
-selection between body-only and full-canvas partial happens in the
-worker loop based on `is_session_screen(_prev_values.screen)`.
+Menu partials write only the body (y = 18..249). Home cooldown partials also
+include the header when needed. `update()` selects the region before handing
+the immutable frame to the worker.
 
 ### Session-Screen Drawing
 
@@ -427,30 +389,11 @@ Session screens skip `_draw_status_bar()` and `_draw_snackbar()`:
 
 ### Display Update Suppression
 
-Background display updates are suppressed in two cases:
-
-- **Menu-navigation screens** (MainMenu, Settings, Operations, DisplayTouch,
-  SettingsChoice, TagList, Confirm, About, and diagnostic menus/screens).
-  Background events — sensor data, BLE
-  connect/disconnect/auth/config writes, BMS charging-status changes,
-  and snackbar expiry — do not trigger display updates while the user
-  is interacting with a menu.
-- **Setup session screens** (`Info`, `Provisioning`,
-  `ProvisioningConfirm`). The orchestrator's
-  `_setup_session_active` flag short-circuits
-  `request_background_display_update()` entirely so sensor / BMS /
-  BLE-status events that arrive during the session do not race the
-  explicit `update_display(wait=true)` calls that drive session state
-  transitions.
-
-Both cases are enforced by the orchestrator's
-`request_background_display_update()`, which checks
-`_setup_session_active` first, then delegates to
-`UIManager::is_on_menu_screen()`. Background data is still cached
-internally and pushed to BLE clients; only the e-paper refresh is
-suppressed. The display catches up on the next user-initiated repaint
-or on the next deliberate session render. See `docs/orchestrator.md`
-for the full call-site classification.
+The orchestrator suppresses background paints on menu screens, pairing focus,
+and active setup sessions. Sensor caches and BLE notifications still update;
+the display catches up on an explicit render. Rejected Home feedback is retried
+without bypassing these gates. See
+[Background Display Suppression](orchestrator.md#background-display-suppression).
 
 Shake-refresh progress is an explicit user-requested update. The orchestrator's
 `update_refresh_display()` submits it with `wait=true` on Home and menus so
