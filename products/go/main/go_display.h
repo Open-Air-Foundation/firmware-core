@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "go_display_geometry.h"
+#include "go_display_refresh.h"
 #include "go_types.h"
 #include "measures_types.h"
 #include "rtos.h"
@@ -276,13 +277,6 @@ extern "C" {
 #include "u8g2.h"
 }
 
-/// Display refresh tier — controls how the e-paper controller updates.
-enum class RefreshMode : uint8_t {
-  Full,    ///< Full GC waveform (flash). Resets basemap in both RAM planes.
-  Fast,    ///< Full-screen differential (no flash). Writes full frame to RAM 0x24.
-  Partial, ///< Body-only differential (no flash). Writes body region to RAM 0x24.
-};
-
 class DisplayService {
 public:
   struct Config {
@@ -302,7 +296,8 @@ public:
     uint8_t task_priority = 4;
 
     // Refresh limits
-    uint8_t max_partial_ops = 20;
+    uint8_t max_partial_ops = DisplayRefreshPolicy::DEFAULT_MAX_PARTIAL_OPS;
+    uint32_t expensive_refresh_cooldown_ms = DisplayRefreshPolicy::DEFAULT_COOLDOWN_MS;
   };
 
   explicit DisplayService(const Config &config);
@@ -361,9 +356,9 @@ private:
 
   // Refresh state
   DisplayValues _prev_values;
-  uint8_t _diff_count = 0;
+  DisplayRefreshPolicy _refresh_policy;
   RefreshMode _pending_mode = RefreshMode::Full;
-  bool _defer_header_check = false;
+  bool _pending_full_canvas_partial = false;
   bool _menu_exited = false;
 
   // Worker task
