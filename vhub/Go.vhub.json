@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "c30a62a",
+  "rev": "a97ec5e",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1057,17 +1057,17 @@
         "V2"
       ],
       "setup": [
-        "Home shows 100% battery charge.",
+        "Go has completed a normal charge cycle from the computer USB connection and remains connected, with no temperature or charger fault.",
         "A USB data cable.",
         "A computer with access to the AirGradient logging tool."
       ],
       "steps": [
         {
-          "action": "Select Portable mode. Connect Go to the computer using USB and open the AirGradient logging tool. Return Home.",
+          "action": "Keep the USB connection in place. Select Portable mode, open the AirGradient logging tool and return Home.",
           "expected_result": "Home and device logs are visible."
         },
         {
-          "action": "Observe for up to 40 seconds. Look for full_chg_paused=1 and charge=NotCharging or charge=Done in the PowerService logs.",
+          "action": "Observe for 30 seconds. Confirm the PowerService logs show external power and charge=NotCharging or charge=Done, and inspect the Home icons.",
           "expected_result": "Home shows a full battery and a plug icon without the charging bolt. The icons are readable and do not overlap."
         }
       ],

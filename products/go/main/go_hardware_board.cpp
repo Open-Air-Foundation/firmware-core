@@ -333,6 +333,9 @@ void GoHardwareBoard::init_fuel_gauge() {
     if (config_ok) {
       config_ok = gauge->write_voltage_config(AGO_V2_GAUGE_VOLTAGES);
     }
+    if (config_ok) {
+      config_ok = gauge->disable_full_charge_cutoff();
+    }
 
     // Always attempt to reseal after configuration access, including on failure.
     const bool seal_ok = gauge->seal();

@@ -181,7 +181,8 @@ independently; a failure can leave a partial update.
 
 `read_voltage_config()` / `write_voltage_config()` access nominal cell voltage
 and the charging-voltage reference used for full-charge detection, with the
-same access, preservation, and readback rules.
+same access, preservation, and readback rules. `disable_full_charge_cutoff()`
+clears only `FCFET`; temperature and fault protection settings are preserved.
 
 `read_design_capacity_mah()` also works while sealed. Chemistry, calibration,
 protection provisioning, and the BQ27427 learning workflow remain outside

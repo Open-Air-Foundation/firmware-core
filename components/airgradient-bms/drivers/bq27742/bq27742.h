@@ -56,6 +56,10 @@ public:
   bool read_voltage_config(VoltageConfig &out);
   bool write_voltage_config(const VoltageConfig &config);
 
+  /// Leave full-charge cutoff to the charger; preserve all gauge safety controls.
+  /// Requires unseal(). Clears only Pack Configuration D[FCFET], with readback.
+  bool disable_full_charge_cutoff();
+
   // These APIs describe the BQ27427 learning workflow, not this gauge.
   bool read_control_status(uint16_t &) override { return false; }
   bool read_qmax_cell0(uint16_t &) override { return false; }

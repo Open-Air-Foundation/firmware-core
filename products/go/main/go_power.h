@@ -114,11 +114,6 @@ struct PowerSnapshot {
   bool external_input_present = false; ///< plugged vs battery, at boot/poll
   bool edv_cutoff_reached = false;     ///< derived: ship_mode_request == OverDischarge
 
-  /// True when charging has been paused because the battery is full and
-  /// external power is present.  Cleared when SOC drops below the resume
-  /// threshold.
-  bool full_charge_paused = false;
-
   /// Non-None when a safety trip requires the orchestrator to show a
   /// warning and enter ship mode.
   ShipModeRequest ship_mode_request = ShipModeRequest::None;
@@ -443,13 +438,6 @@ public:
   static constexpr uint32_t PM_RECOVER_OFF_MS = 50;     ///< SPS30 discharge after boost kill
   static constexpr uint32_t PM_RECOVER_SETTLE_MS = 100; ///< PMID ramp + SPS30 boot after restore
 
-  // --- Full-charge pause ---
-  //
-  // When the battery is full and USB is present, charging is paused to
-  // reduce cell stress.  Charging resumes when SOC drops below the
-  // resume threshold.  Hysteresis (100 → 95%) prevents chattering.
-  static constexpr uint8_t FULL_CHARGE_RESUME_SOC = 95;
-
 private:
   BmsDevice *_bms;
   const gpio::Hal &_gpio;
@@ -466,12 +454,8 @@ private:
   /// set_charge_enable(false / true) on state transitions, not every poll.
   bool _thermal_charge_disabled = false;
 
-  // --- Full-charge pause state ---
-
-  /// True while charging is held off because the battery reached full
-  /// charge while plugged in.  Cleared when SOC drops to
-  /// FULL_CHARGE_RESUME_SOC.  Edge-triggered like the thermal guard.
-  bool _full_charge_paused = false;
+  /// Explicit inhibit used by the learning workflow; survives thermal recovery.
+  bool _manual_charge_disabled = false;
 
   /// Log charger status, ADC telemetry, and FG telemetry for a single
   /// poll_bms() snapshot.  Pure side-effect (serial output); does not

@@ -22,10 +22,8 @@ For AGo, the power service also manages:
   temperatures outside that range request the corresponding
   `ShipModeRequest::UnderTemperature` or `ShipModeRequest::OverTemperature`.
   An invalid NTC reading disables charging only and does not request shutdown
-- **Full-charge pause:** disables charging when the battery is full and
-  USB is present. Resumes when SOC drops to 95 %. Uses the normalized fuel-gauge FC flag
-  when a ready gauge is attached; without an attached gauge, falls back to
-  `ChargeTerminationDone` + 100 % SOC. Interacts safely with the thermal charge guard
+- **Charge completion:** the charger terminates and recharges autonomously on
+  V1 and V2. Fuel-gauge percentage and FC do not disable charging
 - **BMS watchdog wrapper:** `set_watchdog_timeout_ms()` forwards to the
   HAL without adding policy
 
@@ -71,7 +69,6 @@ fields default to invalid sentinels (`BmsInvalid::VOLT` / `-1.0f` / `false`).
 | `fg_full_charge_capacity_mah` | `uint16_t` | `UINT16_MAX` | FG full charge capacity (mAh) |
 | `fg_internal_temperature_c` | `float` | `-273.16` | FG die temperature (C) |
 | `fg_flags` | `uint16_t` | `0` | Normalized FG flags (decoded via `FgFlags::FC`, `CHG`, `DSG`, etc.) |
-| `full_charge_paused` | `bool` | `false` | True when charging is paused because battery is full + USB present |
 | `ship_mode_request` | `ShipModeRequest` | `None` | Non-`None` when a safety trip requires warning and ship mode: `OverDischarge`, `OverTemperature`, or `UnderTemperature`. Invalid NTC alone never sets this field |
 
 ### SOC Source Preference
@@ -92,7 +89,7 @@ only the failed field; the remaining FG fields populate normally.
 `poll_bms()` emits three log lines per poll via `_log_poll_snapshot()`:
 
 1. **Charger status** — percentage, source, voltages, critical flag,
-   charging state, power source, `full_chg_paused`, regulation/fault flags
+   charging state, power source, regulation/fault flags
 2. **BQ25629 ADC telemetry** — input/battery current, system/PMID voltage,
    thermistor, die/battery temperature
 3. **FG telemetry** (when FG attached and ready) — SOC, voltage,
@@ -689,40 +686,24 @@ nothing in the steady-state Go firmware drives them. The only watchdog the
 firmware actively feeds is the external GPIO2 hardware watchdog (see
 [External Watchdog](#external-watchdog)).
 
-## Full-Charge Pause
+## Charge Completion
 
-When the battery is full and USB is present, `poll_bms()` disables
-charging via `set_charge_enable(false)` to reduce cell stress. Charging
-resumes when SOC drops to `FULL_CHARGE_RESUME_SOC` (95 %).
+On V1 and V2, the charger owns normal termination and voltage-based recharge.
+Initialization enables termination and selects recharge at 100 mV below the
+configured charge voltage, with readback before enabling charging. Existing
+per-board charging and termination currents are retained.
 
-### Detection
+Gauge SOC and FC remain telemetry; they neither stop charging nor restart it
+at 95%. V2 clears BQ27742 `FCFET` so FC cannot interrupt the final taper through
+the gauge's charge FET. Other gauge protection controls are preserved.
 
-| Available Data | Full Condition |
-|---|---|
-| Ready fuel gauge attached | `fg_flags & FgFlags::FC` (normalized Full Charge flag) |
-| No fuel gauge attached | `ChargeTerminationDone` + `battery_percentage >= 100` |
+Temperature protection and explicit manual inhibits still disable charging.
+Releasing one does not override the other. A failed thermal recovery write is
+retried on a later poll.
 
-The plugged condition requires `bms_power_source_has_external_input()`.
-
-### Thermal Interaction
-
-Both `_thermal_charge_disabled` and `_full_charge_paused` are independent
-latches. The actual `set_charge_enable()` I2C write is only issued when it
-would change the effective state. When either flag wants charging off, the
-hardware stays off. The last flag to clear re-enables charging:
-
-- Temperature or invalid-NTC recovery with full-charge active →
-  `_thermal_charge_disabled` clears only for a valid battery temperature from
-  2 °C through 43 °C; no `set_charge_enable(true)` (full-charge pause holds)
-- Full-charge resume with temperature protection active →
-  `_full_charge_paused` cleared, no `set_charge_enable(true)` (temperature
-  protection holds)
-
-### Snapshot
-
-`PowerSnapshot::full_charge_paused` surfaces the current state to the
-orchestrator and display. The status bar shows a plug icon when
-`is_plugged_in && !is_battery_charging`.
+The status bar follows charger activity: the bolt can remain visible at 100%
+while charging continues. The plug icon means external power is present and
+charging is inactive; that alone is not proof of a successfully completed cycle.
 
 ## Shutdown (QoN / Ship Mode)
 
