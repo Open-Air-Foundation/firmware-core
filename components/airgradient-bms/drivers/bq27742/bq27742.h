@@ -67,6 +67,19 @@ public:
   /// Preserves unrelated fields and skips identical values. Caller reseals.
   bool write_cc_sense_mohm(float sense_mohm);
 
+  struct TaperConfig {
+    uint16_t current_ma;
+    uint16_t min_capacity_raw; ///< 0.004 mAh per unit (TRM Table 5-3).
+    uint16_t voltage_mv;
+    uint8_t window_s;
+    int8_t fc_set_percent; ///< -1 selects taper qualification instead of SOC.
+  };
+
+  /// Charge-termination subclass. Requires unseal(); writes are range-checked,
+  /// idempotent and verified. Unrelated fields and learned data are preserved.
+  bool read_taper_config(TaperConfig &out);
+  bool write_taper_config(const TaperConfig &config);
+
   // These APIs describe the BQ27427 learning workflow, not this gauge.
   bool read_control_status(uint16_t &) override { return false; }
   bool read_qmax_cell0(uint16_t &) override { return false; }

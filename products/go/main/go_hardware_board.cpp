@@ -87,6 +87,14 @@ static constexpr BQ27742::VoltageConfig AGO_V2_GAUGE_VOLTAGES = {
 // The V2 sense taps include copper resistance in addition to the 5 mOhm shunt.
 static constexpr float AGO_V2_GAUGE_SENSE_MOHM = 6.40f;
 static constexpr float AGO_V2_GAUGE_SENSE_MATCH_MOHM = 0.001f;
+// Starting profile for bench validation; FC never controls charger enable.
+static constexpr BQ27742::TaperConfig AGO_V2_GAUGE_TAPER = {
+    .current_ma = 100,
+    .min_capacity_raw = 25,
+    .voltage_mv = 100,
+    .window_s = 40,
+    .fc_set_percent = -1,
+};
 
 // FG DM corruption sanity ranges.  A reading outside any of these
 // ranges is treated as evidence of a corrupted persistent block
@@ -353,6 +361,10 @@ void GoHardwareBoard::init_fuel_gauge() {
       } else {
         AG_LOGI(TAG, "BQ27742 sense calibration already %.3f mOhm — preserved", gain_mohm);
       }
+    }
+
+    if (config_ok) {
+      config_ok = gauge->write_taper_config(AGO_V2_GAUGE_TAPER);
     }
 
     // Always attempt to reseal after configuration access, including on failure.
