@@ -81,6 +81,8 @@ constexpr int WIDTH_PX = 128;
 constexpr int HEIGHT_PX = 250;
 constexpr int FRAME_BYTES = (WIDTH_PX * HEIGHT_PX) / 8; // 4000
 constexpr size_t TX_BOUNCE_BYTES = 4096;
+constexpr uint8_t RAM_CURRENT = 0x24;
+constexpr uint8_t RAM_PREVIOUS = 0x26;
 
 // Error-propagation macro for driver functions returning esp_err_t.
 // Intentionally unscoped so it works in non-void-returning functions.
@@ -374,11 +376,11 @@ esp_err_t driver_part_begin() {
   return ESP_OK;
 }
 
-// Write pixel data to a rectangular region for partial update.
+// Write pixel data to a rectangular region of the selected RAM plane.
 // Coordinates are logical screen coordinates (Y=0 at top).
-esp_err_t driver_part_write_region(unsigned int x_start_px, unsigned int y_start_px,
-                                   const uint8_t *data, unsigned int height_px,
-                                   unsigned int width_px) {
+esp_err_t driver_part_write_region(uint8_t ram_plane, unsigned int x_start_px,
+                                   unsigned int y_start_px, const uint8_t *data,
+                                   unsigned int height_px, unsigned int width_px) {
   const unsigned int x_start = x_start_px / 8;
   const unsigned int x_end = x_start + width_px / 8 - 1;
 
@@ -405,8 +407,7 @@ esp_err_t driver_part_write_region(unsigned int x_start_px, unsigned int y_start
   DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>(y_start % 256)));
   DISP_RETURN_ON_ERR(write_data(static_cast<uint8_t>(y_start / 256)));
 
-  // Write pixel data (new RAM plane only; partial uses diff against basemap)
-  DISP_RETURN_ON_ERR(write_cmd(0x24));
+  DISP_RETURN_ON_ERR(write_cmd(ram_plane));
   return write_data_bytes(data, static_cast<size_t>(height_px) * width_px / 8);
 }
 
@@ -417,6 +418,19 @@ esp_err_t driver_part_commit() {
   DISP_RETURN_ON_ERR(write_cmd(0x20));
   wait_busy_low();
   return ESP_OK;
+}
+
+esp_err_t driver_part_update(unsigned int x_start_px, unsigned int y_start_px, const uint8_t *data,
+                             unsigned int height_px, unsigned int width_px) {
+  DISP_RETURN_ON_ERR(
+      driver_part_write_region(RAM_CURRENT, x_start_px, y_start_px, data, height_px, width_px));
+  DISP_RETURN_ON_ERR(driver_part_commit());
+
+  // After BUSY clears, synchronize both planes so later body-only updates
+  // cannot bring back a header from before this refresh. No extra waveform.
+  DISP_RETURN_ON_ERR(
+      driver_part_write_region(RAM_PREVIOUS, x_start_px, y_start_px, data, height_px, width_px));
+  return driver_part_write_region(RAM_CURRENT, x_start_px, y_start_px, data, height_px, width_px);
 }
 
 // ---------------------------------------------------------------------------
@@ -2432,11 +2446,9 @@ void DisplayService::_worker_loop() {
         // Session screens and Home header changes during cooldown include
         // the title region. Ordinary body updates retain the smaller span.
         const auto region = go_display_geometry::partial_region(_pending_full_canvas_partial);
-        err = driver_part_write_region(0, region.y, _render_buf + region.byte_offset, region.height,
-                                       SCREEN_W);
+        err = driver_part_update(0, region.y, _render_buf + region.byte_offset, region.height,
+                                 SCREEN_W);
       }
-      if (err == ESP_OK)
-        err = driver_part_commit();
       break;
     }
 
