@@ -700,7 +700,7 @@ bool is_shutdown_screen(Screen screen) {
 bool is_navigable(Screen screen) { return is_home_like(screen) || is_list_screen(screen); }
 
 // A "menu-navigation" screen is any navigable screen except Home.
-// Transitions where either side is menu-navigation always use Partial.
+// Menu transitions use body-only Partial unless a lock change returns Home.
 bool is_menu_navigation_screen(Screen screen) {
   return is_navigable(screen) && screen != Screen::Home;
 }
@@ -1394,15 +1394,18 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
     // consulted inside the session.
     _pending_mode = RefreshMode::Partial;
     _menu_exited = false;
-  } else if (menu_navigation) {
-    _pending_mode = RefreshMode::Partial;
-    _menu_exited = true;
-  } else if (_prev_values.screen == Screen::Home && values.screen == Screen::Home) {
+  } else if (values.screen == Screen::Home &&
+             (_prev_values.screen == Screen::Home || values.locked != _prev_values.locked)) {
+    // Locking from a menu must paint the header and snackbar together.
+    // Apply the Home cooldown before the body-only menu-navigation rule.
     const auto decision = _refresh_policy.home_update(
         header_changed, _menu_exited, static_cast<uint32_t>(RTOS::get_time_ms()),
         _config.max_partial_ops, _config.expensive_refresh_cooldown_ms);
     _pending_mode = decision.mode;
     _pending_full_canvas_partial = decision.full_canvas_partial;
+  } else if (menu_navigation) {
+    _pending_mode = RefreshMode::Partial;
+    _menu_exited = true;
   } else if (_refresh_policy.differential_ops() >= _config.max_partial_ops) {
     _pending_mode = RefreshMode::Full;
   } else if (_menu_exited) {
