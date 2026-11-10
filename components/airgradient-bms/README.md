@@ -179,6 +179,10 @@ Writes validate ranges, preserve unrelated settings and the energy scale,
 skip unchanged blocks, and verify readback. The three flash blocks commit
 independently; a failure can leave a partial update.
 
+`read_voltage_config()` / `write_voltage_config()` access nominal cell voltage
+and the charging-voltage reference used for full-charge detection, with the
+same access, preservation, and readback rules.
+
 `read_design_capacity_mah()` also works while sealed. Chemistry, calibration,
 protection provisioning, and the BQ27427 learning workflow remain outside
 this driver's scope. BQ27427-specific learning methods return `false`. See

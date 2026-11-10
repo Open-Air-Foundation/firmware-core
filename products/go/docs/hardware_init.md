@@ -364,6 +364,11 @@ when they differ, preserving the existing sleep-current threshold:
 | Design capacity | 2600 mAh |
 | Design energy | 9620 mWh |
 | Terminate voltage | 3000 mV |
+| Design voltage | 3700 mV |
+| Charging-voltage reference | 4200 mV |
+
+The charging-voltage reference belongs to gauge full-charge detection;
+it does not control the charger. Both voltage fields are explicitly verified.
 
 The driver verifies changed flash blocks and preserves unrelated settings and
 learned data. The board attempts resealing even after configuration failure.
@@ -371,7 +376,7 @@ Any initialization, configuration, or resealing failure leaves the gauge
 detached, so `PowerService` uses the charger's battery estimate. A partial write
 is checked again at the next boot; it does not trigger a factory reset.
 
-Charging voltage and taper detection, chemistry, calibration, protection
+Taper detection, chemistry, calibration, protection
 provisioning, and learning remain separate work. These basic cell parameters
 alone do not establish SOC accuracy. The BQ27427 factory-learning workflow
 does not run on V2.

@@ -54,10 +54,13 @@ constexpr float MAX_TEMPERATURE_C = 125.0f;
 
 // TI SLUUAX0C sections 5.1, 5.3.5, 5.3.13, and 5.5.1.10.
 constexpr size_t DATA_FLASH_BLOCK_SIZE = 32;
+constexpr uint8_t SUBCLASS_CHARGE = 34;
 constexpr uint8_t SUBCLASS_DATA = 48;
 constexpr uint8_t SUBCLASS_POWER = 68;
 constexpr uint8_t SUBCLASS_IT_CFG = 80;
 constexpr uint8_t OFFSET_DESIGN_CAPACITY = 12;
+constexpr uint8_t OFFSET_DESIGN_VOLTAGE = 0;
+constexpr uint8_t OFFSET_CHARGING_VOLTAGE = 0;
 constexpr uint8_t OFFSET_DESIGN_ENERGY = 14;
 constexpr uint8_t OFFSET_ENERGY_SCALE = 23;
 constexpr uint8_t OFFSET_SLEEP_CURRENT = 2;
@@ -71,6 +74,10 @@ constexpr uint16_t MAX_DESIGN_ENERGY_RAW = 32767;
 constexpr uint16_t MIN_TERMINATE_VOLTAGE_MV = 2800;
 constexpr uint16_t MAX_TERMINATE_VOLTAGE_MV = 3700;
 constexpr uint16_t MAX_SLEEP_CURRENT_MA = 100;
+constexpr uint16_t MIN_DESIGN_VOLTAGE_MV = 2000;
+constexpr uint16_t MAX_DESIGN_VOLTAGE_MV = 5000;
+constexpr uint16_t MIN_CHARGING_VOLTAGE_MV = 4000;
+constexpr uint16_t MAX_CHARGING_VOLTAGE_MV = 5000;
 constexpr uint32_t DATA_FLASH_DELAY_MS = 20;
 constexpr uint32_t DATA_FLASH_COMMIT_DELAY_MS = 200;
 
@@ -390,4 +397,37 @@ bool BQ27742::write_cell_config(const FgCellConfig &config) {
     return false;
   }
   return true;
+}
+
+bool BQ27742::read_voltage_config(VoltageConfig &out) {
+  uint8_t data[DATA_FLASH_BLOCK_SIZE];
+  uint8_t charge[DATA_FLASH_BLOCK_SIZE];
+  if (!data_flash_available() || !read_data_flash_block(SUBCLASS_DATA, 0, data) ||
+      !read_data_flash_block(SUBCLASS_CHARGE, 0, charge)) {
+    return false;
+  }
+  out = {unpack_word(data, OFFSET_DESIGN_VOLTAGE), unpack_word(charge, OFFSET_CHARGING_VOLTAGE)};
+  return true;
+}
+
+bool BQ27742::write_voltage_config(const VoltageConfig &config) {
+  if (config.design_voltage_mv < MIN_DESIGN_VOLTAGE_MV ||
+      config.design_voltage_mv > MAX_DESIGN_VOLTAGE_MV ||
+      config.charging_voltage_mv < MIN_CHARGING_VOLTAGE_MV ||
+      config.charging_voltage_mv > MAX_CHARGING_VOLTAGE_MV || !data_flash_available()) {
+    return false;
+  }
+  uint8_t data[DATA_FLASH_BLOCK_SIZE];
+  uint8_t charge[DATA_FLASH_BLOCK_SIZE];
+  if (!read_data_flash_block(SUBCLASS_DATA, 0, data) ||
+      !read_data_flash_block(SUBCLASS_CHARGE, 0, charge)) {
+    return false;
+  }
+  const bool data_changed = unpack_word(data, OFFSET_DESIGN_VOLTAGE) != config.design_voltage_mv;
+  const bool charge_changed =
+      unpack_word(charge, OFFSET_CHARGING_VOLTAGE) != config.charging_voltage_mv;
+  pack_word(data, OFFSET_DESIGN_VOLTAGE, config.design_voltage_mv);
+  pack_word(charge, OFFSET_CHARGING_VOLTAGE, config.charging_voltage_mv);
+  return (!data_changed || write_data_flash_block(SUBCLASS_DATA, 0, data)) &&
+         (!charge_changed || write_data_flash_block(SUBCLASS_CHARGE, 0, charge));
 }
