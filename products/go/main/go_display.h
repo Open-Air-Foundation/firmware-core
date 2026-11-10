@@ -443,6 +443,7 @@ public:
     spy_worker_busy = false;
     spy_last_screen = values.screen;
     spy_last_update_has_snackbar = values.snackbar_text != nullptr;
+    spy_last_update_locked = values.locked;
     return true;
   }
 
@@ -466,6 +467,7 @@ public:
   inline static bool spy_last_init_deferred = false;
   inline static bool spy_last_update_wait = false;
   inline static bool spy_last_update_has_snackbar = false;
+  inline static bool spy_last_update_locked = true;
   inline static bool spy_worker_busy = false;
   inline static void (*spy_on_init)(const DisplayValues &) = nullptr;
 };

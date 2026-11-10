@@ -999,7 +999,7 @@ void UIManager::set_screen(Screen /*screen*/) {}
 Screen UIManager::current_screen() const { return Screen::Home; }
 bool UIManager::is_on_menu_screen() const { return false; }
 void UIManager::show_snackbar(const char * /*text*/, bool /*persistent*/) {}
-void UIManager::clear_expired_snackbar(uint32_t /*now_ms*/) {}
+bool UIManager::clear_expired_snackbar(uint32_t /*now_ms*/) { return false; }
 void UIManager::sync_settings(const GoSettings & /*settings*/) {}
 void UIManager::apply_to_settings(GoSettings & /*settings*/) const {}
 void UIManager::reset_to_home() {}

@@ -4891,6 +4891,183 @@ TEST_CASE("check_timers: does not auto-lock on Hardware Test screens",
   }
 }
 
+TEST_CASE("display feedback: busy unlock is retried without consuming its lifetime",
+          "[Orchestrator][display][feedback]") {
+  for (const auto metric : {Metric::None, Metric::Pm25}) {
+    CAPTURE(metric);
+    TestFixture f;
+    f.settings.pinned_chart = metric;
+    f.settings.auto_lock_seconds = 0;
+    auto orch = f.make_orchestrator();
+    f.ui_manager.sync_settings(f.settings);
+    uint32_t now = 100;
+    ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+
+    DisplayService::spy_worker_busy = true;
+    A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
+    REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+    CHECK_FALSE(DisplayService::spy_last_update_wait);
+    CHECK_FALSE(DisplayService::spy_last_update_has_snackbar);
+    CHECK(A::snackbar_refresh_deadline_ms(orch) == 0);
+    CHECK(A::compute_queue_timeout_ms(orch) <= 100);
+
+    const auto initial_attempts = DisplayService::spy_update_count;
+    now += 99;
+    A::check_timers(orch);
+    CHECK(DisplayService::spy_update_count == initial_attempts);
+
+    now = 4100; // Longer than a snackbar lifetime, with the worker still busy.
+    A::check_timers(orch);
+    REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+    CHECK(A::snackbar_refresh_deadline_ms(orch) == 0);
+
+    DisplayService::spy_worker_busy = false;
+    now += 100;
+    A::check_timers(orch);
+    CHECK(DisplayService::spy_last_update_has_snackbar);
+    CHECK_FALSE(DisplayService::spy_last_update_locked);
+    CHECK(A::snackbar_refresh_deadline_ms(orch) > now + SNACKBAR_DURATION_MS);
+    const auto updates = DisplayService::spy_update_count;
+    now += 100;
+    A::check_timers(orch);
+    CHECK(DisplayService::spy_update_count == updates);
+  }
+}
+
+TEST_CASE("display feedback: dismissed unlock does not refresh Home at its old deadline",
+          "[Orchestrator][display][feedback]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  uint32_t now = 100;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  A::unlock(orch);
+  const auto old_deadline = A::snackbar_refresh_deadline_ms(orch);
+  now = 200;
+  A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+  REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
+  CHECK(A::snackbar_refresh_deadline_ms(orch) == 0);
+  now = 500;
+  A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress});
+  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+  const auto updates = DisplayService::spy_update_count;
+  now = old_deadline;
+  A::check_timers(orch);
+  CHECK(DisplayService::spy_update_count == updates);
+}
+
+TEST_CASE("display feedback: busy snackbar removal is retried",
+          "[Orchestrator][display][feedback]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  uint32_t now = 100;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  A::unlock(orch);
+  now = A::snackbar_refresh_deadline_ms(orch);
+  DisplayService::spy_worker_busy = true;
+  A::check_timers(orch);
+  REQUIRE(DisplayService::spy_last_update_has_snackbar);
+  const auto attempts = DisplayService::spy_update_count;
+  CHECK(A::compute_queue_timeout_ms(orch) <= 100);
+  DisplayService::spy_worker_busy = false;
+  now += 100;
+  A::check_timers(orch);
+  CHECK(DisplayService::spy_update_count == attempts + 1);
+  CHECK_FALSE(DisplayService::spy_last_update_has_snackbar);
+  CHECK(A::snackbar_refresh_deadline_ms(orch) == 0);
+}
+
+TEST_CASE("display feedback: replacement gets its own expiry deadline",
+          "[Orchestrator][display][feedback]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  uint32_t now = 100;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  A::unlock(orch);
+  const auto old_deadline = A::snackbar_refresh_deadline_ms(orch);
+  now = old_deadline - 100;
+  A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
+  REQUIRE(A::lock_state(orch) == LockState::Locked);
+  const auto new_deadline = A::snackbar_refresh_deadline_ms(orch);
+  CHECK(new_deadline > old_deadline);
+  const auto updates = DisplayService::spy_update_count;
+  now = old_deadline;
+  A::check_timers(orch);
+  CHECK(DisplayService::spy_update_count == updates);
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+  CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) == "Locked");
+}
+
+TEST_CASE("display feedback: intervening input or measurement satisfies a pending retry",
+          "[Orchestrator][display][feedback]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  uint32_t now = 100;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  DisplayService::spy_worker_busy = true;
+  A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
+  REQUIRE(A::lock_state(orch) == LockState::Unlocked);
+  now += 50;
+
+  SECTION("a second Power press replaces pending Unlocked with Locked") {
+    A::on_input(orch, {InputSource::ButtonPower, InputType::ShortPress});
+    CHECK(DisplayService::spy_last_update_locked);
+    REQUIRE(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+    CHECK(std::string(f.ui_manager.build_values(A::build_context(orch)).snackbar_text) == "Locked");
+  }
+  SECTION("opening Menu dismisses the pending unlock") {
+    A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
+    REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
+    CHECK_FALSE(DisplayService::spy_last_update_has_snackbar);
+    CHECK(A::snackbar_refresh_deadline_ms(orch) == 0);
+    A::on_input(orch, {InputSource::TouchEnter, InputType::LongPress});
+    REQUIRE(f.ui_manager.current_screen() == Screen::Home);
+  }
+  SECTION("a sensor render includes the pending unlock") {
+    DisplayService::spy_worker_busy = false;
+    A::on_sensor_data(orch, MeasuresAGo{});
+    CHECK_FALSE(DisplayService::spy_last_update_locked);
+    CHECK(DisplayService::spy_last_update_has_snackbar);
+  }
+  const auto attempts = DisplayService::spy_update_count;
+  now += 100;
+  A::check_timers(orch);
+  CHECK(DisplayService::spy_update_count == attempts);
+}
+
+TEST_CASE("display feedback: pending retry preserves background suppression",
+          "[Orchestrator][display][feedback]") {
+  for (const auto screen : {Screen::Settings, Screen::PairingPasskey, Screen::Info}) {
+    CAPTURE(screen);
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    uint32_t now = 100;
+    ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+    DisplayService::spy_worker_busy = true;
+    A::unlock(orch);
+    f.ui_manager.set_screen(screen);
+    const auto attempts = DisplayService::spy_update_count;
+    now += 100;
+    CHECK(A::compute_queue_timeout_ms(orch) > 100);
+    A::check_timers(orch);
+    CHECK(DisplayService::spy_update_count == attempts);
+  }
+}
+
+TEST_CASE("display feedback: snackbar lifetime starts after a waiting submission returns",
+          "[Orchestrator][display][feedback]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  const auto attempts = DisplayService::spy_update_count;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl())
+      .LR_RETURN(DisplayService::spy_update_count > attempts ? 5000 : 1000);
+  DisplayService::spy_worker_busy = true;
+  A::lock(orch);
+  REQUIRE(DisplayService::spy_last_update_has_snackbar);
+  CHECK(A::snackbar_refresh_deadline_ms(orch) > 5000 + SNACKBAR_DURATION_MS);
+  f.ui_manager.clear_expired_snackbar(5000);
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).snackbar_text != nullptr);
+}
+
 TEST_CASE("check_timers: snackbar refresh timer fires after deadline",
           "[Orchestrator][timers][snackbar]") {
   TestFixture f;

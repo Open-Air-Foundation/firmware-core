@@ -231,8 +231,9 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
       _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
       _svc.ui_manager.show_snackbar("Unlocked");
       uint32_t now_ms = static_cast<uint32_t>(RTOS::get_time_ms());
-      _svc.ui_manager.clear_expired_snackbar(now_ms);
-      _snackbar_refresh_deadline_ms = now_ms + SNACKBAR_DURATION_MS + 200;
+      _svc.ui_manager.mark_snackbar_submitted(now_ms);
+      _display_has_snackbar = true;
+      _snackbar_refresh_deadline_ms = now_ms + SNACKBAR_DURATION_MS + SNACKBAR_CLEAR_GRACE_MS;
     } else {
       // Display not yet showing unlocked UI — unlock triggers
       // update_display() which will paint the unlocked frame.
@@ -519,6 +520,12 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, remaining <= 0 ? 0u : static_cast<uint32_t>(remaining));
   }
 
+  if (_display_feedback_pending && _svc.ui_manager.current_screen() == Screen::Home &&
+      background_display_update_allowed()) {
+    const int32_t remaining = static_cast<int32_t>(_display_feedback_retry_ms - now);
+    next = std::min(next, remaining <= 0 ? 0u : static_cast<uint32_t>(remaining));
+  }
+
   // If any deadline already passed, the unsigned subtraction yields a large
   // number — clamp to 0 so check_timers() fires immediately.
   if (next > MAX_REASONABLE_TIMEOUT_MS) {
@@ -574,7 +581,9 @@ void Orchestrator::check_timers() {
     if (_snackbar_refresh_deadline_ms != 0 &&
         (now - _snackbar_refresh_deadline_ms) < MAX_REASONABLE_TIMEOUT_MS) {
       _snackbar_refresh_deadline_ms = 0;
-      request_background_display_update();
+      if (_svc.ui_manager.clear_expired_snackbar(now) && _display_has_snackbar) {
+        request_background_display_update();
+      }
     }
   }
 
@@ -636,6 +645,13 @@ void Orchestrator::check_timers() {
 
   if (_tracking_status_refresh_armed) {
     refresh_tracking_status();
+  }
+
+  if (_display_feedback_pending && _svc.ui_manager.current_screen() == Screen::Home &&
+      background_display_update_allowed() &&
+      static_cast<int32_t>(static_cast<uint32_t>(RTOS::get_time_ms()) -
+                           _display_feedback_retry_ms) >= 0) {
+    update_display();
   }
 }
 
@@ -1601,6 +1617,8 @@ void Orchestrator::unlock() {
   _svc.ui_manager.show_snackbar("Unlocked");
   _lock_state = LockState::Unlocked;
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  // Preserve the lock-icon change even if persistent progress owns the snackbar.
+  _display_feedback_pending = true;
   update_display();
 }
 
@@ -2792,6 +2810,7 @@ void Orchestrator::begin_session_if_needed() {
   // screens or fire when the device eventually returns to Home.
   _svc.ui_manager.show_snackbar(nullptr);
   _snackbar_refresh_deadline_ms = 0;
+  _display_feedback_pending = false;
 }
 
 void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
@@ -3353,37 +3372,54 @@ bool Orchestrator::update_display(bool wait) {
   _svc.ui_manager.clear_expired_snackbar(now_ms);
   BuildContext ctx = build_context();
   DisplayValues values = _svc.ui_manager.build_values(ctx);
-  const bool accepted = _svc.display_service.update(values, wait);
-
-  // Schedule a follow-up refresh to visually clear the snackbar after it
-  // expires.  Only arm once per snackbar — intermediate update_display()
-  // calls (from sensor data, input, etc.) that happen before the deadline
-  // naturally clear it and the timer fires as a harmless no-op.
-  if (values.snackbar_text != nullptr && !_svc.ui_manager.snackbar_persistent() &&
-      _snackbar_refresh_deadline_ms == 0) {
-    _snackbar_refresh_deadline_ms = now_ms + SNACKBAR_DURATION_MS + 200;
+  const bool has_snackbar = values.snackbar_text != nullptr;
+  const bool snackbar_pending = _svc.ui_manager.snackbar_pending();
+  if (!has_snackbar || snackbar_pending || _svc.ui_manager.snackbar_persistent()) {
+    // A replaced or dismissed message must not inherit the old expiry refresh.
+    _snackbar_refresh_deadline_ms = 0;
   }
-
-  AG_LOGI(TAG, "display update done");
+  const bool accepted = _svc.display_service.update(values, wait);
+  const uint32_t submitted_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  if (accepted) {
+    _display_feedback_pending = false;
+    _display_has_snackbar = has_snackbar;
+    if (has_snackbar && _svc.ui_manager.mark_snackbar_submitted(submitted_ms)) {
+      _snackbar_refresh_deadline_ms = submitted_ms + SNACKBAR_DURATION_MS + SNACKBAR_CLEAR_GRACE_MS;
+      if (_snackbar_refresh_deadline_ms == 0) {
+        _snackbar_refresh_deadline_ms = 1; // Zero is reserved for inactive.
+      }
+    }
+    AG_LOGI(TAG, "display update done");
+  } else if (_display_feedback_pending || (has_snackbar && snackbar_pending) ||
+             has_snackbar != _display_has_snackbar) {
+    // Retry current state, never a saved frame or snackbar pointer. An accepted
+    // input/background render also satisfies this request without another paint.
+    _display_feedback_pending = true;
+    _display_feedback_retry_ms = submitted_ms + DISPLAY_FEEDBACK_RETRY_MS;
+  }
   return accepted;
 }
 
-void Orchestrator::request_background_display_update(bool wait) {
+bool Orchestrator::background_display_update_allowed() const {
   if (_setup_session_active) {
     // Session screens (Info / Provisioning / ProvisioningConfirm) only
     // re-render on explicit setup state transitions.  Suppressing the
     // background path here prevents sensor / BMS / BLE-status events from
     // racing the orchestrator's deliberate wait=true renders.
-    return;
+    return false;
   }
   if (_svc.ui_manager.is_focus_screen()) {
     // Focus screens (PairingPasskey) render constant content while the
     // user is acting on it.  Sensor / BMS events would cause Fast
     // refreshes of an identical frame and eventually trigger the
     // anti-ghost Full refresh.
-    return;
+    return false;
   }
-  if (!_svc.ui_manager.is_on_menu_screen()) {
+  return !_svc.ui_manager.is_on_menu_screen();
+}
+
+void Orchestrator::request_background_display_update(bool wait) {
+  if (background_display_update_allowed()) {
     update_display(wait);
   }
 }
@@ -3499,6 +3535,7 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   // The e-paper retains this frame throughout sleep, when expiry cannot run.
   _svc.ui_manager.show_snackbar(nullptr, /*persistent=*/true);
   _snackbar_refresh_deadline_ms = 0;
+  _display_feedback_pending = false;
   BuildContext ctx = build_context();
   DisplayValues values = _svc.ui_manager.build_values(ctx);
   _svc.display_service.update(values, true); // wait = true
