@@ -56,6 +56,9 @@ constexpr float MAX_TEMPERATURE_C = 125.0f;
 constexpr size_t DATA_FLASH_BLOCK_SIZE = 32;
 constexpr uint8_t SUBCLASS_CHARGE = 34;
 constexpr uint8_t SUBCLASS_DATA = 48;
+constexpr uint8_t SUBCLASS_REGISTERS = 64;
+constexpr uint8_t OFFSET_PACK_CONFIG_D = 4;
+constexpr uint8_t PACK_CONFIG_D_FCFET = 1u << 6;
 constexpr uint8_t SUBCLASS_POWER = 68;
 constexpr uint8_t SUBCLASS_IT_CFG = 80;
 constexpr uint8_t OFFSET_DESIGN_CAPACITY = 12;
@@ -408,6 +411,18 @@ bool BQ27742::read_voltage_config(VoltageConfig &out) {
   }
   out = {unpack_word(data, OFFSET_DESIGN_VOLTAGE), unpack_word(charge, OFFSET_CHARGING_VOLTAGE)};
   return true;
+}
+
+bool BQ27742::disable_full_charge_cutoff() {
+  uint8_t data[DATA_FLASH_BLOCK_SIZE];
+  if (!data_flash_available() || !read_data_flash_block(SUBCLASS_REGISTERS, 0, data)) {
+    return false;
+  }
+  if (!(data[OFFSET_PACK_CONFIG_D] & PACK_CONFIG_D_FCFET)) {
+    return true;
+  }
+  data[OFFSET_PACK_CONFIG_D] &= ~PACK_CONFIG_D_FCFET;
+  return write_data_flash_block(SUBCLASS_REGISTERS, 0, data);
 }
 
 bool BQ27742::write_voltage_config(const VoltageConfig &config) {

@@ -125,10 +125,9 @@ factory credentials automatically.
   temperatures outside that range cause distinct cold- or hot-temperature
   shutdowns. An invalid NTC reading disables charging only and does not request
   shutdown.
-- **Full-charge pause:** when the battery is full and USB is present,
-  charging is disabled to reduce cell stress. Resumes when SOC drops
-  to 95 %. Uses the gauge's normalized FC flag when a ready gauge is attached; falls back
-  to BQ25629 `ChargeTerminationDone` + 100 % SOC when no gauge is attached.
+- **Charge completion:** V1 and V2 use charger-controlled termination and
+  voltage-based recharge. Gauge percentage and FC do not stop charging;
+  temperature protection and manual inhibits remain active.
 - **BATFET_DLY:** explicitly cleared to 0 (25 ms fast disconnect)
   during BQ25629 init for deterministic ship-mode timing.
 

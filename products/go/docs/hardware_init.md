@@ -368,7 +368,9 @@ when they differ, preserving the existing sleep-current threshold:
 | Charging-voltage reference | 4200 mV |
 
 The charging-voltage reference belongs to gauge full-charge detection;
-it does not control the charger. Both voltage fields are explicitly verified.
+it does not control the charger. Both voltage fields are explicitly verified. V2 also clears only `FCFET` in
+Pack Configuration D, leaving normal charge completion to the charger and
+preserving the gauge's protection controls.
 
 The driver verifies changed flash blocks and preserves unrelated settings and
 learned data. The board attempts resealing even after configuration failure.

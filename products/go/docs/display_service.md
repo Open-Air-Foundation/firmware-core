@@ -536,8 +536,8 @@ states:
 | Plugged, not charging | Plug glyph (57410) + battery level glyph |
 
 The plug icon appears left of the battery glyph when
-`is_plugged_in && !is_battery_charging` (full-charge pause or charge
-termination done while USB is connected).
+`is_plugged_in && !is_battery_charging`. The bolt may remain at 100% while
+the charger finishes its taper; percentage alone does not select the plug icon.
 
 Recording shows a dot; Paused shows two bars in the same position; Idle shows
 neither. When the plug icon is visible, either tracking indicator shifts left

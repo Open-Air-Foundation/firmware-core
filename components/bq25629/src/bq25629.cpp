@@ -97,6 +97,10 @@ constexpr uint32_t I2C_SCL_WAIT_US = 20000;
 
 // Register bit masks
 namespace BIT_MASK {
+// CHARGE_CONTROL (0x14)
+constexpr uint8_t EN_TERM = (1 << 2);
+constexpr uint8_t VRECHG = (1 << 0); // 0: recharge 100 mV below VREG
+
 // CHARGER_CONTROL_0 (0x16)
 constexpr uint8_t EN_AUTO_IBATDIS = (1 << 7);
 constexpr uint8_t EN_CHG = (1 << 5);
@@ -275,6 +279,44 @@ esp_err_t BQ25629::init(const BQ25629_Config &config) {
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Failed to set termination current");
     return ret;
+  }
+
+  // Own normal charge completion and recharge, even after an earlier host
+  // disabled termination. Preserve other charge-control settings.
+  ret = modify_register(BQ25629_REG::CHARGE_CONTROL, BIT_MASK::EN_TERM | BIT_MASK::VRECHG,
+                        BIT_MASK::EN_TERM);
+  if (ret != ESP_OK) {
+    return ret;
+  }
+  uint8_t charge_control = 0;
+  uint16_t termination = 0;
+  uint16_t charge_voltage = 0;
+  ret = read_register(BQ25629_REG::CHARGE_CONTROL, charge_control);
+  if (ret != ESP_OK) {
+    return ret;
+  }
+  ret = read_register_16(BQ25629_REG::TERMINATION_CONTROL, termination);
+  if (ret != ESP_OK) {
+    return ret;
+  }
+  ret = read_register_16(BQ25629_REG::CHARGE_VOLTAGE_LIMIT, charge_voltage);
+  if (ret != ESP_OK) {
+    return ret;
+  }
+  constexpr uint16_t TERMINATION_MASK = 0x00fc;
+  constexpr uint16_t CHARGE_VOLTAGE_MASK = 0x0ff8;
+  constexpr uint16_t CHARGE_VOLTAGE_STEP_MV = 10;
+  constexpr uint8_t CHARGE_VOLTAGE_SHIFT = 3;
+  constexpr uint16_t MIN_CHARGE_VOLTAGE_MV = 3500;
+  constexpr uint16_t MAX_CHARGE_VOLTAGE_MV = 4800;
+  const uint16_t expected_voltage =
+      (clamp_u16(config.charge_voltage_mv, MIN_CHARGE_VOLTAGE_MV, MAX_CHARGE_VOLTAGE_MV) /
+       CHARGE_VOLTAGE_STEP_MV) << CHARGE_VOLTAGE_SHIFT;
+  if ((charge_control & (BIT_MASK::EN_TERM | BIT_MASK::VRECHG)) != BIT_MASK::EN_TERM ||
+      (termination & TERMINATION_MASK) != (iterm_value << 2) ||
+      (charge_voltage & CHARGE_VOLTAGE_MASK) != expected_voltage) {
+    ESP_LOGE(TAG, "Charge termination configuration readback failed");
+    return ESP_ERR_INVALID_RESPONSE;
   }
 
   // Enable/disable charging
