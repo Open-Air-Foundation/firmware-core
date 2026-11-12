@@ -185,9 +185,7 @@ same access, preservation, and readback rules. `disable_full_charge_cutoff()`
 clears only `FCFET`; temperature and fault protection settings are preserved.
 
 `read_cc_sense_mohm()` / `write_cc_sense_mohm()` access CC Gain and CC Delta
-using TI's F4 encoding. Writes require an unsealed gauge, validate both fields,
-verify the whole flash block, and skip identical values. Other calibration
-fields and learned data are preserved.
+using TI's F4 encoding, with the same access, preservation, and readback rules.
 
 `read_design_capacity_mah()` also works while sealed. Chemistry,
 protection provisioning, and the BQ27427 learning workflow remain outside

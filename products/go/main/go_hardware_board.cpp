@@ -84,7 +84,7 @@ static constexpr BQ27742::VoltageConfig AGO_V2_GAUGE_VOLTAGES = {
     .design_voltage_mv = 3700,
     .charging_voltage_mv = 4200,
 };
-// The V2 sense taps include copper resistance in addition to the 5 mOhm shunt (#133).
+// The V2 sense taps include copper resistance in addition to the 5 mOhm shunt.
 static constexpr float AGO_V2_GAUGE_SENSE_MOHM = 6.40f;
 static constexpr float AGO_V2_GAUGE_SENSE_MATCH_MOHM = 0.001f;
 
