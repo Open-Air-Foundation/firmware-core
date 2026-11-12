@@ -184,7 +184,10 @@ and the charging-voltage reference used for full-charge detection, with the
 same access, preservation, and readback rules. `disable_full_charge_cutoff()`
 clears only `FCFET`; temperature and fault protection settings are preserved.
 
-`read_design_capacity_mah()` also works while sealed. Chemistry, calibration,
+`read_cc_sense_mohm()` / `write_cc_sense_mohm()` access CC Gain and CC Delta
+using TI's F4 encoding, with the same access, preservation, and readback rules.
+
+`read_design_capacity_mah()` also works while sealed. Chemistry,
 protection provisioning, and the BQ27427 learning workflow remain outside
 this driver's scope. BQ27427-specific learning methods return `false`. See
 [TI's technical reference, chapter 5](https://www.ti.com/lit/ug/sluuax0c/sluuax0c.pdf).
