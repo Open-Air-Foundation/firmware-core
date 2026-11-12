@@ -188,8 +188,7 @@ clears only `FCFET`; temperature and fault protection settings are preserved.
 using TI's F4 encoding, with the same access, preservation, and readback rules.
 
 `read_taper_config()` / `write_taper_config()` access full-charge detection
-thresholds, qualification timing, and FC Set %. Writes preserve unrelated
-termination fields and learned data. FC Set % of -1 selects taper qualification.
+settings with the same access, preservation, and readback rules.
 
 `read_design_capacity_mah()` also works while sealed. Chemistry,
 protection provisioning, and the BQ27427 learning workflow remain outside

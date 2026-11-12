@@ -545,8 +545,10 @@ bool BQ27742::write_taper_config(const TaperConfig &config) {
   pack_word(expected, OFFSET_TAPER_VOLTAGE, config.voltage_mv);
   expected[OFFSET_TAPER_WINDOW] = config.window_s;
   expected[OFFSET_FC_SET_PERCENT] = static_cast<uint8_t>(config.fc_set_percent);
-  return std::memcmp(data, expected, sizeof(expected)) == 0 ||
-         write_data_flash_block(SUBCLASS_CHARGE_TERMINATION, 0, expected);
+  if (std::memcmp(data, expected, sizeof(expected)) == 0) {
+    return true;
+  }
+  return write_data_flash_block(SUBCLASS_CHARGE_TERMINATION, 0, expected);
 }
 
 bool BQ27742::write_voltage_config(const VoltageConfig &config) {
