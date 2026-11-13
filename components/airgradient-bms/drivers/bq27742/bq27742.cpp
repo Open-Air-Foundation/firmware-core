@@ -56,6 +56,18 @@ constexpr float MAX_TEMPERATURE_C = 125.0f;
 // TI SLUUAX0C sections 5.1, 5.3.5, 5.3.13, and 5.5.1.10.
 constexpr size_t DATA_FLASH_BLOCK_SIZE = 32;
 constexpr uint8_t SUBCLASS_CHARGE = 34;
+constexpr uint8_t SUBCLASS_CHARGE_TERMINATION = 36;
+constexpr uint8_t OFFSET_TAPER_CURRENT = 0;
+constexpr uint8_t OFFSET_MIN_TAPER_CAPACITY = 2;
+constexpr uint8_t OFFSET_TAPER_VOLTAGE = 4;
+constexpr uint8_t OFFSET_TAPER_WINDOW = 6;
+constexpr uint8_t OFFSET_FC_SET_PERCENT = 9;
+constexpr uint16_t MAX_TAPER_CURRENT_MA = 1000;
+constexpr uint16_t MAX_MIN_TAPER_CAPACITY_RAW = 1000;
+constexpr uint16_t MAX_TAPER_VOLTAGE_MV = 1000;
+constexpr uint8_t MAX_TAPER_WINDOW_S = 60;
+constexpr int8_t FC_SET_USE_TAPER = -1;
+constexpr int8_t MAX_FC_SET_PERCENT = 100;
 constexpr uint8_t SUBCLASS_DATA = 48;
 constexpr uint8_t SUBCLASS_REGISTERS = 64;
 constexpr uint8_t OFFSET_PACK_CONFIG_D = 4;
@@ -501,6 +513,42 @@ bool BQ27742::write_cc_sense_mohm(float sense_mohm) {
   }
   std::memcpy(data, expected, sizeof(expected));
   return write_data_flash_block(SUBCLASS_CALIBRATION, 0, data);
+}
+
+bool BQ27742::read_taper_config(TaperConfig &out) {
+  uint8_t data[DATA_FLASH_BLOCK_SIZE];
+  if (!data_flash_available() || !read_data_flash_block(SUBCLASS_CHARGE_TERMINATION, 0, data)) {
+    return false;
+  }
+  out = {unpack_word(data, OFFSET_TAPER_CURRENT), unpack_word(data, OFFSET_MIN_TAPER_CAPACITY),
+         unpack_word(data, OFFSET_TAPER_VOLTAGE), data[OFFSET_TAPER_WINDOW],
+         static_cast<int8_t>(data[OFFSET_FC_SET_PERCENT])};
+  return true;
+}
+
+bool BQ27742::write_taper_config(const TaperConfig &config) {
+  if (config.current_ma == 0 || config.current_ma > MAX_TAPER_CURRENT_MA ||
+      config.min_capacity_raw > MAX_MIN_TAPER_CAPACITY_RAW ||
+      config.voltage_mv > MAX_TAPER_VOLTAGE_MV || config.window_s == 0 ||
+      config.window_s > MAX_TAPER_WINDOW_S || config.fc_set_percent < FC_SET_USE_TAPER ||
+      config.fc_set_percent > MAX_FC_SET_PERCENT || !data_flash_available()) {
+    return false;
+  }
+  uint8_t data[DATA_FLASH_BLOCK_SIZE];
+  if (!read_data_flash_block(SUBCLASS_CHARGE_TERMINATION, 0, data)) {
+    return false;
+  }
+  uint8_t expected[DATA_FLASH_BLOCK_SIZE];
+  std::memcpy(expected, data, sizeof(expected));
+  pack_word(expected, OFFSET_TAPER_CURRENT, config.current_ma);
+  pack_word(expected, OFFSET_MIN_TAPER_CAPACITY, config.min_capacity_raw);
+  pack_word(expected, OFFSET_TAPER_VOLTAGE, config.voltage_mv);
+  expected[OFFSET_TAPER_WINDOW] = config.window_s;
+  expected[OFFSET_FC_SET_PERCENT] = static_cast<uint8_t>(config.fc_set_percent);
+  if (std::memcmp(data, expected, sizeof(expected)) == 0) {
+    return true;
+  }
+  return write_data_flash_block(SUBCLASS_CHARGE_TERMINATION, 0, expected);
 }
 
 bool BQ27742::write_voltage_config(const VoltageConfig &config) {

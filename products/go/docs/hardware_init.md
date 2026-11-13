@@ -368,9 +368,9 @@ when they differ, preserving the existing sleep-current threshold:
 | Charging-voltage reference | 4200 mV |
 
 The charging-voltage reference belongs to gauge full-charge detection;
-it does not control the charger. Both voltage fields are explicitly verified. V2 also clears only `FCFET` in
-Pack Configuration D, leaving normal charge completion to the charger and
-preserving the gauge's protection controls.
+it does not control the charger. Both voltage fields are explicitly verified.
+V2 also clears only `FCFET` in Pack Configuration D, leaving normal charge
+completion to the charger and preserving the gauge's protection controls.
 
 The driver verifies changed flash blocks and preserves unrelated settings and
 learned data. The board attempts resealing even after configuration failure.
@@ -384,10 +384,22 @@ unreadable calibration is logged and left unchanged. Calibration persists in
 data flash without changing protection thresholds. Apply it before capturing
 learned profiles.
 
-Taper detection, chemistry, protection
-provisioning, and learning remain separate work. These basic cell parameters
-alone do not establish SOC accuracy. The BQ27427 factory-learning workflow
-does not run on V2.
+V2 configures these full-charge detection settings:
+
+| Parameter | Value |
+|---|---|
+| Taper current | 100 mA |
+| Taper voltage | 100 mV below the 4200 mV charging reference |
+| Current taper window | 40 seconds; two consecutive qualifying windows |
+| Minimum taper capacity | Raw 25; 0.004 mAh per unit |
+| FC Set % | -1: qualify using taper conditions, not a percentage threshold |
+
+The gauge can report FC before the charger reaches its 50 mA termination
+threshold. FC does not disable charging.
+
+Chemistry, protection provisioning, and learning remain outside this setup.
+These settings alone do not establish SOC accuracy. The BQ27427 factory-learning
+workflow does not run on V2.
 
 On V1, `init_fuel_gauge()` constructs the BQ27427 driver and runs the
 `evaluate_fg_state` pure helper (inline in `go_board.h`). The helper examines
