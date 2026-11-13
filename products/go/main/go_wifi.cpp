@@ -249,6 +249,9 @@ void WifiService::stop_provisioning(bool stop_http_server) {
   // Blocks for ~1.5 s when called after Connected (component-side hold).
   _prov->stop(stop_http_server);
   _provisioning_active = false;
+  // Release transport caches and timers before cloud TLS needs the heap.
+  delete _prov;
+  _prov = nullptr;
   // ProvisioningManager::stop() cleared the WifiManager callback slots;
   // restore ours so post-online disconnects and shutdown work.
   _install_wifi_callbacks();

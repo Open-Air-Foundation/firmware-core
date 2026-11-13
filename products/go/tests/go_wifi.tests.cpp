@@ -862,9 +862,11 @@ TEST_CASE("clear_credentials erases saved networks and resets has_been_online",
 // Provisioning event mapping + transport-switch latch
 // ---------------------------------------------------------------------------
 
-TEST_CASE("WifiService constructs provisioning manager only when provisioning begins",
+TEST_CASE("WifiService releases provisioning manager on stop and recreates it on demand",
           "[go_wifi][provisioning][lifecycle]") {
-  Fixture f;
+  WifiService::Config config{};
+  config.ap_ssid = "airgradient-ABCDEF123456";
+  Fixture f(config);
   f.seed_network();
 
   CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == nullptr);
@@ -875,12 +877,24 @@ TEST_CASE("WifiService constructs provisioning manager only when provisioning be
   f.svc.try_default_fallback_credentials();
   CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == nullptr);
 
-  f.svc.start_provisioning(ProvisioningTransport::BleOnly);
-  ProvisioningManager *const manager = WifiServiceTestAccess::provisioning_manager(f.svc);
-  REQUIRE(manager != nullptr);
+  f.svc.start_provisioning(ProvisioningTransport::WifiOnly);
+  REQUIRE(f.svc.is_provisioning());
+  REQUIRE(WifiServiceTestAccess::provisioning_manager(f.svc) != nullptr);
 
   f.svc.stop_provisioning();
-  CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == manager);
+  CHECK_FALSE(f.svc.is_provisioning());
+  CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == nullptr);
+
+  const int stop_calls = f.http.stop_calls;
+  f.svc.stop_provisioning();
+  CHECK(f.http.stop_calls == stop_calls);
+
+  f.svc.start_provisioning(ProvisioningTransport::WifiOnly);
+  REQUIRE(f.svc.is_provisioning());
+  REQUIRE(WifiServiceTestAccess::provisioning_manager(f.svc) != nullptr);
+  CHECK(f.http.active_routes > 0);
+  f.svc.stop_provisioning();
+  CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == nullptr);
 }
 
 TEST_CASE("on_provisioning_event Connected maps disable_cloud and static_ip into payload",
@@ -1213,6 +1227,7 @@ TEST_CASE("provisioning success handoff retains listener for local routes",
   const int stop_calls_before_handoff = f.http.stop_calls;
 
   f.svc.stop_provisioning(/*stop_http_server=*/false);
+  CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == nullptr);
   CHECK(f.http.stop_calls == stop_calls_before_handoff);
   CHECK(f.http.unregister_all_calls == 1);
   CHECK(f.http.active_routes == 0);
