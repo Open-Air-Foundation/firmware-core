@@ -64,8 +64,9 @@ Change frequently — driven by user interaction or shutdown.
 
 The default operating mode on fresh boot is **Portable**.
 
-Tracking is available in Portable and Stationary. Entering Energy Saving
-(Offline) stops the session and keeps GPS asleep; measurements and charts continue.
+Tracking is available only in Portable. Entering Stationary or Energy Saving
+ends the session and preserves its route data. Returning to Portable leaves
+tracking idle. Energy Saving also keeps GPS asleep; measurements and charts continue.
 
 ## High-Level Architecture
 
