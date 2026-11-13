@@ -26,6 +26,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <string>
 #include <initializer_list>
@@ -658,11 +659,13 @@ TEST_CASE("UIManager: tracking start/stop", "[UIManager][tracking]") {
   }
 }
 
-TEST_CASE("UIManager: Energy Saving hides tracking and keeps menu actions aligned",
+TEST_CASE("UIManager: Stationary and Energy Saving hide tracking and keep menu actions aligned",
           "[UIManager][tracking][nav]") {
+  const auto mode = GENERATE(OperatingMode::Stationary, OperatingMode::Offline);
+  CAPTURE(mode);
   UIManager ui(DEFAULT_UI_CONFIG);
   GoSettings settings{};
-  settings.operating_mode = OperatingMode::Offline;
+  settings.operating_mode = mode;
   ui.sync_settings(settings);
   press(ui, InputSource::TouchEnter);
   check_rows(ui, {"Exit Menu", "Operating Mode", "Settings"});
@@ -695,21 +698,18 @@ TEST_CASE("UIManager: Energy Saving hides tracking and keeps menu actions aligne
     settings.operating_mode = OperatingMode::Portable;
     ui.sync_settings(settings);
     select_row(ui, "Start Tracking");
-    settings.operating_mode = OperatingMode::Offline;
+    settings.operating_mode = mode;
     ui.sync_settings(settings);
     CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
     press(ui, InputSource::TouchEnter);
     CHECK(ui.current_screen() == Screen::SettingsChoice);
   }
 
-  SECTION("leaving Energy Saving restores tracking in either mode") {
-    for (auto mode : {OperatingMode::Portable, OperatingMode::Stationary}) {
-      settings.operating_mode = mode;
-      ui.sync_settings(settings);
-      check_rows(ui, {"Exit Menu", "Start Tracking", "Operating Mode", "Settings"});
-      CHECK(open_row(ui, "Start Tracking").action == UIAction::StartTracking);
-      press(ui, InputSource::TouchEnter);
-    }
+  SECTION("returning to Portable restores tracking") {
+    settings.operating_mode = OperatingMode::Portable;
+    ui.sync_settings(settings);
+    check_rows(ui, {"Exit Menu", "Start Tracking", "Operating Mode", "Settings"});
+    CHECK(open_row(ui, "Start Tracking").action == UIAction::StartTracking);
   }
 }
 

@@ -558,7 +558,7 @@ void UIManager::sync_settings(const GoSettings &s) {
   _setting_measure_interval_seconds = s.measure_interval_seconds;
   _setting_energy_saving_measure_interval_seconds = s.energy_saving_measure_interval_seconds;
   _setting_mode = s.operating_mode;
-  if (_setting_mode == OperatingMode::Offline && _menu_index == MENU_TRACKING) {
+  if (_setting_mode != OperatingMode::Portable && _menu_index == MENU_TRACKING) {
     _menu_index = MENU_MODE;
   }
   if (!display_temp_hum_for_interval(setting_measure_interval_seconds()) &&
@@ -815,7 +815,7 @@ void UIManager::navigate_back() {
     break;
   case Screen::TrackingMenu:
     _screen = Screen::MainMenu;
-    _menu_index = _setting_mode == OperatingMode::Offline ? MENU_MODE : MENU_TRACKING;
+    _menu_index = _setting_mode != OperatingMode::Portable ? MENU_MODE : MENU_TRACKING;
     break;
   case Screen::TrackingStatus:
     _screen = Screen::TrackingMenu;
@@ -959,7 +959,7 @@ void UIManager::move_menu(int delta) {
   // Keep action indices stable while skipping the hidden tracking row.
   do {
     _menu_index = (uint8_t)wrap((int)_menu_index + delta, MAIN_MENU_TOTAL);
-  } while (_setting_mode == OperatingMode::Offline && _menu_index == MENU_TRACKING);
+  } while (_setting_mode != OperatingMode::Portable && _menu_index == MENU_TRACKING);
 }
 
 void UIManager::move_settings(int delta) {
@@ -1273,7 +1273,7 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
       go_home();
       break;
     case MENU_TRACKING:
-      if (_setting_mode == OperatingMode::Offline) {
+      if (_setting_mode != OperatingMode::Portable) {
         break;
       }
       if (tracking_session_active(_tracking_state)) {
@@ -1723,7 +1723,7 @@ void UIManager::sync_tracking_state(TrackingState state) {
       (_screen == Screen::TrackingMenu || _screen == Screen::TrackingStatus)) {
     // A finished session has no Tracking parent menu to return to.
     _screen = Screen::MainMenu;
-    _menu_index = _setting_mode == OperatingMode::Offline ? MENU_MODE : MENU_TRACKING;
+    _menu_index = _setting_mode != OperatingMode::Portable ? MENU_MODE : MENU_TRACKING;
   }
 }
 
@@ -1875,7 +1875,7 @@ void UIManager::populate_tracking_status_rows(DisplayValues &v, const BuildConte
 }
 
 void UIManager::populate_menu_rows(DisplayValues &v) const {
-  const bool hide_tracking = _setting_mode == OperatingMode::Offline;
+  const bool hide_tracking = _setting_mode != OperatingMode::Portable;
   uint8_t row = 0;
   copy_row(v, row++, "Exit Menu", false);
   if (!hide_tracking) {
