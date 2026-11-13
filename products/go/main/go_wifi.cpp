@@ -175,6 +175,7 @@ void WifiService::_connect_fallback_internal(bool reset_online_latches, bool arm
 
 void WifiService::start_provisioning(ProvisioningTransport transport) {
   _use_default_credentials = false;
+  _portal_used = false;
   AG_LOGI(TAG, "start_provisioning(%u)", static_cast<unsigned>(transport));
   log_heap(TAG, "wifi.start_provisioning:enter");
   _provisioning_connected_event_pending.store(false);
@@ -325,6 +326,9 @@ void WifiService::stop_local_endpoint() {
 }
 
 bool WifiService::_start_provisioning_internal(ProvisioningTransport transport) {
+  if (transport == ProvisioningTransport::WifiOnly || transport == ProvisioningTransport::Both) {
+    _portal_used = true;
+  }
   // Keep onboarding responsive without changing the saved preference.
   apply_stationary_power_save(_wifi, false);
   ProvisioningConfig config{};
@@ -554,6 +558,7 @@ void WifiService::_post_provisioning_event(const ProvisioningEventInfo &info) {
   evt.prov.stop_reason = static_cast<uint8_t>(info.stop_reason);
   evt.prov.ip = info.ip;
   evt.prov.disable_cloud = info.data.disable_cloud;
+  evt.prov.portal_used = _portal_used;
   evt.prov.static_ip = info.data.static_ip;
   if (!RTOS::queue_send(_event_queue, &evt, 0) && info.event == ProvisioningEvent::Connected &&
       !_provisioning_connected_event_pending.load()) {

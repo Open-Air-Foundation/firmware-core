@@ -721,7 +721,9 @@ stateDiagram-v2
     ProvisioningConfirm --> Provisioning: No
     ProvisioningConfirm --> Provisioning: Yes on row 0 -- switch transport
     ProvisioningConfirm --> Portable: Yes on row 1 -- leave session to Portable
-    Provisioning --> Home: Connected event -- persist + 1.5 s on-page hold + leave to Home
+    Provisioning --> PortalReboot: Connected after portal use -- persist + hold + stop
+    PortalReboot --> EnterStationary: saved-network boot
+    Provisioning --> Home: Connected without restart -- hold + leave to Home
     Provisioning --> Portable: Stopped before online -- leave session to Portable
 ```
 
@@ -741,7 +743,7 @@ through `on_wifi_connected()`; STA failure routes through the disconnect policy.
 |---|---|
 | `begin_session_if_needed()` | Idempotent session preamble. Sets `_setup_session_active`, silently flips `_lock_state = Unlocked` (no `"Unlocked"` snackbar), and clears any pending snackbar so leftover `"Mode changed"` / `"Locked"` / stale `"Wi-Fi connected"` cannot leak onto session screens. Called by `enter_stationary()` and `enter_provisioning_page()`. |
 | `enter_provisioning_page(transport)` | Entry into `Screen::Provisioning`. Calls `begin_session_if_needed()`, clears `_bring_up_pending` (defangs the on-Info success arm), runs `pause_provisioning_sensitive_services()`, opens the page via `UIManager::open_provisioning()`, kicks off the transport, and ends with `update_display(wait=true)`. Used by normal entry without saved networks and normal pre-online STA failure. |
-| `leave_session_to_home()` | Success-path leave. Clears the `Connected!` page state, calls `UIManager::reset_to_home()`, polls the BMS once for a fresh battery icon, resumes paused services, rebases periodic clocks, silently unlocks, clears the session gate, and ends with `update_display(wait=true) + DisplayService::flush()`. Used by both STA-only success (Info) and provisioning-success (Provisioning). |
+| `leave_session_to_home()` | Success-path leave. Clears the `Connected!` page state, calls `UIManager::reset_to_home()`, polls the BMS once for a fresh battery icon, resumes paused services, rebases periodic clocks, silently unlocks, clears the session gate, and ends with `update_display(wait=true) + DisplayService::flush()`. Used by STA-only success and provisioning success that does not reboot. |
 | `leave_session_to_portable()` | Cancel / abort path. Mirrors the success leave but routes through `change_mode(Portable)` (which fires its own `"Mode changed"` snackbar). The session gate stays true through `change_mode()` so any background-render path that fires mid-teardown still no-ops. |
 | `rebase_periodic_clocks()` | Roll `_last_measurement_ms` / `_last_bms_poll_ms` / `_last_bms_status_poll_ms` forward to `now` on resume so paused timers do not fire back-to-back catching up. The external watchdog clock is deliberately not rebased. |
 
@@ -831,15 +833,13 @@ glyph the moment `is_online()` flips (connect repaints via
 `on_provisioning_state_changed(payload)` updates the Provisioning page
 state and handles two terminal events:
 
-- **`Connected`** — persist `disable_cloud` and `static_ip` from the
-  payload, push `set_disable_cloud()` to `CloudService`, render
-  `Connected! a.b.c.d` with `update_display(wait=true) + flush()` so
-  the success frame is painted before any hold, call
-  `WifiService::stop_provisioning(false)` (whose internal
-  `POST_CONNECT_HOLD_MS` provides the ~1.5 s on-page dwell), then
-  activate local HTTP and mDNS, call `leave_session_to_home()`, then
-  `cloud.start()` + `cloud.arm(/*fire_now=*/true)` so the first POST fires
-  immediately.
+- **`Connected`** — persist `disable_cloud` and `static_ip`, paint and flush
+  `Connected! a.b.c.d`, then stop provisioning with its ~1.5 s hold. If Stationary,
+  still online, settings saved, and `payload.portal_used` is true, request HTTP
+  listener shutdown and reboot before local/cloud startup. Otherwise retain any
+  listener, activate local HTTP and mDNS, call `leave_session_to_home()`, and
+  start/arm cloud immediately. See the
+  [restart policy](wifi_service.md#provisioning-completion).
 - **`Stopped`** (without `has_been_online()`) — user abort, inactivity
   timeout, or a transport-switch start failure. Falls back to Portable
   via `leave_session_to_portable()` so the device is never stranded on

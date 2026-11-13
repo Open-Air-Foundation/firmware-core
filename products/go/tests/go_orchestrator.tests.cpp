@@ -9631,6 +9631,7 @@ TEST_CASE("direct got-IP activates local HTTP, admission, and mDNS",
   REQUIRE(f.local_api.get_system_info().wifi_rssi.has_value());
   CHECK(*f.local_api.get_system_info().wifi_rssi == -54);
   CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
+  CHECK(reboot_count == 0);
 }
 
 TEST_CASE("cloud-disabled Stationary keeps local HTTP admitted",
@@ -9900,6 +9901,8 @@ TEST_CASE("ProvisioningEvent::Connected continues after metadata persistence fai
   REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
 
   Event evt = make_provisioning_event(ProvisioningEvent::Connected);
+  evt.prov.portal_used = true;
+  test_spy::wifi_is_online = true;
   evt.prov.disable_cloud = true;
   evt.prov.static_ip.ip = 0x0100A8C0;
   A::dispatch(orch, evt);
@@ -9909,6 +9912,86 @@ TEST_CASE("ProvisioningEvent::Connected continues after metadata persistence fai
   CHECK(test_spy::wifi_stop_provisioning_called);
   CHECK(test_spy::cloud_start_count == 1);
   CHECK_FALSE(test_spy::cloud_last_disable_cloud);
+  CHECK(reboot_count == 0);
+}
+
+TEST_CASE("Successful portal session stops provisioning before reboot without starting cloud",
+          "[Orchestrator][stationary][provisioning][reboot]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_provisioning_active = true;
+
+  Event evt =
+      make_provisioning_event(ProvisioningEvent::Connected, ProvisioningTransport::WifiOnly);
+  evt.prov.portal_used = true;
+  evt.prov.ip = 0x0100A8C0;
+  evt.prov.static_ip.ip = evt.prov.ip;
+  SECTION("connected through portal") {}
+  SECTION("connected through BLE after using portal") {
+    evt.prov.transport = static_cast<uint8_t>(ProvisioningTransport::BleOnly);
+  }
+  f.ui_manager.open_provisioning(static_cast<ProvisioningTransport>(evt.prov.transport));
+  DisplayService::spy_flush_count = 0;
+  during_reboot = [&] {
+    CHECK(test_spy::wifi_stop_provisioning_called);
+    CHECK(test_spy::wifi_stop_provisioning_stop_http);
+    CHECK_FALSE(test_spy::wifi_provisioning_active);
+    CHECK(DisplayService::spy_last_screen == Screen::Provisioning);
+    CHECK(DisplayService::spy_flush_count > 0);
+    CHECK(A::settings(orch).static_ip.ip == evt.prov.ip);
+    CHECK(test_spy::wifi_ensure_local_http_count == 0);
+    CHECK(test_spy::cloud_start_count == 0);
+  };
+
+  A::dispatch(orch, evt);
+
+  CHECK(reboot_count == 1);
+  CHECK(test_spy::cloud_start_count == 0);
+  CHECK(test_spy::cloud_arm_count == 0);
+  CHECK(test_spy::wifi_ensure_local_http_count == 0);
+  CHECK_FALSE(test_spy::sensor_started);
+}
+
+TEST_CASE("BLE-only provisioning or a lost connection does not reboot",
+          "[Orchestrator][stationary][provisioning][reboot]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::wifi_is_online = true;
+  Event evt =
+      make_provisioning_event(ProvisioningEvent::Connected, ProvisioningTransport::WifiOnly);
+  evt.prov.portal_used = true;
+  SECTION("BLE only") {
+    evt.prov.transport = static_cast<uint8_t>(ProvisioningTransport::BleOnly);
+    evt.prov.portal_used = false;
+  }
+  SECTION("connection already lost") { test_spy::wifi_is_online = false; }
+
+  A::dispatch(orch, evt);
+
+  CHECK(reboot_count == 0);
+  CHECK(test_spy::wifi_stop_provisioning_called);
+  CHECK_FALSE(test_spy::wifi_stop_provisioning_stop_http);
+  CHECK(test_spy::cloud_start_count == 1);
+}
+
+TEST_CASE("Portal failure or cancellation does not reboot",
+          "[Orchestrator][stationary][provisioning][reboot]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_mode(orch, OperatingMode::Stationary);
+  Event evt =
+      make_provisioning_event(ProvisioningEvent::ConnectFailed, ProvisioningTransport::WifiOnly);
+  evt.prov.portal_used = true;
+  SECTION("connection failure") {}
+  SECTION("cancelled") { evt.prov.event = static_cast<uint8_t>(ProvisioningEvent::Stopped); }
+  A::dispatch(orch, evt);
+  CHECK(reboot_count == 0);
 }
 
 TEST_CASE("ProvisioningEvent::Connected resumes services and requests a measurement",

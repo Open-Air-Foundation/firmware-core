@@ -28,6 +28,7 @@ struct ProvisioningEventPayload {
   uint8_t stop_reason; // ProvisioningStopReason enum value
   uint32_t ip;
   bool disable_cloud;
+  bool portal_used;
   WifiStaticIpConfig static_ip;
 };
 

@@ -3082,10 +3082,10 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     if (payload.disable_cloud && _settings.configuration_control == ConfigurationControl::Cloud) {
       candidate.configuration_control = ConfigurationControl::Local;
     }
-    if (!activate_settings_candidate(candidate)) {
+    const bool settings_saved = activate_settings_candidate(candidate);
+    if (!settings_saved) {
       AG_LOGW(TAG, "stationary provisioning metadata save failed");
     }
-  }
 
     // Render "Connected! a.b.c.d" on the Provisioning page first.  The
     // wait=true + flush() pair guarantees the success frame is painted
@@ -3100,7 +3100,14 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     // blocks for POST_CONNECT_HOLD_MS (~1.5 s) when called after
     // Connected, which doubles as the on-page hold now that the success
     // page is actually visible.  No snackbar — the page already shows it.
-    _svc.wifi.stop_provisioning(/*stop_http_server=*/false);
+    const bool restart_after_portal = _mode == OperatingMode::Stationary && payload.portal_used &&
+                                      settings_saved && _svc.wifi.is_online();
+    _svc.wifi.stop_provisioning(/*stop_http_server=*/restart_after_portal);
+    if (restart_after_portal) {
+      AG_LOGI(TAG, "Portal provisioning complete; restarting to recover heap");
+      reboot();
+      break;
+    }
     (void)activate_local_endpoint();
 
     leave_session_to_home();
@@ -3115,6 +3122,7 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     }
     _svc.cloud.arm(/*fire_now=*/true);
     break;
+  }
 
   case ProvisioningEvent::Stopped:
     // User abort, timeout, or transport-switch start failure. With no

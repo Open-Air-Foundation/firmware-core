@@ -302,13 +302,12 @@ seconds. Ordinary Wi-Fi events use non-blocking central-queue sends and are not
 retained, so queue saturation can skip this transition.
 
 Provisioning exclusively owns its transport routes and the shared listener
-while active. On a successful Stationary provisioning connection, the product
-preserves the provisioning success response hold, stops provisioning without
-stopping the HTTP listener, removes provisioning ownership, then registers the
-local routes and starts local mDNS. BLE-only provisioning may not have started
-the listener, so the same idempotent local activation path starts it when
-needed. If Local Server is disabled, the handoff stops any retained listener
-and leaves local routes and discovery inactive.
+while active. Successful portal sessions normally reboot before local API
+activation; the next saved-network connection starts the endpoint. See the
+[restart policy](wifi_service.md#provisioning-completion). Without a restart,
+provisioning releases its routes after the success hold and retains any listener
+for local activation. With Local Server disabled, the handoff stops any retained
+listener and leaves routes and discovery inactive.
 
 With Local Server enabled, a transient disconnect after the first connection
 does not return to provisioning. It omits `wifiRssi`, retains local routes and
