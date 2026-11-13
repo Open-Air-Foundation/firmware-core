@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "4a4691f",
+  "rev": "960fd68",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2436,7 +2436,8 @@
         "Go has saved credentials for the test Wi-Fi network.",
         "The test computer is connected to that network.",
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
-        "An Android phone with nRF Connect and Bluetooth enabled."
+        "An Android phone with nRF Connect and Bluetooth enabled.",
+        "Tracking is idle."
       ],
       "steps": [
         {
@@ -2448,8 +2449,16 @@
           "expected_result": "The read serial matches Go."
         },
         {
+          "action": "Select Main Menu > Start Tracking. Allow up to 10 seconds for the display refresh.",
+          "expected_result": "Home shows the recording dot."
+        },
+        {
           "action": "Keep the Bluetooth connection open and select Stationary mode. Allow up to 30 seconds for Wi-Fi connection. Record Local Server under Settings > Operations, then select Enable and return Home.",
-          "expected_result": "nRF Connect reports disconnection. Go reaches Home with the connected Wi-Fi icon. Local Server is enabled."
+          "expected_result": "nRF Connect reports disconnection. Go reaches Home with the connected Wi-Fi icon and no recording dot. Local Server is enabled."
+        },
+        {
+          "action": "Open Main Menu. Allow up to 10 seconds for the refresh, then return Home.",
+          "expected_result": "Only Exit Menu, Operating Mode and Settings appear, with no blank rows or leftover text."
         },
         {
           "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout. Clear previous scan results in nRF Connect and scan again for 30 seconds.",
@@ -2458,7 +2467,8 @@
       ],
       "cleanup": [
         "Disconnect nRF Connect and return Go Home, including after interruption. Record any failure.",
-        "Restore the recorded Local Server setting under Settings > Operations, including after interruption; record any restoration failure."
+        "Restore the recorded Local Server setting under Settings > Operations, including after interruption; record any restoration failure.",
+        "Stop this case’s session if still active. Leave saved routes intact."
       ],
       "references": [
         "products/go/docs/orchestrator.md",
@@ -2608,8 +2618,8 @@
     },
     {
       "id": "go.modes.stationary-offline",
-      "title": "Switching to Energy Saving ends paused tracking and stops local Wi-Fi access",
-      "objective": "Verify a mode change ends a paused session and disables local Wi-Fi access on battery and USB power.",
+      "title": "Switching to Energy Saving stops local Wi-Fi access",
+      "objective": "Verify a mode change disables local Wi-Fi access on battery and USB power.",
       "category": "Modes & Sleep",
       "sub_category": "Mode Transitions",
       "applicability": [
@@ -2620,7 +2630,6 @@
         "Go has saved credentials for the test Wi-Fi network.",
         "The test computer is connected to that network.",
         "Postman or an equivalent GUI API client supporting .local addresses is available.",
-        "Tracking is idle.",
         "A USB power source."
       ],
       "steps": [
@@ -2633,24 +2642,19 @@
           "expected_result": "HTTP 200 is returned with the matching serialNumber."
         },
         {
-          "action": "Select Main Menu > Start Tracking, then Tracking > Pause Tracking.",
-          "expected_result": "Home shows the paused indicator."
-        },
-        {
           "action": "Select Energy Saving mode and watch startup for up to one minute.",
-          "expected_result": "Go restarts into Energy Saving. Home has no Wi-Fi icon, recording dot or paused indicator."
+          "expected_result": "Go restarts into Energy Saving. Home has no Wi-Fi icon."
         },
         {
           "action": "Repeat the GET request using the five-second timeout.",
           "expected_result": "Go’s local API is unreachable; no HTTP response is received."
         },
         {
-          "action": "Connect USB power. Select Stationary mode, allowing up to one minute for Home and Wi-Fi connection, then repeat steps 2–5 with USB connected.",
-          "expected_result": "The tracking-indicator and Wi-Fi outcomes are the same. Go remains usable through the mode changes; a restart is not required with USB."
+          "action": "Connect USB power. Select Stationary mode, allowing up to one minute for Home and Wi-Fi connection, then repeat steps 2–4 with USB connected.",
+          "expected_result": "The Wi-Fi outcome is the same. Go remains usable through the mode changes; a restart is not required with USB."
         }
       ],
       "cleanup": [
-        "Stop this case’s session if still active, including after interruption. Leave saved routes intact; the test sessions’ route data is expendable.",
         "Select Stationary, restore the recorded Local Server setting, then return to Energy Saving. Record any restoration failure, including after interruption.",
         "Disconnect USB, return Home and record any failure."
       ],
@@ -2682,7 +2686,7 @@
         },
         {
           "action": "Select Stationary mode and watch startup for up to one minute. Open Main Menu, then Settings > Operations > Local Server. Record its selection, select Enable and return Home.",
-          "expected_result": "Go restarts into Stationary and reaches Home with the connected Wi-Fi icon. Main Menu offers Start Tracking with readable rows and highlighting. Local Server is enabled."
+          "expected_result": "Go restarts into Stationary and reaches Home with the connected Wi-Fi icon. Main Menu has no Tracking row; labels and highlighting are readable. Local Server is enabled."
         },
         {
           "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout.",
