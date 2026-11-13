@@ -73,13 +73,13 @@ Tracking supports:
 
 Pause stops new sensor/GPS route points while retaining the session. Resume
 continues the same route without filling in the paused interval. Live readings,
-charts, GPS, and existing data export continue; Stationary cloud upload and
-configuration polling also continue. The display replaces the recording dot
-with a pause icon. A paused route must be stopped before it can be deleted.
+charts, GPS, and existing data export continue. The display replaces the recording
+dot with a pause icon. A paused route must be stopped before it can be deleted.
 
-Tracking is available in Portable and Stationary. Starting a route can wait for
-GPS to wake while sensor points are already recorded. Always Off keeps GPS asleep.
-Entering Energy Saving ends Recording or Paused sessions. Entering or leaving
+Tracking is available only in Portable. Entering Stationary or Energy Saving ends
+Recording or Paused sessions and preserves saved routes. Returning to Portable
+leaves tracking idle. Starting a route can wait for GPS to wake while sensor
+points are already recorded; Always Off keeps GPS asleep. Entering or leaving
 Energy Saving restarts the system on battery; USB may prevent that power cycle.
 
 The device also keeps a short temporary measurement history for on-device charts.
@@ -329,7 +329,7 @@ reset or refurbished unit.
 ## Configurable Settings
 
 The main menu offers Exit Menu, Start Tracking / Tracking, Operating Mode, and
-Settings. Energy Saving hides the tracking row. During a session, Tracking opens
+Settings. Stationary and Energy Saving hide the tracking row. During a session, Tracking opens
 Exit, Back, Status, Pause Tracking / Resume Tracking, and Stop Tracking. Operating Mode lists Portable, Stationary, and
 Energy Saving. Settings contains Operations, Display & Touch, Hardware Test, Clear
 Data, Setup Guide, and the existing About Device page.

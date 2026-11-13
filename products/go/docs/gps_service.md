@@ -64,7 +64,7 @@ Inactive GPS uses CASIC `CFG-SLEEP`, rather than only stopping the GNSS engine.
 |---|---|
 | Inactive in Portable/Stationary: Always Off, or On When Tracking without a session | Repeated 30-second sleep intervals |
 | Energy Saving (Offline), any GPS setting | Request maximum-duration sleep; tracking and GPS Test are unavailable |
-| Active in Portable/Stationary: Always On, or On When Tracking with a Recording/Paused session | Keep the receiver running |
+| Active: Always On in Portable/Stationary, or On When Tracking with a Recording/Paused session in Portable | Keep the receiver running |
 
 The service owns wake waiting and repeated sleep commands. Interactive callers
 preserve an existing deadline; Energy Saving timer wakes explicitly probe again
@@ -86,6 +86,7 @@ when a tracking session is recording or paused. Selecting On When Tracking
 without a session leaves GPS inactive. Selecting Always Off stops acquisition,
 clears the cached fix, and starts sleep maintenance without ending tracking.
 
+Entering Stationary ends tracking; Always On GPS and GPS Test remain available.
 Entering Energy Saving ends Recording or Paused sessions and disables GPS
 regardless of the saved GPS setting. Persisted transitions into or out of this
 mode request a charger system reset after saving settings and backing up cache.
@@ -126,9 +127,8 @@ still tries the expected baud and then the alternate baud.
 
 ### Starting Tracking While GPS Sleeps
 
-Portable and Stationary start the route without resetting; GPS acquisition waits
+In Portable, starting a route does not reset the device; GPS acquisition waits
 for its existing deadline. Sensor points can be recorded before a valid GPS fix.
-Energy Saving hides the tracking menu and does not resume retained sessions.
 
 ## Edge Cases / Errors
 

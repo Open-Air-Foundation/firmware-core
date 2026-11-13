@@ -434,8 +434,9 @@ Screen dispatch:
   hero values remain unhighlighted. See [Home Charts](#home-charts).
 - **MainMenu:** Home screen (metric cleared to None) + overlay at y=162.
   The 2 px-thick 1st grid divider is preserved as the menu top border.
-  Menu rows use full 128 px-wide selection rects. The four rows are Exit Menu,
+  Menu rows use full 128 px-wide selection rects. Portable shows Exit Menu,
   Start Tracking (Idle) / Tracking (Recording or Paused), Operating Mode, and Settings.
+  Stationary and Energy Saving omit the tracking row.
 - **TrackingMenu/TrackingStatus/Settings/Operations/DisplayTouch/SettingsChoice/TagList/Confirm/About:** Full-screen list with
   full 128 px-wide selection rects and vertically centered text. A
   separator line between the header rows (Exit/Back) and content rows

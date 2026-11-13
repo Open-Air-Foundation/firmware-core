@@ -1623,6 +1623,9 @@ void Orchestrator::unlock() {
 }
 
 bool Orchestrator::start_tracking() {
+  if (_mode != OperatingMode::Portable) {
+    return false;
+  }
   if (tracking_session_active(_tracking_state)) {
     return false; // caller treats as "already tracking"
   }
@@ -1687,6 +1690,9 @@ bool Orchestrator::pause_tracking() {
 }
 
 bool Orchestrator::resume_tracking() {
+  if (_mode != OperatingMode::Portable) {
+    return false;
+  }
   if (_tracking_state == TrackingState::Recording) {
     return true;
   }
@@ -2217,8 +2223,10 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
                                (previous_settings.gps_mode == GpsMode::OnWhenTracking &&
                                 tracking_session_active(_tracking_state)));
 
-  if (mode_changing && _mode == OperatingMode::Offline) {
+  if (mode_changing && _mode != OperatingMode::Portable) {
     stop_tracking();
+  }
+  if (mode_changing && _mode == OperatingMode::Offline) {
     if (_svc.ui_manager.current_screen() == Screen::GpsTest) {
       _svc.ui_manager.reset_to_home();
       finish_gps_test();

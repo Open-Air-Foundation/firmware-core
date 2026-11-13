@@ -372,9 +372,8 @@ single-iteration measurement, and updates the display.
 
 ### Tracking Lifecycle
 
-Manages route lifecycle through `StorageService`. `start_tracking()`
-returns `bool` so the BLE `StartTracking` command-result reports the real
-outcome instead of the pre-spec "was-idle" heuristic.
+Manages route lifecycle through `StorageService`. `start_tracking()` and
+`resume_tracking()` return `false` outside Portable, before storage or GPS work.
 
 `start_tracking()` rejects an existing session, generates a unique five-digit
 ID, and opens its route. Failure leaves Idle and reports a storage error.
@@ -382,9 +381,10 @@ Success sets Recording, starts GPS if required, shows
 `"Tracking start = NNNNN"`, and publishes the new BLE status. Acquisition may
 wait for an existing GPS sleep deadline; route creation does not require a fix.
 
-Energy Saving hides Start Tracking. Entering it ends either Recording or Paused
-sessions, and boot never restores them in that mode. Persisted mode transitions
-request the charger reset described under [change_mode()](#change_mode).
+Stationary and Energy Saving hide Tracking. Entering either mode stops Recording
+or Paused sessions and preserves saved routes. Returning to Portable leaves
+tracking idle. Energy Saving also skips boot restoration and requests the charger
+reset described under [change_mode()](#change_mode) for persisted mode transitions.
 
 `pause_tracking()` changes Recording to Paused, flushes/closes the route with
 `end_route()`, and retains the session ID. It shows `"Tracking paused"` on success
@@ -399,8 +399,8 @@ changing Paused to Recording. Failure leaves the session Paused and shows
 notification. Pause and Resume both return `false` when Idle.
 
 Pause and Resume keep GPS running according to `GpsMode`, including
-`OnWhenTracking`. Live measurements, chart cache, BLE Measures, Stationary cloud
-upload/config polling, and existing History export continue. Paused sessions
+`OnWhenTracking`. Live measurements, chart cache, BLE Measures, and existing
+History export continue. Paused sessions
 remain protected from History deletion until stopped.
 
 `stop_tracking()` accepts Recording or Paused. It calls `end_route()`, sets Idle,
@@ -511,7 +511,7 @@ updates; Pause/Resume preserve the Status view, and Stop returns it to Main Menu
 handling. Status is exempt, but manual locking and safety shutdowns remain
 available. Leaving Status starts a fresh configured timeout once, including
 after remote Stop; repaints and Pause/Resume do not extend it. The saved setting
-is unchanged. Tracking Status is unavailable in Energy Saving.
+is unchanged. Tracking Status is available only in Portable.
 
 Entry, input, and tracking changes repaint immediately. The timer loop observes
 page entry/exit through `sync_tracking_status_lifecycle()`: entry arms a

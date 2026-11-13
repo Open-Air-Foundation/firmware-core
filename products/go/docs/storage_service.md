@@ -214,7 +214,7 @@ configured window regardless of the measurement period:
 Any `fflush` or `fsync` failure inside `append_route_point()` surfaces as a
 `false` return. The orchestrator logs and ignores the failure, keeping the
 session running so subsequent appends can retry. Pause closes the file while
-retaining the logical session; Stop and Energy Saving entry end it.
+retaining the logical session; Stop or leaving Portable ends it.
 
 ### Resume-time Torn-Record Truncate
 
@@ -282,8 +282,8 @@ or persist it internally.
 Pause closes the route while the orchestrator retains its Paused state and ID.
 The storage-local ID resets to zero because no writer is open; BLE Status uses
 the orchestrator's ID. Explicit Resume appends to the same route; failure leaves
-it Paused. Energy Saving entry ends the session, preserving the existing file
-for later export. Its timer wakes never reopen or append routes.
+it Paused. Entering Stationary or Energy Saving ends the session, preserving the
+existing file for later export. Energy Saving timer wakes never reopen or append routes.
 
 ```text
 Start:  create_route(N) -> append points
