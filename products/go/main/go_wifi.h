@@ -235,6 +235,7 @@ private:
 
   // Provisioning state
   bool _provisioning_active = false;
+  bool _portal_used = false; // Retained across transport switches within a session.
   ProvisioningTransport _transport = ProvisioningTransport::BleOnly;
   // Connected is the provisioning success transition and must survive central
   // queue backpressure. The callback publishes the built event to tick().

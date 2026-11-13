@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "a97ec5e",
+  "rev": "4a4691f",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -2050,11 +2050,11 @@
         },
         {
           "action": "Enter the test network’s SSID and password. Leave Static IP disabled and select Connect. Observe Go for up to 30 seconds and record the displayed IP address.",
-          "expected_result": "Connecting is followed by Connected! with an IP address, then Home."
+          "expected_result": "Connecting is followed by Connected! with an IP address, then one automatic restart. Go reconnects using saved credentials and reaches Home without reopening setup."
         },
         {
           "action": "Connect the computer to the test network and inspect the router’s connected-device list and DHCP leases.",
-          "expected_result": "Go is connected and has a DHCP lease matching the displayed IP address."
+          "expected_result": "Go is connected and has a DHCP lease; its IP address may change after the automatic restart."
         },
         {
           "action": "Replace <serial> with the recorded serial. Send GET http://airgradient_<serial>.local/api/v1/measures with No Auth, no body and a five-second timeout.",
@@ -2111,7 +2111,7 @@
         },
         {
           "action": "Enter the test network’s SSID and password. Open Advanced options, enable Disable cloud upload and Static IP, then enter the supplied IP address, subnet mask, gateway and DNS address. Select Connect and observe Go for up to 30 seconds.",
-          "expected_result": "Connected! shows the configured static IP, followed by Home."
+          "expected_result": "Connected! shows the configured static IP, followed by one automatic restart. Go reconnects at the same address and reaches Home without reopening setup."
         },
         {
           "action": "Connect the computer to the test network. Send GET http://<static-ip>/api/v1/config with No Auth and no body, replacing <static-ip> with the configured address.",
@@ -2281,7 +2281,7 @@
         },
         {
           "action": "Connect the computer to the exact airgradient- network shown on Go using password cleanair. Open http://192.168.4.1/. Enter A’s SSID and password, leave Static IP disabled and select Connect. Observe Go for up to 30 seconds.",
-          "expected_result": "Connected! shows an IP address, followed by Home with the connected Wi-Fi icon."
+          "expected_result": "Connected! shows an IP address, followed by one automatic restart. Go reconnects using saved credentials and reaches Home with the connected Wi-Fi icon."
         },
         {
           "action": "Hold Power until Powered off is fully displayed, release and wait 10 seconds. Switch A off and B on. Once B’s Wi-Fi network is available, press and release Power on Go. Observe startup for up to 90 seconds. Do not factory-reset Go.",
@@ -2289,7 +2289,7 @@
         },
         {
           "action": "Select Use portal and confirm Yes. Connect the computer to the exact airgradient- network shown on Go using password cleanair, then open http://192.168.4.1/. Enter B’s SSID and password, leave Static IP disabled and select Connect. Observe Go for up to 30 seconds.",
-          "expected_result": "Connected! shows an IP address, followed by Home with the connected Wi-Fi icon."
+          "expected_result": "Connected! shows an IP address, followed by one automatic restart. Go reconnects using saved credentials and reaches Home with the connected Wi-Fi icon."
         },
         {
           "action": "Select Portable mode. Switch A on and B off. Once A’s Wi-Fi network is available, select Stationary mode and allow up to 30 seconds for connection. Connect the computer to A and inspect router A’s connected-device list.",

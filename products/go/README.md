@@ -113,6 +113,9 @@ Normal Stationary mode uses saved networks only and opens BLE provisioning
 immediately when none are saved. Initial saved-network failures retain the
 existing provisioning flow. Normal startup and runtime reconnect never select
 factory credentials automatically.
+Successful Wi-Fi portal setup normally triggers one reboot to restore TLS heap
+headroom, then reconnects using saved credentials. BLE-only setup continues
+without reboot; see [restart conditions](docs/wifi_service.md#provisioning-completion).
 
 ### Cell Safety
 

@@ -40,7 +40,7 @@ reads.
 
 | Method | Returns | Purpose |
 |---|---|---|
-| `WifiService(event_queue, deps, cfg)` | — | Construct with the central event queue, borrowed Wi-Fi/BLE/HTTP/local-server dependencies, and product config. Installs Wi-Fi callbacks initially and the provisioning event callback once for the service lifetime. |
+| `WifiService(event_queue, deps, cfg)` | — | Construct with the central event queue, borrowed Wi-Fi/BLE/HTTP/local-server dependencies, and product config. Installs Wi-Fi callbacks; provisioning is allocated on demand. |
 | `has_saved_networks()` | `bool` | True when at least one network is saved. Delegates to `WifiManager`. |
 | `set_power_save_enabled(enabled)` | `void` | Retain the preference and apply it immediately in STA mode outside provisioning, without disconnecting. |
 | `connect_with_saved_credentials(static_ip)` | `void` | Restore Wi-Fi callbacks, arm the initial-connect deadline, and call `WifiManager::connect` with an empty SSID. One saved network connects directly with normal retry/backoff; multiple networks are scanned, ranked by RSSI, and tried with single-attempt failover. Applies `static_ip` when non-null, clears it otherwise. Resets the online latches (fresh bring-up). Posts a synthetic `WifiDisconnected` when the manager returns `NotFound`. |
@@ -48,7 +48,7 @@ reads.
 | `try_default_fallback_credentials()` | `void` | Manufacturing-only, single-shot STA connect to the factory AP (`airgradient` / `cleanair`). The explicit SSID makes the connect transient, so nothing is written to the saved-networks store. Bounded by the fallback window even when the driver rejects the attempt immediately. |
 | `start_provisioning(transport)` | `void` | Clear retained success, stop the local endpoint, cancel STA/deadlines, and start the requested provisioning transport. Defaults to `BleOnly`. |
 | `switch_provisioning_transport()` | `void` | Back-to-back stop/start that flips transport, swallows the intermediate `Stopped`, and requests listener retention when one is already bound. |
-| `stop_provisioning(stop_http_server = true)` | `void` | Tear down provisioning and optionally retain the listener for local-route handoff. Blocks for the component's post-connect hold after `Connected`, then reinstalls Wi-Fi callbacks. |
+| `stop_provisioning(stop_http_server = true)` | `void` | Stop and delete the provisioning manager, releasing transport caches and timers. Optionally retain the HTTP listener. After `Connected`, includes the post-connect hold before teardown and restoring Wi-Fi callbacks. |
 | `ensure_local_http()` | `bool` | Idempotently register local routes before ensuring the configured listener is active. Rolls routes back on listener failure. |
 | `ensure_local_mdns()` | `bool` | Install the local `StaIpAuto` profile once and explicitly start mDNS. HTTP must already be active. |
 | `stop_local_endpoint()` | `void` | Stop/clear mDNS, stop the listener, then unregister only local API routes. Idempotent. |
@@ -99,12 +99,9 @@ borrowed `ProvisioningManager`. Mode changes always tear down the
 outgoing owner before bringing up the incoming one.
 
 Stationary provisioning and the local API also borrow the same process-lifetime
-`HttpServer` object. Their routes never overlap: provisioning owns its transport
-routes during setup, then hands ownership to `LocalServer` after a successful
-connection. Wi-Fi provisioning can retain an already-bound listener during the
-handoff. A directly started BLE-only session has no HTTP listener; BLE-only
-reached through a Wi-Fi-to-BLE transport switch can inherit the retained
-listener.
+`HttpServer` object. Their routes never overlap. Transport switches retain an
+existing listener; successful portal sessions normally reboot before local API
+activation. A BLE-only session has no listener unless inherited from a portal.
 
 `WifiService` owns the **Stationary** `ProvisioningManager` instance.
 Portable mode has its own separate manager instance inside
@@ -304,12 +301,11 @@ the driver default.
 `start_provisioning()` first tears the local endpoint down so provisioning owns
 its transport routes exclusively. Transport switches call provisioning stop
 with `stop_http_server=false`, preserving the listener when one is already bound
-while route ownership changes. On provisioning success, the orchestrator again
-uses `stop_provisioning(false)`: Wi-Fi provisioning unregisters its routes while
-retaining its listener. Directly started BLE-only provisioning has no listener,
-while BLE-only reached through a Wi-Fi-to-BLE switch can inherit one. Local
-routes then register before the idempotent listener start when Local Server is
-enabled. When disabled, the orchestrator stops any retained listener instead.
+while route ownership changes. Successful portal sessions follow the
+[restart policy](#provisioning-completion). When continuing without restart,
+the orchestrator uses `stop_provisioning(false)`, then registers local routes
+before ensuring the listener is running. With Local Server disabled, it stops
+any retained listener instead.
 
 Full teardown uses the reverse ownership order: clear the mDNS profile (which
 stops mDNS), stop the listener, unregister local routes, then disconnect and
@@ -336,8 +332,20 @@ synthesizes an unwanted `WifiDisconnected{connection_lost}`.
 
 When `_start_provisioning_internal()` succeeds the service marks
 `_provisioning_active = true` and remembers the active transport.
-`ProvisioningManager::set_on_event` is installed once at construction
-and stays installed for the lifetime of the service.
+The manager and its event callback are created lazily. `stop_provisioning()`
+deletes the manager; another session recreates it. Transport switches reuse it.
+
+### Provisioning Completion
+
+On `Connected`, Stationary mode reboots if the session used the Wi-Fi portal,
+Wi-Fi is still online, and settings persistence succeeds. The device displays
+`Connected!` for the existing ~1.5 s hold, stops provisioning, then reboots before
+local HTTP or cloud startup. The next boot connects using saved credentials.
+This restores heap headroom for TLS; it does not fix the underlying fragmentation.
+
+Portal use remains latched across switches back to BLE and resets for a new
+session. BLE-only success, connection failures, cancellation, settings-save
+failure, and ordinary saved-network reconnects do not trigger this reboot.
 
 ### Transport Switching
 
@@ -382,8 +390,8 @@ strict ownership rule:
 - `WifiService` owns `on_got_ip` and `on_disconnected` at all times
   outside an active provisioning session.
 - `ProvisioningManager` owns those slots while a session is active.
-- `ProvisioningManager::set_on_event` is installed once by the
-  constructor and never reassigned.
+- `ProvisioningManager::set_on_event` is installed when each manager is created
+  and retained across transport switches.
 
 `stop_provisioning()` calls `_install_wifi_callbacks()` after the
 component returns so post-online disconnects and `shutdown()` continue
@@ -420,6 +428,8 @@ queue. All events are consumed by `Orchestrator::dispatch()`.
 carries `disable_cloud` and `static_ip` inline so the orchestrator can
 persist them without querying live service state after the event.
 `static_ip` is zeroed when the user selected DHCP.
+`portal_used` records portal use anywhere in the session, including before a
+switch back to BLE, so the orchestrator can select the restart path.
 
 `Connected` is the only provisioning event retained on central queue
 backpressure because losing it would strand the listener handoff. The callback

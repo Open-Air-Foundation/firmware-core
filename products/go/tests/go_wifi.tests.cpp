@@ -18,8 +18,10 @@
 #include "hal/ble_server.h"
 #include "hal/http_server.h"
 #include "hal/wifi_hal.h"
+#include "mock_ble.h"
 #include "rtos.h"
 #include "services/local_server.h"
+#include "services/provisioning_manager.h"
 #include "services/wifi_manager.h"
 #include "types/provisioning_types.h"
 
@@ -337,8 +339,11 @@ struct Fixture {
   LocalServer local_server{http, {providers, &providers, ConfigAccess::ReadWrite, &providers}};
   WifiService svc;
 
-  explicit Fixture(const WifiService::Config &config = {})
-      : svc(&event_queue_sentinel, WifiService::Deps{wifi, ble, http, local_server}, config) {
+  explicit Fixture(const WifiService::Config &config = {}, AgBleServer *ble_override = nullptr)
+      : svc(&event_queue_sentinel,
+            WifiService::Deps{wifi, ble_override != nullptr ? *ble_override : ble, http,
+                              local_server},
+            config) {
     RTOS::set_instance(&rtos);
   }
 
@@ -862,9 +867,11 @@ TEST_CASE("clear_credentials erases saved networks and resets has_been_online",
 // Provisioning event mapping + transport-switch latch
 // ---------------------------------------------------------------------------
 
-TEST_CASE("WifiService constructs provisioning manager only when provisioning begins",
+TEST_CASE("WifiService releases provisioning manager on stop and recreates it on demand",
           "[go_wifi][provisioning][lifecycle]") {
-  Fixture f;
+  WifiService::Config config{};
+  config.ap_ssid = "airgradient-ABCDEF123456";
+  Fixture f(config);
   f.seed_network();
 
   CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == nullptr);
@@ -875,12 +882,24 @@ TEST_CASE("WifiService constructs provisioning manager only when provisioning be
   f.svc.try_default_fallback_credentials();
   CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == nullptr);
 
-  f.svc.start_provisioning(ProvisioningTransport::BleOnly);
-  ProvisioningManager *const manager = WifiServiceTestAccess::provisioning_manager(f.svc);
-  REQUIRE(manager != nullptr);
+  f.svc.start_provisioning(ProvisioningTransport::WifiOnly);
+  REQUIRE(f.svc.is_provisioning());
+  REQUIRE(WifiServiceTestAccess::provisioning_manager(f.svc) != nullptr);
 
   f.svc.stop_provisioning();
-  CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == manager);
+  CHECK_FALSE(f.svc.is_provisioning());
+  CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == nullptr);
+
+  const int stop_calls = f.http.stop_calls;
+  f.svc.stop_provisioning();
+  CHECK(f.http.stop_calls == stop_calls);
+
+  f.svc.start_provisioning(ProvisioningTransport::WifiOnly);
+  REQUIRE(f.svc.is_provisioning());
+  REQUIRE(WifiServiceTestAccess::provisioning_manager(f.svc) != nullptr);
+  CHECK(f.http.active_routes > 0);
+  f.svc.stop_provisioning();
+  CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == nullptr);
 }
 
 TEST_CASE("on_provisioning_event Connected maps disable_cloud and static_ip into payload",
@@ -906,6 +925,50 @@ TEST_CASE("on_provisioning_event Connected maps disable_cloud and static_ip into
   CHECK(evt->prov.disable_cloud == true);
   CHECK(evt->prov.static_ip.ip == 0x0100A8C0);
   CHECK(evt->prov.static_ip.netmask == 0x00FFFFFF);
+}
+
+TEST_CASE("provisioning success retains portal use across switches and resets for a new session",
+          "[go_wifi][provisioning][switch]") {
+  MockBleServer ble;
+  WifiService::Config config{};
+  config.ap_ssid = "airgradient-ABCDEF123456";
+  Fixture f(config, &ble);
+  bool portal_used = false;
+
+  f.svc.start_provisioning(ProvisioningTransport::BleOnly);
+  REQUIRE(f.svc.is_provisioning());
+  SECTION("BLE only") {}
+  SECTION("switch to portal") {
+    f.svc.switch_provisioning_transport();
+    portal_used = true;
+  }
+  SECTION("switch to portal then back to BLE") {
+    f.svc.switch_provisioning_transport();
+    f.svc.switch_provisioning_transport();
+    portal_used = true;
+  }
+  SECTION("new BLE session after portal") {
+    f.svc.switch_provisioning_transport();
+    f.svc.stop_provisioning();
+    f.svc.start_provisioning(ProvisioningTransport::BleOnly);
+  }
+  REQUIRE(f.svc.is_provisioning());
+  auto *manager = WifiServiceTestAccess::provisioning_manager(f.svc);
+  REQUIRE(manager != nullptr);
+  ProvisioningData data{};
+  std::strcpy(data.ssid, "test-network");
+  std::strcpy(data.password, "secret12");
+  REQUIRE(manager->submit_credentials(data));
+  f.rtos.captured.clear();
+  REQUIRE(f.hal.got_ip_cb);
+  f.hal.got_ip_cb(0x0100A8C0);
+
+  const Event *event = f.rtos.first_event(EventType::ProvisioningStateChanged);
+  REQUIRE(event != nullptr);
+  REQUIRE(event->prov.event == static_cast<uint8_t>(ProvisioningEvent::Connected));
+  CHECK(event->prov.portal_used == portal_used);
+  CHECK(f.svc.has_saved_networks());
+  f.svc.stop_provisioning();
 }
 
 TEST_CASE("on_provisioning_event swallows Stopped during transport switch",
@@ -1213,6 +1276,7 @@ TEST_CASE("provisioning success handoff retains listener for local routes",
   const int stop_calls_before_handoff = f.http.stop_calls;
 
   f.svc.stop_provisioning(/*stop_http_server=*/false);
+  CHECK(WifiServiceTestAccess::provisioning_manager(f.svc) == nullptr);
   CHECK(f.http.stop_calls == stop_calls_before_handoff);
   CHECK(f.http.unregister_all_calls == 1);
   CHECK(f.http.active_routes == 0);
