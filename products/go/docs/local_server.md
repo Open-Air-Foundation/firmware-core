@@ -63,8 +63,11 @@ Local Server is controlled through **Settings → Operations → Local Server**,
 visible only in Stationary mode, including while Wi-Fi is disconnected. The
 selection defaults to Enable and persists across restarts and mode changes.
 
-Enable starts the local API and discovery when Stationary Wi-Fi connects and
-disables Wi-Fi power saving for reliable access. Disable stops both, clears
+Manufacturing overrides this preference: the local API and mDNS stay disabled,
+and Wi-Fi power saving stays enabled. The saved preference is unchanged.
+
+In normal Stationary mode, Enable starts the local API and discovery when Wi-Fi
+connects and disables Wi-Fi power saving for reliable access. Disable stops both, clears
 queued requests and activation retries, and enables Wi-Fi power saving. Cloud
 connectivity continues. Portable and **Energy Saving** modes do not expose the
 endpoint.

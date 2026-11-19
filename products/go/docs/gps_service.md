@@ -26,8 +26,9 @@ worker, wake deadline, latest fix, clock sync, and `GpsFixUpdate` events.
 
 | Method | Behavior |
 |---|---|
-| `start()` | Start acquisition; wait for any existing sleep interval first |
-| `start_sleeping(interval_ms)` | Maintain sleep, sending another interval whenever GPS is expected to wake |
+| `start(initial_sleep_interval_ms = 0)` | Create the worker: zero selects acquisition; nonzero selects sleep maintenance |
+| `acquire()` | Request acquisition on an existing worker; wait for any remaining sleep |
+| `maintain_sleep(interval_ms)` | Request repeated timed sleep on an existing worker |
 | `stop()` | Join the worker and close UART; leave the receiver's power state unchanged |
 | `request_sleep(duration_ms)` | Stop the worker and send one sleep command; an existing sleep interval is not replaced |
 | `sleep_remaining_ms()` | Expected remaining sleep duration, or zero |
@@ -36,9 +37,9 @@ worker, wake deadline, latest fix, clock sync, and `GpsFixUpdate` events.
 | `set_posting_interval_ms(ms)` | Change event cadence |
 | `set_aiding_data(data)` | Queue approximate position/time for A-GNSS injection |
 
-`start()` and `start_sleeping()` are idempotent for the same worker mode.
-Success means the task started, not that GPS is ready or has a fix. Lifecycle
-calls have one owning caller; `stop()` interrupts a pending wake wait.
+`start()` leaves an already-running worker unchanged. Job requests never create
+a worker, and acceptance does not mean GPS is ready or has a fix. Lifecycle calls
+have one owning caller; `stop()` interrupts a pending wake wait.
 
 ### Configuration
 
@@ -62,7 +63,8 @@ Inactive GPS uses CASIC `CFG-SLEEP`, rather than only stopping the GNSS engine.
 
 | GPS State | Policy |
 |---|---|
-| Inactive in Portable/Stationary: Always Off, or On When Tracking without a session | Repeated 30-second sleep intervals |
+| Inactive in normal Portable/Stationary: Always Off, or On When Tracking without a session | Repeated 30-second sleep intervals |
+| Inactive during manufacturing | Stop the worker and close UART; no repeated sleep commands |
 | Energy Saving (Offline), any GPS setting | Request maximum-duration sleep; tracking and GPS Test are unavailable |
 | Active: Always On in Portable/Stationary, or On When Tracking with a Recording/Paused session in Portable | Keep the receiver running |
 
@@ -71,6 +73,11 @@ preserve an existing deadline; Energy Saving timer wakes explicitly probe again
 because the receiver may have reset or woken independently. Failed probes retain
 the old deadline and do not prevent ESP sleep. Charging-only boot also requests
 long GPS sleep when Energy Saving is saved. Shutdown sends no GPS sleep command.
+
+Manufacturing releases the idle worker's stack but leaves receiver state unchanged.
+A sleep interval already sent before entry remains in force until its deadline.
+Always On GPS and explicit GPS tests start the worker as needed and wait for any
+remaining sleep. Exiting a test releases the worker unless settings keep GPS active.
 
 The wake deadline uses `RTOS::get_retained_time_ms()` and is stored as a
 `uint64_t` in `RtcAppState::gps_wake_deadline_ms`. It is an absolute monotonic
@@ -85,6 +92,7 @@ activates GPS, acquisition waits for the existing sleep deadline, including
 when a tracking session is recording or paused. Selecting On When Tracking
 without a session leaves GPS inactive. Selecting Always Off stops acquisition,
 clears the cached fix, and starts sleep maintenance without ending tracking.
+During manufacturing it releases the worker instead.
 
 Entering Stationary ends tracking; Always On GPS and GPS Test remain available.
 Entering Energy Saving ends Recording or Paused sessions and disables GPS
@@ -138,7 +146,7 @@ for its existing deadline. Sensor points can be recorded before a valid GPS fix.
   after one second; one-shot callers receive `false`.
 - Failure to connect at both bauds or switch baud ends acquisition setup.
   A wake deadline alone does not prove the receiver is awake or tracking.
-- `stop: task only (GNSS keeps tracking)` logs worker shutdown, not a receiver
+- `stop: GPS worker and UART; receiver state unchanged` logs worker shutdown, not a receiver
   status check. The module may already be asleep or acquisition may have failed.
 - A failed or ineffective mode-change reset leaves the existing GPS deadline
   in force. Leaving Energy Saving can therefore leave GPS unavailable until

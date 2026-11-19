@@ -583,7 +583,9 @@ A Local Server change in Stationary updates Wi-Fi power saving and calls
 `activate_local_endpoint()`. Enable starts HTTP and mDNS when connected; Disable
 revokes API access, discards queued requests, cancels activation retries, and
 stops the endpoint. Stationary entry applies the saved preference; reconnects
-and provisioning handoff respect it. See [Local Server](local_server.md).
+and provisioning handoff respect it. Manufacturing keeps the endpoint disabled
+and Wi-Fi power saving enabled regardless of this preference.
+See [Local Server](local_server.md).
 
 ### update_back_led_indicator()
 
@@ -689,6 +691,10 @@ crossing a newer authority change. Accepted candidates are fully validated and
 committed to NVS before runtime state and snapshots change. CO2 actions use the
 same FIFO but have no calibration busy or duplicate gate; the final result is
 determined asynchronously by `SensorProducer`.
+
+The following activation paths apply when Local Server is enabled outside
+manufacturing. Manufacturing always disables admission, stops HTTP/mDNS, and
+cancels activation retries.
 
 | Lifecycle Point | Local Endpoint Behavior |
 |---|---|
@@ -1101,7 +1107,9 @@ after `stop()` to ensure the worker task is no longer using the SPI bus.
 
 This method gates cached GPS updates and the start/stop decisions for the
 receiver. Pause and Resume leave the receiver and cached fix intact. Inactive
-GPS uses `start_sleeping()` to maintain timed sleep. See [GPS Service](gps_service.md#sleep-policy).
+GPS normally maintains timed sleep. Manufacturing instead stops the idle worker
+and closes UART; Always On and explicit GPS tests can restart it. An existing
+receiver sleep deadline remains in force. See [GPS Service](gps_service.md#sleep-policy).
 
 ## Sensor Scheduling
 

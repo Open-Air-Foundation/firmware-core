@@ -2271,7 +2271,7 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
   }
   if (!mode_changing && _mode == OperatingMode::Stationary &&
       previous_settings.local_server_enabled != _settings.local_server_enabled) {
-    _svc.wifi.set_power_save_enabled(!_settings.local_server_enabled);
+    _svc.wifi.set_power_save_enabled(_manufacturing_mode || !_settings.local_server_enabled);
     (void)activate_local_endpoint();
   }
   if (previous_settings.configuration_control != _settings.configuration_control) {
@@ -2758,7 +2758,7 @@ void Orchestrator::enter_stationary() {
   // Idempotent — cheap no-op on warm Stationary re-entry. Portable-only
   // boots never reach this line.
   _svc.board.init_wifi_subsystem();
-  _svc.wifi.set_power_save_enabled(!_settings.local_server_enabled);
+  _svc.wifi.set_power_save_enabled(_manufacturing_mode || !_settings.local_server_enabled);
   log_heap(TAG, "wifi.enter-stationary:after-init");
 
   // Silent unlock + snackbar clear.  Required so a cold-boot Locked
@@ -3148,7 +3148,7 @@ bool Orchestrator::activate_local_endpoint() {
     _local_api_activation_retry_deadline_ms = 0;
     return false;
   }
-  if (!_settings.local_server_enabled) {
+  if (_manufacturing_mode || !_settings.local_server_enabled) {
     _local_api_activation_retry_deadline_ms = 0;
     _svc.local_api.set_access(ConfigAccess::Disabled);
     discard_local_requests("local server disabled");
@@ -3228,9 +3228,13 @@ void Orchestrator::resume_provisioning_sensitive_services() {
   _svc.power_service.set_pm_power(true);
   _svc.sensor_producer.start();
   _pm_state = PmState::Preparing;
-  const uint32_t initial_gps_sleep_ms = is_gps_active() ? 0 : gps_inactive_sleep_ms(_mode);
-  if (!_svc.gps_service.start(initial_gps_sleep_ms)) {
-    AG_LOGE(TAG, "Failed to restart GPS task after provisioning");
+  const bool gps_active = is_gps_active() || (_manufacturing_mode &&
+                                              _svc.ui_manager.current_screen() == Screen::GpsTest);
+  if (!_manufacturing_mode || gps_active) {
+    const uint32_t initial_gps_sleep_ms = gps_active ? 0 : gps_inactive_sleep_ms(_mode);
+    if (!_svc.gps_service.start(initial_gps_sleep_ms)) {
+      AG_LOGE(TAG, "Failed to restart GPS task after provisioning");
+    }
   }
   _provisioning_sensitive_services_paused = false;
   // One immediate measurement so the display refreshes promptly after
@@ -3607,13 +3611,18 @@ void Orchestrator::activate_gps() {
   if (_shutting_down || _provisioning_sensitive_services_paused) {
     return; // Resume explicitly creates the task with the current GPS policy.
   }
+  // Manufacturing releases the idle worker instead of maintaining timed sleep.
+  if (_manufacturing_mode && !_svc.gps_service.start()) {
+    AG_LOGE(TAG, "Failed to start GPS task during manufacturing");
+    return;
+  }
   if (!_svc.gps_service.acquire()) {
     AG_LOGE(TAG, "GPS acquisition request rejected: task is stopped");
   }
 }
 
 void Orchestrator::deactivate_gps() {
-  if (_shutting_down) {
+  if (_shutting_down || _manufacturing_mode) {
     _svc.gps_service.stop();
     _latest_gps = GpsData{};
     return;
