@@ -213,7 +213,7 @@ partition table, and merged factory-flash binary.
 - [`go_ble_client.md`](go_ble_client.md) — client-side BLE integration spec
   for mobile app developers (discovery, pairing, GATT, payloads, history)
 - [`specs/`](specs) — design specs and refactor plans (temporary; deleted
-  once shipped, per [`docs/STYLE.md`](../../docs/STYLE.md))
+  once shipped, per [`docs/GUIDE.md`](../../docs/GUIDE.md))
 - [`tests/`](tests) — host tests (`go_*.tests.cpp`)
 - [`tests/ble-integration/`](tests/ble-integration/) — BLE hardware integration
   suite for the Portable GATT surface

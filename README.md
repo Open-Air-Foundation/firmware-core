@@ -122,9 +122,10 @@ Start at the layer that matches your task:
 - [`docs/local_http_api.md`](docs/local_http_api.md) — product-neutral local
   HTTP API, mDNS discovery, and AirGradient Go support
 
-When adding or editing any Markdown file:
+Before creating or updating documentation, read the documentation guide:
 
-- [`docs/STYLE.md`](docs/STYLE.md) — documentation style guide
+- [`docs/GUIDE.md`](docs/GUIDE.md) — purpose, ownership, writing, maintenance,
+  and style rules for first-party documentation
 - [`docs/templates/`](docs/templates) — copy-pasteable templates per doc type
 
 ## Contributing

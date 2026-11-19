@@ -7,9 +7,9 @@
 > [`products/go/docs/orchestrator.md`](../docs/orchestrator.md), and
 > [`products/go/docs/ble_service.md`](../docs/ble_service.md); the BLE
 > client contract is in
-> [`AGo_BLE_Client_Spec.md`](AGo_BLE_Client_Spec.md). This file is kept
+> [`go_ble_client.md`](../go_ble_client.md). This file is kept
 > as a historical record of the design discussion — it is **not** subject
-> to the delete-on-ship rule in `docs/STYLE.md`.
+> to the delete-on-ship rule in `docs/GUIDE.md`.
 >
 > **Shipped:** explicit-intent `create_route` / `resume_route` /
 > `route_file_exists` API split, empty-file fsync, first-append fsync

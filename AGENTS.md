@@ -95,7 +95,7 @@ Provide a brief plan before making changes:
 - **Constants:** No new magic numbers; configuration values centralized
 - **Documentation:** Related `README.md`, service docs, specs, and templates are
   updated, or explicitly confirmed unchanged; Markdown follows
-  [`docs/STYLE.md`](docs/STYLE.md)
+  [`docs/GUIDE.md`](docs/GUIDE.md)
 - **VHUB:** The relevant product template is updated for behavior observable
   through hardware, display, serial logs, network interfaces, or server data;
   internal-only changes are explicitly confirmed to need no template change
@@ -194,12 +194,12 @@ Use the current repository docs as the primary source of truth:
 When repository structure and older architecture notes disagree, prefer the
 current codebase structure and the local documentation near the code.
 
-### 8.1 Documentation Style
+### 8.1 Documentation Guide
 
-When creating or editing any Markdown file, follow [`docs/STYLE.md`](docs/STYLE.md).
+When creating or editing any Markdown file, follow [`docs/GUIDE.md`](docs/GUIDE.md).
 
-- Required heading order, casing rules, and code-fence languages live in
-  `docs/STYLE.md`
+- Documentation purpose, ownership, maintenance, applicable outlines, and
+  formatting rules live in `docs/GUIDE.md`
 - Per-doc-type templates live under [`docs/templates/`](docs/templates):
   component README, product README, service doc, spec doc
 - `markdownlint-cli2` runs via `pre-commit` on every staged Markdown file;

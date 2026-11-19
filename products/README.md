@@ -21,7 +21,7 @@ Each product carries its own:
   structure
 - `docs/` — service-level documentation (one file per service)
 - `specs/` — design specs and refactor plans (temporary; see
-  [`docs/STYLE.md`](../docs/STYLE.md) → "Doc Lifecycle")
+  [`docs/GUIDE.md`](../docs/GUIDE.md) → "Doc Lifecycle")
 
 ## Typical Product Layout
 

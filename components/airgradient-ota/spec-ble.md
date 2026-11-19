@@ -2,7 +2,7 @@
 
 > **This is a spec.** It describes how a feature **will be built**, not what
 > currently exists. Once the feature ships, the component README becomes the
-> source of truth and this file is typically deleted. See `docs/STYLE.md` →
+> source of truth and this file is typically deleted. See `docs/GUIDE.md` →
 > "Doc Lifecycle".
 
 This spec implements the **BLE push** OTA path alongside the existing WiFi pull

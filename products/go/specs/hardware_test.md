@@ -3,7 +3,7 @@
 > **This is a spec.** It describes how a feature **will be built**, not what
 > currently exists. Once the feature ships, the corresponding doc under
 > `products/go/docs/` becomes the source of truth and this file is typically
-> deleted. See [`docs/STYLE.md`](../../../docs/STYLE.md) → "Doc Lifecycle".
+> deleted. See [`docs/GUIDE.md`](../../../docs/GUIDE.md) → "Doc Lifecycle".
 
 AirGradient Go will gain a single **Hardware Test** area, reachable from device
 **Settings**, that lets an operator verify every Go peripheral on-device without

@@ -53,7 +53,7 @@ Boundary and palette tests live in
 ## Vendor / Third-Party Components
 
 These live alongside first-party components but are upstream-owned. Their
-docs are not subject to `docs/STYLE.md` and are intentionally excluded from
+docs are not subject to `docs/GUIDE.md` and are intentionally excluded from
 markdownlint enforcement.
 
 | Component | Source | Used by |
