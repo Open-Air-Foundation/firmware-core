@@ -639,6 +639,7 @@ public:
   static void poll_accel_test(Orchestrator &o) { o.poll_accel_test(); }
   static void finish_accel_test(Orchestrator &o) { o.finish_accel_test(); }
   static void finish_gps_test(Orchestrator &o) { o.finish_gps_test(); }
+  static void trigger_gps_test(Orchestrator &o) { o.trigger_gps_test(); }
   static uint8_t accel_who_am_i(const Orchestrator &o) { return o._accel_who_am_i; }
   static bool accel_id_ok(const Orchestrator &o) { return o._accel_id_ok; }
   static bool accel_read_ok(const Orchestrator &o) { return o._accel_read_ok; }
@@ -3853,7 +3854,7 @@ TEST_CASE("manufacturing: boot short-press before onboarding enters Stationary e
   CHECK(test_spy::wifi_try_fallback_called);      // Stationary bring-up ran
 }
 
-TEST_CASE("manufacturing: Stationary connection activates the normal local endpoint",
+TEST_CASE("manufacturing: local endpoint stays disabled while cloud remains available",
           "[Orchestrator][manufacturing][local_endpoint]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -3863,13 +3864,106 @@ TEST_CASE("manufacturing: Stationary connection activates the normal local endpo
   A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
   REQUIRE(A::manufacturing_mode(orch));
   REQUIRE(A::mode(orch) == OperatingMode::Stationary);
+  REQUIRE(A::settings(orch).local_server_enabled);
+  CHECK(test_spy::wifi_power_save_enabled);
 
   test_spy::wifi_is_online = true;
   A::on_wifi_connected(orch, 0x0100A8C0);
 
-  CHECK(test_spy::wifi_ensure_local_http_count == 1);
-  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
-  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+  CHECK(test_spy::cloud_start_count == 1);
+  CHECK(test_spy::cloud_arm_count == 1);
+
+  SECTION("reconnection") { A::on_wifi_connected(orch, 0x0200A8C0); }
+  SECTION("settings disable and re-enable local server") {
+    auto candidate = A::settings(orch);
+    candidate.local_server_enabled = false;
+    REQUIRE(A::activate_settings_candidate(orch, candidate, false));
+    candidate.local_server_enabled = true;
+    REQUIRE(A::activate_settings_candidate(orch, candidate, false));
+  }
+  CHECK(test_spy::wifi_ensure_local_http_count == 0);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 0);
+  CHECK(f.local_api.access() == ConfigAccess::Disabled);
+  CHECK(A::local_api_activation_retry_deadline_ms(orch) == 0);
+  CHECK(test_spy::wifi_power_save_enabled);
+  CHECK(A::settings(orch).local_server_enabled);
+}
+
+TEST_CASE("manufacturing: idle GPS releases its worker and explicit tests restart it",
+          "[Orchestrator][manufacturing][gps_sleep]") {
+  TestFixture f;
+  SECTION("tracking-only GPS") { f.settings.gps_mode = GpsMode::OnWhenTracking; }
+  SECTION("always-off GPS") { f.settings.gps_mode = GpsMode::AlwaysOff; }
+  auto orch = f.make_orchestrator();
+  FORBID_CALL(f.mock_config, commit());
+  orch.init(WakeCause::PowerOn);
+  REQUIRE(test_spy::gps_task_start_count == 1);
+  REQUIRE(test_spy::gps_sleeping_start_count == 1);
+
+  A::enter_manufacturing_mode(orch);
+  CHECK(test_spy::gps_task_stop_count == 1);
+  CHECK(test_spy::gps_sleeping_start_count == 1);
+  CHECK_FALSE(test_spy::gps_sleep_requested);
+
+  A::trigger_gps_test(orch);
+  CHECK(f.ui_manager.current_screen() == Screen::GpsTest);
+  CHECK(test_spy::gps_task_start_count == 2);
+  CHECK(test_spy::gps_started);
+  CHECK(test_spy::gps_task_stop_count == 1);
+
+  f.ui_manager.reset_to_home();
+  A::finish_gps_test(orch);
+  CHECK(test_spy::gps_task_stop_count == 2);
+  CHECK(test_spy::gps_sleeping_start_count == 1);
+  CHECK_FALSE(test_spy::gps_sleep_requested);
+
+  A::pause_sensitive_services(orch);
+  A::resume_sensitive_services(orch);
+  CHECK(test_spy::gps_task_start_count == 2);
+  CHECK(test_spy::gps_sleeping_start_count == 1);
+}
+
+TEST_CASE("manufacturing: Always On GPS stays active and can restart after idle",
+          "[Orchestrator][manufacturing][gps_sleep]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOn;
+  auto orch = f.make_orchestrator();
+  FORBID_CALL(f.mock_config, commit());
+  orch.init(WakeCause::PowerOn);
+  A::enter_manufacturing_mode(orch);
+  CHECK(test_spy::gps_task_stop_count == 0);
+  CHECK(test_spy::gps_sleeping_start_count == 0);
+
+  auto candidate = A::settings(orch);
+  candidate.gps_mode = GpsMode::AlwaysOff;
+  REQUIRE(A::activate_settings_candidate(orch, candidate, false));
+  CHECK(test_spy::gps_task_stop_count == 1);
+  candidate.gps_mode = GpsMode::AlwaysOn;
+  REQUIRE(A::activate_settings_candidate(orch, candidate, false));
+  CHECK(test_spy::gps_task_start_count == 2);
+
+  A::pause_sensitive_services(orch);
+  A::resume_sensitive_services(orch);
+  CHECK(test_spy::gps_task_start_count == 3);
+  CHECK(test_spy::gps_sleeping_start_count == 0);
+}
+
+TEST_CASE("manufacturing: service resume preserves an explicit GPS test",
+          "[Orchestrator][manufacturing][gps_sleep]") {
+  TestFixture f;
+  f.settings.gps_mode = GpsMode::AlwaysOff;
+  auto orch = f.make_orchestrator();
+  FORBID_CALL(f.mock_config, commit());
+  A::enter_manufacturing_mode(orch);
+  A::trigger_gps_test(orch);
+  REQUIRE(test_spy::gps_task_start_count == 1);
+
+  A::pause_sensitive_services(orch);
+  A::resume_sensitive_services(orch);
+
+  CHECK(f.ui_manager.current_screen() == Screen::GpsTest);
+  CHECK(test_spy::gps_task_start_count == 2);
+  CHECK(test_spy::gps_sleeping_start_count == 0);
 }
 
 TEST_CASE("manufacturing: boot short-press after onboarding does not enter Stationary",

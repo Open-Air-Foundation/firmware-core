@@ -92,14 +92,20 @@ onboarding; entering Manufacturing Mode is not required. See
 While a unit is still un-onboarded (`onboarding_done == false`), a short
 press of Button 2 (`PIN_BUTTON_BOOT`) skips the Getting Started guide and
 enters Stationary operating mode **ephemerally** — nothing is written to
-NVS. This lets the production team exercise the full Stationary path (Wi-Fi,
-cloud) without latching `onboarding_done`. The device tracks an internal
+NVS. This lets the production team test Wi-Fi and cloud communication without
+latching `onboarding_done`. The device tracks an internal
 manufacturing flag and runs a cleanup reset at shutdown: saved Wi-Fi
 credentials, routes, and all Go settings except active measurement corrections
 are wiped before power-off. This retains production-configured PM, temperature,
 and humidity corrections. BLE bond deletion is a safe no-op once Stationary
 mode has torn down the BLE host. A plain reboot likewise returns to fresh
 onboarding. Button 2 long press remains factory reset.
+
+To preserve TLS heap headroom, manufacturing disables local HTTP and mDNS,
+enables Wi-Fi power saving, and stops idle GPS maintenance without changing
+saved preferences. Always On GPS and explicit GPS tests remain available.
+An existing GPS sleep interval must expire before acquisition can start; see
+[GPS Sleep Policy](docs/gps_service.md#sleep-policy).
 
 Manufacturing connects only to the transient factory Wi-Fi (`airgradient` /
 `cleanair`), even when saved networks exist. If no IP is obtained within the

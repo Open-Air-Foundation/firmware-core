@@ -266,6 +266,10 @@ restarting the listener.
 
 ### Local HTTP and mDNS
 
+Manufacturing suppresses local HTTP and mDNS regardless of the saved Local Server
+preference, including on reconnect. It uses `MaxModem` Wi-Fi power saving while
+cloud communication remains available. Normal Stationary behavior follows below.
+
 Local endpoint activation follows a strict order:
 
 ```text
