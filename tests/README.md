@@ -1,92 +1,184 @@
 # Host Tests
 
-Top-level entrypoint for the native host-test suite. Builds Catch2 +
-Trompeloeil once and aggregates per-component test executables registered
-with CTest.
+Native tests for shared components and product application logic. The top-level
+CMake project builds the test dependencies once and registers component and
+product executables with CTest. Production sources selected by each test target
+compile with `TEST_HOST` and run on the development machine.
+
+## Scope
+
+Use host tests for data validation, calculations, protocol handling, state
+transitions, and policy exercised through mocks or fakes. They do not establish
+electrical behavior, real RTOS scheduling, radio performance, or display quality.
+Use the [reference product](../products/reference/README.md) for component
+hardware smoke tests and the [VHUB workflow](../vhub/README.md) for product
+manual verification.
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| [`tests/CMakeLists.txt`](CMakeLists.txt) | Top-level CMake entrypoint; fetches Catch2 / Trompeloeil and adds component test subdirectories |
-| [`tests/Makefile`](Makefile) | Convenience wrappers: `make build`, `make test`, `make run`, `make clean` |
-| `components/<component>/tests/` | Component-owned test source and `CMakeLists.txt` |
-| `products/<product>/tests/` | Product-owned test source and `CMakeLists.txt` |
+| [`CMakeLists.txt`](CMakeLists.txt) | Native entrypoint and registration of component/product test directories |
+| [`Makefile`](Makefile) | Configure, build, run, and clean wrappers |
+| `components/<component>/tests/` | Component test sources and target definitions |
+| `products/<product>/tests/` | Product test sources and target definitions; Go is currently registered |
+| `tests/build/` | Generated native build files, executables, and fetched dependencies |
 
-Component-local test directories register their executables back into the
-top-level CMake tree via `add_subdirectory()` from
-[`tests/CMakeLists.txt`](CMakeLists.txt).
+## Prerequisites
+
+- A native C/C++ toolchain supporting C11 and C++17, CMake 3.16 or newer, Git,
+  and a build tool such as Make or Ninja.
+- Network access on initial configuration for CMake's pinned Catch2 v3.5.0,
+  Trompeloeil v47, and cJSON v1.7.18 dependencies, as required by the targets.
+- Initialized Git submodules, including the nested `libnmea` sources used by
+  Go GPS tests.
+- For the full suite and targets that use TinyCBOR, Go's managed components
+  populated through ESP-IDF. OTA and Go tests read TinyCBOR from
+  `products/go/managed_components/espressif__cbor/tinycbor/src`.
+
+### Fresh Checkout Setup
+
+Run from the repository root. Use the ESP-IDF version pinned by
+[host-test CI](../.github/workflows/host-tests.yml), currently v5.5.6 with the
+ESP32-C5 target. Adjust the export-script location to your installation.
+
+```sh
+git submodule update --init --recursive
+(
+  . "$HOME/Tools/esp/esp-idf/export.sh"
+  idf.py -C products/go -DIDF_TARGET=esp32c5 reconfigure
+)
+git diff --exit-code -- products/go/dependencies.lock
+```
+
+`reconfigure` resolves managed sources; a firmware build is not needed to
+prepare the native suite. The subshell keeps ESP-IDF environment changes out
+of the subsequent native build. Investigate unexpected lockfile changes rather
+than silently accepting a dependency update. Repeat dependency setup when
+manifests or lockfiles change, or managed sources are missing.
 
 ## Build
 
-The host-test CI uses `ubuntu-24.04` to avoid automatic Ubuntu release upgrades
-through `ubuntu-latest`.
-
-From the repository root:
+Use a native shell, not an ESP cross-compilation toolchain. From the repository
+root:
 
 ```sh
 cmake -S tests -B tests/build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 cmake --build tests/build
 ```
 
-Or via the wrapper:
+Configuration should report the host C/C++ compilers. Keep this build directory
+separate from ESP-IDF product build directories. The equivalent wrapper is:
 
 ```sh
-cd tests && make build
+make -C tests build
 ```
 
-### Build only one component's tests
+### Build Selected Targets
 
-Useful when iterating on a single component (only works for components that
-own a `tests/CMakeLists.txt`):
+After configuring the aggregate project, build only the executables needed for
+iteration. For example:
 
 ```sh
-cmake -S components/<component>/tests -B components/<component>/tests/build
-cmake --build components/<component>/tests/build
+cmake --build tests/build --target sensors_tests go_settings_tests
 ```
+
+Target names come from `add_executable()` in the owning `tests/CMakeLists.txt`.
+Building selected targets does not build every executable that the aggregate
+CTest tree has registered. Run the selected binaries or the corresponding
+CTest subdirectory afterward.
+
+### Standalone Component Build
+
+A component can also be configured separately when its test CMake file contains
+a standalone `project()` setup. For example, the sensor suite does not require
+Go's managed TinyCBOR sources:
+
+```sh
+cmake -S components/airgradient-sensors/tests -B components/airgradient-sensors/tests/build
+cmake --build components/airgradient-sensors/tests/build
+ctest --test-dir components/airgradient-sensors/tests/build --output-on-failure
+```
+
+Check the chosen component's CMake file before using this pattern. Standalone
+support and dependency requirements are target-specific; a `tests/` directory
+alone does not guarantee independent configuration.
 
 ## Run
 
-From the repository root:
+After building the full aggregate suite:
 
 ```sh
 ctest --test-dir tests/build --output-on-failure
 ```
 
-Or via the wrapper:
+For Make wrappers, `make -C tests test` configures and builds before running
+CTest; `make -C tests run` does the same with verbose test output.
 
-```sh
-cd tests && make test     # plain
-cd tests && make run      # verbose (-V)
-```
+### Run Selected Tests
 
-### Run a single executable
-
-Catch2 binaries can be run directly with filters:
+Catch2 binaries accept test names or tags. List available tests before choosing
+a filter; an empty selection is not evidence of a pass.
 
 ```sh
 ./tests/build/components_airgradient_sensors_tests/sensors_tests --list-tests
 ./tests/build/components_airgradient_sensors_tests/sensors_tests "[SensorManager]"
-./tests/build/components_airgradient_sensors_tests/sensors_tests -s
+./tests/build/products_go_tests/go_settings_tests "[settings]"
 ```
+
+To run all registered sensor tests in the aggregate build:
+
+```sh
+ctest --test-dir tests/build/components_airgradient_sensors_tests --output-on-failure
+```
+
+Use `ctest --test-dir tests/build -N` to inspect registration without running
+tests. CTest's `-R` option filters registered test names; Catch2 tags such as
+`[settings]` are filters for the executable, not CTest labels.
+
+### Interpret Results
+
+A successful run exits with status zero and reports tests/assertions passing.
+Failures name the test and failing assertion. CTest writes details under the
+invocation build directory's `Testing/Temporary/LastTest.log`.
+
+If CTest cannot find an executable, build its target first. If configuration
+cannot find TinyCBOR or libnmea sources, complete the prerequisite steps. Do
+not interpret a skipped test, missing executable, or unmatched filter as
+verification of the intended behavior.
+
+## Adding Tests
+
+1. Put tests beside their owner: `components/<component>/tests/` for shared
+   behavior or `products/<product>/tests/` for product policy and wiring.
+2. Extend an existing executable when appropriate. For a new target, select the
+   production sources, define `TEST_HOST`, link the needed test libraries, and
+   register cases with `catch_discover_tests()`.
+3. Add a new test directory to this [CMake entrypoint](CMakeLists.txt) using
+   `add_subdirectory()`. Existing registered directories need no second entry.
+4. Add mocks at hardware or service boundaries. Test observable behavior,
+   including applicable invalid inputs, partial failures, and timing decisions.
+5. Reconfigure, build, and confirm the expected tests are discovered and pass.
+   Update the owning component/product documentation when coverage boundaries
+   or test setup change.
+
+For fixtures and target-specific limitations, use the owning README and test
+CMake file. [Go's test CMake file](../products/go/tests/CMakeLists.txt) shows
+product support libraries and host-only dependencies.
 
 ## Clean
 
 ```sh
-cd tests && make clean
-# or
-rm -rf tests/build
+make -C tests clean
 ```
 
-## Adding Component Tests
+This removes `tests/build/`, including fetched native dependencies. It does not
+remove product managed components or standalone component build directories.
 
-1. Create `components/<component>/tests/` with a `CMakeLists.txt` that
-   defines a Catch2 executable and registers it with `catch_discover_tests`.
-2. Add `*.tests.cpp` files for the new behavior.
-3. Register the component test directory in
-   [`tests/CMakeLists.txt`](CMakeLists.txt) via `add_subdirectory()`.
-4. Re-configure (`cmake -S tests -B tests/build`) and verify CTest sees the
-   new tests.
+## Continuous Integration
 
-For component-specific notes (mocks, fixtures, support libraries), see the
-component's own README under `components/<component>/`.
+[Host-test CI](../.github/workflows/host-tests.yml) uses Ubuntu 24.04, populates
+Go's managed components, checks that the lockfile remains unchanged, then
+configures, builds, and runs this native suite. The repository's
+[change-aware build policy](../README.md#continuous-integration) determines
+when it runs. Firmware compilation and hardware verification remain separate.
