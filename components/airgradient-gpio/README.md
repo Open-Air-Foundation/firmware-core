@@ -4,8 +4,10 @@ GPIO HAL for native ESP-IDF pins and TCA6408A I2C expanders.
 
 ## Status
 
-`Stable` for the HAL and native backend. TCA6408A hardware validation is
-pending; the driver is not wired into a product.
+The HAL and native backend are stable. The TCA6408A backend is integrated into
+Go V2; see [board initialization](../../products/go/main/go_hardware_board.cpp)
+for bus ownership and pin setup. Integration alone does not establish complete
+hardware validation coverage.
 
 ## Scope
 
@@ -119,5 +121,5 @@ This component has no host tests. Consumers mock `gpio::Hal` in their
 ## Notes
 
 Hardware reference: [TI TCA6408A datasheet](https://www.ti.com/lit/ds/symlink/tca6408a.pdf).
-Bench validation remains pending; firmware builds do not verify hardware.
-Product VHUB coverage is unchanged until integration.
+Firmware builds do not verify electrical behavior. Use the product's
+[manual verification template](../../vhub/README.md) for board-level checks.

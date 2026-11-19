@@ -67,10 +67,16 @@ Guideline:
 
 ## Design
 
-```text
-caller -> BmsDevice&       -> BQ25629Bms -> i2c_master -> charger IC
-caller -> FuelGaugeDevice& -> BQ27427    -> i2c_master -> fuel gauge IC
-caller -> FuelGaugeDevice& -> BQ27742    -> i2c_master -> fuel gauge IC
+```mermaid
+flowchart LR
+    Caller --> Charger[BmsDevice]
+    Caller --> Gauge[FuelGaugeDevice]
+    Charger --> BQ25629[BQ25629Bms]
+    Gauge --> BQ27427
+    Gauge --> BQ27742
+    BQ25629 --> I2C[I2C master]
+    BQ27427 --> I2C
+    BQ27742 --> I2C
 ```
 
 `BmsDevice` models a charger / PMIC with telemetry reads, status

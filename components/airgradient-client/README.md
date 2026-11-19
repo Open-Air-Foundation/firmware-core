@@ -1,8 +1,8 @@
 # airgradient-client
 
-Unified AirGradient server client. One `AgClient` object handles config fetch,
-measure post, MQTT, and CoAP traffic against the AirGradient backend over a
-single transport chosen at boot.
+AirGradient server client for Wi-Fi HTTP configuration fetch and measurement
+posting. `AgClient` exposes additional protocol interfaces whose implementations
+are currently unsupported; see [Not Yet Implemented](#not-yet-implemented).
 
 ## Status
 
@@ -33,7 +33,7 @@ This component does not own:
 
 - Network bring-up (WiFi stack must be ready before `http_*` calls)
 - Config parsing (returns the raw JSON body to the caller)
-- OTA binary download (future `airgradient-ota` component)
+- OTA binary download (owned by `airgradient-ota`)
 
 ## Directory Layout
 
@@ -66,10 +66,14 @@ measure-taking method, so no conversion happens at the call site.
 
 ## Design
 
-```text
-caller -> AgClient -> HttpClient (interface) -> WifiHttpClient -> esp_http_client
-                   -> CoapClient (interface) -> (future cellular backend)
-                   -> MqttClient (interface) -> (future backend)
+```mermaid
+flowchart LR
+    Caller --> Client[AgClient]
+    Client --> HTTP[HttpClient]
+    HTTP --> Backend[WifiHttpClient]
+    Backend --> IDF[esp_http_client]
+    Client -.-> CoAP[CoapClient - unsupported]
+    Client -.-> MQTT[MqttClient - unsupported]
 ```
 
 `AgClient` builds URLs, serializes measures to JSON, and maps transport +
@@ -87,10 +91,7 @@ if (!client.begin("aabbccddeeff", NetworkType::Wifi)) {
     // handle init failure
 }
 
-// Value-initialisation is safe: every measure substruct in
-// measures_types.h default-initialises its fields to the matching
-// MeasuresInvalid sentinel, so any field the caller does not set is
-// omitted by the serializer.
+// Unset fields retain invalid sentinels and are omitted from the payload.
 MeasuresBasic m{};
 m.temp_hum_a.temperature = 23.5f;
 const uint32_t boot_minutes = 6; // Sample product uptime at POST time.
@@ -194,6 +195,3 @@ nothing in the active code path uses them yet.
 - Calling a method whose backend is not yet implemented aborts with a
   clear error log. This is by design — it surfaces programming bugs
   early rather than silently no-op'ing.
-- The previous library's `airgradient-client` (in `tmp/`) is being
-  replaced by this component. Once consumers migrate,
-  `tmp/airgradient-client/` can be removed.

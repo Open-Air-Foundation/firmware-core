@@ -59,8 +59,9 @@ Guideline:
 
 ## Design
 
-```text
-caller -> AgBleServer& -> NimbleBleServer -> esp-nimble-cpp -> NimBLE stack
+```mermaid
+flowchart LR
+    Caller["Caller"] --> HAL["AgBleServer"] --> Driver["NimbleBleServer"] --> Wrapper["esp-nimble-cpp"] --> Stack["NimBLE stack"]
 ```
 
 Product composition code creates a `NimbleBleServer` instance and passes a

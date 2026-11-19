@@ -60,14 +60,20 @@ Guideline:
 
 ## Design
 
-```text
-producer -> PayloadCache::push -> ring buffer -> PayloadCacheStorage::save
-consumer <- PayloadCache::pop  <- ring buffer <- PayloadCacheStorage::load
+```mermaid
+flowchart LR
+    Producer -->|push| Queue[PayloadCache ring buffer]
+    Queue -->|pop| Consumer
+    Queue -->|backup after push or pop| Storage[PayloadCacheStorage]
+    Storage -->|restore| Queue
 ```
 
 The queue is a fixed-size ring buffer with `head` / `tail` indices and
 overwrite-oldest behavior when full. Usable capacity is `N - 1` so
-`head == tail` continues to mean empty.
+`head == tail` continues to mean empty. Both `push()` and successful `pop()`
+back up the changed queue immediately. A popped item is already removed from
+retained storage; callers that need retry-on-upload-failure must retain or
+requeue it themselves. `backup()` does not report storage failures to callers.
 
 ## Usage
 
@@ -80,7 +86,7 @@ cache.push(measures);             // enqueue (overwrites oldest if full)
 
 PayloadCacheType payload;
 if (cache.pop(payload)) {
-    // forward to upload pipeline; on success, cache.backup()
+    // Already removed and persisted; caller owns delivery and retry.
 }
 ```
 

@@ -73,8 +73,9 @@ Guideline:
 
 ## Design
 
-```text
-caller -> HttpServer& -> IdfHttpServer -> esp_http_server -> TCP stack
+```mermaid
+flowchart LR
+    Caller["Caller"] --> HAL["HttpServer"] --> Driver["IdfHttpServer"] --> Server["esp_http_server"] --> TCP["TCP stack"]
 ```
 
 Product code creates an `IdfHttpServer`, registers routes through the

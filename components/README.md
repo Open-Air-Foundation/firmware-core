@@ -14,41 +14,28 @@ third party can live here if it is part of the shared firmware foundation.
 
 | Component | Responsibility |
 |---|---|
-| [`ads1115`](ads1115/) | Generic ADS1115 ADC helper used by sensor drivers such as AlphaSense |
+| [`ads1115`](ads1115/README.md) | Generic ADS1115 ADC helper used by sensor drivers such as AlphaSense |
 | [`airgradient-ble`](airgradient-ble/README.md) | BLE peripheral HAL and NimBLE-backed GATT server, characteristic management, and advertising control |
 | [`airgradient-bms`](airgradient-bms/README.md) | Battery management HAL, public BMS types, and concrete charger / PMIC drivers (e.g. BQ25XX) |
 | [`airgradient-cellular`](airgradient-cellular/README.md) | Cellular modem HAL, shared cellular types, AT-command service, and modem drivers (scaffold) |
-| [`airgradient-common`](airgradient-common/) | Shared measurement types, air-quality classification/colors, RTOS abstraction, and retained uptime |
+| [`airgradient-client`](airgradient-client/README.md) | AirGradient cloud HTTP client, payload serialization, and response mapping |
+| [`airgradient-common`](airgradient-common/README.md) | Shared measurement types, air-quality classification/colors, RTOS abstraction, and retained uptime |
 | [`airgradient-config`](airgradient-config/README.md) | Typed key-value persistence interface and reusable backends (NVS) |
 | [`airgradient-gpio`](airgradient-gpio/README.md) | Context-aware GPIO HAL, pin bindings, native GPIO, and TCA6408A expander driver |
+| [`airgradient-http-server`](airgradient-http-server/README.md) | HTTP listener, routes, request/response abstractions, and ESP-IDF backend |
+| [`airgradient-local-server`](airgradient-local-server/README.md) | Versioned local API routes and wire schema over product-supplied providers |
 | [`airgradient-nand-storage`](airgradient-nand-storage/README.md) | SPI NAND flash HAL providing FATFS mount/unmount lifecycle for application POSIX I/O |
+| [`airgradient-ota`](airgradient-ota/README.md) | Shared image writer, Wi-Fi pull updates, and BLE push updates |
 | [`airgradient-payload-cache`](airgradient-payload-cache/README.md) | Bounded FIFO payload queue and RTC-retained storage backend for `Measures`-derived payloads |
+| [`airgradient-provisioning`](airgradient-provisioning/README.md) | Wi-Fi onboarding over BLE or a captive portal, including attached BLE sessions |
 | [`airgradient-sensors`](airgradient-sensors/README.md) | Environmental sensor HALs, concrete drivers, and shared orchestration (`SensorManager`) |
-| [`airgradient-serial`](airgradient-serial/) | Serial transport abstractions (UART, I2C-to-UART bridge) used by sensors and other peripherals (no README yet) |
+| [`airgradient-serial`](airgradient-serial/README.md) | Serial transport abstractions (UART, I2C-to-UART bridge) used by sensors and other peripherals |
 | [`airgradient-touch`](airgradient-touch/README.md) | Capacitive touch HAL and CAP1203 driver with noise detection and recalibration |
 | [`airgradient-watchdog`](airgradient-watchdog/README.md) | Stateless external watchdog initialization and GPIO feed pulse |
+| [`airgradient-wifi`](airgradient-wifi/README.md) | Wi-Fi HAL and manager, saved networks, auto-connect, and mDNS profiles |
 
 Each first-party component README follows the
 [component README template](../docs/templates/component_readme.md).
-
-## Shared Air Quality Helpers
-
-[`air_quality.h`](airgradient-common/include/air_quality.h) provides pure,
-hardware-independent helpers in the `air_quality` namespace:
-
-| API | Purpose |
-|---|---|
-| `pm25_to_us_aqi(float)` | PM2.5 to US AQI using the 2024 breakpoints; negative/NaN returns `INVALID_AQI` |
-| `us_aqi_to_category(int)` | US AQI to `UsAqiCategory`; negative values are invalid |
-| `co2_to_category(int)` | CO2 ppm to `Co2Category`, using `CO2Data::is_valid()` (0–10000 ppm) |
-| `category_to_rgb(category)` | Overloads for both category types; invalid/unknown categories return black |
-
-[`rgb.h`](airgradient-common/include/rgb.h) defines unscaled 8-bit `Rgb`
-channels. Brightness and source selection belong to the product. CO2 categories
-are independent of the US AQI scale; see Go's
-[color tables](../products/go/docs/led_service.md#co2-color-map).
-Boundary and palette tests live in
-[`air_quality.tests.cpp`](airgradient-common/tests/air_quality.tests.cpp).
 
 ## Vendor / Third-Party Components
 
@@ -74,6 +61,6 @@ markdownlint enforcement.
 - Vendor or third-party code may live here if it belongs to a shared
   component responsibility.
 
-As the firmware grows, new shared capabilities such as connectivity,
-display, or power can follow the same pattern and live alongside these
-components.
+Use each component README as its entry point. Detailed topic documents, when
+needed, live in that component's `docs/` directory and are linked from its README.
+Follow the [documentation guide](../docs/GUIDE.md) when adding or updating them.

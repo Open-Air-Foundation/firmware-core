@@ -73,10 +73,6 @@ Guideline:
 
 ## Design
 
-```text
-caller -> WifiManager -> WifiHal& -> EspWifiHal -> esp_wifi_* / esp_netif_* / mdns_*
-```
-
 ```mermaid
 flowchart LR
     Product[Product code] --> Mgr[WifiManager<br/>pure C++]
