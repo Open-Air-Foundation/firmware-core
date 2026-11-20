@@ -322,21 +322,38 @@ Button wake in Offline mode. V2 calls `init_buses()` before Phase 1 so display
 D/C is available. V1 keeps I2C initialization in Phase 2. The four-phase boot uses
 individual init methods for fine-grained ordering:
 
-```text
-Phase 1:  _board.init_spi() → _board.display() → early paint → _board.ulp_stop()
-Phase 2:  _board.init_core() → _board.init_fuel_gauge() → BMS retry
-          → restart on BMS failure → _board.release_gpio_holds()
-          → _board.power().set_pm_power(true)
-          → _board.sensors() → _board.new_touch_sensor() → _board.new_gps_driver()
-          → start producer tasks
-Phase 3:  _board.storage() → BleService (borrows _board.ble_server())
-          → WifiService (borrows wifi_manager / ble_server / http_server)
-          → CloudService (borrows _board.ag_client() + WifiService + OtaService)
-Phase 4:  Orchestrator::init() → Orchestrator::run()
+```mermaid
+sequenceDiagram
+    participant App as GoApp
+    participant Board as GoBoard
+    participant Display as Display Worker
+    participant Orch as Orchestrator
+    Note over App,Board: Phase 1: V2 initializes I2C and expander first
+    App->>Board: Initialize SPI and obtain display
+    App->>Display: Deferred unlocked paint from RTC snapshot
+    App->>Board: Stop LP watchdog feeder
+    Note over App,Board: Phase 2: overlap initialization with display refresh
+    App->>Board: Initialize core, fuel gauge, and BMS with retry
+    Note over App,Board: Restart if BMS remains unavailable
+    App->>Board: Release holds, connect PM bus, initialize sensors
+    App->>App: Create queue and start producer services
+    Note over App,Board: Phase 3: NAND access waits for shared SPI
+    Display-->>Board: Release SPI after refresh
+    App->>Board: Mount storage
+    App->>App: Compose BLE, Wi-Fi, OTA, and cloud services
+    Note over App,Orch: Phase 4: hand off to runtime
+    App->>Orch: Initialize with painted frame and Unlocked state
+    App->>Orch: Run event loop
 ```
 
-See [ARCHITECTURE.md → Button-Wake Path](../ARCHITECTURE.md#button-wake-path-button-wake-offline-mode)
-for the full sequence.
+`build_wake_values()` uses the retained snapshot, or dashes when unavailable,
+and includes the Unlocked snackbar. The handoff suppresses the waking button
+press and redundant paint while the orchestrator requests fresh measurements.
+This avoids an empty-frame refresh followed by another unlocked-frame refresh.
+The display worker's SPI ownership serializes NAND access during the initial
+refresh. V2 starts painting later because its expander must be ready first;
+board-specific wake latency still needs hardware measurement. See
+[`run_button_wake_path()`](../main/go_app.cpp) for the complete composition.
 
 ## Bus Initialization
 
@@ -449,7 +466,7 @@ All pin assignments in `board_config.h`. Known I2C addresses:
 | S12 CO2 | 0x68 | Both |
 | SCD4x CO2 | 0x62 | Both |
 | STCC4 CO2 | 0x64 | Both |
-| SHT40 | 0x44 | Dedicated temperature and humidity |
+| SHT40 | 0x44 | Both (probed at initialization) |
 | SGP41 | 0x59 | Both |
 | DPS368 / SPL07-003 | 0x77 | V1 / V2 pressure sensor |
 | BQ25629 | 0x6A | Both |

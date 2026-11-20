@@ -9,8 +9,8 @@ portable air quality monitor with GPS, e-paper display, BLE, and battery.
 - **CO2** — SenseAir S12 / Sensirion SCD4x / Sensirion STCC4 (probed in
   order at boot; first detected wins)
 - **TVOC / NOx** — Sensirion SGP41
-- **Temp / Humidity** — SHT40 on V1, then fallback from CO2 and pressure
-  sensors
+- **Temp / Humidity** — SHT40 probed on both V1 and V2, with fallback to
+  CO2-integrated temperature/humidity, then pressure-sensor temperature
 - **Pressure** — DPS368 (V1) or SPL07-003 (V2)
 - **Motion** — LIS2DH12; V1 shake detection, both boards support diagnostics
 - **Battery** — BQ25629 charger driver; BQ27427 (V1) or BQ27742 (V2) fuel gauge
@@ -23,201 +23,36 @@ V2 uses a TCA6408A expander, four back LEDs, and no touch LEDs or shake detectio
 See [Hardware Initialization](docs/hardware_init.md#board-variants) for wiring,
 board-ID tooling, and display initialization prerequisites.
 
-### Temperature and Humidity Source
+The SPS30 depends on the charger-managed PMID rail. EN_PM isolates its I2C
+bus; it does not switch off the supply. See
+[PM Power Management](docs/power_management.md#why-pmid-is-session-armed)
+before changing power sequencing.
 
-Go probes SHT40 during `sensors()`. `SensorManager` resolves
-`temp_hum_a` in this priority order: dedicated SHT40, CO2-integrated T/RH
-(SCD4x or STCC4), then the board's pressure sensor for temperature only.
+See [Sensor Selection](docs/sensor_producer.md#ago-sensor-wiring) for
+temperature/humidity fallback, and [Power Management](docs/power_management.md)
+for battery safety, gauge telemetry, and shutdown behavior.
 
-### PMID Power Rail
+On battery, release the power button after a long press to turn off; holding it
+through shutdown restarts the device. With USB attached, user shutdown enters
+[charging-only operation](docs/power_management.md#charging-only-light-sleep).
 
-The SPS30 PM sensor is powered by the PMID +5 V rail from the BQ25629.
-PMID `EN_OTG` is armed **once during BMS init** and held for the lifetime
-of the session. The chip handles VBUS pass-through ↔ boost transitions
-autonomously based on its own VBUS-detect:
-
-- VBUS present → buck pass-through (`EN_OTG` masked internally by the chip)
-- VBUS absent → boost runs to drive PMID = 5 V from VBAT
-
-`set_pm_power(true/false)` drives EN_PM (V1 GPIO26; V2 expander P1), never `EN_OTG`.
-It isolates the SPS30 from the shared I2C bus — the sensor stays powered
-by always-on PMID.
-
-The ~50 mA fan current is cut between measurements by the SPS30's
-native **Sleep** command (`0x1001`), not the GPIO. When enough time remains
-before the next scheduled measurement, the orchestrator calls
-`request_pm_sleep()`; the sensor producer sleeps
-the SPS30 and posts `PmSensorAsleep`, after which the orchestrator
-isolates the bus with `set_pm_power(false)`. The pre-wake path connects
-the bus (`set_pm_power(true)`) then wakes + warms via `request_prepare()`.
-A sensor left asleep across deep sleep is recovered by `SPS30::init()`,
-which sends the wake sequence on probe failure.
-
-Per-measurement `EN_OTG` toggling was tried (saves ~220 µA quiescent on
-battery when PM is off) and reverted: each boost cold-start charges the
-PMID output capacitance from ~VBAT to 5.1 V with an inrush spike that can
-exceed 1S cell-protection OCP, opening the protection FET and causing a
-POWERON reset. Holding `EN_OTG=1` trades ~220 µA quiescent for indefinite
-uptime on battery.
-
-All three normal boot paths call `init_core()` for NVS, GPIO/I2C buses, and
-SPI, then initialize the optional fuel gauge and try BQ25629 initialization
-twice, 100 ms apart. A successful BQ25629 initialization arms PMID before
-`power().set_pm_power(true)` and `sensors()`. Interactive, button-wake,
-factory-learning, and fast-path promotion boots restart if both BQ25629
-attempts fail. A fast path that can return directly to sleep continues in
-degraded mode so fuel-gauge SOC and non-PM measurements remain available.
-
-### Power Button and Restart
-
-The power button (`PIN_BUTTON_POWER`, GPIO5) drives both the ESP32 GPIO
-and the BQ25629 `/QON` pin, so the long-press gesture has two outcomes:
-
-- **Long press, then release** — normal power off (ship mode; BATFET
-  opens and the system stays off).
-- **Long press and keep holding** — hardware power-cycle restart on
-  battery. Once the BATFET opens, the still-held `/QON` line qualifies a
-  ship-mode wake (≥ ~17 ms) and the BQ25629 re-closes the BATFET. Because
-  the BATFET cut drops the RTC domain, the device returns as
-  `WakeCause::PowerOn` (full cold boot, RTC state wiped). With USB
-  present, ship mode is refused and the path falls back to deep sleep, so
-  the restart behavior is battery-only.
-
-### Manufacturing Mode
-
-The USB `#AG` production command service is available automatically before
-onboarding; entering Manufacturing Mode is not required. See
-[Serial Command Service](docs/serial_command_service.md) for its lifecycle.
-
-While a unit is still un-onboarded (`onboarding_done == false`), a short
-press of Button 2 (`PIN_BUTTON_BOOT`) skips the Getting Started guide and
-enters Stationary operating mode **ephemerally** — nothing is written to
-NVS. This lets the production team test Wi-Fi and cloud communication without
-latching `onboarding_done`. The device tracks an internal
-manufacturing flag and runs a cleanup reset at shutdown: saved Wi-Fi
-credentials, routes, and all Go settings except active measurement corrections
-are wiped before power-off. This retains production-configured PM, temperature,
-and humidity corrections. BLE bond deletion is a safe no-op once Stationary
-mode has torn down the BLE host. A plain reboot likewise returns to fresh
-onboarding. Button 2 long press remains factory reset.
-
-To preserve TLS heap headroom, manufacturing disables local HTTP and mDNS,
-enables Wi-Fi power saving, and stops idle GPS maintenance without changing
-saved preferences. Always On GPS and explicit GPS tests remain available.
-An existing GPS sleep interval must expire before acquisition can start; see
-[GPS Sleep Policy](docs/gps_service.md#sleep-policy).
-
-Manufacturing connects only to the transient factory Wi-Fi (`airgradient` /
-`cleanair`), even when saved networks exist. If no IP is obtained within the
-15-second startup window, the display paints `Wi-Fi connection failed`, holds
-it for one second after painting, and the device reboots to Getting Started.
-The operator must press Button 2 again to re-enter manufacturing. This path
-never starts provisioning. After a successful connection, later Wi-Fi drops
-use the normal reconnect policy without a startup-timeout reboot.
-
-Normal Stationary mode uses saved networks only and opens BLE provisioning
-immediately when none are saved. Initial saved-network failures retain the
-existing provisioning flow. Normal startup and runtime reconnect never select
-factory credentials automatically.
-Successful Wi-Fi portal setup normally triggers one reboot to restore TLS heap
-headroom, then reconnects using saved credentials. BLE-only setup continues
-without reboot; see [restart conditions](docs/wifi_service.md#provisioning-completion).
-
-### Cell Safety
-
-- **EDV (over-discharge):** ship mode requested when cell voltage stays
-  below 2.9 V for 3 consecutive polls while on battery. The orchestrator
-  shows a warning on `Screen::Info` before entering ship mode.
-- **Battery-temperature protection:** charging is allowed from 0 °C through
-  45 °C. After a temperature or invalid-NTC block, charging resumes only from
-  2 °C through 43 °C. Discharging is allowed from -10 °C through 60 °C;
-  temperatures outside that range cause distinct cold- or hot-temperature
-  shutdowns. An invalid NTC reading disables charging only and does not request
-  shutdown.
-- **Charge completion:** V1 and V2 use charger-controlled termination and
-  voltage-based recharge. Gauge percentage and FC do not stop charging;
-  temperature protection and manual inhibits remain active.
-- **BATFET_DLY:** explicitly cleared to 0 (25 ms fast disconnect)
-  during BQ25629 init for deterministic ship-mode timing.
-
-### Fuel Gauge
-
-`init_fuel_gauge()` initializes the gauge independently from the charger.
-V1 performs BQ27427 corruption recovery and an idempotent cell-config write.
-V2 applies BQ27742 capacity, energy, and empty-voltage parameters while preserving
-the sleep threshold and learned data. Remaining pack provisioning is deferred;
-see [Fuel Gauge Bring-Up](docs/hardware_init.md#fuel-gauge-bring-up).
-At runtime, `poll_bms()` prefers FG-derived SOC and surfaces
-FG telemetry in `PowerSnapshot`, even when the charger is unavailable. Fast-path
-route points and display rendering use the same snapshot. Three log lines are
-emitted per poll: charger status, BQ25629 ADC telemetry, and FG telemetry with
-decoded flags (`FgFlags::FC`, `CHG`, `DSG`, etc.).
-
-## Build
-
-```sh
-. "$HOME/Tools/esp/esp-idf/export.sh"
-idf.py -C products/go build
-```
-
-The build derives `PROJECT_VER` from the latest reachable
-`go-vMAJOR.MINOR.PATCH` tag:
-
-- exact clean `go-v1.2.3` tag — `1.2.3`
-- later clean commit — `1.2.3-gabcdef0`
-- tracked or untracked worktree changes — `1.2.3-gabcdef0-dirty`
-- no matching tag — `0.0.0-gabcdef0`, with `-dirty` when applicable
-
-The `MAJOR.MINOR.PATCH` portion is limited to 16 characters so the complete
-development version remains within ESP-IDF's 31-character application-version
-field.
-
-Version resolution happens during CMake configuration. When reusing an existing
-build directory, run `idf.py -C products/go reconfigure` after changing tags or
-worktree cleanliness.
-
-Push an annotated tag whose commit is already on `main` to build and publish
-the firmware bundle through the repository-level
-[`release.yml`](../../.github/workflows/release.yml) workflow:
-
-```sh
-git tag -a go-v1.2.3 -m "AirGradient Go v1.2.3"
-git push origin go-v1.2.3
-```
-
-The release ZIP contains the OTA application, OTA data initializer, bootloader,
-partition table, and merged factory-flash binary.
+For production setup, see the [manufacturing shortcut](docs/orchestrator.md#input-handling)
+and [USB command service](docs/serial_command_service.md), available before onboarding.
 
 ## Documentation
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — boot paths, event model, module
-  structure
-- [`feature_overview.md`](feature_overview.md) — product-facing feature summary
-- [`docs/accel_service.md`](docs/accel_service.md) — interrupt-burst shake
-  detection, cooldown, and shared Hardware Test access
-- [`docs/`](docs) — per-service implementation notes (BLE, cloud, display,
-  GPS, input, Local Server, orchestrator, OTA, power, sensor producer,
-  settings, storage, UI, Wi-Fi)
-- [`../../docs/local_http_api.md`](../../docs/local_http_api.md) — local HTTP
-  API, mDNS discovery, and AirGradient Go support
-- [`docs/local_server.md`](docs/local_server.md) — Local Server lifecycle,
-  request queue, and OTA access policy
-- [`docs/measurement_corrections.md`](docs/measurement_corrections.md) — raw
-  and corrected measurement views and their consumers
-- [`docs/serial_command_service.md`](docs/serial_command_service.md) —
-  manufacturing-only USB Serial/JTAG command protocol
-- [`docs/fg_learning.md`](docs/fg_learning.md) — factory fuel-gauge learning
-  boot path (`FgLearningRunner` / `FgLearningController` split, dashboard)
-- [`docs/hardware_test.md`](docs/hardware_test.md) — on-device Hardware Test
-  surface (Peripheral, GPS, Accelerometer, Battery Calibration arm)
-- [`go_ble_client.md`](go_ble_client.md) — client-side BLE integration spec
-  for mobile app developers (discovery, pairing, GATT, payloads, history)
-- [`specs/`](specs) — design specs and refactor plans (temporary; deleted
-  once shipped, per [`docs/GUIDE.md`](../../docs/GUIDE.md))
-- [`tests/`](tests) — host tests (`go_*.tests.cpp`)
-- [`tests/ble-integration/`](tests/ble-integration/) — BLE hardware integration
-  suite for the Portable GATT surface
-- [`tests/local-server-integration/`](tests/local-server-integration/) — Local
-  Server hardware integration suite for Stationary mDNS, HTTP, config, action,
-  and OTA policy surfaces
-- `main/board_config.h` — pin assignments and I2C addresses
+- [Architecture](ARCHITECTURE.md) — system structure, boot, tasks, and data flow;
+  start here before reading the detailed topic docs
+- [Feature Overview](feature_overview.md) — product-facing behavior
+- [Hardware Initialization](docs/hardware_init.md) and
+  [board configuration](main/board_config.h) — board selection, wiring, and boot sequencing
+- [BLE Client Reference](go_ble_client.md) — discovery, pairing, GATT, payloads,
+  history, provisioning, and OTA
+- [Local HTTP API](../../docs/local_http_api.md) — shared wire contract;
+  [Go Local Server](docs/local_server.md) owns Go support, ranges, and policy
+- [Hardware Test](docs/hardware_test.md) — on-device diagnostics;
+  [Fuel-Gauge Learning](docs/fg_learning.md) describes the V1 factory routine
+- [Host-Test Workflow](../../tests/README.md) and [Go tests](tests) — automated verification
+- [BLE integration tests](tests/ble-integration/README.md) and
+  [Local Server integration tests](tests/local-server-integration/README.md) —
+  physical-device verification

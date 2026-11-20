@@ -1,1080 +1,559 @@
-# AirGradient Go (AGo) — Architecture
+# AirGradient Go Architecture
 
-This document describes the product architecture for the AirGradient Go
-portable air quality monitor. It serves as the high-level reference;
-per-service implementation details are in the `docs/` folder (linked from
-the [Service Documentation](#service-documentation) section).
+Go composes shared ESP-IDF components into a battery-powered air-quality monitor
+with GPS, an e-paper display, touch/buttons, and BLE or Wi-Fi connectivity.
+It measures PM, CO2, TVOC, NOx, temperature, humidity, and pressure; Portable
+tracking combines measurements with GPS in persistent route files.
+This document explains ownership, boot paths, task boundaries, and data flow.
+Use the [product README](README.md) for setup and the
+[detailed documentation](#detailed-documentation) for subsystem contracts.
 
-## Product Overview
+## System Structure
 
-AirGradient Go is a portable, battery-powered air quality monitor with GPS
-tracking, e-paper display, touch / button navigation, and multiple
-connectivity modes. The device measures environmental data (PM, CO2, TVOC,
-NOx, temperature, humidity), logs routes with GPS coordinates, and streams
-data over BLE. In Stationary mode it also posts raw measurements to the cloud
-and serves corrected snapshots and selected controls over the local network.
-
-The firmware supports **V1 and V2**, selected at runtime from the eFuse board ID.
-Blank, unknown, or unreadable IDs fall back to V1.
-
-## Hardware Configuration
-
-EN_PM provides active-low SPS30 I2C bus isolation through GPIO26 on V1 or
-TCA6408A P1 on V2. Fuel-gauge telemetry comes from BQ27427 on V1 or BQ27742
-on V2, both at I2C address `0x55`.
-Peripheral availability does not change the board configuration or GPIO
-polarity. When gauge data is unavailable, battery estimation falls back to
-the BQ25629. See [Hardware Init](docs/hardware_init.md) for initialization
-ordering and failure handling.
-
-## Modes and Behaviors
-
-AGo has two orthogonal state dimensions.
-
-### Operating Modes
-
-Set rarely — typically only via UI menu.
-
-| Mode | Radio | Power Source | Firmware Update (OTA) |
-|---|---|---|---|
-| Portable | BLE streams data to phone | Battery | BLE push, phone-initiated |
-| Stationary | Wi-Fi cloud transport plus local HTTP and mDNS | Battery or USB | WiFi pull, hourly device-initiated check while cloud transport is enabled |
-| Offline | Brief, non-connectable BLE measurement broadcasts on timer wakes | Battery | None |
-
-OTA runs in Portable or Stationary mode over the corresponding radio. BLE OTA starts after
-sensitive services are paused. Stationary availability checks run sequentially
-with cloud POST/FETCH. Cloud disarms before requesting a download; sensing, GPS,
-and PM pause only when downloading begins. See
-[`docs/ota_service.md`](docs/ota_service.md) and
-[`docs/orchestrator.md` → OTA](docs/orchestrator.md#firmware-update-ota).
-During a committed Stationary OTA, an already-active local listener and mDNS
-advertisement remain active while STA stays connected: cached GET routes stay
-readable while config writes and actions are rejected. OTA does not enable a
-local endpoint that was already disabled or failed to start.
-
-### Behaviors
-
-Change frequently — driven by user interaction or shutdown.
-
-| Behavior | Description |
-|---|---|
-| Tracking | GPS + sensor logging, persist route to NAND flash, temporary cache for chart |
-| Idle | Sensor readings on display, temporary cache for chart only |
-| Shutdown | BMS QoN — full power off |
-
-The default operating mode on fresh boot is **Portable**.
-
-Tracking is available only in Portable. Entering Stationary or Energy Saving
-ends the session and preserves its route data. Returning to Portable leaves
-tracking idle. Energy Saving also keeps GPS asleep; measurements and charts continue.
-
-## High-Level Architecture
-
-The system uses a **single centralized event queue** with an orchestrator
-loop. Producers post typed events into a queue (via the RTOS abstraction
-layer). The orchestrator consumes events, updates state machines, and
-calls consumers directly.
+[`app_main()`](main/main.cpp) constructs `GoHardwareBoard` and `GoApp`.
+`GoApp` chooses the boot path and composes product services through the
+[`GoBoard` interface](main/go_board.h). `GoHardwareBoard` owns hardware drivers
+and shared component instances; its lazy accessors reuse initialized objects.
+Product services add Go policy, and `Orchestrator` coordinates their runtime
+behavior. `UIManager` is a hardware-independent navigation state machine.
 
 ### Boot Composition
 
 ```mermaid
 flowchart TD
-    Main["main.cpp<br/>thin shell"]
-    GoApp["GoApp<br/>boot path selection<br/>host-testable"]
-    GoBoard["GoBoard<br/>abstract factory"]
-    HwBoard["GoHardwareBoard<br/>real ESP-IDF impl"]
-    Orch["Orchestrator<br/>event loop"]
-
-    Main --> GoApp
-    GoApp --> GoBoard
-    GoBoard --> HwBoard
-    GoApp --> Orch
+    Main["app_main"] --> Board["GoHardwareBoard: drivers and shared components"]
+    Main --> App["GoApp: boot selection and composition"]
+    App --> Interface["GoBoard interface"]
+    Interface --> Board
+    App --> Orch["Orchestrator: runtime policy and state"]
+    Orch --> Producers["Sensor, GPS, input, and accelerometer services"]
+    Orch --> Consumers["Storage, display, LEDs, and connectivity services"]
+    Orch --> UI["UIManager: navigation and display values"]
+    Producers --> Board
+    Consumers --> Board
 ```
 
-| Layer | File(s) | Responsibility | Testable on host? |
-|---|---|---|---|
-| **main.cpp** | `main.cpp` | Construct `GoHardwareBoard`, construct `GoApp`, call `run()` | No (hardware entry point) |
-| **GoApp** | `go_app.h/cpp` | Boot path selection, fast-path logic, service construction, orchestrator launch, pure data transforms | **Yes** (via MockBoard + link-time stubs) |
-| **GoBoard** | `go_board.h` | Abstract interface for hardware object creation, platform operations, inline `evaluate_fg_state` helper | N/A (interface) |
-| **GoHardwareBoard** | `go_hardware_board.h/cpp` | All ESP-IDF init calls, driver creation, bus management, ISR setup, FG bring-up | No (hardware-specific) |
+| Layer | Responsibility | Host-Test Boundary |
+|---|---|---|
+| [`main.cpp`](main/main.cpp) | Construct the real board and run the app | Hardware entrypoint |
+| [`GoApp`](main/go_app.h) | Select boot path, construct services, launch runtime | Mock board and service stubs |
+| [`GoBoard`](main/go_board.h) | Abstract hardware factories and platform operations | Interface implemented by the mock board |
+| [`GoHardwareBoard`](main/go_hardware_board.h) | Initialize ESP-IDF, buses, drivers, and interrupts | Hardware-specific implementation |
+| [`Orchestrator`](main/go_orchestrator.h) and [`UIManager`](main/go_ui.h) | Coordinate runtime policy and navigation | Services and platform operations can be substituted |
 
-### Runtime Layout
+### Hardware Boundaries
+
+V1 and V2 share application logic. Runtime eFuse selection determines pin
+bindings and capabilities; peripheral probe failures do not select a different
+board. Blank, unknown, or unreadable board IDs select V1. V2 uses an I2C expander
+for several controls and requires it before initial display access.
+
+Display and NAND share SPI; sensor, charger, gauge, and other peripherals share
+I2C. EN_PM isolates the SPS30 bus rather than switching its supply. PowerService
+combines the charger and optional board-selected gauge into one `PowerSnapshot`,
+using charger-based battery estimation when gauge telemetry is unavailable.
+See [Board Variants](docs/hardware_init.md#board-variants) for pins, capabilities,
+and driver choices.
+
+### Operating Modes and Application State
+
+Operating mode determines connectivity and sleep policy:
+
+| Mode | Connectivity | Tracking | Sleep |
+|---|---|---|---|
+| Portable | Connected BLE, with attached provisioning and BLE OTA | Start, pause, resume, and stop | Stays awake |
+| Stationary | Wi-Fi cloud, optional local HTTP, and Wi-Fi OTA | Unavailable; entering ends the session | Stays awake |
+| Energy Saving (`OperatingMode::Offline`) | Brief public BLE measurement broadcasts on eligible timer wakes | Unavailable; entering ends the session | Locked device can deep-sleep between measurements |
+
+Portable is the default. Mode, lock state, tracking state, and UI screen are
+separate state dimensions, with mode constraints enforced by the orchestrator.
+Leaving Portable preserves route files but ends Recording or Paused sessions;
+returning starts idle. See [Tracking Lifecycle](docs/orchestrator.md#tracking-lifecycle)
+and [Settings](docs/settings.md).
+
+| State Dimension | Owner | Architectural Effect |
+|---|---|---|
+| Operating mode | Orchestrator | Selects radios, tracking availability, GPS policy, and sleep eligibility |
+| Behavior | Orchestrator | Idle, Tracking, or Shutdown; Recording and Paused both retain Tracking behavior |
+| Tracking state | Orchestrator with StorageService | Idle, Recording, or Paused; only Recording with an open route permits appends |
+| Lock state | Orchestrator | Gates menu interaction and Energy Saving sleep |
+| UI screen | UIManager, coordinated by orchestrator | Chooses presentation without defining whether tracking or sensing is active |
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Recording: Start in Portable and create route succeeds
+    Recording --> Paused: Pause closes route and retains session ID
+    Paused --> Recording: Resume reopens same route successfully
+    Recording --> Idle: Stop or leave Portable
+    Paused --> Idle: Stop or leave Portable
+```
+
+Start failure leaves Idle; Resume failure leaves Paused. Pause retains live
+sensing, chart caching, GPS policy, and connectivity, while route appends stop.
+Menus and lock/unlock do not themselves end a tracking session. Energy Saving
+clears retained tracking state and suppresses GPS acquisition regardless of its
+saved preference. These constraints mean the state dimensions cannot be combined
+arbitrarily. See [Tracking Lifecycle](docs/orchestrator.md#tracking-lifecycle).
+
+## Boot and Lifecycle
+
+### Wake and Boot Path
+
+Deep sleep restarts execution at `app_main()`. RTC state carries the sleep
+handoff; NVS carries durable settings. A power cut loses RTC state.
 
 ```mermaid
 flowchart TD
-    subgraph Producers ["Producers — post events to queue"]
-        Sensor["Sensor Task"]
-        GPS["GPS Task"]
-        Input["Input Task"]
-        Timer["Timer system"]
-        LocalHttp["HTTP task<br/>validated PUT and action"]
+    Start["GoApp::run"] --> Learning{"Active V1 factory learning?"}
+    Learning -->|Yes| Factory["Fuel-gauge learning runner"]
+    Learning -->|No| Select["Read wake cause and RTC state, probe charging-only eligibility"]
+    Select --> Charge{"Charging-only eligible or requested?"}
+    Charge -->|Yes| Charging["Static charging display and light-sleep polling"]
+    Charge -->|No| Fast{"Eligible locked timer wake?"}
+    Fast -->|Yes| Measure["Fast path: acquire, cache, paint, broadcast if eligible"]
+    Fast -->|No| Button{"Button wake in Energy Saving?"}
+    Button -->|Yes| Early["Early unlocked paint and button-wake composition"]
+    Button -->|No| Interactive["Interactive composition"]
+    Early --> Loop["Orchestrator event loop"]
+    Interactive --> Loop
+    Measure --> Result{"Fast-path result"}
+    Result -->|Sleep| Sleep["Save RTC state and deep-sleep"]
+    Result -->|Promote| Interactive
+    Result -->|Thermal shutdown| Off["Protective shutdown"]
+```
+
+The fast path avoids the full orchestrator and producer tasks. It returns a
+`BootHandoff` when interactive operation is needed so already acquired data
+and painted frames can be reused. It never appends tracking routes.
+Button wake paints retained display values early, then initializes services
+while the display worker refreshes. Display and NAND share SPI; startup orders
+their access to avoid redundant refreshes and storage contention.
+
+Charging-only boot runs without sensors, radios, storage, or the orchestrator.
+A power-button wake restarts normal startup. The V1 factory-learning runner is
+also a separate boot path, armed explicitly from Hardware Test.
+
+During interactive startup, sensors warm while the first-use guide or splash
+is visible. The orchestrator owns onboarding completion and screen transitions.
+The USB production command service starts before onboarding and parks after
+completion. See [Hardware Initialization](docs/hardware_init.md),
+[UI Setup Guide](docs/ui_manager.md#screen-navigation), and
+[Serial Command Service](docs/serial_command_service.md).
+
+### Initialization and Handoff
+
+In measurement boot paths, core initialization precedes independent fuel-gauge
+initialization and the charger attempt; PowerService and sensors follow.
+The charger arms PMID before PM acquisition. Interactive, button-wake,
+factory-learning, and promoted fast-path operation restart when charger retries
+fail. A fast path returning directly to sleep may continue with the optional
+gauge and non-PM sensors. Idempotent board initialization lets promotion reuse
+objects already created by the fast path.
+
+`BootHandoff` makes that reuse explicit: it carries whether a frame was painted
+and a measurement completed, the initial lock state, whether to suppress the
+waking button press, and any retained display or fresh measurement data.
+The display snapshot seeds presentation; raw readings come from fresh data or
+the raw RTC chart cache, never from corrected display values.
+
+The button-wake path has four architectural stages:
+
+1. Start an unlocked frame from retained display data, after V2 expander setup.
+2. Initialize core services and start producers while the display refreshes.
+3. Mount NAND after shared SPI becomes available, then compose dependent services.
+4. Initialize the orchestrator with the painted-frame handoff and run its loop.
+
+This avoids an empty-frame refresh followed by a second unlocked-frame refresh.
+See [Hardware Initialization](docs/hardware_init.md#button-wake-path-goapprun_button_wake_path)
+for the sequence and [BootHandoff](docs/hardware_init.md#boothandoff) for fields.
+
+### Onboarding and Manufacturing
+
+The first-use guide is an application gate, not a pause in acquisition. Sensor
+warmup and Portable BLE continue while it is visible. Onboarding is durable in
+NVS; completing the guide, authenticated BLE engagement, or a normal mode change
+ends the gate. Factory reset restores it. The orchestrator protects setup,
+pairing, and menu screens from being replaced by an incoming measurement.
+
+Before onboarding, Button 2 short press enters an ephemeral manufacturing
+Stationary session. It uses transient factory Wi-Fi, leaves onboarding unset,
+and disables local HTTP/mDNS to preserve TLS heap. Manufacturing shutdown clears
+routes, credentials, and settings while retaining active measurement corrections.
+The USB production command service is independently available before onboarding.
+See [Input Handling](docs/orchestrator.md#input-handling),
+[Manufacturing Wi-Fi](docs/wifi_service.md#manufacturing-factory-wi-fi), and
+[Serial Command Service](docs/serial_command_service.md).
+
+### Sleep and Shutdown
+
+Only locked Energy Saving operation can enter measurement-cycle deep sleep,
+after its first measurement and other lifecycle gates permit it. Portable and
+Stationary stay awake even when locked. Sleep duration subtracts awake work
+from the selected measurement interval; if the remaining duration is below the
+deep-sleep threshold, execution stays interactive. Timer fast paths can instead
+promote when a power-button press is latched.
+
+```mermaid
+flowchart TD
+    Check{"Locked Energy Saving and sleep gates satisfied?"}
+    Check -->|No| Loop["Continue event loop"]
+    Check -->|Yes| Budget{"Enough interval remains for deep sleep?"}
+    Budget -->|No| Loop
+    Budget -->|Yes| Finish["Finish display work and stop services"]
+    Finish --> Retain["Close storage, save RTC state, prepare watchdog maintenance"]
+    Retain --> Sleep["Configure wake sources and enter deep sleep"]
+    Sleep --> Boot["Wake restarts at app_main"]
+```
+
+User shutdown is distinct from the measurement sleep cycle. On battery, charger
+ship mode cuts power and loses RTC state. Releasing the power button leaves the
+unit off; holding it through the cut can wake the charger again and cold-boot.
+With confirmed USB input, user shutdown requests a charging-only reboot instead.
+Battery discharge/temperature trips use protective shutdown handling.
+
+The external watchdog must remain serviced through these transitions: the
+interactive loop feeds it, foreground OTA uses progress callbacks, deep sleep
+uses the LP-core feeder, and charging-only operation feeds it from the main CPU.
+See [Sleep Entry](docs/power_management.md#sleep-entry),
+[Shutdown](docs/power_management.md#shutdown-qon--ship-mode), and
+[Watchdog Lifecycle](docs/power_management.md#lp-core-watchdog-feed-deep-sleep).
+
+## Runtime Interactions
+
+The orchestrator owns application state and active settings. Background tasks
+post typed events to its central queue; it dispatches events, checks deadlines,
+and calls service APIs. Most timer deadlines are evaluated in this loop rather
+than separate timer tasks. [`go_events.h`](main/go_events.h) defines payloads;
+[Orchestrator](docs/orchestrator.md) explains dispatch and state transitions.
+
+### Producer, Orchestrator, and Consumer Layout
+
+```mermaid
+flowchart TD
+    subgraph Producers["Producers and callbacks: post typed events"]
+        Sensor["Sensor producer"]
+        GPS["GPS worker"]
+        Input["Input worker"]
+        Accel["Accelerometer worker"]
+        Radio["BLE and Wi-Fi callbacks"]
+        HTTP["HTTP task: admitted writes and actions"]
+        Serial["USB production command task"]
     end
-
-    Queue[["Event Queue<br/>(RTOS queue)"]]
-
-    Orch["Orchestrator (main loop)<br/>App State + UI State + Power Policy<br/>dispatch event → state machines → consumers"]
-
-    BMS["BMS<br/>polled by orchestrator"]
-
-    subgraph Consumers ["Consumers — direct calls from orchestrator"]
-        Display["Display Service"]
-        Storage["Storage Service"]
-        BLE["BLE Service"]
-        PortableProv["Portable Wi-Fi Provisioner"]
-        Ota["OTA Service<br/>(transfers block orchestrator)"]
-        Cloud["Cloud Service<br/>(dedicated task)"]
-        LocalApi["Local API<br/>cached snapshots"]
-        PowerMgmt["Power Mgmt"]
-        UI["UI Manager"]
+    Queue[["Central RTOS event queue"]]
+    Orch["Orchestrator: state, deadlines, and power policy"]
+    BMS["Charger and fuel gauge: polled by orchestrator"]
+    subgraph Consumers["Consumers: direct calls and service commands"]
+        Display["Display service"]
+        Storage["Storage service"]
+        BLE["BLE service"]
+        Prov["Wi-Fi and portable provisioner"]
+        OTA["OTA service: foreground transfer blocks loop"]
+        Cloud["Cloud service: dedicated worker"]
+        Local["Local API: synchronized snapshots"]
+        Power["PowerService"]
+        UI["UIManager"]
+        Feedback["LED and buzzer services"]
     end
-
     Sensor --> Queue
     GPS --> Queue
     Input --> Queue
-    Timer --> Queue
-    LocalHttp --> Queue
+    Accel --> Queue
+    Radio --> Queue
+    HTTP --> Queue
+    Serial --> Queue
     Queue --> Orch
-    BMS -.->|read on timer| Orch
+    Orch -->|poll| BMS
     Orch --> Display
     Orch --> Storage
     Orch --> BLE
-    Orch --> PortableProv
-    Orch --> Ota
+    Orch --> Prov
+    Orch --> OTA
     Orch --> Cloud
-    Cloud -->|availability probe| Ota
-    Cloud --> Queue
-    Orch --> LocalApi
-    Orch --> PowerMgmt
+    Orch --> Local
+    Orch --> Power
     Orch --> UI
+    Orch --> Feedback
+    Cloud -->|results and OTA availability| Queue
+    Cloud -->|availability check| OTA
 ```
 
-In Portable mode the **Portable Wi-Fi Provisioner** co-registers the
-provisioning GATT service + DIS on the same BLE server `BleService`
-advertises, so the companion app can (re)configure Wi-Fi over the bonded
-link without a mode switch. The Wi-Fi radio is brought up on demand for a
-scan/connect and dropped again. See
-[`docs/portable_provisioner.md`](docs/portable_provisioner.md).
+These are runtime roles, not disjoint object categories. Cloud receives commands
+and produces result events; BLE receives publication calls and produces callback
+events. A direct service call may enqueue work on that service's worker rather
+than execute all hardware work inline. Sensor requests likewise leave the
+orchestrator by task notification and return through the central event queue.
 
-The **OTA Service** also co-registers its GATT service on that same BLE server
-(Portable). It has **no task of its own**: the orchestrator runs the blocking
-`OtaBleService::run()` / `OtaUpdater::run()` on its own task. BLE OTA pauses
-sensitive services before the call. Cloud runs `check_wifi_update()` on its own
-task and sends `WifiOtaAvailable` after disarming. Stationary pauses sensing,
-GPS, and PM only when a download starts. See
-[`docs/ota_service.md`](docs/ota_service.md).
+### Event Loop and Handoffs
 
-In Stationary mode, the existing ESP-IDF HTTP listener serves the local v1 API
-on its httpd task. GET handlers copy synchronized snapshots from
-`GoLocalApiService`; they never read orchestrator-owned settings or measurements
-directly. Valid config writes and actions enter the service's fixed FIFO and
-post `LocalApiRequestReady` to the central queue, so validation on the httpd
-task does not perform NVS, sensor, display, or cloud work.
+The loop first checks sleep eligibility, then waits on the central queue until
+an event arrives or the nearest deadline expires. It dispatches a received
+event and checks due timers. Measurement scheduling, inactivity, PM pre-wake,
+BMS polling, and watchdog servicing are evaluated there; they do not require
+a separate timer producer task.
 
-### Event Flow Direction
+| Event Family | Data Crossing the Boundary | Orchestrator Responsibility |
+|---|---|---|
+| `SensorDataReady`, PM boundary events | Raw measures plus Scheduled/Refresh origin; PM lifecycle completion | Update views, release pending work, control PM bus isolation |
+| `GpsFixUpdate`, `ShakeDetected` | Fix snapshot or detection timestamp | Update GPS state or admit a manual refresh |
+| `InputPress` | Classified input source and gesture | Apply lock/setup gates, then route to UIManager |
+| BLE connection, pairing, Config, and History events | Connection/authentication data or a pending-buffer signal | Own onboarding, settings changes, commands, and export |
+| Wi-Fi and provisioning events | Connectivity state, IP, or pending provisioning request | Coordinate radio ownership, setup screens, cloud, and local endpoint |
+| Cloud results and `WifiOtaAvailable` | POST result, parsed configuration/actions, or update availability | Recheck policy and apply settings or start foreground OTA |
+| `LocalApiRequestReady` | Generation tag for a bounded request FIFO | Consume one matching request, persist settings, or execute an action |
+| `SerialCommandRequest` | Parsed production request | Execute supported production commands on the application task |
+| Sensor test and calibration completion | Operation result | Update diagnostic UI and applicable client feedback |
 
-- **Events** flow from producers into the orchestrator via the event queue.
-- **Commands** flow from the orchestrator to consumers via direct method
-  calls.
-- Routine sensor, GPS, HTTP-server, cloud, and e-paper work runs on producer or
-  worker tasks. The orchestrator does block at explicit synchronization and
-  lifecycle boundaries, including display flushes, provisioning holds, and
-  foreground OTA calls.
+The event enum also defines system and user-action events. Ordinary UI handling
+does not require another queue hop: `UIManager::handle_input()` returns an action
+that the orchestrator executes in the current dispatch. Full payload definitions
+live in [`go_events.h`](main/go_events.h); timer gates and dispatch rules live in
+[Orchestrator](docs/orchestrator.md#event-loop).
 
-## State Machines
+### Task Map and Blocking Boundaries
 
-### App State Machine
+| Execution Context | Responsibility | Handoff |
+|---|---|---|
+| Orchestrator | Mode, lock, tracking, settings, power policy, and lifecycle | Receives events and invokes service commands |
+| Sensor producer | SensorManager acquisition, gas sampling, PM preparation, diagnostics | `SensorDataReady`, PM boundary events, calibration/test results |
+| GPS worker | Receiver acquisition and timed sleep | Protected latest fix and `GpsFixUpdate` |
+| Input worker | Debounce and classify buttons/touch | `InputPress` |
+| Accelerometer worker | V1 interrupt capture and both boards' diagnostics | `ShakeDetected` and synchronous diagnostic requests |
+| NimBLE host | Connection, authentication, and characteristic callbacks | Pending write buffers plus BLE events |
+| Cloud worker | Sequential POST, Fetch, and OTA availability checks | Results and `WifiOtaAvailable` |
+| Shared HTTP server | Provisioning routes or local API | Snapshot reads; local writes/actions enter an epoch-tagged FIFO |
+| USB production command task | Receive commands before onboarding | `SerialCommandRequest` |
+| Display, LED, and buzzer workers | Hardware output | Commands and rendered snapshots from application policy |
 
-Controls what the device is doing. Two orthogonal dimensions:
+Power polling runs in the orchestrator; it has no dedicated task. OTA also has
+no task of its own: foreground transfer blocks the orchestrator after coordinated
+service pauses. History export blocks it while streaming with BLE backpressure.
+Display refresh runs asynchronously, but lifecycle transitions can explicitly
+wait for a frame to finish. These blocking boundaries matter when adding events
+or changing timing.
 
-```text
-Operating Mode:     Portable | Stationary | Offline
-Behavior:           Tracking | Idle | Shutdown
-```
+Sensor acquisition and measurement publication have different clocks. In
+always-awake modes, SensorProducer samples gas indices on its own cadence while
+the orchestrator requests measurements at the selected interval. PM preparation
+also spans multiple worker steps; completion events keep the orchestrator from
+requesting acquisition before PM is ready. The Energy Saving timer fast path
+does not retain the gas algorithm across deep sleep and uses raw gas placeholders
+instead. See [Sensor Producer](docs/sensor_producer.md#task-loop) and its
+[Offline Fast Path](docs/sensor_producer.md#offline-fast-path).
 
-Mode affects which radios / features are enabled. Behavior affects the
-measurement + logging pipeline. These are independent — the device can be
-in any (mode, behavior) combination.
+GpsService owns receiver access and a protected latest fix, including time
+synchronization. Inactive receiver sleep has its own deadline; requesting GPS
+does not necessarily make it available immediately. AccelService owns both V1
+shake capture and diagnostic access on either board; V2 has no background shake
+polling. See [GPS Service](docs/gps_service.md) and
+[Accelerometer Service](docs/accel_service.md).
 
-Transitions:
+### UI State and Locking
 
-- Mode changes: user navigates UI menu
-- Tracking start / pause / resume / stop: device menu or BLE `start_tracking`,
-  `pause_tracking`, `resume_tracking`, and `stop_tracking` commands
-- Shutdown: physical button long press (Button 1) → BMS QoN
-
-`TrackingState` adds the route lifecycle within this model: Idle (0), Recording
-(1), and Paused (2). Recording and Paused both retain `Behavior::Tracking` and
-the session ID, but only Recording appends route points. Pause closes the file;
-Resume reopens it for append. RTC state preserves the enum across deep sleep.
-Live sensing, chart cache, GPS, and enabled connectivity continue while Paused.
-See [Tracking Lifecycle](docs/orchestrator.md#tracking-lifecycle) and the
-[BLE Status contract](go_ble_client.md#6-status-characteristic).
-
-### UI State Machine
-
-Controls what is on the display. Independent from the app state machine,
-though UI actions can trigger app state transitions (e.g., user selects
-"Start Tracking" in a menu).
-
-```text
-User-navigable:   Home | MainMenu | Settings | SettingsChoice | About | TagList | Confirm | GettingStarted
-Orchestrator-set: Shutdown | PairingPasskey | Info | Provisioning | ProvisioningConfirm | GettingStarted
-```
-
-`GettingStarted` appears in both rows: the orchestrator sets it at the
-first-boot gate, and the user can re-open it from `Settings → Setup Guide`.
-
-The UI state machine consumes input events (touch / button) and decides
-what to render. The orchestrator forwards input events to the UI manager
-when the device is unlocked. Shutdown, PairingPasskey, Info, Provisioning,
-and ProvisioningConfirm screens are set directly by the orchestrator and
-do not appear in normal menu navigation.
-
-### Lock / Unlock
-
-A lock / unlock gate separates interactive and passive display modes.
+UIManager owns screen navigation and builds `DisplayValues` from application
+state. The orchestrator forwards eligible input, executes returned actions,
+and directly selects lifecycle screens such as pairing, provisioning, and
+shutdown. Opening a menu does not pause sensing or tracking. The first-use guide
+is both a boot-gate screen and a screen that can be reopened from Settings.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Locked
-    Locked --> Unlocked: Button 1 short
-    Unlocked --> Locked: Button 1 short
-    Unlocked --> Locked: inactivity timeout
-    Locked --> Shutdown: Button 1 long
-    Unlocked --> Shutdown: Button 1 long
+    Locked --> Unlocked: Power short press when setup and splash gates allow
+    Unlocked --> Locked: Power short press when gates allow
+    Unlocked --> Locked: Eligible inactivity timeout
+    Locked --> Shutdown: Power long press
+    Unlocked --> Shutdown: Power long press
     Shutdown --> [*]
 ```
 
-| State | Touch Pads | Display | Sleep | Button 1 Short |
-|---|---|---|---|---|
-| Locked | Ignored | Static dashboard (periodic refresh) | Eligible | Unlock, except during cold-boot splash |
-| Unlocked | Active (Up / Down / Menu) | Interactive menus | Never | Lock |
-
-Both states: Button 1 long press → Shutdown. Releasing after the long
-press powers off; keeping the button held re-wakes the BQ25629 through
-`/QON` and cold-boots the device — see [Shutdown](#shutdown).
-
-Inactivity while unlocked triggers auto-lock after the selected Auto Lock
-timeout (10, 30, or 60 seconds). Setting Auto Lock to 0 disables it.
-
-While locked, the display periodically updates sensor values and status on
-the dashboard. The refresh interval is configurable and can be disabled
-entirely.
-
-## Event Types
-
-### Producer Events
-
-Posted into the queue by background tasks.
-
-| Event | Source | Payload |
+| Lock State | Input and Presentation | Sleep |
 |---|---|---|
-| `SensorDataReady` | Sensor Task | `SensorEventData`: `MeasuresAGo` plus `MeasurementOrigin` (`Scheduled` or `Refresh`) |
-| `PmPreparationStarted`, `PmPrepared`, `PmSensorAsleep` | Sensor Task | PM operation boundary; no payload |
-| `ShakeDetected` | Accelerometer Worker | Monotonic detection timestamp in milliseconds |
-| `GpsFixUpdate` | GPS Task | `GpsData` from `airgradient-gps` — position, altitude, fix type, DOP, satellite count, timestamp |
-| `InputPress` | Input Task | source (touch_up / down / enter, btn_power, btn_boot), type (short / long) |
-| `BleConnected` | BLE Service | client connected |
-| `BleDisconnected` | BLE Service | client disconnected |
-| `BleConfigWrite` | BLE Service | pending Config characteristic write available |
-| `BleHistoryWrite` | BLE Service | pending History characteristic write available |
-| `BlePairingRequest` | BLE Service | 6-digit passkey for authenticated pairing |
-| `BleAuthComplete` | BLE Service | encryption-change result; carries `ble_auth_ok` (link encrypted/authenticated) |
-| `WifiConnected` | Wi-Fi Service | STA acquired IP; carries network-byte-order IPv4 |
-| `WifiDisconnected` | Wi-Fi Service | STA disconnect (real or synthetic from window expiry); carries normalised `WifiDisconnectReason` |
-| `ProvisioningStateChanged` | Wi-Fi Service | provisioning state transition; carries `ProvisioningEvent`, transport, stop reason, IP, `disable_cloud`, `static_ip` |
-| `PostMeasuresResult` | Cloud Task | `AgClientResult` byte — POST outcome |
-| `FetchConfigResult` | Cloud Task | `FetchConfigEventPayload` — FETCH outcome plus selected valid config updates |
-| `LocalApiRequestReady` | HTTP Task | epoch for one admitted Local API FIFO entry |
-| `Co2CalibrationDone` | Sensor Producer | calibration result code |
-
-### System Events
-
-Posted into the queue by timers or the boot path.
-
-| Event | Source | Meaning |
-|---|---|---|
-| `InactivityTimeout` | Timer | No input for configured duration → auto-lock |
-| `MeasurementTimer` | Timer | Time to start next measurement cycle |
-| `WakeFromSleep` | Boot path | Wake cause: timer or button |
-
-BMS is polled directly by the orchestrator on a 30-second timer. There is no
-dedicated `BatteryStatus` queue event in the current implementation.
-
-### UI Action Events
-
-Posted into the queue by the UI manager when a user action requires
-orchestrator-level state changes.
-
-| Event | Meaning |
-|---|---|
-| `UserStartTracking` | User selected start tracking in menu |
-| `UserStopTracking` | User selected stop tracking in menu |
-| `UserChangeMode` | User selected Portable / Stationary / Offline |
-| `SettingsChanged` | User changed a setting via UI (includes GPS mode changes) |
-| `ClearData` | User confirmed data clear via UI |
-| `SaveTag` | User selected a tag (with tag index) |
-
-## Tasks
-
-### Task Map
-
-| Task | Role | Blocks? | Posts to Queue | Notes |
-|---|---|---|---|---|
-| Orchestrator | Main event loop | Yes | -- | Usually waits on its event queue; also performs explicit bounded lifecycle waits and foreground OTA calls |
-| Sensor Producer | Wraps SensorManager | Yes | `SensorDataReady`, PM boundary and diagnostic events | Waits for RTOS task notification from orchestrator |
-| Accelerometer Worker | Interrupt-burst motion capture and Hardware Test access | Yes | `ShakeDetected` | V1: interrupt capture and 1 s cooldown; V2: Hardware Test only, no background polling |
-| GPS Producer | UART NMEA read loop | Yes | `GpsFixUpdate` | Product-specific, uses `airgradient-gps` (`GpsSensor` / `NmeaGps`) |
-| Input Producer | Classifies button and touch activity | Yes | `InputPress` | Native button interrupts; V1 touch interrupt or V2 20 ms polling; debounce and gestures |
-| Cloud Task | POST, FETCH, and OTA availability | Yes | `PostMeasuresResult`, `FetchConfigResult`, `WifiOtaAvailable` | Stationary + online only; heap deferred to `start()` |
-| HTTP Server | Serves captive provisioning or Local Server routes | Yes | `LocalApiRequestReady` | One httpd task; no dedicated Go local-server task |
-| Display Worker | Drives e-paper refresh | Yes | -- | Receives render commands from orchestrator |
-
-BMS is polled directly by the orchestrator on a 30-second timer (I2C read,
-fast and non-blocking). No dedicated task. `poll_bms()` also
-reads telemetry from the board-selected fuel gauge.
-
-OTA likewise has **no dedicated task**: the blocking `OtaBleService::run()` /
-`OtaUpdater::run()` run on the orchestrator task itself, triggered by the BLE
-poll or `WifiOtaAvailable` event. While a transfer runs the main loop does not
-iterate, so OTA is mutually exclusive with every queue-driven activity. See
-[`docs/ota_service.md`](docs/ota_service.md).
-
-### Sensor Producer
-
-Wraps the shared `SensorManager` from `components/airgradient-sensors/`.
-In Portable and Stationary modes (always-awake), the producer also drives
-a gas-index sampler that feeds the Sensirion algorithm at a fixed cadence
-(default 10 s) independent of the measurement interval.
-
-The task performs startup warmup and configures the gas-index sampler before
-entering its loop. Each iteration waits for a notification or the earliest
-active deadline: a gas sample or a PM warmup step. It dispatches the notification,
-services any due gas sample, then advances PM warmup. See the
-[task loop](docs/sensor_producer.md#task-loop) for the control flow.
-
-The orchestrator controls when to measure by sending a task notification
-that encodes the iteration count (always 1), measurement origin, and which sensor groups
-to poll (`SensorGroup::PM`, `SensorGroup::Other`, `SensorGroup::TvocNox`,
-or `SensorGroup::All`). When the sampler is active, the producer strips
-`TvocNox` from measurement masks and splices its cached TVOC/NOx into
-the result. After startup, PM preparation uses timed PM-only warmup steps and
-reports start/completion events while gas-index sampling continues.
-The orchestrator tracks PM state and one outstanding measurement so shake
-refresh can reuse a scheduled request or wait for PM preparation before sending
-its own request. See [Sensor Producer](docs/sensor_producer.md) for details.
-
-### Accelerometer Worker
-
-`AccelService` owns LIS2DH12 access, including Hardware Test configuration and
-reads. On V1, GPIO3 interrupts start filtered 100 Hz capture; a Y-axis side-to-side
-shake posts `ShakeDetected` and immediately ends polling. The detector owns
-the one-second cooldown timing, and the service keeps the interrupt masked
-during that wait. Application startup starts the worker; the orchestrator
-handles accepted-shake ACK and measurement requests. No accelerometer wake
-from deep sleep is configured. V2 has no shake detection: its accelerometer
-is powered down outside Hardware Test, and the worker waits for commands
-without background polling. See [Accelerometer Service](docs/accel_service.md).
-
-### Gas Index in Offline Mode
-
-The Offline timer fast path records raw SGP41 values without running the
-gas-index algorithm. Raw ticks also populate the TVOC/NOx index fields for
-display and storage; these placeholders are not calculated gas indices.
-Interactive operation uses the producer's periodic gas-index
-sampler; its state is not retained across deep sleep. See
-[Sensor Producer](docs/sensor_producer.md#offline-fast-path).
-
-### GPS Producer
-
-The product's `GpsService` uses `GpsDriver` for UART, CASIC commands, and NMEA
-parsing. It maintains a mutex-protected fix, synchronizes time from GPS, and
-posts `GpsFixUpdate` at the configured interval, including `NoFix` updates.
-
-Inactive GPS uses 30-second sleep in Portable/Stationary and maximum-duration
-sleep in Energy Saving. Energy Saving suppresses GPS acquisition regardless of
-its saved preference. Its timer fast path probes at 9600 baud and includes any
-final retry in the awake-time budget. Persisted transitions into or out of Energy
-Saving request a charger power reset; USB may prevent the power cycle. See
-[GPS Service](docs/gps_service.md) for connection and deadline handling.
-
-### Input Producer
-
-Handles all 5 inputs: 3 capacitive touch pads (via `airgradient-touch`)
-and 2 physical buttons (via `airgradient-gpio`).
-
-```text
-ISR (GPIO / Touch interrupt):
-  Post raw event (gpio_id + timestamp) to raw_input_queue via xQueueSendFromISR
-
-Input Task:
-  loop:
-    Receive raw event from raw_input_queue
-    Debounce
-    Classify: short press vs long press (physical buttons only)
-    Post Event::InputPress to orchestrator event queue
-```
-
-Touch pads support short press only. Physical buttons support short and
-long press.
-
-Input mapping:
-
-| Input | Type | Role |
-|---|---|---|
-| Touch Pad 1 | Capacitive | Navigate Up |
-| Touch Pad 2 | Capacitive | Navigate Down |
-| Touch Pad 3 | Capacitive | Menu / Select |
-| Button 1 | Physical | Short: lock / unlock. Long + release: shutdown. Long + keep holding: power-cycle restart (battery-only, via `/QON`) |
-| Button Boot | Physical | Short: unused. Long: factory reset |
-
-### Display Worker
-
-E-paper display with an independent task for the slow SPI refresh.
-
-```text
-Orchestrator:
-  display_service.update(current_screen_data)   // prepares framebuffer
-  // returns immediately
-
-Display Task:
-  loop:
-    Wait for "frame ready" signal
-    Drive e-paper refresh (slow, blocking SPI)
-```
-
-The orchestrator never blocks on e-paper refresh. The display service API
-is synchronous (prepare what to render), but the hardware refresh is
-async.
-
-## Measurement Views
-
-The orchestrator keeps the latest sensor result as `_raw_measures` and derives
-`_corrected_measures` with the effective corrections for the operating mode.
-Energy Saving bypasses temperature and humidity correction, while Portable and
-Stationary use the saved algorithms. PM2.5 correction remains active in all
-modes. Switching modes recomputes the view before the transition display
-update, preserving saved calibration and raw history.
-
-Button wake seeds `_raw_measures` from the newest RTC cache sample so mode
-changes work before fresh acquisition completes. Fresh fast-path data takes
-priority; see [wake initialization](docs/measurement_corrections.md#button-wake-initialization).
-
-| Consumer or Use | View | Behavior |
-|---|---|---|
-| AirGradient cloud POST | Raw | The cloud owns its correction policy |
-| RTC chart cache | Raw | Samples are corrected into a scratch buffer when rendered |
-| Persistent route files | Raw | Export clients choose their correction policy |
-| Live BLE Measures | Raw | Clients can read correction settings from BLE Config |
-| BLE route-history export | Raw | Stored route points have no correction-version identifier |
-| Sensor acquisition logs | Raw | Logs continue to represent sensor output |
-| SGP41 compensation | Raw | Sensor compensation is independent of display correction |
-| Sensor health and recovery | Raw | User correction cannot change hardware diagnostics |
-| Current display | Corrected | Fahrenheit conversion, when selected, happens afterward |
-| Display charts | Corrected | Raw cached samples use the correction active at render time |
-| Back LED indicator | Corrected PM2.5 or unchanged CO2 | Selected by `back_led_indicator`; see [LED Service](docs/led_service.md#selected-indicator) |
-| Local Server measures GET | Corrected | The synchronized API snapshot exposes the common corrected fields |
-| RTC display snapshot | Corrected display state | It never seeds raw cloud or storage state |
-
-The Offline fast path follows the same boundary: storage and BLE broadcasts
-receive raw values, while the display receives a copy with PM2.5 correction
-and raw temperature and humidity. See
-[`docs/measurement_corrections.md`](docs/measurement_corrections.md).
-
-Manual refresh results update the current readings, BLE, local API, back LED indicator,
-and cloud snapshot. Only scheduled results enter the RTC chart cache and route
-files. A regular measurement already requested when a shake is accepted serves
-the refresh and retains its scheduled origin. Manual refresh does not reset
-regular measurement or cloud-post timers. See
-[Shake-To-Refresh](docs/orchestrator.md#shake-to-refresh).
-
-## Power Management
-
-### Sleep Eligibility
-
-Sleep is only eligible when:
-
-- The operating mode is **Offline** (Portable and Stationary never sleep), and
-- The device is **locked** (never sleep while user is interacting with menus).
-
-### Sleep Type Selection
-
-`PowerService::decide_sleep()` computes sleep type and duration in one
-call, using the saved Energy Saving interval (minimum/default 5 minutes):
-
-```text
-sleep_ms = (energy_saving_measure_interval_seconds * 1000) - awake_ms   (clamped to 0)
-```
-
-| sleep_ms | Sleep Type | Rationale |
-|---|---|---|
-| ≥ `deep_sleep_threshold_ms` (5 s) | Deep sleep | Benefit exceeds reboot cost |
-| < `deep_sleep_threshold_ms` | None (stay awake) | Reboot overhead ≥ sleep duration; loop instead |
-
-The threshold is a tunable constant (`Config::deep_sleep_threshold_ms`),
-set to 5 s for AGo. PM warm-hold skips PM preparation, while gas conditioning
-still runs. Awake time is subtracted so the total cycle (awake + sleep) matches
-the configured interval when enough time remains for deep sleep.
-
-### Sleep Entry
-
-The orchestrator finishes the display update, saves its RTC snapshot, and
-stops services. Sensor shutdown turns off the gas heater and sleeps PM unless
-it will be held warm; input shutdown puts CAP1203 into verified deep sleep.
-It then sleeps the display, closes storage, requests inactive GPS sleep, saves
-RTC state, and starts watchdog maintenance. `PowerService::enter_sleep()`
-disables the charger ADC before holding PM GPIO when required, configuring
-wake sources, and entering deep sleep.
-
-See [Power Management](docs/power_management.md#sleep-entry) for the sleep
-policy and [Hardware Initialization](docs/hardware_init.md#fast-path-boot-goappexecute_fast_path)
-for timer wakes.
-
-### Wake and Boot Path
-
-Deep sleep reboots the CPU. All tasks restart from `app_main`, which creates
-the board and calls `GoApp::run()`. Active factory fuel-gauge learning takes
-priority. Otherwise, the app probes charging-only eligibility and passes it
-to the pure, host-testable `select_boot_path(cause, state,
-charging_only_eligible)` function:
-
-| Wake Cause | Condition | Path |
-|---|---|---|
-| Timer wake after user shutdown | One-shot RTC charging-only request | `ChargingOnly` |
-| `PowerOn` | Hardware power-on reset with confirmed external input | `ChargingOnly` |
-| `Timer` + `Locked` | `is_fast_path_wake()` | `FastPath` — measure, display, sleep or promote |
-| `Timer` + `Unlocked` | Not fast-path eligible | `Interactive` |
-| `Button` + `Offline` | -- | `ButtonWake` — four-phase early paint |
-| `Button` + non-Offline | -- | `Interactive` |
-| `PowerOn` | Not charging-only eligible, including software reset | `Interactive` |
-
-Energy Saving clears retained tracking state before path selection. Its
-charging-only boot also requests long GPS sleep.
-
-Charging-only boot shows a static battery-and-bolt icon with "Charging" and
-"Hold power button / to turn on". Charge completion shows a filled battery
-and "Battery Full", including when already full at boot. Only charging-state
-transitions repaint the page. The charger is initialized once, PM power is
-disabled, and sensors, radios, storage, and the orchestrator remain unstarted.
-The main CPU feeds the external watchdog and uses two-second light sleeps to
-poll external-power status; no LP-core feeder runs. Button wake restarts into
-normal startup. A valid unplug reading refreshes "Powered off" and calls
-`shutdown()` without rechecking the cable or button after the refresh.
-Cold-boot charging-only eligibility requires `ESP_RST_POWERON` and external
-input, regardless of charge completion; there is no startup button override.
-User shutdown with USB attached sets `RtcAppFlag::ChargingOnlyRequested`
-after its normal shutdown page and cleanup, then uses a brief timer-woken
-deep-sleep reboot. Boot consumes the request and enters the same charging-only
-display and polling path. See
-[Hardware Init](docs/hardware_init.md#boot-path-selection) for detection rules.
-
-Hardware initialization is managed by **GoHardwareBoard** through
-fine-grained init methods and lazy service accessors. `init_nvs()`,
-`init_buses()`, and `init_spi()` are idempotent and grouped by `init_core()`.
-Optional fuel-gauge initialization (BQ27427 on V1, BQ27742 on V2) is explicit through
-`init_fuel_gauge()`. BQ25629 initialization remains explicit through the
-retryable `init_bms()` method, and `GoApp` gives transient communication
-failures two attempts separated by 100 ms.
-
-All three normal boot paths follow this pre-sensor sequence:
-
-```text
-init_core() → init_fuel_gauge() → retry init_bms() → power() → sensors()
-```
-
-After the BMS attempt, `release_gpio_holds()` and `set_pm_power(true)` drive the
-EN_PM GPIO LOW to connect the SPS30 I2C bus. A successful `init_bms()` arms
-PMID (`EN_OTG`) once, and the chip handles buck↔boost transitions autonomously thereafter.
-Interactive, button-wake, factory-learning, and promoted fast-path boots
-restart after both BMS attempts fail. A fast path that is returning directly to
-sleep continues without the charger; `PowerService` remains usable with the
-fuel gauge alone, while the unavailable PMID rail can leave SPS30 data invalid.
-Between measurements the SPS30 is power-managed via its native Sleep command,
-not the GPIO (see [`docs/power_management.md`](docs/power_management.md)).
-
-When transitioning from the fast path to the interactive event loop
-(either because sleep is too short or the user pressed a button), the
-fast path calls `run_interactive()` directly. Already-initialized services
-are reused via the lazy accessors (idempotent — return the cached
-instance). A `BootHandoff` struct describes what the fast path has already
-done (display painted, measurement completed, lock state) so the
-orchestrator can skip redundant work.
-
-On a fresh interactive power-on with no RTC snapshot and no fast-path
-measurement, `GoApp` initializes SPI and starts a deferred `Screen::Info`
-`Getting Ready` splash before completing core initialization. V2 initializes
-I2C and the expander before display access; V1 can initialize I2C during the
-refresh. `GoApp` flushes that refresh before mounting
-NAND storage. At the end of initialization, the orchestrator replaces the splash
-with the one-time `Screen::GettingStarted` guide when the durable
-`onboarding_done` NVS flag is unset. Sensors warm up in the background.
-Onboarded devices keep the splash until the first `SensorDataReady` event,
-then enter Home. Stationary connection screens retain control of their own
-transition to Home. A short press on Button 1 is ignored while the splash is
-active so it is not replaced by an unlock / lock transition.
-
-**First-boot onboarding.** The Getting Started guide is informational and
-non-blocking — sensor warmup and measurements continue, and Portable BLE is
-discoverable while it shows. The boot-gate entry reuses the setup-session machinery
-(`begin_session_if_needed()` silent-unlock so the cold-boot Locked device
-can hold Menu). Leaving the guide requires the default one-second Menu long
-press; short presses and double taps leave the guide open. The QR caption reads
-`Scan for guide`, and a single bold `Hold menu to start` instruction appears
-inside the highlighted action, below `Or just use it right now`. The screen
-does not display a hold duration. `onboarding_done` flips `true` via the idempotent
-`mark_onboarding_done()` on the first real engagement (the Menu hold,
-a BLE pairing/bond, or any `change_mode()`), and the guide auto-shows
-only once. Factory reset clears the flag so refurbished units re-show it.
-
-The Menu hold works before the first measurement. Home shows dashes until
-readings arrive, and `_first_measurement_done` stays false until then, preserving
-the sleep gate. A measurement updates cached data without dismissing the guide
-or replacing a menu or pairing screen the user has opened.
-
-Full composition also starts `SerialCommandService` before onboarding and parks
-its receive task when onboarding completes. See
-[`docs/serial_command_service.md`](docs/serial_command_service.md) for the
-detailed lifecycle.
-
-**Manufacturing shortcut.** While `onboarding_done` is still `false`, a
-short press on Button 2 (`ButtonBoot`) calls `enter_manufacturing_mode()`,
-which skips the guide and enters Stationary ephemerally via
-`change_mode(Stationary, persist=false)` — neither `onboarding_done` nor
-`operating_mode` is written to NVS. The runtime `_manufacturing_mode` flag
-forces a cleanup reset at `shutdown()`: Wi-Fi credentials, routes, and all Go
-settings except active measurement corrections are wiped before power-off. This
-preserves production-configured PM, temperature, and humidity corrections while
-the unit otherwise ships at defaults. BLE bond deletion is a safe no-op after
-Stationary mode has torn down the BLE host. Because nothing else is persisted,
-a plain reboot also returns to fresh onboarding. Button 2 long press remains
-factory reset.
-
-**Fast path** avoids GPS task, input task, and the full orchestrator for a
-"measure and sleep" cycle. The core logic lives in `execute_fast_path()`
-which returns a `FastPathResult` (Sleep, Promote, or thermal Shutdown).
-Timer-only light sleep covers gas conditioning and any remaining PM warmup.
-An ISR latches power-button presses while awake; the final check promotes to
-interactive mode after acquisition, storage, and display finish.
-
-**Button-wake path** eliminates the double display flash (empty frame →
-unlock frame). The display worker holds the SPI bus during the ~3 s
-refresh, which naturally prevents NAND access until the bus is free — no
-explicit synchronization needed.
-
-### Shutdown
-
-On battery, Button 1 long press triggers BMS QoN (ship mode) via
-`BmsDevice::enter_ship_mode()` on the BQ25629. The device fully powers
-off. GPS module loses power. Next power-on is a fresh boot.
-
-When the latest power status reports USB input, the orchestrator saves existing
-data and a one-shot RTC request after the normal shutdown page and cleanup.
-PowerService waits for button release and reboots through deep sleep into
-charging-only mode.
-The charging-only loop feeds the watchdog and handles unplug; the
-orchestrator has no separate charging loop. Protective shutdowns retain the
-existing ship-mode/deep-sleep fallback.
-
-Button 1 (`PIN_BUTTON_POWER`, GPIO5) is wired to **both** the ESP32 GPIO
-**and** the BQ25629 `/QON` pin. This makes the gesture matter:
-
-- **Long press, then release** — normal power off. Ship mode opens the
-  BATFET and the system stays off until the next QON press or adapter
-  insert.
-- **Long press and keep holding** — acts as a **hardware power-cycle
-  restart** (battery-only). After the BATFET opens, the still-held `/QON`
-  line qualifies a ship-mode wake (≥ ~17 ms) and the BQ25629 re-closes
-  the BATFET, so the device powers back on. Because the BATFET cut drops
-  the RTC domain too, this comes up as `WakeCause::PowerOn` — a full cold
-  boot (RTC state wiped), not a deep-sleep wake. With confirmed USB present,
-  user shutdown waits for release and enters charging-only mode instead, so
-  the hardware hold-to-restart behavior only applies on battery.
-
-Ship mode is also triggered automatically by the EDV and high- or
-low-battery-temperature safety trips — see
-[Power Management](docs/power_management.md) for details.
-
-## Services
-
-These are the product-specific service modules under `products/go/main/`.
-Each service is a focused unit that the orchestrator wires together. For
-detailed implementation notes, see [Service Documentation](#service-documentation).
-
-### GPS Service
-
-- `start()` runs acquisition; `start_sleeping()` maintains timed receiver sleep.
-- `stop()` joins the worker and closes UART without changing receiver power.
-- `request_sleep()` sends one sleep interval; it cannot replace an existing one.
-- `get_latest_fix()` returns a protected snapshot; `set_aiding_data()` queues
-  approximate position/time for the receiver.
-- The Energy Saving fast path probes for long sleep before gas conditioning;
-  failed requests get one final attempt before calculating remaining ESP sleep.
-
-See [GPS Service](docs/gps_service.md) for the API and wake-deadline handling.
-
-### Input Service (Button Service)
-
-- Uses `airgradient-touch` (CAP1203) for 3 capacitive touch pads
-- Uses `airgradient-gpio` for 2 physical buttons with interrupt
-- Independent task (Input Producer)
-- Handles ISR → raw queue → debounce → classify → typed event
-- Posts `InputPress` events to the orchestrator queue
-- Future-proof: additional input sources (IMU) can post the same event
-  types
-
-### Storage Service
-
-Two tiers of storage:
-
-**Temporary (chart data):**
-
-- Uses `airgradient-payload-cache` with `RtcPayloadCacheStorage` backend
-- Keeps last N measurements for display chart rendering
-- Survives deep sleep (RTC memory), lost on power-off
-- Ring buffer semantics (overwrites oldest when full)
-- Supports `clear_cache()` for user-triggered data clearing / factory
-  reset
-
-**Persistent (route data):**
-
-- Uses `airgradient-nand-storage` (SPI NAND with FATFS)
-- Stores GPS + sensor data for tracking routes
-- Survives power-off
-- POSIX file I/O on mounted filesystem
-- One file per tracking session: `route_XXXXX.bin` with a random 5-digit
-  session ID
-- Supports `clear_routes()` for user-triggered data clearing / factory
-  reset
-- Exposes total and used filesystem capacity for BLE status reporting
-
-### Power Management
-
-- BMS interaction via `BmsDevice` HAL and optional `FuelGaugeDevice` HAL
-  from `airgradient-bms`
-- Polled by orchestrator every 30 s (full BMS poll) and every 5 s (status
-  poll); no dedicated task
-- **Session-armed PMID:** `BQ25629Bms::init()` arms `EN_OTG=1` once
-  during BMS bring-up and the chip handles VBUS pass-through ↔ boost
-  transitions autonomously. `set_pm_power()` drives only the EN_PM GPIO
-  for SPS30 I2C bus isolation and never touches
-  `EN_OTG`; this avoids the per-measurement boost cold-start inrush that
-  can exceed 1S cell-protection OCP. Between measurements the SPS30 is
-  power-managed via its native Sleep command. See
-  [`docs/power_management.md`](docs/power_management.md#why-pmid-is-session-armed)
-- **Cell safety trips:** EDV uses a 2.9 V, three-poll debounce. Battery charging
-  is permitted from 0 °C through 45 °C and recovers from a temperature or
-  invalid-NTC block only from 2 °C through 43 °C. An invalid NTC disables
-  charging without shutdown. Discharge is permitted from -10 °C through 60 °C;
-  crossing either limit requests the corresponding cold- or hot-temperature
-  ship-mode shutdown
-- **Fuel gauge:** `PowerService::set_fuel_gauge()` attaches an
-  already-initialised `FuelGaugeDevice` for runtime SOC reads. `poll_bms()`
-  prefers FG-derived SOC and tags the log line with `src=FG|BMS`
-- Sleep cycle management (deep sleep entry, wake source config)
-- RTC memory state persistence before sleep
-- Fast-path boot logic for timer wakes
-- External watchdog (GPIO2): initialized at boot, pulsed every 60 s and
-  before sleep
-- `PowerSnapshot` aggregates battery voltage, percentage (with source
-  marker), charging state, critical flag, charger status, telemetry, and
-  FG telemetry fields
-
-### Settings
-
-- Uses `airgradient-config` (`ConfigStore` with NVS backend)
-- Product-specific `GoSettings` struct with field validation and NVS
-  load / save
-- BLE link security is not a runtime setting. It is always enabled — the
-  custom GATT service mandates pairing / bonding
-
-Settings fields:
-
-- Measurement cadence shared by Portable/Stationary (default 10 s), plus a
-  separate Energy Saving cadence (default 5 min); see [Settings](docs/settings.md)
-- Temperature units (C / F), altitude units (m / ft), PM display
-  (µg/m³ / USAQI)
-- GPS mode (AlwaysOff / OnWhenTracking / AlwaysOn)
-- Operating mode (Portable / Stationary / Offline; default: Portable)
-- Auto-lock timeout (0 = disabled, 10 s / 30 s / 60 s)
-- GPS interval
-- Back LED indicator (AQI / CO2, default AQI) and independent brightness
-
-### Display Service (E-Paper)
-
-- SSD1680 128×250 e-paper driven over SPI
-- Independent worker task for async hardware refresh (full + partial
-  updates)
-- u8g2 software renderer for framebuffer composition
-- `init(values, defer_refresh=false)` — synchronous by default; pass
-  `defer_refresh=true` in the button-wake path to return in ~10 ms and let
-  the worker handle the initial full refresh in the background
-- `deep_sleep()` — puts the SSD1680 into deep sleep mode 1 after the
-  worker task is stopped; reduces quiescent current from ~100 µA to
-  <1 µA
-- `RtcDisplaySnapshot` struct + `save_rtc_display_snapshot()` /
-  `load_rtc_display_snapshot()` free functions in `go_display.cpp`; saves
-  the last displayed state before sleep so the button-wake paint can use
-  cached values without reading NVS or sensors
-- Status bar, hero blocks (PM2.5 / CO2), grid cells, chart, menu
-  overlays, snackbar
-
-### UI Manager
-
-- Pure state machine — zero hardware or RTOS dependencies
-- Manages screen navigation (Home → MainMenu → Settings / About / TagList
-  / Confirm)
-- Metric cycling, settings choice selection, snackbar lifecycle
-- `handle_input()` returns `UIAction` for orchestrator-level state
-  changes
-- `build_values()` produces a `DisplayValues` snapshot from
-  `BuildContext`
-- `sync_settings()` synchronizes internal option indices from
-  `GoSettings`
-
-### BLE Streams
-
-- BLE peripheral mode using `airgradient-ble` (NimBLE)
-- Streams sensor + GPS data to connected phone
-- Exposes live measures, device status, config read / write, command
-  execution (including start / stop tracking), and route-history export
-  over one custom GATT service
-- Only active in Portable mode
-- Always requires authenticated pairing / bonding (Passkey Entry, MITM);
-  there is no unauthenticated access path
-
-### Local Server
-
-- Stationary-only v1 HTTP API registered through the same process-lifetime
-  `HttpServer` object used by captive-portal provisioning; the listener itself
-  starts and stops as ownership and mode change
-- Controlled by Operations → Local Server, visible only in Stationary and
-  enabled by default. Disabling stops the endpoint and enables Wi-Fi power
-  saving while cloud connectivity continues
-- Advertised after route readiness as `_airgradient._tcp` at
-  `airgradient_<serial>.local`, with `api=1` and the same model, serial, and
-  firmware identity returned by the measures endpoint
-- Serves corrected measurement, system-information, and active-config snapshots
-  cached by `GoLocalApiService` behind a short-held RTOS mutex
-- Supports display settings including `pinnedChart`, measurement and GPS
-  settings, output controls, cloud/source policy, and sensor configuration; see
-  the [supported fields](docs/local_server.md#configuration)
-- Accepts validated config updates asynchronously: HTTP `202` means admitted,
-  not persisted or applied; clients read config until the cached value converges
-- Uses one four-entry FIFO for config and action requests. Each admitted entry
-  posts one epoch-tagged `LocalApiRequestReady` event, and the orchestrator pops
-  one entry per matching event
-- Returns a busy response if either the local FIFO or central event queue cannot
-  admit a request; clearing the FIFO advances its epoch so stale events cannot
-  consume requests from a later endpoint generation
-- Dispatches `calibrate-co2`, `test-leds`, and `test-gps` as fire-and-forget
-  actions. The HTTP success response confirms queue admission, not action
-  completion
-- Uses plain HTTP without API authentication or TLS. The security boundary is a
-  trusted local network, not exposure through an untrusted or public network
-- Retains routes and the listener across transient STA reconnects, restarts mDNS
-  after IP recovery, and tears down mDNS, HTTP, routes, and queued work when
-  disabled or leaving Stationary
-
-See [`docs/local_server.md`](docs/local_server.md) for the route contract,
-snapshot ownership, queue semantics, and lifecycle details.
-
-### Cloud Service
-
-- Stationary cloud transport: periodic POST of `MeasuresAGo` and FETCH of
-  device configuration every 60 s via `AgClient` on a dedicated task
-  (priority 4, 8 KB stack)
-- Requests run sequentially in POST, FETCH, OTA order; deadlines are start-anchored
-- OTA availability is checked initially and hourly through `OtaService`; an
-  available image disarms cloud and queues `WifiOtaAvailable`
-- Heap is claimed lazily by `start()` (called only when Stationary +
-  online); Portable / Offline boots pay zero heap cost
-- `stop()` drains in-flight HTTP before Wi-Fi teardown (bounded ~15 s)
-- State changes (arm, disarm, disable) use atomics — no command queue
-- RSSI sourced from `WifiService::rssi()` at post time; 0 sentinel
-  translated to -127
-- Successful Fetch bodies are parsed and applied through the same
-  persist-before-activate path as other settings writers
-- Cloud Fetch can update PM standard, temperature unit, `abcDays`, and PM2.5,
-  temperature, and humidity corrections. It does not own `cloudConnection` or
-  `configurationControl`, even if those fields appear in a response
-- True `co2CalibrationRequested`, `ledTestRequested`, and `gpsTestRequested`
-  Fetch fields are carried outside persistent settings and dispatch calibration,
-  the LED diagnostic, or direct navigation to the live GPS Test screen
-
-`configurationControl` governs the two competing remote config sources:
-
-| Active Value | Local Server PUT | Cloud Fetch |
-|---|---|---|
-| `cloud` | Blocked, except an exact control-only change to `local` or `both` | Enabled |
-| `local` | Enabled | Disabled; no Fetch request is issued |
-| `both` | Enabled | Enabled |
-
-BLE, UI, provisioning, factory reset, and system writes bypass this source
-gate, but still use complete-candidate validation and persist-before-activate.
-Changing control from `local` to `cloud` or `both` wakes the cloud task and,
-while it is armed and cloud transport is enabled, makes Fetch immediately due.
-An in-flight Fetch result is checked again by the orchestrator and discarded if
-control has changed to `local`.
-
-`cloudConnection` is the independent master cloud switch. Turning it off
-suppresses subsequent cloud POST and Fetch attempts and automatic Stationary
-Wi-Fi OTA checks; it does not stop Wi-Fi, local HTTP, or local mDNS. It does not
-cancel an in-flight cloud request, whose Fetch result can still apply if
-`configurationControl` permits it when the orchestrator consumes the event.
-
-**ESP32-C5 heap constraint:** the TLS handshake with the 4096-bit RSA
-server certificate temporarily consumes most available heap. The Go
-product's sdkconfig is tuned for this:
-
-| Setting | Default | Go value | Purpose |
-|---|---|---|---|
-| `CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN` | `16384` | `4096` | TLS input buffer — 12 KB heap saving per connection |
-| `CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM` | `32` | `16` | Wi-Fi RX buffers — sufficient for the Go workload |
-| `CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM` | `32` | `16` | Wi-Fi TX buffers — sufficient for the Go workload |
-
-These values are safe for the Go product's small, infrequent HTTP
-payloads (POST < 300 bytes, FETCH config < 1 KB). Products with higher
-throughput requirements or more RAM (e.g. ESP32-C6) may keep the
-defaults.
-
-### OTA Service
-
-- Product-side glue around `airgradient-ota` (`go_ota.h` / `go_ota.cpp`)
-- Per-mode transport: BLE push (Portable) over the borrowed `AgBleServer`;
-  WiFi pull (Stationary) via a per-call `OtaUpdater` + `WifiHttpOtaSource`;
-  both terminate at the owned `EspOtaImageWriter`
-- **No task of its own** — the orchestrator runs the blocking `run_ble()` /
-  `run_wifi_check()` from the BLE poll or Wi-Fi availability event; BLE pauses
-  sensitive services first,
-  while Stationary pauses them only on the download-start commit edge
-- Feeds the external GPIO2 watchdog from the component progress callback while
-  the loop is blocked; never reboots (the orchestrator decides from `OtaStatus`)
-- During committed Stationary OTA, preserves an already-active local listener,
-  mDNS, and cached GET routes while STA stays connected, and rejects config PUT
-  and action requests; a non-rebooting outcome restores the previous access
-  state with an empty local request FIFO
-- No rollback this iteration (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` off)
-- See [`docs/ota_service.md`](docs/ota_service.md) and
-  [`docs/orchestrator.md` → OTA](docs/orchestrator.md#firmware-update-ota)
-
-### Factory Reset
-
-- Triggered by Button Boot long press or BLE `factory_rst` command
-- Clears temporary chart cache and all persisted route files
-- Restores `GoSettings` to defaults
-- Deletes all stored BLE bonds
-- Reboots the ESP on success
-
-## Data Flow Examples
-
-### Locked + Tracking + Measurement Timer Fires
+| Locked | Home/dashboard; touch cannot navigate and can show Unlock First feedback | Eligible only in Energy Saving after measurement/lifecycle gates |
+| Unlocked | Touch navigates UI; auto-lock applies only when enabled and allowed by the current screen/session | No measurement-cycle deep sleep |
+
+Setup and splash screens suppress ordinary power-button lock toggles. Diagnostic
+and other focus screens suppress inactivity auto-lock as defined by the
+orchestrator. The power-button long press remains a shutdown request in either
+lock state. Button 2 long press requests factory reset; its short press has the
+pre-onboarding manufacturing role described above. TouchEnter supports more than
+a short press: its long/double gestures also participate in navigation.
+See [Input Service](docs/input_service.md) and
+[UI Navigation](docs/ui_manager.md#screen-navigation) for gesture and screen rules.
+
+### Shared Resource Ownership
+
+Portable BLE, attached provisioning, and BLE OTA register on one board-owned
+`AgBleServer` before advertising. Stationary standalone provisioning takes that
+server only after Portable teardown. The orchestrator controls the handoff.
+
+Captive-portal provisioning and local HTTP use one process-lifetime
+`HttpServer`. Provisioning releases its routes before the local API activates.
+Local GET handlers read synchronized snapshots; config writes and actions go
+through a bounded FIFO to the orchestrator, which owns NVS changes and hardware
+side effects. See [BLE Service](docs/ble_service.md),
+[Wi-Fi Service](docs/wifi_service.md), and [Local Server](docs/local_server.md).
+
+Portable provisioning brings Wi-Fi up only for requested scan/connect work and
+then releases it, while retaining the bonded BLE connection. Stationary uses
+saved networks or provisioning; cloud starts after connectivity becomes ready.
+On Stationary exit, cloud drains in-flight HTTP before Wi-Fi teardown. Local
+routes can remain registered through a transient reconnect, while mDNS follows
+address availability. Its activation and teardown are separate from the cloud
+transport enable switch.
+
+The custom Portable GATT service requires authenticated pairing/bonding. Energy
+Saving advertisements are public, non-connectable broadcasts, a separate surface
+from that service. Local HTTP relies on the local network trust boundary. See
+the [BLE Client Reference](go_ble_client.md#2-pairing-and-security) and
+[Local HTTP Security](../../docs/local_http_api.md#security).
+
+### OTA Coordination
+
+BLE OTA pauses sensitive services before the foreground transfer. In Stationary,
+the cloud worker checks availability sequentially with POST/Fetch, disarms itself,
+and posts `WifiOtaAvailable`. The orchestrator rechecks eligibility; sensing, GPS,
+and PM are paused only when download starts, not during the availability probe.
+
+During a committed Stationary update, an already-active local listener can serve
+cached GET snapshots while writes and actions are rejected. OTA does not start a
+previously disabled endpoint. A non-rebooting result restores the prior access
+state; the orchestrator decides whether a successful transfer should reboot.
+See [OTA Service](docs/ota_service.md) and
+[OTA Orchestration](docs/orchestrator.md#firmware-update-ota).
+
+## Data Flow
+
+### Scheduled Measurement While Tracking
+
+For a Portable session in Recording state, a due measurement follows this path.
+Locking changes interaction, not the recording pipeline or Portable's awake policy.
 
 ```mermaid
 sequenceDiagram
-    participant Timer
-    participant Queue as Event Queue
     participant Orch as Orchestrator
     participant Sensor as Sensor Producer
+    participant Queue as Event Queue
     participant Storage
+    participant LEDs
     participant Display
     participant BLE
-
-    Timer->>Queue: MeasurementTimer
-    Queue->>Orch: dispatch
-    Orch->>Sensor: notify(1, group)
-    Sensor->>Sensor: SensorManager::start_measures
-    Sensor->>Queue: SensorDataReady(measures)
-    Queue->>Orch: dispatch
-    Note over Orch: read latest GPS fix
-    Orch->>Storage: append_route_point
-    Orch->>Storage: cache_measurement
-    Orch->>Display: update(values)
-    Orch->>BLE: notify_measures (Portable + connected)
-    Note over Orch: locked → enter sleep
+    Orch->>Orch: Measurement deadline due and PM ready
+    Orch->>Sensor: Request scheduled measurement
+    Sensor->>Sensor: Acquire and validate sensor fields
+    Sensor->>Queue: SensorDataReady with Scheduled origin
+    Queue-->>Orch: Receive and dispatch
+    Orch->>Orch: Combine latest GPS and power, derive corrected view
+    Orch->>LEDs: Update selected indicator unless diagnostics own LEDs
+    Orch->>Storage: Cache raw sample for charts
+    opt Recording with an open route
+        Orch->>Storage: Append raw route point
+    end
+    Orch->>BLE: Raw Measures snapshot and notification when connected
+    Orch->>Display: Corrected view and eligible refresh
+    Note over Orch: Continue event loop, Portable does not deep-sleep
 ```
 
-### User Unlocks Device
+Stationary follows the acquisition and chart-cache path without route appends;
+it publishes raw data to the cloud snapshot and corrected data to the local API.
+The cloud worker posts independently on its transport schedule. A snapshot
+update is not itself a network POST.
+
+### Measurement Views and Consumers
+
+| Consumer | View | Boundary |
+|---|---|---|
+| Cloud POST, BLE Measures, and Energy Saving broadcasts | Raw | External consumers choose their correction policy |
+| Persistent routes and BLE history export | Raw | Corrections never rewrite stored points |
+| RTC chart cache | Raw | Rendering applies the current corrections to a scratch view |
+| Current display and rendered charts | Corrected | Display-unit conversion follows correction |
+| Back LED | Corrected PM2.5 or unchanged CO2 | Follows the selected indicator |
+| Local HTTP measures | Corrected | Handler reads a synchronized published snapshot |
+| RTC display snapshot | Display state | Used for early paint, never as raw acquisition data |
+| Sensor compensation, validation, and health checks | Raw | User correction must not alter sensor diagnostics |
+
+Energy Saving bypasses temperature/humidity correction while retaining PM2.5
+correction. A mode change recomputes the view without changing saved calibration.
+[Measurement Corrections](docs/measurement_corrections.md) owns the complete
+consumer mapping, mode policy, and wake initialization rules.
+
+A manual refresh updates current readings and transport snapshots without
+adding chart or route samples or resetting scheduled timers. A pending scheduled
+measurement may satisfy the refresh and retain its scheduled origin. See
+[Shake-To-Refresh](docs/orchestrator.md#shake-to-refresh).
+
+### Unlock While the Runtime Is Active
 
 ```mermaid
 sequenceDiagram
-    participant ISR as Button 1 ISR
-    participant InputTask as Input Task
+    participant ISR as Power Button ISR
+    participant Input as Input Worker
     participant Queue as Event Queue
     participant Orch as Orchestrator
+    participant UI as UIManager
     participant Display
-
-    ISR->>InputTask: raw event (gpio_id + ts)
-    InputTask->>InputTask: classify (short press)
-    InputTask->>Queue: InputPress(btn_power, short)
-    Queue->>Orch: dispatch
-    Note over Orch: locked → unlocked
-    Orch->>Orch: disable sleep eligibility
-    Orch->>Orch: reset inactivity timer
-    Orch->>Display: show_dashboard_interactive
+    ISR->>Input: Raw button activity
+    Input->>Input: Debounce and classify short press
+    Input->>Queue: InputPress
+    Queue-->>Orch: Dispatch input
+    Orch->>Orch: Check setup and splash gates
+    Orch->>Orch: Set Unlocked and reset inactivity timestamp
+    Orch->>UI: Set Unlocked feedback
+    Orch->>Display: Submit updated view
 ```
 
-### Deep Sleep Fast-Path (Timer Wake)
+This flow starts with an already-running input worker. Waking from deep sleep
+instead follows the button-wake boot path, which paints before full composition
+and suppresses the waking press so it does not immediately relock the device.
+Display submission is distinct from completion of the e-paper refresh.
 
-`GoApp::run_fast_path()` installs the button ISR and calls the testable
-`execute_fast_path()`. The core initializes sensors, handles GPS, conditions
-and reads raw gas, reads the remaining sensors, stores data, and paints the
-locked dashboard through `build_fast_path_display()` without UIManager.
-It returns a sleep, promotion, or thermal shutdown result; the wrapper saves
-retained state before sleep or interactive promotion. It writes no route points.
-Timer wakes leave CAP1203 sensing active without initializing touch.
+### Configuration and Persistence
 
-See [Fast-Path Boot](docs/hardware_init.md#fast-path-boot-goappexecute_fast_path)
-for sequencing, timing, and promotion handoff.
+Configuration follows a separate path: UI, BLE, local HTTP, cloud, and production
+commands submit changes through the product's validation and persistence logic.
+The complete candidate is validated and persisted before activation, then
+transport snapshots and affected services are updated. Remote-source policy
+can reject local HTTP or cloud writes; it does not gate UI or BLE. See
+[Settings](docs/settings.md) for ownership and
+[Local Server](docs/local_server.md#configuration) for HTTP admission semantics.
 
-### Button-Wake Path (Button Wake, Offline Mode)
+`cloudConnection` controls cloud transport, including automatic Wi-Fi OTA checks;
+it does not disable local HTTP or mDNS. `configurationControl` selects local,
+cloud, or both remote writers. Authority is checked again when queued work is
+consumed, so a previously admitted request need not become active. UI, BLE,
+provisioning, and factory/system writers bypass that remote-source gate but still
+validate and persist changes. See [Configuration Authority](docs/settings.md#configuration-authority).
 
-```text
-1. ESP32 wakes from deep sleep (button press)
-2. GoApp::run() reads wake cause: button, mode: Offline → selects ButtonWake
-3. GoApp::run_button_wake_path(state):
+| State or Data | Storage | Lifetime and Purpose |
+|---|---|---|
+| Active settings, onboarded flag, and saved networks | NVS through configuration services | Survive resets and power-off |
+| BLE bonds | NimBLE NVS persistence | Restore authenticated relationships across power cycles |
+| Chart samples | RTC payload-cache ring buffer | Survive deep sleep; overwritten when full and lost on power cut |
+| Retained app state and display snapshot | RTC memory | Restore sleep context and early presentation |
+| Tracking routes | SPI NAND filesystem | One file per session; survive power-off subject to successful synchronization |
 
-   Phase 1 (V2 initializes I2C/expander before painting):
-     4. V2: _board.init_buses(); both: _board.init_spi(), _board.display()
-     5. Load RtcDisplaySnapshot from RTC memory
-     6. Build DisplayValues via build_wake_values(): Home, unlocked,
-        "Unlocked" snackbar, sensor values from snapshot (or dashes)
-     7. display.init(values, defer_refresh=true)
-        → renders frame, starts worker, worker begins SPI refresh
-        → returns immediately
+Normal factory reset clears routes, chart cache, saved networks, BLE bonds, and
+Go settings before reboot on success. Manufacturing and explicitly requested
+production reset paths preserve active corrections. See
+[Factory Reset](docs/orchestrator.md#factory_reset) and
+[Storage Durability](docs/storage_service.md#durability-budget) for failure handling.
 
-   Phase 2 (~300 ms, parallel with display refresh):
-      8. _board.init_core() (NVS, GPIO/I2C, and SPI — idempotent)
-      9. _board.init_fuel_gauge(), then retry _board.init_bms() twice
-     10. Restart if BMS remains unavailable
-     11. _board.release_gpio_holds()
-     12. _board.power().set_pm_power(true) — drives EN_PM GPIO only
-     13. _board.load_settings(), _board.sensors()
-     14. _board.new_gps_driver(), _board.new_touch_sensor()
-     15. Event queue, SensorProducer, GpsService, InputService
-     16. Start producer tasks → sensors and touch input operational
+## Constraints and Decisions
 
-   Phase 3 (~3 s, blocks on SPI):
-     17. _board.storage() → SpiNandStorage spi_device_transmit() blocks
-         until display worker releases bus (natural serialization)
-     18. BLE service (requires StorageService from Phase 3)
+- **Heap:** Wi-Fi/TLS consumes substantial ESP32-C5 heap. Cloud resources are
+  deferred until needed; provisioning and OTA coordinate service pauses and
+  teardown. [Cloud Service](docs/cloud_service.md) owns tuning details.
+- **Power:** PMID stays armed across measurements to avoid boost-start inrush
+  resets. Native SPS30 sleep and bus isolation reduce consumption; EN_PM is not
+  a supply switch. See [PMID rationale](docs/power_management.md#why-pmid-is-session-armed).
+- **Persistence:** RTC charts survive deep sleep, route files survive power-off,
+  and NVS stores settings. Route creation and synchronization must succeed before
+  making durability claims; see [Storage Service](docs/storage_service.md#durability-budget).
+- **Hardware boundaries:** `GoBoard`, shared HALs, and RTOS abstractions let
+  boot and policy logic run under `TEST_HOST`. Host tests cover logic; physical
+  timing, radio behavior, and peripheral interaction still need device verification.
 
-   Phase 4 (~10 ms):
-     19. Build BootHandoff: display_painted=true, suppress_wake_press=true,
-         initial_lock_state=Unlocked, display_snapshot=&snapshot
-     20. Orchestrator::init(Button, handoff)
-         → sets lock=Unlocked, pre-arms snackbar + schedules refresh timer,
-            seeds cached measurement state from snapshot, requests fresh measurement
-         → skips update_display() (screen already correct)
-     21. Orchestrator::run()
-```
-
-First meaningful paint: ~3 s. Single display flash (no empty-frame
-flash). V2 moves I2C/expander initialization ahead of display refresh, so
-its first paint starts later than V1; wake timing still needs hardware verification.
-
-## Service Documentation
-
-Detailed implementation documentation for each service:
+## Detailed Documentation
 
 - [Settings Service](docs/settings.md)
 - [Sensor Producer](docs/sensor_producer.md)
@@ -1093,3 +572,11 @@ Detailed implementation documentation for each service:
 - [Measurement Corrections](docs/measurement_corrections.md)
 - [Orchestrator](docs/orchestrator.md)
 - [Hardware Init](docs/hardware_init.md)
+- [LED Service](docs/led_service.md)
+- [Portable Provisioner](docs/portable_provisioner.md)
+- [Hardware Test](docs/hardware_test.md)
+- [Serial Command Service](docs/serial_command_service.md)
+- [Fuel-Gauge Learning](docs/fg_learning.md)
+- [BLE Client Reference](go_ble_client.md)
+- [Shared Local HTTP Contract](../../docs/local_http_api.md)
+- [Release Firmware](../../README.md#release-firmware)

@@ -115,12 +115,11 @@ Start at the layer that matches your task:
 - [`components/README.md`](components/README.md) — shared component layout;
   each component carries its own `README.md`
 - [`products/README.md`](products/README.md) — product application roots;
-  each product carries its own `README.md`, `ARCHITECTURE.md`, `docs/`,
-  and `specs/`
+  start with its `README.md`, then follow links to architecture and topic docs
 - [`tests/README.md`](tests/README.md) — host-test workflow
 - [`vhub/README.md`](vhub/README.md) — manual release-verification templates
 - [`docs/local_http_api.md`](docs/local_http_api.md) — product-neutral local
-  HTTP API, mDNS discovery, and AirGradient Go support
+  HTTP API and mDNS discovery, with links to product support
 
 Before creating or updating documentation, read the documentation guide:
 

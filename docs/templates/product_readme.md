@@ -25,10 +25,8 @@ reader getting started with the product.
 
 ## Build
 
-```sh
-. "$HOME/Tools/esp/esp-idf/export.sh"
-idf.py -C products/<product> build
-```
+Optional: document only product-specific requirements not covered by the root
+README. Remove this section when the shared build instructions are sufficient.
 
 ## Documentation
 

@@ -1,6 +1,6 @@
-# AirGradient Go — BLE Client Integration Spec
+# AirGradient Go — BLE Client Reference
 
-Client-side specification for mobile app developers integrating with the
+Current protocol reference for mobile app developers integrating with the
 AirGradient Go (AGo) BLE peripheral. Covers discovery, pairing, GATT
 operations, payload decoding, Offline measurement broadcasts, and the history
 download protocol.
@@ -175,8 +175,8 @@ Phone                              Device
 
 ### Authenticated Characteristics
 
-When security is enabled (production builds), the following characteristics
-require an authenticated (paired) connection:
+Security is always enabled in the current Go firmware. The following table
+lists the characteristic access requirements:
 
 | Characteristic | Read | Write | Notify / Subscribe |
 |---|---|---|---|
@@ -201,9 +201,8 @@ supported platforms.
 
 ### Development Builds
 
-Development firmware may disable BLE security. In this case, all
-characteristics are accessible without pairing. The GATT structure remains
-identical.
+Development builds use the same mandatory pairing and bonding configuration.
+There is no supported build-time or runtime option to disable BLE security.
 
 ---
 
@@ -228,7 +227,7 @@ identical.
 All UUIDs share the base `d1c0c0aX-6b48-4b2a-9b1d-59f9f2b0a1e1` where `X`
 is the characteristic index (1–4).
 
-When BLE security is enabled, the Measures characteristic requires an
+The Measures characteristic requires an
 authenticated connection for both read access and notification delivery.
 
 ### Additional Services (Portable mode)
@@ -313,7 +312,7 @@ Subscribe to notifications on this characteristic to receive live sensor
 data. The device sends a notification each time a new measurement cycle
 completes (typically every few seconds, configurable via Config).
 
-In production builds, both reads and subscription require an authenticated
+Both reads and subscription require an authenticated
 (paired) connection. If the client reads or enables notifications before
 pairing, the BLE stack may trigger the passkey pairing flow automatically.
 

@@ -61,7 +61,7 @@ with shared components; product wiring and policy belong with the product.
 | Root `README.md` | What is this repository, and where do I start? | Repository map, key architectural boundaries, build/test entrypoints, links to workflows and deeper docs |
 | `components/README.md`, `products/README.md` | Which component or product should I look at? | Responsibility summaries and links |
 | `components/<name>/README.md` | How do I use and maintain this shared capability? | Scope, interfaces, constraints, dependencies, minimal usage, tests |
-| `products/<name>/README.md` | How do I get started with this product? | Product overview, sensors, essential setup notes, build command, reading path |
+| `products/<name>/README.md` | How do I get started with this product? | Product overview, sensors, essential setup notes, product-specific build requirements when needed, reading path |
 | `products/<name>/ARCHITECTURE.md` | How does this product work as a system? | Boot composition, ownership, tasks/events, major state transitions, end-to-end data flow |
 | Component or product `docs/<topic>.md` | How does this behavior or subsystem work? | Detailed lifecycle, contracts, timing, concurrency, failure handling, design rationale |
 | Shared or product integration reference | How does an external client use this interface? | Protocol, payload schema, units, validation, compatibility, errors |
@@ -200,7 +200,8 @@ configuration, or directories to fill a template.
 2. `## Sensors` — bullet list with sensor model and quantity
 3. `## Hardware Notes` — essential setup constraints and links to detailed
    hardware and power behavior
-4. `## Build` — exact `idf.py` invocation
+4. `## Build` — optional; include only for product-specific requirements not
+   covered by the root README. Omit when the shared instructions are sufficient.
 5. `## Documentation` — links to `ARCHITECTURE.md`, `docs/`, `specs/`,
    board config
 

@@ -19,7 +19,6 @@ teardown ordering) and routes events to the service.
 |---|---|
 | `products/go/main/go_portable_provisioner.h` | `PortableWifiProvisioner` class declaration |
 | `products/go/main/go_portable_provisioner.cpp` | Attach/stop, request marshaling, radio lifecycle, idle timer |
-| `products/go/specs/portable_wifi_provisioning.md` | Feature spec (design rationale) |
 
 ## Dependencies
 

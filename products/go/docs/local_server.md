@@ -72,49 +72,20 @@ queued requests and activation retries, and enables Wi-Fi power saving. Cloud
 connectivity continues. Portable and **Energy Saving** modes do not expose the
 endpoint.
 
-The Go configuration uses plain HTTP on `CONFIG_AG_HTTP_PORT`, currently port
-80, and advertises this profile after the HTTP routes are reachable:
-
-| Property | Value |
-|---|---|
-| Hostname | `airgradient_<serial>.local` |
-| Service | `_airgradient._tcp` |
-| Port | `80` |
-| TXT `vendor` | `AirGradient` |
-| TXT `model` | `P-1PSG` |
-| TXT `serialno` | Same value as `serialNumber` in measures |
-| TXT `fw_ver` | Same value as `firmware` in measures |
-| TXT `api` | `1` |
+Go uses `CONFIG_AG_HTTP_PORT` (currently 80) and model `P-1PSG` with the
+[shared discovery contract](../../../docs/local_http_api.md#availability-and-discovery).
+Discovery starts only after the HTTP routes are reachable.
 
 ### Routes and Statuses
 
-The Go integration registers exactly these routes:
+Go implements all routes in the [shared endpoint catalog](../../../docs/local_http_api.md#endpoints):
+measurement/configuration GET, configuration PUT, and the calibration, LED-test,
+and GPS-test actions. Response bodies, status codes, and the error envelope are
+defined by the [shared HTTP contract](../../../docs/local_http_api.md#errors).
 
-| Method | Route | Success | Other Handler Statuses |
-|---|---|---:|---|
-| `GET` | `/api/v1/measures` | `200` JSON | `500` if serialization fails |
-| `GET` | `/api/v1/config` | `200` JSON | `500` if serialization fails |
-| `PUT` | `/api/v1/config` | Empty `202` | `400`, `403`, `404`, `503`, `500` |
-| `POST` | `/api/v1/actions/calibrate-co2` | Empty `200` | `403`, `503` |
-| `POST` | `/api/v1/actions/test-leds` | Empty `200` | `403`, `503` |
-| `POST` | `/api/v1/actions/test-gps` | Empty `200` | `403`, `503` |
-
-Errors produced by these handlers use an `application/json` envelope with
-`error.code`, optional `error.field`, and `error.message`:
-
-| Status | Code | Meaning |
-|---:|---|---|
-| `400` | `invalid_body` | Empty, incomplete, malformed, non-object, or trailing request body |
-| `400` | `unknown_field` | Unknown top-level or nested config key |
-| `400` | `invalid_value` | Invalid type, enum, correction, or merged Go setting |
-| `403` | `forbidden` | Endpoint access or configuration source policy rejects the request |
-| `404` | `not_found` | A known catalog field or action is unsupported by Go |
-| `503` | `busy` | The local FIFO or central event queue cannot admit work |
-| `500` | `internal` | Provider or serialization failure |
-
-Successful writes and actions have no body. A `503` response has no
-`Retry-After` header. Routes outside the registered catalog use the underlying
-HTTP server's default `404`, not the Local Server structured error envelope.
+Go-specific admission and execution behavior is described below. In particular,
+queue saturation returns `503 busy`, while source policy or OTA can reject an
+otherwise valid operation with `403 forbidden`.
 
 ### Measures
 
@@ -141,8 +112,8 @@ when available, with the charger voltage-curve estimate as fallback. `chargeVolt
 is measured input/VBUS voltage, not a charging-state indicator.
 
 Each field passes its field-specific validator before serialization; invalid
-fields are omitted rather than emitted as JSON `null`. `temperature` remains
-Celsius regardless of the configured display temperature unit. Corrections are
+fields are omitted. Units, precision, and omission rules follow the
+[shared measurement schema](../../../docs/local_http_api.md#read-measurements). Corrections are
 applied before the Go common-measures snapshot is published, so local clients
 receive the corrected PM2.5, temperature, and humidity view rather than the raw
 cloud, storage, and BLE view.
@@ -287,11 +258,14 @@ stateDiagram-v2
     [*] --> Connecting: enter Stationary
     Connecting --> Active: first IP
     Connecting --> Provisioning: initial connection fails
-    Provisioning --> Active: credentials connect and listener handoff completes
+    Provisioning --> Restart: successful portal setup requires restart
+    Restart --> Connecting: saved-network boot
+    Provisioning --> Active: success without restart and listener handoff completes
     Provisioning --> Inactive: abort or mode change
     Active --> Reconnecting: transient link loss
     Reconnecting --> Active: IP returns
     Active --> Inactive: disable Local Server or leave Stationary
+    Reconnecting --> Inactive: disable Local Server or leave Stationary
     Inactive --> [*]
 ```
 
@@ -314,11 +288,12 @@ listener and leaves routes and discovery inactive.
 
 With Local Server enabled, a transient disconnect after the first connection
 does not return to provisioning. It omits `wifiRssi`, retains local routes and
-the HTTP listener, leaves admitted FIFO work intact, and requests a reconnect after the
-configured 5-second delay. The reconnect uses saved networks when present or
-retries the transient factory-default network otherwise. The `StaIpAuto` mDNS
-profile follows the STA address lifecycle; reconnect reuses the local server
-and starts mDNS again instead of rebuilding the route set.
+the HTTP listener, leaves admitted FIFO work intact, and requests a reconnect
+after the configured 5-second delay. Normal reconnect uses saved networks only;
+the factory network belongs to the separate
+[manufacturing policy](wifi_service.md#manufacturing-factory-wi-fi). The
+`StaIpAuto` mDNS profile follows the STA address lifecycle; reconnect reuses the
+local server and starts mDNS again instead of rebuilding the route set.
 
 Disabling Local Server, entering provisioning, leaving Stationary, and entering
 committed OTA clear the mixed FIFO and increment its epoch. Stale central events
@@ -339,19 +314,16 @@ disabled remains disabled. When the endpoint is reachable during that interval:
 | `GET /api/v1/config` | `200` with the last active config snapshot |
 | Structurally valid config PUT | `403 forbidden` |
 | Malformed config PUT | `400` parse error before OTA policy |
-| Either registered action | `403 forbidden` before model support policy |
+| Any registered action | `403 forbidden` before model support policy |
 
 A non-rebooting OTA outcome restores the previous access state with an empty
 FIFO. A successful OTA reboots.
 
 ### Trust Boundary
 
-The endpoint is plain HTTP with no TLS, authentication, authorization, or CORS
-policy. Any host that can reach the Stationary device on the local network can
-read snapshots, attempt configuration changes allowed by
-`configurationControl`, and dispatch supported actions. Deployment therefore
-relies on a trusted and appropriately isolated LAN; the endpoint must not be
-treated as safe for direct exposure to untrusted networks.
+Go uses the [shared local API security model](../../../docs/local_http_api.md#security).
+Its `configurationControl` setting arbitrates configuration sources; it does not
+authenticate clients or restrict read access to a particular caller.
 
 ### External Client Follow-Ups
 

@@ -526,7 +526,7 @@ condition is naturally false on the first power-on and falls through to
 When true, `GoApp::run_button_wake_path(state)` renders the wake frame
 immediately from the RTC display snapshot and initializes peripherals in
 parallel while the display refreshes. See
-[ARCHITECTURE.md → Wake and Boot Path](../ARCHITECTURE.md#wake-and-boot-path)
+[Hardware Initialization → Button-Wake Path](hardware_init.md#button-wake-path-goapprun_button_wake_path)
 for the four-phase sequence.
 
 ### All other cases

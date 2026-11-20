@@ -31,7 +31,7 @@ synchronized buzzer/LED playback.
 | `DisplayService` | `go_display.h` | Full-screen list renderer for every test screen |
 | `LedService` | `led/go_led.h` | Actuator drives + PASS/FAIL colour cues; restored on exit |
 | `BuzzerService` | `buzzer/go_buzzer.h` | Actuator tone + success/alert cues |
-| `SensorProducer` | `go_sensor_producer.h` | `request_self_test()` runs the AQ sweep as the single I2C bus owner |
+| `SensorProducer` | `go_sensor_producer.h` | `request_self_test()` runs the AQ sweep on the existing sensor acquisition task |
 | `GpsService` | `gps/gps_service.h` | Ungates the receiver + fast posting for the live GPS screen |
 | `AccelService` | `accel/accel_service.h` | Worker-owned configuration and live X/Y/Z + WHO_AM_I reads |
 | `accel_sanity.h` | `accel/accel_sanity.h` | Pure identity + rest-magnitude classification |
@@ -65,6 +65,24 @@ See [`go_ui.h`](../main/go_ui.h) and [`go_orchestrator.h`](../main/go_orchestrat
 for full signatures.
 
 ## Behavior
+
+### Ownership and Entry Points
+
+```mermaid
+flowchart TD
+    Settings["Settings"] --> Menu["Hardware Test"]
+    Menu --> Peripheral["Peripheral Test: guided actuators and automatic AQ sweep"]
+    Menu --> GPS["GPS Test: live fix and TTFF"]
+    Menu --> Accel["Accelerometer Test: live samples and sanity check"]
+    Menu --> Melody["Play Melody: synchronized buzzer and LEDs"]
+    Menu --> Confirm["V1 Battery Calibration confirmation"]
+    Confirm -->|Yes| Factory["Persist factory state and reboot"]
+    Factory --> Runner["Fuel-gauge learning boot path"]
+```
+
+The diagnostic screens reuse the running services. Only confirmed Battery
+Calibration starts a separate boot path. Hardware Test is available through
+ordinary Settings; manufacturing mode is not a prerequisite.
 
 ### Navigation
 
@@ -123,12 +141,19 @@ After the buzzer check, the screen shows the automatic testing view while
 orchestrator start the sweep once both conditions are met. If PM is already
 ready and the producer is available, the sweep starts immediately.
 
-The AQ sweep runs **inside the sensor producer task** (the normal I2C bus owner)
+The AQ sweep runs **inside the sensor producer task** (the sensor acquisition owner)
 via `request_self_test()`: a single `start_measures(1, All)` iteration classified
 per Go sensor role by field validity, posted back as one `SensorTestDone` event
 carrying `SensorTestResults`. The summary cue fires on the overall result —
 **PASS**: green back LED + `PATTERN_CHARGE_DONE`; **FAIL**: red back LED +
 `PATTERN_UNPLUG`. On exit the LED/buzzer are restored to persisted settings.
+
+Results describe the five configured sensor roles, not every physical device
+independently. An absent sensor and an invalid reading both produce **FAIL**;
+there is no separate `ABSENT` result or per-address probe report. Temperature
+and humidity use the configured fallback sources, so the role can pass without
+a dedicated SHT40. LED and buzzer results are operator judgments; the firmware
+does not electrically verify their output.
 
 The sweep shares `_measurement_pending` with normal measurements to prevent
 overlapping requests. Its completion event is `SensorTestDone`;
@@ -229,3 +254,19 @@ See [`fg_learning.md`](fg_learning.md) for the runner.
   locked and returned Home mid-test. Auto-lock resumes once the surface is
   exited. The Play Melody choice screen and Battery Calibration confirmation retain
   ordinary auto-lock behavior.
+
+## Verification
+
+[`go_orchestrator.tests.cpp`](../tests/go_orchestrator.tests.cpp) covers peripheral
+step ordering, restoration on exit, GPS TTFF, accelerometer failures, and the
+factory-learning arm. [`go_ui.tests.cpp`](../tests/go_ui.tests.cpp) covers navigation;
+[`go_accel_sanity.tests.cpp`](../tests/go_accel_sanity.tests.cpp) covers the identity
+and magnitude classifier. Run these through the [host-test workflow](../../../tests/README.md).
+
+On-device verification must check actuator output, sensor results, GPS fix and
+TTFF, orientation-dependent acceleration, and restoration after exiting a test.
+The implemented rest band is 850–1150 mg; field validation should account for
+motion and device noise. Confirm live-screen refresh usability and check AQ
+results after sensor warmup before treating an early bad reading as a hardware
+failure. Battery Calibration remains explicitly confirmed and V1-only; see
+[Fuel-Gauge Learning](fg_learning.md) for its prerequisites and procedure.
