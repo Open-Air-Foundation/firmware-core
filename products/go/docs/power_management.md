@@ -288,12 +288,14 @@ a full `ShutdownUser` refresh, puts the panel to sleep, and calls `shutdown()`.
 There is no cable or button recheck after the refresh, so reconnecting during
 that refresh does not cancel shutdown.
 
-`ChargeTerminationDone` selects "Battery Full" with a filled-battery icon.
+`NotCharging` or `ChargeTerminationDone` selects "Battery Full" with a filled-battery icon.
 Active charging selects "Charging" with a battery-and-bolt icon. The display
-refreshes only when the selected page changes and sleeps afterward. Unknown
-charging state, failed reads, and `NotCharging` retain the current page;
-`NotCharging` alone is not evidence of a full battery. At startup, Charging is
-the default unless charge completion is confirmed. This loop uses status
+refreshes only when the selected page changes and sleeps afterward. This follows
+the Home plug-icon condition for known charger states, without checking fuel-gauge
+percentage or FC. "Battery Full" therefore also covers inhibited charging; it
+is a display policy, not proof of charge completion. Unknown charging state and
+failed reads retain the current page. At startup, Charging is the default when
+the charging state is unknown. This loop uses status
 polling only; `poll_bms()` firmware temperature and voltage protection checks do
 not run here. Charger-chip protections and charge termination remain active.
 User-requested shutdown with USB attached also enters this boot path through

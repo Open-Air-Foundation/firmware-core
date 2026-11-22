@@ -935,8 +935,8 @@ TEST_CASE("GoApp::run: ineligible charging boots start the application normally"
 TEST_CASE("Charging-only boot: light sleep retains charger until unplug, then paints before ship") {
   for (auto source : {BmsPowerSource::UsbSdp, BmsPowerSource::UsbCdp, BmsPowerSource::UsbDcp,
                       BmsPowerSource::UnknownAdapter, BmsPowerSource::NonStandard}) {
-    for (auto charge : {BmsChargingState::FastCharge, BmsChargingState::NotCharging,
-                        BmsChargingState::ChargeTerminationDone}) {
+    for (auto charge : {BmsChargingState::Unknown, BmsChargingState::FastCharge,
+                        BmsChargingState::NotCharging, BmsChargingState::ChargeTerminationDone}) {
       test_spy::reset();
       test_spy::power_on_reset = true;
       MockBoard board;
@@ -946,9 +946,11 @@ TEST_CASE("Charging-only boot: light sleep retains charger until unplug, then pa
         if (test_spy::light_sleep_count == 2) {
           board._bms.status.power_source = BmsPowerSource::None;
         }
-        CHECK(DisplayService::spy_last_screen == (charge == BmsChargingState::ChargeTerminationDone
-                                                      ? Screen::ShutdownCharged
-                                                      : Screen::ShutdownCharging));
+        CHECK(DisplayService::spy_last_screen ==
+              (charge == BmsChargingState::NotCharging ||
+                       charge == BmsChargingState::ChargeTerminationDone
+                   ? Screen::ShutdownCharged
+                   : Screen::ShutdownCharging));
         CHECK(DisplayService::spy_sync_update_count == 0);
         return false;
       };
@@ -980,7 +982,7 @@ TEST_CASE("Charging-only boot: light sleep retains charger until unplug, then pa
   }
 }
 
-TEST_CASE("Charging-only polling: repaint only on completion and charging resumption") {
+TEST_CASE("Charging-only polling: repaint only when charging stops or resumes") {
   for (auto resumed :
        {BmsChargingState::TrickleCharge, BmsChargingState::PreCharge, BmsChargingState::FastCharge,
         BmsChargingState::TaperCharge, BmsChargingState::TopOffTimerActiveCharging}) {
@@ -993,14 +995,14 @@ TEST_CASE("Charging-only polling: repaint only on completion and charging resump
       const auto count = test_spy::light_sleep_count;
       REQUIRE(count <= 9);
       CHECK(DisplayService::spy_last_screen ==
-            (count >= 3 && count <= 7 ? Screen::ShutdownCharged : Screen::ShutdownCharging));
-      CHECK(DisplayService::spy_sync_update_count == (count <= 2 ? 0 : count <= 7 ? 1 : 2));
+            (count >= 2 && count <= 7 ? Screen::ShutdownCharged : Screen::ShutdownCharging));
+      CHECK(DisplayService::spy_sync_update_count == (count == 1 ? 0 : count <= 7 ? 1 : 2));
       switch (count) {
       case 1:
+      case 2:
       case 6:
         board._bms.status.charging_state = BmsChargingState::NotCharging;
         break;
-      case 2:
       case 3:
         board._bms.status.charging_state = BmsChargingState::ChargeTerminationDone;
         break;
@@ -1039,11 +1041,13 @@ TEST_CASE("Charging-only shutdown handoff: consumes the request before entering 
   MockBoard board;
   board._bms.status.power_source = BmsPowerSource::UsbDcp;
   SECTION("charging") { board._bms.status.charging_state = BmsChargingState::FastCharge; }
+  SECTION("not charging") { board._bms.status.charging_state = BmsChargingState::NotCharging; }
   SECTION("full") { board._bms.status.charging_state = BmsChargingState::ChargeTerminationDone; }
   test_spy::light_sleep_callback = [&] {
     CHECK_FALSE(test_spy::rtc_state.has_flag(RtcAppFlag::ChargingOnlyRequested));
     CHECK(DisplayService::spy_init_count == 1);
-    const bool full = board._bms.status.charging_state == BmsChargingState::ChargeTerminationDone;
+    const bool full = board._bms.status.charging_state == BmsChargingState::NotCharging ||
+                      board._bms.status.charging_state == BmsChargingState::ChargeTerminationDone;
     CHECK(DisplayService::spy_last_screen ==
           (full ? Screen::ShutdownCharged : Screen::ShutdownCharging));
     CHECK(DisplayService::spy_sync_update_count == 0);
