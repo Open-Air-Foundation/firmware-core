@@ -5,7 +5,7 @@
 // markdownlint-cli2 even when the tool is invoked with explicit globs
 // such as `**/*.md`, which `.markdownlintignore` is NOT.
 //
-// See `docs/STYLE.md` for the doc-style rules these enforce.
+// See `docs/GUIDE.md` for the doc-style rules these enforce.
 {
   "config": {
     "extends": ".markdownlint.json"
@@ -18,7 +18,7 @@
     "components/u8g2/**",
     "components/spi_nand_flash/**",
 
-    // Vendor driver pending replacement (see docs/STYLE.md scope decision)
+    // Vendor driver pending replacement (see docs/GUIDE.md scope decision)
     "components/bq25629/**",
 
     // Vendored libraries inside airgradient-client (copied as-is from old

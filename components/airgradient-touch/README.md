@@ -49,8 +49,9 @@ components/airgradient-touch/
 
 ## Design
 
-```text
-caller -> CapTouchSensor& -> CAP1203 -> i2c_master -> CAP1203 chip
+```mermaid
+flowchart LR
+    Caller["Caller"] --> HAL["CapTouchSensor"] --> Driver["CAP1203"] --> Bus["I2C master"] --> Chip["CAP1203 chip"]
 ```
 
 Product code creates a `CAP1203` instance and passes a `CapTouchSensor &`

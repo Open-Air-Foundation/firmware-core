@@ -3,10 +3,16 @@
 > **This is a spec.** It describes how a feature **will be built**, not what
 > currently exists. Once the feature ships, the corresponding doc under
 > `docs/` (or the relevant component README) becomes the source of truth and
-> this file is typically deleted. See `docs/STYLE.md` → "Doc Lifecycle".
+> this file is typically deleted after useful rationale is preserved there.
+> If retained, label its status and link to current docs. See `docs/GUIDE.md`
+> → "Doc Lifecycle".
 
 One-paragraph summary of the change: what is being designed, why now, and
 what the desired outcome is.
+
+Template instructions: keep applicable sections, remove placeholders, and
+adjust paths for the destination. Identify the existing documents that will
+own the implemented behavior. Remove this paragraph when using the template.
 
 ## Problem
 
@@ -27,7 +33,7 @@ Describe the proposed approach. Use Mermaid for state machines, sequences,
 and branched flows; ASCII only for short linear flows. Interface sketches
 (`cpp` fences) and tables are encouraged.
 
-Specs are **exempt** from the 15-line code-block cap in `docs/STYLE.md` —
+Specs are **exempt** from the 15-line code-block cap in `docs/GUIDE.md` —
 include as much pseudo-code, interface draft, or worked example as the
 implementer needs to follow the design.
 
@@ -51,6 +57,9 @@ stateDiagram-v2
 
 Ordered steps the implementer will follow. Each step should be small enough
 to land as a single focused commit.
+
+Include updates to the authoritative documentation and related summaries, plus
+VHUB changes when manually observable behavior changes.
 
 1. Step one
 2. Step two

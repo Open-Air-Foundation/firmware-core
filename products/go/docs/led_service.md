@@ -10,13 +10,13 @@ effects such as blink, breathe, fade, chase, and sequenced animations.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/led/go_led_types.h` | Public types: `LedBrightness`, `TouchLedIntensity`, `TouchPad`, `BackStep`, `BackAnimation` |
-| `products/go/main/led/go_led_hal.h` | Abstract `LedDriver` interface |
-| `products/go/main/led/go_led_driver.h` | `LP5036` concrete driver declaration |
-| `products/go/main/led/go_led_driver.cpp` | LP5036 I2C implementation |
-| `products/go/main/led/go_led.h` | `LedService` class declaration |
-| `products/go/main/led/go_led.cpp` | Service implementation (effect engine, render loop, touch flash) |
-| `products/go/tests/go_led.tests.cpp` | Host tests with mocked `LedDriver` |
+| [`products/go/main/led/go_led_types.h`](../main/led/go_led_types.h) | Public types: `LedBrightness`, `TouchLedIntensity`, `TouchPad`, `BackStep`, `BackAnimation` |
+| [`products/go/main/led/go_led_hal.h`](../main/led/go_led_hal.h) | Abstract `LedDriver` interface |
+| [`products/go/main/led/go_led_driver.h`](../main/led/go_led_driver.h) | `LP5036` concrete driver declaration |
+| [`products/go/main/led/go_led_driver.cpp`](../main/led/go_led_driver.cpp) | LP5036 I2C implementation |
+| [`products/go/main/led/go_led.h`](../main/led/go_led.h) | `LedService` class declaration |
+| [`products/go/main/led/go_led.cpp`](../main/led/go_led.cpp) | Service implementation (effect engine, render loop, touch flash) |
+| [`products/go/tests/go_led.tests.cpp`](../tests/go_led.tests.cpp) | Host tests with mocked `LedDriver` |
 
 ## Dependencies
 
@@ -49,32 +49,22 @@ effects such as blink, breathe, fade, chase, and sequenced animations.
 | `init()` | `bool` | Init driver, create queue. Cached: second call returns first result. |
 | `start()` | `bool` | Spawn worker task. Idempotent. |
 
-### Back (Animated)
+### Output Contracts
 
-| Method | Purpose |
-|---|---|
-| `back_solid(color)` | All configured back LEDs at `color`. Static. |
-| `back_blink(color, period_ms)` | Toggle on/off at `period_ms`. Looping. |
-| `back_breathe(color, period_ms)` | Cosine ramp between 100% and 0%. Looping. |
-| `back_fade_to(color, duration_ms)` | Linear interpolate from current color. One-shot. |
-| `back_chase(color, step_ms)` | Sequential fill, one LED per `step_ms`. One-shot. |
-| `back_off()` | All configured back LEDs off. Static. |
-| `back_set_brightness(b)` | Scale factor: Off=0, Dim=64, Mid=128, Bright=255. |
-| `back_play(steps, count)` | Play a transient sequence of up to 6 sub-effects with auto-restore. |
-| `back_animate(animation)` | Play a predefined `BackAnimation` (resolves to `back_play`). |
-| `back_update_aqi(pm25)` | Resolve PM2.5 to AQI category color, enqueue `back_solid`. |
-| `back_clear_aqi()` | Enqueue `back_off`. |
-| `back_update_co2(ppm)` | Resolve CO2 category color; invalid input enqueues `back_off`. |
+Back commands select a static color or a timed effect. Indicator helpers map
+valid PM2.5 or CO2 readings to colors; brightness scales physical output without
+losing logical state. See the [effect engine](#back-effect-engine) and
+[sequence ordering](#sequence-ordering) before mixing steady updates and overlays.
 
-### Touch
+Touch commands select a transient pad flash or steady illumination of all mapped
+pads. V2 has no touch LEDs, so those commands are inert. Commands are copied into
+a bounded queue and return without waiting for rendering or confirming I2C
+success. The borrowed driver must outlive the service.
 
-| Method | Purpose |
-|---|---|
-| `touch_flash(pad)` | Flash white on the given pad for `touch_flash_ms`, then off. |
-| `touch_set_all(on)` | Light (or clear) all three pads steadily at the current intensity, with no auto-off. Used by the hardware peripheral test. |
-| `touch_set_intensity(i)` | Off/Dim/Bright. Off suppresses all flashes. |
+See [`go_led.h`](../main/led/go_led.h) for full signatures and
+[`go_led_types.h`](../main/led/go_led_types.h) for animation types.
 
-## LED Groups And Channel Map
+## LED Groups and Channel Map
 
 The board supplies both layouts. Each number is a blue-channel base; green
 and red use the next two LP5036 outputs.
@@ -215,16 +205,16 @@ can render.
 
 Correct ordering:
 
-```text
-back_update_aqi(pm25);          // set steady-state AQI color
-back_animate(BackAnimation::X); // overlay plays, auto-restores to AQI color
+```cpp
+led.back_update_aqi(pm25);            // set steady-state AQI color
+led.back_animate(BackAnimation::Boot); // overlay plays, auto-restores to AQI color
 ```
 
 Wrong ordering:
 
-```text
-back_animate(BackAnimation::X); // starts sequence, saves current state
-back_update_aqi(pm25);          // kills sequence immediately, clears saved state
+```cpp
+led.back_animate(BackAnimation::Boot); // starts sequence, saves current state
+led.back_update_aqi(pm25);            // kills sequence immediately, clears saved state
 ```
 
 ### Zero Timing Parameters
@@ -252,7 +242,7 @@ back_update_aqi(pm25);          // kills sequence immediately, clears saved stat
   not interfere with `touch_flash()`. Used by the V1 hardware peripheral test
   so an operator can visually confirm the touch LEDs.
 
-### V1 Input Source To Touch Pad Mapping
+### V1 Input Source to Touch Pad Mapping
 
 | `InputSource` | `TouchPad` | Physical LED |
 |---|---|---|
@@ -304,15 +294,11 @@ the orchestrator sets the selected indicator when the first measurement arrives.
 
 ## Persistence
 
-| Setting | NVS Key | BLE Key | Enum | Valid Range | Default |
-|---|---|---|---|---:|---|
-| Back indicator | `bli` | `bledi` | `BackLedIndicator` | 0..1 in NVS; `aqi`/`co2` over BLE | AQI |
-| Back brightness | `blb` | `bled` | `LedBrightness` | 0..3 | Off |
-| Touch intensity | `tlb` | `tled` | `TouchLedIntensity` | 0..2 | Off |
-
-Missing or invalid NVS values load as AQI for the indicator and Off for
-brightness/intensity. Invalid BLE values return `invalid_config_value`. Settings
-apply at boot and after successful persistence; see [Settings](settings.md#gosettings-fields).
+The orchestrator applies indicator and brightness preferences at boot and after
+successful settings activation. [Settings](settings.md#display-and-feedback)
+owns defaults, NVS keys, and validation. The
+[BLE client reference](../go_ble_client.md#72-write-set-config) owns wire names
+and error responses. `LedService` itself does not read or write configuration.
 
 ## Inert Mode
 
@@ -322,23 +308,29 @@ When `Config::driver == nullptr`:
 - All public methods return immediately without enqueuing.
 - `pump_for_test()` is a no-op.
 
-## Host Testing
-
-Under `TEST_HOST`, the service uses an in-class ring buffer instead of a
-FreeRTOS queue and exposes `pump_for_test(now_ms)` via a friend class.
-Tests mock `LedDriver` and drive virtual time through `pump_for_test`.
-The LP5036 `.cpp` is not linked into host tests.
-
-## Edge Cases and Errors
+## Edge Cases / Errors
 
 - **Invalid counts**: initialization rejects counts beyond the channel arrays.
 - **Driver errors**: Failed I2C writes are logged (edge-triggered:
   first failure WARN, first recovery INFO) and not retried. The dirty
   flag is cleared unconditionally to avoid busy-looping on a faulty bus.
-- **Queue full**: Enqueue is dropped silently. The next call re-syncs.
+- **Queue full**: The command is dropped silently without replay. A later call
+  updates only the state addressed by that command.
 - **Mutators before init/start**: All are no-ops. No crash, no queue
   access.
 - **Fade from Chase**: `_last_rendered_back` stores the chase base color
   (uniform), so fading from an active chase may produce a visible jump
   for partially-lit LEDs. Acceptable because chase typically completes
   before a fade begins.
+
+## Verification
+
+Under `TEST_HOST`, the service uses the host RTOS queue implementation and
+exposes `pump_for_test(now_ms)` to drain commands and render at a supplied time.
+Tests mock `LedDriver` and use friend access for internal timeout checks.
+The LP5036 `.cpp` is not linked into host tests.
+
+See [`go_led.tests.cpp`](../tests/go_led.tests.cpp) and the
+[host-test workflow](../../../tests/README.md). These tests cover effect timing,
+restoration, board channel maps, and write suppression; physical color,
+brightness, and LED order still need device verification.

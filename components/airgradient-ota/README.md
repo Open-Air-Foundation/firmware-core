@@ -93,7 +93,7 @@ Guideline:
 
 The `OtaImageWriter` is the single universal piece every transport terminates
 at. Pull transports share the `OtaImageSource` seam and are driven by
-`OtaUpdater`; a future BLE push transport owns its own GATT flow and feeds the
+`OtaUpdater`; the BLE push service owns its own GATT flow and feeds the
 writer directly. "Is an update available?" semantics live only in the pull
 path. Reboot is never performed here.
 
@@ -101,6 +101,8 @@ path. Reboot is never performed here.
 flowchart TB
     U[OtaUpdater] -->|OtaImageSource| WS[WifiHttpOtaSource]
     U -->|write bytes| W[(OtaImageWriter<br/>EspOtaImageWriter)]
+    Phone --> BLE[OtaBleService]
+    BLE -->|write bytes| W
     WS -->|stream GET| Net[esp_http_client]
     W -.->|status only| PR[Product decides reboot]
 ```
@@ -136,44 +138,15 @@ download still handles its own response normally. Existing `open()` and
 `OtaUpdater::run()` behavior is unchanged, including rejecting an empty HTTP
 200 response when downloading an image.
 
-### BLE push (`OtaBleService`)
+### BLE Push
 
-BLE inverts the control flow: the phone drives and the device receives, so there
-is no `OtaUpdater` and no `OtaImageSource`. `OtaBleService` owns an OTA GATT
-service with three characteristics:
+`OtaBleService` registers Control, Data, and Status characteristics on a
+borrowed, secured BLE server before advertising. Data writes execute on the
+NimBLE host task; the product calls `run()` to prepare, finish, or abort the
+transfer on its own task. The product owns sleep/coexistence policy and reboot.
 
-```text
- OTA Service
-   ├─ Control  char  [WRITE | WRITE_AUTHEN]       CBOR: START{total, fw} | END | ABORT
-   ├─ Data     char  [WRITE_NR | WRITE_AUTHEN]    raw image bytes (no response)
-   └─ Status   char  [NOTIFY | READ_AUTHEN]       CBOR: {state, result, bytes}
-```
-
-It borrows an already-`init()`'d and `set_security()`'d `AgBleServer` that is
-**not yet advertising**; `setup()` must run **before** `start_advertising()`,
-and the service never `init()`/`deinit()`s the server. There is **no worker
-task and no chunk buffer**: each Data write (`WRITE_NR`) is flashed straight
-from the NimBLE host-task write callback (`esp_ota_write`, ~1.5 ms), while the
-stack-hungry `begin`/`finish`/`abort` run on the **product's task** inside a
-product-called `run()`. The product contract is a single method: `run(timeout_ms)`
-returns immediately (or parks up to `timeout_ms` waiting for a `START`) when
-idle, and once a `START` is latched it emits `Starting`, drives one transfer to
-its terminal, and returns the final `OtaStatus`. An optional
-`set_on_progress(OtaProgressCallback)` (mirroring `OtaUpdater`) reports the
-`Starting` edge, the `Downloading`/`Applying` ticks, and the terminal
-`Done`/`Failed` on the `run()` task.
-Status (`{state, result, bytes}`) is pushed as NOTIFY-only CBOR on each state
-transition and on a periodic progress tick (~5 s,
-`CONFIG_AG_OTA_BLE_PROGRESS_INTERVAL_MS`) carrying the device's real byte count
-— the phone's own Write-Without-Response send count runs ahead of the link, so
-the device reports true progress. The product forwards the
-server's disconnect via `handle_disconnect()`, uses the `run()` start/terminal
-edges (the progress callback and the returned `OtaStatus`) and `is_active()` to
-inhibit sleep / gate other BLE services, and decides reboot — the service never
-reboots. The connection-interval window is bracketed by the service itself: it
-requests the fast OTA window (15–30 ms) on `begin()` and restores the relaxed
-window (30–50 ms) on a non-success terminal, so the product does not touch
-`request_conn_params()`.
+See [BLE Push OTA](docs/ble_push.md) for the current protocol, threading,
+failure handling, and design rationale.
 
 ## Usage
 
@@ -192,44 +165,10 @@ if (st == OtaStatus::Ok) {
 }
 ```
 
-BLE push (product owns the BLE server lifecycle):
-
-```cpp
-NimbleBleServer ble;
-ble.init("AirGradient OTA");
-ble.set_security(AgBleIoCapability::DISPLAY_ONLY,
-                 AgBleAuth::BOND | AgBleAuth::MITM | AgBleAuth::SC);
-
-EspOtaImageWriter writer;
-OtaBleService ota(ble, writer);
-ota.setup();                     // registers GATT BEFORE advertising
-
-// Start edge fires on the run() task before begin(): prep here. The service
-// brackets the BLE conn-param window itself; the product only inhibits sleep.
-bool transfer_ran = false;
-ota.set_on_progress([&](const OtaProgress &p) {
-  if (p.state == OtaState::Starting) {
-    transfer_ran = true;
-    power.inhibit_sleep(true);                 // don't sleep/shut down mid-flash
-  }
-});
-
-ble.set_disconnect_callback([&ota](uint16_t, int) { ota.handle_disconnect(); });
-ble.start_advertising();
-
-// Dedicated product loop (nothing else heavy runs during OTA).
-for (;;) {
-  transfer_ran = false;
-  OtaStatus result = ota.run(IDLE_POLL_MS);    // parks idle, blocks through transfer
-  if (!transfer_ran) {
-    continue;                                  // idle wakeup
-  }
-  power.inhibit_sleep(false);
-  if (result == OtaStatus::Ok) {
-    reboot();                                  // product decides
-  }
-}
-```
+For BLE setup and lifecycle, follow [BLE Push OTA](docs/ble_push.md#ownership-and-integration)
+and the [service header](services/ota_ble_service.h). In particular, an idle
+`run()` returns `Ok` without performing an update; use progress events to
+identify a completed transfer before deciding to reboot.
 
 ## Configuration
 

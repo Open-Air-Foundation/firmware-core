@@ -1,6 +1,6 @@
-# AirGradient Go — BLE Client Integration Spec
+# AirGradient Go — BLE Client Reference
 
-Client-side specification for mobile app developers integrating with the
+Current protocol reference for mobile app developers integrating with the
 AirGradient Go (AGo) BLE peripheral. Covers discovery, pairing, GATT
 operations, payload decoding, Offline measurement broadcasts, and the history
 download protocol.
@@ -153,57 +153,42 @@ Security features:
 
 ### Pairing Flow
 
-```text
-Phone                              Device
-  |                                  |
-  |------- connect ----------------->|
-  |                                  |
-  |------- initiate pairing -------->|
-  |                                  |
-  |                         (generates passkey)
-  |                         (shows passkey on display)
-  |                                  |
-  |  (user reads passkey from device)|
-  |                                  |
-  |------- enter passkey ----------->|
-  |                                  |
-  |<------- pairing complete --------|
-  |                                  |
-  |  (bonded — future connections    |
-  |   skip passkey entry)            |
+```mermaid
+sequenceDiagram
+    participant Phone
+    participant Device
+    Phone->>Device: Connect and initiate pairing
+    Device->>Device: Generate and display six-digit passkey
+    Note over Phone,Device: User reads the device passkey and enters it on the phone
+    Phone->>Device: Complete passkey entry
+    Device-->>Phone: Pairing complete
+    Note over Phone,Device: Bond is retained for later connections
 ```
 
-### Authenticated Characteristics
+### Characteristic Access
 
-When security is enabled (production builds), the following characteristics
-require an authenticated (paired) connection:
+Security is always enabled in the current Go firmware. The following table
+lists the characteristic access requirements:
 
-| Characteristic | Read | Write | Notify / Subscribe |
+| Characteristic | Read | Write | Notifications |
 |---|---|---|---|
-| Measures | Authenticated | — | Authenticated |
-| Status | Authenticated | — | — |
-| Config | Authenticated | Authenticated | — |
-| History | — | Authenticated | — |
+| Measures | Authenticated | — | Yes |
+| Status | Authenticated | — | Yes |
+| Config | Authenticated | Authenticated | Yes |
+| History | — | Authenticated | Yes |
 | OTA Control / Data (firmware update) | — | Authenticated | — |
-| OTA Status (firmware update) | — | — | Authenticated |
-| Wi-Fi Scan (provisioning) | — | Encrypted | Encrypted |
-| Credentials/Status (provisioning) | Encrypted | Encrypted | Encrypted |
+| OTA Status (firmware update) | — | — | Yes |
+| Wi-Fi Scan (provisioning) | — | Encrypted | Yes |
+| Credentials/Status (provisioning) | Encrypted | Encrypted | Yes |
 | Device Information (DIS) | Encrypted | — | — |
 
-The provisioning and DIS characteristics require an **encrypted** link rather
-than an explicitly authenticated one. On the Portable link the bonded MITM
-pairing above already provides encryption, so no extra step is needed (see §9
-and §10).
-
-Attempting to read or subscribe to an authenticated characteristic without
-pairing will usually trigger the BLE stack's pairing flow automatically on
-supported platforms.
+Complete Portable pairing before reading, writing, or subscribing. Subscribe
+to the relevant notifications before sending requests.
 
 ### Development Builds
 
-Development firmware may disable BLE security. In this case, all
-characteristics are accessible without pairing. The GATT structure remains
-identical.
+Development builds use the same mandatory pairing and bonding configuration.
+There is no supported build-time or runtime option to disable BLE security.
 
 ---
 
@@ -228,10 +213,10 @@ identical.
 All UUIDs share the base `d1c0c0aX-6b48-4b2a-9b1d-59f9f2b0a1e1` where `X`
 is the characteristic index (1–4).
 
-When BLE security is enabled, the Measures characteristic requires an
-authenticated connection for both read access and notification delivery.
+The Measures characteristic requires authentication for reads and also supports
+notifications. Complete pairing before reading or subscribing.
 
-### Additional Services (Portable mode)
+### Additional Services (Portable Mode)
 
 In Portable mode the bonded link also exposes three more services — alongside
 the AGo data service above — for Wi-Fi provisioning, firmware update, and device
@@ -243,7 +228,7 @@ identity:
 | AirGradient OTA | `ab9a0001-1e3c-4f5a-9b6d-0a1b2c3d4e5f` | Firmware update push (§11) |
 | Device Information (DIS) | `0x180A` | Model / Serial / Firmware / Manufacturer (§9) |
 
-Neither UUID is added to the advertising payload (the client is already
+These service UUIDs are not added to the advertising payload (the client is already
 connected on the bonded link); discover them via GATT service discovery after
 connecting.
 
@@ -251,9 +236,10 @@ connecting.
 
 ## 4. Serialization
 
-All characteristic payloads use **CBOR** (RFC 8949, Concise Binary Object
-Representation). CBOR is a compact binary encoding similar to JSON in
-structure.
+The Go data service uses **CBOR** for Measures, Status, Config, and History
+control messages. History data is tagged packed binary, provisioning uses
+UTF-8 JSON, and OTA Data carries raw firmware bytes. Read the framing rules
+for the specific characteristic before decoding.
 
 ### Conventions
 
@@ -313,9 +299,9 @@ Subscribe to notifications on this characteristic to receive live sensor
 data. The device sends a notification each time a new measurement cycle
 completes (typically every few seconds, configurable via Config).
 
-In production builds, both reads and subscription require an authenticated
-(paired) connection. If the client reads or enables notifications before
-pairing, the BLE stack may trigger the passkey pairing flow automatically.
+Complete pairing before reading or subscribing. If the client reads or enables
+notifications before pairing, the BLE stack may trigger the passkey pairing
+flow automatically.
 
 Notifications are only sent while the device is in **Portable** operating
 mode and the BLE client is connected.
@@ -342,8 +328,8 @@ CBOR map. All keys are optional except `"ts"`.
 | `"pm25"` | float32 | ug/m3 | PM 2.5 |
 | `"pm10"` | float32 | ug/m3 | PM 10 |
 | `"co2"` | uint | ppm | CO2 concentration |
-| `"tvoc"` | uint | index | TVOC index (1–500) |
-| `"nox"` | uint | index | NOx index (1–500) |
+| `"tvoc"` | uint | index | TVOC index (zero is accepted during startup) |
+| `"nox"` | uint | index | NOx index (zero is accepted during startup) |
 | `"pres"` | float32 | hPa | Atmospheric pressure |
 | `"lat"` | float64 | degrees | GPS latitude |
 | `"lon"` | float64 | degrees | GPS longitude |
@@ -393,7 +379,7 @@ When GPS is included:
 }
 ```
 
-GPS keys absent (not tracking). `"co2"` key absent (sensor not ready).
+GPS keys absent (no valid fix in this example). `"co2"` key absent (sensor not ready).
 
 ---
 
@@ -406,9 +392,9 @@ GPS keys absent (not tracking). `"co2"` key absent (sensor not ready).
 ### Usage
 
 Read this characteristic at any time to get a snapshot of the device's
-current status. The device refreshes the value internally on battery
-polls, GPS fix changes, history-delete reconciliation, and on every
-tracking state transition.
+current status. The device refreshes the value on connection, periodic battery
+polls, charging/tracking transitions, and storage reconciliation. GPS fix events
+update the internal GPS cache; they do not independently refresh Status.
 
 ### Notifications
 
@@ -433,7 +419,7 @@ your local model. A notification is a single ATT PDU and is kept bounded by
 sending the relevant state fields. The **Read** value remains the full 10-key snapshot
 (see Payload); re-read Status for the full state on connect.
 
-| Event | NOTIFY? | Payload reflects |
+| Event | NOTIFY? | Payload Reflects |
 |---|---|---|
 | `start_tracking` succeeded | Yes | `tracking: true`, `session: N`, `trk: 1` |
 | `start_tracking` failed at storage open | Yes | `tracking: false`, `session: 0`, `trk: 0` |
@@ -445,7 +431,7 @@ sending the relevant state fields. The **Read** value remains the full 10-key sn
 | Resume-after-sleep failed in firmware init | No | BLE is not up yet; client picks it up via Read on the next connect |
 | Periodic BMS / GPS refresh (no charging change) | No | — |
 
-#### Disconnect notice (`disc`)
+#### Disconnect Notice (`disc`)
 
 Before the device tears down the BLE link, it pushes a single-key
 `{"disc": <text>}` notice so the client can treat the imminent disconnect as
@@ -467,14 +453,14 @@ notification), treat the disconnect itself as the signal.
 | `"op_stationary"` | Operating mode changing to Stationary |
 | `"op_offline"` | Operating mode changing to Offline |
 
-#### Read is authoritative
+#### Read Is Authoritative
 
 NimBLE silently drops notifications to peers that have not yet enabled
 the CCCD, and notifications can be lost in transit. Treat Status NOTIFY
 as best-effort. Clients that just connected MUST issue a Read on Status
 before relying on subsequent notifies to learn the current state.
 
-#### Tracking Commands And Notifications
+#### Tracking Commands and Notifications
 
 When a BLE command starts, pauses, resumes, or stops a session and changes its
 state, it produces **two** notifications on different characteristics:
@@ -493,15 +479,16 @@ Paused and sends only the failed Config result. Pause sync/close failure still
 changes the state to Paused and sends both the Status delta and a failed Config
 result.
 
-#### Reconciling An Unexpected Session End
+#### Reconciling an Unexpected Session End
 
 If you receive a NOTIFY with `trk: 0` that did **not** follow
 a client-issued `stop_tracking` command, treat it as "session ended on
 device" and refresh local state from the device (re-list History,
 re-read Status). Do not try to infer the cause from the payload — the
-on-device snackbar carries the human-readable reason. The most common
-causes are a manual stop on the device's own menu and (rarely) a NAND
-fault at the storage layer.
+on-device snackbar carries the human-readable reason. A stop on the device
+menu or a data-clear operation can end the session.
+Do not assume a route append failure will end tracking automatically; reconcile
+state and downloaded data separately.
 
 ### Payload
 
@@ -514,17 +501,16 @@ via Read. The `disc` key is never part of the Read snapshot.
 |---|---|---|---|
 | `"gps_fix"` | uint | No (Read-only) | GPS fix type: `0` = none, `2` = 2D, `3` = 3D |
 | `"gps_sat"` | uint | No (Read-only) | Satellite count (0 if unavailable) |
-| `"bat_pct"` | uint | Yes (charging delta) | Battery percentage, 0–100 |
-| `"bat_v"` | float32 | Yes (charging delta) | Battery voltage in Volts |
+| `"bat_pct"` | uint | Yes (charging delta) | Battery percentage, 0–100; unavailable becomes 0 |
+| `"bat_v"` | float32 | Yes (charging delta) | Battery voltage in volts; unavailable becomes 0 |
 | `"charging"` | text | Yes (charging delta) | Charging state (see table below) |
-| `"tracking"` | bool | Yes (tracking delta) | Legacy flag: `true` while Recording or Paused; will be deprecated soon |
+| `"tracking"` | bool | Yes (tracking delta) | Compatibility flag: `true` while Recording or Paused |
 | `"session"` | uint | Yes (tracking delta) | Current session ID, retained while Paused; 0 when Idle |
 | `"trk"` | uint | Yes (tracking delta) | Tracking state: `0` = Idle, `1` = Recording, `2` = Paused |
 | `"flash_kb"` | uint | No (Read-only) | Total flash storage capacity in KB |
 | `"used_kb"` | uint | No (Read-only) | Used flash storage in KB |
 
-**Upcoming deprecation:** the BLE `tracking` field will be deprecated soon.
-Clients should use `trk` for tracking state. `tracking` remains in the current
+Use `trk` for the full tracking state. `tracking` remains in the current
 Read and notification payloads for compatibility; it is `true` for both
 Recording and Paused and `false` for Idle. Clients should tolerate unknown map
 keys. When supporting older firmware without `trk`, use `tracking` as a fallback;
@@ -538,16 +524,17 @@ but the retained session cannot be deleted until it is stopped.
 The firmware version is **not** in this payload. Read it from the Device
 Information Service Firmware Revision characteristic (`0x2A26`, see §9).
 
-#### Polling the non-urgent fields
+#### Polling the Non-Urgent Fields
 
-The four Read-only fields above (`gps_fix`, `gps_sat`, `flash_kb`, `used_kb`)
-are **never pushed** via NOTIFY. They change slowly and are not urgent, so the
-device leaves them to the client to poll. While a screen that displays any of
-them is visible, **poll the Status characteristic with a Read** at a sensible
-cadence — roughly every **30 seconds**, aligned with the device's internal
-~30 s battery-refresh rate. Polling faster yields no fresher data; stop polling
-when no such screen is visible to save power. Battery and charging state arrive
-promptly via the charging-transition NOTIFY, so they do not require polling.
+The Read-only fields (`gps_fix`, `gps_sat`, `flash_kb`, `used_kb`) are never
+pushed as Status deltas. Poll Status while a screen needs them. A roughly
+30-second cadence matches the periodic full battery poll, though transitions
+can refresh the snapshot sooner.
+
+Also poll when displaying battery percentage or voltage: these values change
+without a charging transition and therefore without a notification. Charging
+deltas report changes in power source or charging-versus-not-charging state;
+they are not a continuous battery telemetry stream.
 
 ### Charging State Values
 
@@ -597,7 +584,7 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (18-key CBOR map)
+#### Payload (18-Key CBOR Map)
 
 | Key | Type | Description |
 |---|---|---|
@@ -652,9 +639,9 @@ with unchanged coefficients. Writing this group back selects custom; omit
 
 | Value | Meaning |
 |---|---|
-| `"portable"` | Portable mode (BLE active, battery powered) |
-| `"stationary"` | Stationary mode (Wi-Fi connected, wall powered) |
-| `"offline"` | Offline mode (no connectivity) |
+| `"portable"` | Portable mode (connectable BLE; battery or USB power) |
+| `"stationary"` | Stationary mode (Wi-Fi; connectivity depends on setup and network availability) |
+| `"offline"` | Energy Saving mode (brief measurement broadcasts; no connectable BLE or Wi-Fi) |
 
 Offline appears as **Energy Saving** on the display. Keep using `"offline"`
 for `op_mode` and `"op_offline"` for disconnect notices.
@@ -685,8 +672,15 @@ Write a CBOR map to update device configuration. Include `"op": "set"` and
 {"op": "set", "meas_int": 30}
 ```
 
-All config keys from the Read payload are supported. The `"op"` key is
-required.
+The `"op"` key is required. The Read payload defines the config keys; board
+capability restrictions still apply, including V2's read-only `tled` field.
+
+Serialize writes: Config and History each have one pending request slot, and a
+new write can replace an unconsumed request. A GATT write response acknowledges
+transport receipt, not application completion. Subscribe first, wait for the
+expected result/delta, and use Read for reconciliation. An unchanged config
+write produces no delta. Empty, malformed, or over-256-byte Config/History
+writes can be ignored without an application error response.
 
 **Single field per write.** A `set` may carry **only one** recognized config
 key. This keeps the resulting Config NOTIFY (a delta — see 7.4) within a single
@@ -697,7 +691,7 @@ is applied. To change several settings, send one `set` per field.
 Deprecated keys (`"pm_int"`, `"other_int"`, `"disp_int"`) are accepted and
 silently ignored for backward compatibility. They do not modify any setting.
 
-#### Config key types for writes
+#### Config Key Types for Writes
 
 | Key | Expected Type | Notes |
 |---|---|---|
@@ -707,7 +701,7 @@ silently ignored for backward compatibility. They do not modify any setting.
 | `"pm_aqi"` | bool | |
 | `"pchart"` | uint | 0–8, using the Read payload metric IDs |
 | `"gps_mode"` | text | `"off"`, `"tracking"`, or `"always"` |
-| `"auto_lock"` | uint | |
+| `"auto_lock"` | uint | 0 (disabled), 10, 30, or 60 seconds |
 | `"op_mode"` | text | `"portable"`, `"stationary"`, or `"offline"` |
 | `"bledi"` | text | `"aqi"` or `"co2"` |
 | `"bled"` | uint | 0–3 (back LED brightness) |
@@ -749,8 +743,9 @@ interval, GPS mode, LED, buzzer, ABC, learning-offset, or correction value
 (`single_field_only`). After these checks, V2 rejects `tled` writes with
 `unsupported`, including writes of `0`. The field remains readable (default
 `0`); rejected writes emit no Config delta. A settings persistence failure returns
-`config_save_failed`. On rejection no settings are modified and the device
-sends an error notification instead:
+`config_save_failed` and leaves active settings unchanged. Persistence has no
+multi-key rollback, so that error does not guarantee unchanged storage after a
+reboot. Validation rejections apply nothing. Errors use a Config notification:
 
 ```json
 {"type": "cmd_result", "cmd": "set", "ok": false, "err": "unknown_config_key"}
@@ -764,7 +759,7 @@ Aiding keys (`lat`, `lon`, `alt`, `pos_acc`, `epoch`, `time_acc`) are valid only
 under `op:"cmd"` (`set_aiding`); under `op:"set"` they are rejected as
 `unknown_config_key`.
 
-#### Leaving `"portable"` mode disconnects BLE
+#### Leaving Portable Mode Disconnects BLE
 
 Any change of the operating mode away from Portable tears down the Portable BLE
 link — whether **you** set `op_mode` to `"stationary"`/`"offline"`, or the user
@@ -775,8 +770,8 @@ short settle window (~200 ms) so the notification can drain, then disconnects an
 switches mode. So an `op_mode` set is **not** confirmed with a Config delta;
 instead, watch for the `disc` notice on **Status** and treat the following
 disconnect as completion of the switch. Because notifications are best-effort,
-the `disc` may occasionally be missed; if a disconnect follows (with no reconnect
-on the AGo service), assume the device left Portable mode.
+the `disc` may be missed. A disconnect alone leaves the outcome uncertain;
+confirm the mode on the device or through its newly available interface.
 
 ### 7.3 Write: Execute Command
 
@@ -792,7 +787,7 @@ Write a CBOR map to execute a device command.
 
 | `"cmd"` Value | Action |
 |---|---|
-| `"co2_cal"` | Trigger CO2 sensor background calibration |
+| `"co2_cal"` | Request manual CO2 calibration |
 | `"clear_data"` | Erase all stored route data and clear chart cache |
 | `"factory_rst"` | Reset to factory defaults: clears data, restores default settings, deletes BLE bonds, and reboots the device |
 | `"start_tracking"` | Begin GPS + sensor route logging session |
@@ -891,13 +886,12 @@ The phone should send this command shortly after connecting, using the
 phone's own location and clock as the data source. It can also be re-sent
 whenever the phone obtains a significantly updated position.
 
-**System clock side-effect**: If the device's system clock has not yet been
-synced (no GPS timestamp received), and the aiding data includes a valid
-`"epoch"`, the device also sets its internal clock from the aiding epoch.
-This provides meaningful timestamps for route-point data before the first
-GPS fix arrives. The aiding epoch is approximate, so the device does not
-mark the clock as synced — when a real GPS timestamp arrives, it overwrites
-with the authoritative time.
+**System clock side effect:** the BLE command handler immediately sets the
+system clock whenever a non-zero `"epoch"` is supplied, even if GPS previously
+synchronized it. The GPS worker separately applies aiding to the receiver; a
+successful command result does not prove receiver acceptance or a new fix.
+Send trustworthy UTC time because subsequent timestamps can change. See
+[GPS clock behavior](docs/gps_service.md) for worker synchronization rules.
 
 ### 7.4 Notify: Config Changed
 
@@ -905,7 +899,7 @@ Subscribe to Config notifications to receive confirmation when any
 configuration change is applied (whether from this BLE client, another
 source, or the device's own UI).
 
-#### Payload (delta CBOR map)
+#### Payload (Delta CBOR Map)
 
 A Config NOTIFY is a **delta**, not the full snapshot: `"type": "config"` plus
 **only the field(s) that changed**. A single-field `set` (and the device UI,
@@ -925,9 +919,10 @@ regardless of which notification kind was last sent).
 
 If a notification **fails to CBOR-decode**, do not guess — re-Read the
 characteristic. A notification is a single ATT PDU and is never fragmented, so a
-payload that exceeds the negotiated MTU is truncated by the stack; a failed
-decode is the client's signal to fall back to the authoritative Read. Keeping a
-negotiated MTU ≥ 185 B (see §12) makes this path unnecessary in practice.
+payload that exceeds the negotiated MTU may be lost or incomplete. Re-read
+Config to recover settings; a command result is not retained by that Read.
+Keep MTU at least 185 for the notification budget in §12, and retain timeout
+handling for lost notifications.
 
 Decoupling NOTIFY from the Read snapshot keeps every notification within one ATT
 PDU, independent of how many config fields the snapshot grows to carry.
@@ -948,9 +943,9 @@ loading indicator while waiting for the final result.
 The `"cmd"` value echoes the command string from the write request.
 
 **Client handling**: When a `"cmd_progress"` notification arrives, display a
-progress/loading state for the indicated command. The final outcome will
-arrive as a separate `"cmd_result"` notification. Clients that do not
-recognize `"cmd_progress"` can safely ignore it — the `"cmd_result"`
+progress/loading state for the indicated command. The device reports the final
+outcome through a separate, best-effort `"cmd_result"` notification. Clients that
+do not recognize `"cmd_progress"` can safely ignore it — the `"cmd_result"`
 notification is unchanged and self-contained.
 
 For `"co2_cal"`, do not clear the loading state or issue another calibration
@@ -992,6 +987,8 @@ description is available.
 
 | Error String | Command | Cause |
 |---|---|---|
+| `"invalid_config_value"` | `set` | Invalid field type, range, correction group, or complete settings candidate |
+| `"config_save_failed"` | `set` | Persistence failed; active settings were not replaced |
 | `"unsupported"` | `set` | Touch LED writes are unavailable on V2 |
 | `"unsupported"` | `co2_cal` | No CO2 sensor is selected or the selected driver does not support manual calibration; S12 and SCD4x support it, while the current STCC4 driver does not |
 | `"calibration_failed"` | `co2_cal` | CO2 calibration procedure failed |
@@ -1075,9 +1072,9 @@ Request retransmission of specific point indices that were missed during the
 initial download. The `"pts"` array contains zero-based point indices. Can
 only be sent after a download has completed (after receiving `"done"`).
 
-The device's write buffer (256 bytes) limits the `"pts"` array to
-approximately 50 indices per request. For larger gaps, send multiple `fill`
-requests.
+Send at most 50 indices per request and keep the complete encoded command
+within 256 bytes and the negotiated write limit. For larger gaps, send multiple
+`fill` requests, waiting for each `done` before sending the next.
 
 #### End Download
 
@@ -1194,6 +1191,11 @@ Points are streamed sequentially starting from index 0. The `point_index`
 field tells the client which points are in this notification. Use it to
 detect gaps (missed notifications).
 
+The current wire index is only 16 bits although stored route counts are wider.
+Indices wrap beyond 65,535; sessions above 65,536 points cannot be unambiguously
+recovered with this index alone. Treat this as a protocol limitation rather than
+silently merging wrapped indices into earlier points.
+
 #### Download Done
 
 Sent after all binary data has been streamed (for both `start` and `fill`
@@ -1205,7 +1207,11 @@ operations).
 
 | Field | Type | Description |
 |---|---|---|
-| `"sent"` | uint | Number of points actually sent |
+| `"sent"` | uint | Points processed for transmission; not a client receipt acknowledgement |
+
+Count received indices independently. `fill` skips unreadable indices and
+reports only the points it could read; a `done` response does not prove that
+all requested gaps were filled.
 
 #### Download Ended
 
@@ -1248,22 +1254,20 @@ Sent when an operation fails.
 
 #### Complete Download
 
-```text
-Phone                              Device
-  |                                  |
-  |---- {"op": "list"} ------------>|
-  |<-- [0x00] sessions list --------|
-  |                                  |
-  |---- {"op": "start", session: N} |
-  |<-- [0x00] started --------------|
-  |<-- [0x01] points 0-3 ----------|  (streaming begins)
-  |<-- [0x01] points 4-7 ----------|
-  |     ...                          |
-  |<-- [0x01] points 296-299 ------|
-  |<-- [0x00] done (sent: 300) ----|  (streaming complete)
-  |                                  |
-  |---- {"op": "end"} ------------>|
-  |<-- [0x00] ended ----------------|
+```mermaid
+sequenceDiagram
+    participant Phone
+    participant Device
+    Phone->>Device: list
+    Device-->>Phone: 0x00 sessions pages
+    Phone->>Device: start session N
+    Device-->>Phone: 0x00 started, total 300
+    loop Chunks of up to four points
+        Device-->>Phone: 0x01 index and packed points
+    end
+    Device-->>Phone: 0x00 done, sent 300
+    Phone->>Device: end
+    Device-->>Phone: 0x00 ended
 ```
 
 #### With Gap Recovery
@@ -1271,59 +1275,44 @@ Phone                              Device
 BLE notifications are unreliable — they can be lost. The client should track
 which point indices it received and use `fill` to request any gaps.
 
-```text
-Phone                              Device
-  |                                  |
-  |---- {"op": "start", session: N} |
-  |<-- [0x00] started --------------|
-  |<-- [0x01] points 0-3 ----------|
-  |<-- [0x01] points 4-7 ----------|
-  |     ... (points 8-11 lost) ...   |
-  |<-- [0x01] points 12-15 --------|
-  |     ...                          |
-  |<-- [0x00] done (sent: 300) ----|
-  |                                  |
-  |  (client detects gap: 8-11)      |
-  |                                  |
-  |---- {"op": "fill", pts:[8,9,10,11]} |
-  |<-- [0x01] point 8 -------------|
-  |<-- [0x01] point 9 -------------|
-  |<-- [0x01] point 10 ------------|
-  |<-- [0x01] point 11 ------------|
-  |<-- [0x00] done (sent: 4) ------|
-  |                                  |
-  |  (verify all points received)    |
-  |                                  |
-  |---- {"op": "end"} ------------>|
-  |<-- [0x00] ended ----------------|
+```mermaid
+sequenceDiagram
+    participant Phone
+    participant Device
+    Phone->>Device: start session N
+    Device-->>Phone: 0x00 started
+    Device-->>Phone: 0x01 points 0-7 in two chunks
+    Device--xPhone: 0x01 points 8-11 lost
+    Device-->>Phone: 0x01 remaining chunks
+    Device-->>Phone: 0x00 done
+    Phone->>Phone: Detect missing indices 8-11
+    Phone->>Device: fill indices 8, 9, 10, 11
+    loop Each requested readable point
+        Device-->>Phone: 0x01 single point
+    end
+    Device-->>Phone: 0x00 done, sent 4
+    Phone->>Phone: Verify all expected indices are present
+    Phone->>Device: end
+    Device-->>Phone: 0x00 ended
 ```
 
 #### Delete a Session
 
-```text
-Phone                              Device
-  |                                  |
-  |---- {"op": "list"} ------------>|
-  |<-- [0x00] sessions list --------|
-  |                                  |
-  |  (user selects session to delete)|
-  |                                  |
-  |---- {"op": "delete", session: N}|
-  |<-- [0x00] deleted (session: N) -|
-  |                                  |
-  |  (optionally re-list to confirm) |
-  |                                  |
-  |---- {"op": "list"} ------------>|
-  |<-- [0x00] sessions list --------|
-```
-
-If the session is currently being tracked:
-
-```text
-Phone                              Device
-  |                                  |
-  |---- {"op": "delete", session: N}|
-  |<-- [0x00] error: session_active |
+```mermaid
+sequenceDiagram
+    participant Phone
+    participant Device
+    Phone->>Device: list
+    Device-->>Phone: 0x00 sessions pages
+    Note over Phone: User selects session N
+    Phone->>Device: delete session N
+    alt Session is Recording or Paused
+        Device-->>Phone: 0x00 error, session_active
+    else Deletable session
+        Device-->>Phone: 0x00 deleted, session N
+        Phone->>Device: list to confirm
+        Device-->>Phone: 0x00 remaining sessions
+    end
 ```
 
 ### 8.5 Client Implementation Guide
@@ -1383,8 +1372,7 @@ on a dedicated GATT service that sits alongside the data service.
 > (over a Just Works connection); this section documents the Portable
 > bonded-link flow.
 
-Unlike the rest of this spec, provisioning payloads are **JSON** (UTF-8), not
-CBOR.
+Provisioning payloads are **JSON** (UTF-8), not CBOR.
 
 ### Service and Characteristics
 
@@ -1400,16 +1388,18 @@ CBOR.
 Both characteristics are encrypted; on the Portable link the existing passkey
 bond satisfies that, so no extra pairing step is needed.
 
-### Availability and the on-demand radio
+### Availability and the On-Demand Radio
 
 - The provisioning service is present on **every Portable boot** and stays idle
   until the client writes a scan or credentials request.
-- The Wi-Fi radio is **off by default** and powered only for the few seconds of
-  an active scan or connect, then dropped. Two consequences for the client:
-  - A scan can take several seconds (the radio time-shares the antenna with
-    BLE).
-  - The radio auto-drops after ~90 s of provisioning inactivity. Treat a stale
-    scan list as expired and re-scan before submitting if the user lingered.
+- The Wi-Fi radio is **off by default**. A scan or credentials request powers
+  it up. A scan can take several seconds because Wi-Fi shares the antenna
+  with BLE.
+- Scan completion or a failed connection does not immediately turn Wi-Fi off.
+  Successful connection, BLE disconnect, or the roughly 90-second deadline
+  after the latest request drops the radio.
+- Wait for each operation before sending another. A newer pending scan or
+  credentials request can replace one the device has not consumed.
 
 ### 10.1 Wi-Fi Scan
 
@@ -1468,12 +1458,17 @@ Write a JSON object to the Credentials/Status characteristic:
 |---|---|---|---|
 | `"ssid"` | text | Yes | Target network SSID |
 | `"password"` | text | No | 8–63 chars; omit or empty for an open network |
-| `"disableCloud"` | bool | No | Persisted; suppresses cloud upload in Stationary |
-| `"staticIp"` | object | No | All four sub-fields required together; omit for DHCP |
+| `"disableCloud"` | bool | No | Defaults to false; saved on connection when settings persistence succeeds. Suppresses subsequent cloud POST, Fetch, and Stationary update checks |
+| `"staticIp"` | object | No | Supply all four sub-fields for a usable configuration; omit for DHCP |
 
 `"staticIp"` sub-fields (`"ip"`, `"netmask"`, `"gateway"`, `"dns"`) are dotted
-IPv4 strings. If `"staticIp"` is present it must be complete and valid,
-otherwise it is ignored and the device uses DHCP.
+IPv4 strings. An invalid supplied address string or a missing/zero `ip` causes
+the credentials request to be ignored, not converted to DHCP. Missing other
+sub-fields remain zero in the current parser; clients should supply the full
+record. Malformed JSON, missing/empty SSID, and invalid password length are also
+ignored without an error notification. Apply a client timeout and correct the
+payload before retrying. Omit `staticIp` to request DHCP and clear prior static
+metadata after a successful save.
 
 ### 10.3 Status Notifications
 
@@ -1486,54 +1481,62 @@ STA connection, and notifies status on the Credentials/Status characteristic:
 
 | Code | Meaning |
 |---|---|
-| `0` | `WIFI_CONNECTED` — connected and credentials saved |
+| `0` | `WIFI_CONNECTED` — Wi-Fi connection succeeded; see persistence warning below |
 | `10` | `WIFI_CONNECT_FAILED` — could not connect; re-prompt and retry |
+| `14` | `CREDENTIALS_NOT_SAVED` — connection succeeded but credential persistence failed; emitted before `0` |
 
-> In Portable, only codes `0` and `10` are emitted. The server-reachability
+> Portable uses codes `0`, `10`, and the persistence warning `14`. The server-reachability
 > codes (`1`, `2`, `3`, `11`, `12`, `13`) defined for the provisioning service
 > are produced only during Stationary onboarding, where the device performs a
 > cloud check; Portable provisioning does not.
 
-### Verify-then-drop semantics (important)
+### Verify-Then-Drop Behavior
 
-`WIFI_CONNECTED` means the credentials were **verified and saved** — it does
-**not** mean the device is online to the cloud. After a successful connect the
-device drops the Wi-Fi radio and **stays in Portable**. The saved credentials
-are used the next time the device enters Stationary mode. The session stays
-open, so the client can scan / submit again to reconfigure.
+`WIFI_CONNECTED` confirms a Wi-Fi connection, not cloud reachability. Credential
+saving is attempted first; retain a preceding `14` warning even when `0`
+follows. Status delivery is best-effort, and `0` is not an acknowledgement that
+Go's separate cloud/static-IP settings were persisted.
+
+After a successful connect the device drops Wi-Fi and **stays in Portable**.
+Successfully saved credentials are used on the next Stationary entry. The BLE
+provisioning service stays available for another scan or submission.
 
 A failed connect leaves the device listening; submit corrected credentials to
 retry.
 
-### History export contention
+### History Export Contention
 
-While the provisioning radio is active (during a scan/connect), History export
+While the provisioning radio remains active, including after a scan, History export
 requests (`list` / `start` / `fill`) are rejected with
 `{"type": "error", "err": "busy"}`. Do not interleave a History download with
 provisioning; retry the export once provisioning is idle.
 
 ### Flow
 
-```text
-Phone                              Device (Portable, bonded)
-  |                                  |
-  |-- write Scan char -------------->|  (powers Wi-Fi, scans)
-  |<-- notify scan page 1/2 ---------|
-  |<-- notify scan page 2/2 ---------|
-  |                                  |
-  |-- write Credentials char ------->|  (single STA connect)
-  |<-- notify {"status": 0} ---------|  (saved + verified, radio dropped)
-  |                                  |
-  |  (creds used on next Stationary entry; device stays Portable)
+```mermaid
+sequenceDiagram
+    participant Phone
+    participant Device as Go in Portable Mode
+    Phone->>Device: Subscribe to Scan and Credentials/Status
+    Phone->>Device: Write Scan
+    Device->>Device: Power Wi-Fi and scan
+    Device-->>Phone: JSON scan pages
+    Phone->>Device: Write credentials JSON
+    Device->>Device: Connect and attempt credential persistence
+    opt Credential persistence fails
+        Device-->>Phone: Status 14
+    end
+    Device-->>Phone: Status 0 on connection
+    Device->>Device: Drop Wi-Fi and stay in Portable
+    Note over Phone,Device: Successfully saved credentials apply on next Stationary entry
 ```
 
-### Upgrade note: GATT cache
+### GATT Cache After an Upgrade
 
-The provisioning and DIS services are new in this firmware. A phone that bonded
-to the device **before** this firmware may have a cached GATT layout without
-them. If the services are missing after upgrade, refresh the GATT cache (the
-device sends a Service Changed indication, `0x1801`) or remove and re-pair the
-device.
+A bonded phone can retain an older GATT layout after firmware changes. If
+services are missing after an upgrade, rediscover services using the platform's
+GATT-cache handling or remove and re-pair the device. Do not treat cached
+service discovery as proof of the current firmware's capabilities.
 
 ---
 
@@ -1565,9 +1568,8 @@ data service uses, so no second bond. Status is **NOTIFY-only** (no readable
 value); subscribe to its CCCD before starting. Control payloads are **CBOR**;
 Data payloads are **raw image bytes** (not CBOR).
 
-Neither UUID is advertised; discover the service via GATT discovery after
-connecting. A phone bonded before this firmware may need a GATT-cache refresh
-(see §10 "Upgrade note").
+The OTA service UUID is not advertised; discover it after connecting. A bonded
+phone may need to refresh its GATT cache after a firmware upgrade (see §10).
 
 ### 11.1 Control (Phone -> Device)
 
@@ -1625,10 +1627,12 @@ just the file bytes split into chunks.
   ≤ **512** bytes (the device's hard cap). Negotiate MTU 512 (the device
   prefers 512) for a 509-byte chunk.
 - Send chunks sequentially; the device flashes each as it arrives.
-- Write-Without-Response has no ATT ACK — pace sends so the local TX queue does
-  not overrun (a sub-millisecond inter-chunk gap is enough in practice).
-- Sending Data before the ready NOTIFY, an empty write, an oversized write, or
-  more bytes than `total` aborts the transfer with `TransportError`.
+- Write-Without-Response has no ATT ACK. Respect the platform's transmit
+  readiness/backpressure and monitor device progress; no fixed inter-chunk
+  delay guarantees delivery on every phone.
+- Sending Data during Start before ready aborts with `TransportError`. During
+  downloading, empty or oversized writes and bytes beyond `total` do likewise.
+  Data outside an active transfer is ignored.
 
 ### 11.3 Status (Device -> Phone)
 
@@ -1647,7 +1651,7 @@ Subscribe for progress and the terminal result. CBOR map, always 3 keys:
 Drive the progress bar from `"bytes"`, **not** your own send count — with
 Write-Without-Response the send count runs ahead of what the device has flashed.
 
-#### State values
+#### State Values
 
 | Value | State | Meaning |
 |---|---|---|
@@ -1656,7 +1660,7 @@ Write-Without-Response the send count runs ahead of what the device has flashed.
 | `3` | Done | Image applied; the device reboots into it |
 | `4` | Failed | Transfer failed (see `result`) |
 
-#### Result values
+#### Result Values
 
 | Value | Result | Meaning |
 |---|---|---|
@@ -1673,19 +1677,23 @@ A mid-transfer **disconnect** ends the transfer as `TransportError` (not
 
 ### 11.4 Flow
 
-```text
-Phone                              Device (Portable, bonded)
-  |-- subscribe Status CCCD ------->|
-  |-- write Control {op:start} ---->|  (validate, erase partition — seconds)
-  |<-- notify {state:1,result:0} ---|  (ready)
-  |-- Data chunk (WnR) ------------>|  (flash)
-  |-- Data chunk (WnR) ------------>|
-  |     ...                          |
-  |<-- notify {state:1,bytes:N} ----|  (periodic progress)
-  |-- write Control {op:end} ------>|
-  |<-- notify {state:2} ------------|  (applying)
-  |<-- notify {state:3,result:0} ---|  (done)
-  |        (device reboots into the new image)
+```mermaid
+sequenceDiagram
+    participant Phone
+    participant Device as Go in Portable Mode
+    Phone->>Device: Subscribe to OTA Status
+    Phone->>Device: Control start with total bytes
+    Device->>Device: Validate and erase passive partition
+    Device-->>Phone: Downloading, ready
+    loop Sequential image chunks
+        Phone->>Device: Data Write Without Response
+        Device-->>Phone: Periodic accepted-byte progress
+    end
+    Phone->>Device: Control end
+    Device-->>Phone: Applying
+    Device->>Device: Validate image and select boot partition
+    Device-->>Phone: Done on success
+    Device->>Device: Reboot
 ```
 
 ### 11.5 Constraints
@@ -1705,9 +1713,9 @@ throughput, and restores a relaxed window (30–50 ms) on a non-success terminal
 
 This is a peripheral-initiated connection-parameter-update request — the central
 (phone) may accept, clamp, or reject it, and iOS / Android each enforce their own
-interval policy. For best throughput, let the OS honor a short interval during
-the transfer and avoid forcing a long one. The transfer is correct at any
-negotiated interval; only its speed is affected.
+interval policy. Use platform flow control and keep data moving within the
+stall timeout; connection parameters affect both throughput and the ability to
+finish without a timeout.
 
 ---
 
@@ -1728,7 +1736,7 @@ negotiated interval; only its speed is affected.
   the client should treat a failed CBOR decode as a reason to re-Read the
   characteristic.
 
-### Required MTUs by operation
+### Required MTUs by Operation
 
 - **Config Read**: the full 18-key snapshot is bounded by a 512-byte
   characteristic buffer. Use Read-Long / Read Blob and
@@ -1743,8 +1751,9 @@ negotiated interval; only its speed is affected.
   recommended for normal operation.
 - **History binary notifications**: each chunk is 227 bytes (3-byte header plus
   four 56-byte points), so the negotiated MTU must be at least **230 bytes** to
-  carry one complete chunk. The current firmware always sends four points per
-  chunk; a larger MTU does not increase that count.
+  carry a full chunk. The firmware sends up to four points per chunk; the last
+  chunk can be smaller and `fill` sends individual points. A larger MTU does
+  not increase that count.
 - **OTA Data writes**: use Write Without Response with chunks no larger than
   `MTU - 3`, and no larger than the device's 512-byte write cap. At the preferred
   MTU 512, the maximum ATT payload is 509 bytes.
@@ -1756,8 +1765,8 @@ negotiated interval; only its speed is affected.
 ### Config Command Errors
 
 Command result notifications (`"type": "cmd_result"`) may include an `"err"`
-field. Error strings are operation-specific and defined by the device
-firmware.
+field. See [Command Error Strings](#command-error-strings) for the supported
+errors and [Config Response](#response) for validation and persistence behavior.
 
 ### History Protocol Errors
 
@@ -1768,7 +1777,7 @@ firmware.
 | `"flash_error"` | Storage read failed | Retry or skip session |
 | `"delete_failed"` | Flash delete failed | Retry or ignore |
 | `"session_active"` | Cannot delete the active tracking session | Stop tracking first via Config `"stop_tracking"` command, then retry |
-| `"busy"` | Provisioning Wi-Fi radio is active | Wait until provisioning is idle (radio drops after a scan/connect or ~90 s), then retry |
+| `"busy"` | Provisioning Wi-Fi radio is active | Wait until the radio drops after successful connection or the idle deadline, then retry |
 
 ### Connection Errors
 
@@ -1810,7 +1819,8 @@ binary data from History notifications.
 - All multi-byte fields are **little-endian**.
 - Check each field against its sentinel value to determine validity. If a
   field equals its sentinel, treat it as "not available."
-- The `timestamp` field is always valid (no sentinel).
+- The `timestamp` has no wire sentinel, but can be zero or approximate before
+  clock synchronization. Its presence does not establish clock accuracy.
 - The `gps_fix` field is always valid (0 means no fix).
 
 ---
@@ -1828,46 +1838,27 @@ libraries available:
 | Python | `cbor2` |
 | Dart/Flutter | `cbor` |
 
-### Decoding Example (Pseudocode)
+### Decoding Example
 
-```text
-// Measures notification (no tag prefix)
-raw_bytes = notification.value
-map = cbor_decode(raw_bytes)
-if "t" in map:
-    temperature = map["t"]   // float32
-if "co2" in map:
-    co2 = map["co2"]         // uint
+```python
+import cbor2
 
-// History notification (has tag prefix)
-raw_bytes = notification.value
-tag = raw_bytes[0]
-if tag == 0x00:
-    map = cbor_decode(raw_bytes[1:])
-    handle_control(map)
-elif tag == 0x01:
-    point_index = uint16_le(raw_bytes[1:3])
-    point_data = raw_bytes[3:]
-    parse_route_points(point_index, point_data)
+measures = cbor2.loads(measures_bytes)
+temperature = measures.get("t")  # None means unavailable
+if history_bytes[0] == 0x00:
+    control = cbor2.loads(history_bytes[1:])
+elif history_bytes[0] == 0x01:
+    first_index = int.from_bytes(history_bytes[1:3], "little")
+    packed_points = history_bytes[3:]  # Decode each 56-byte point by the table.
 ```
+
+See [`ago_protocol.py`](tests/ble-integration/ago_protocol.py) for complete
+History framing and binary decoding used by the integration tests.
 
 ---
 
 ## Appendix: Invalid Sentinel Values
 
-These sentinel values indicate "data not available" in the binary route point
-format. In CBOR payloads, unavailable fields are simply omitted (key absent).
-
-| Field | Sentinel Value | Notes |
-|---|---|---|
-| latitude | `91.0` | Outside valid range [-90, 90] |
-| longitude | `181.0` | Outside valid range [-180, 180] |
-| altitude | `-10000.0` | Below minimum plausible altitude |
-| temperature | `-1001.0` | Below absolute zero in any unit |
-| humidity | `-1.0` | Below valid range [0, 100] |
-| pm1.0 / pm2.5 / pm10 | `-1.0` | Negative PM is impossible |
-| co2 | `-1` (int16) | Negative CO2 is impossible |
-| tvoc_index | `-1` (int16) | Negative index is impossible |
-| nox_index | `-1` (int16) | Negative index is impossible |
-| pressure | `-1001.0` | Below valid atmospheric range |
-| battery_percentage | `255` (uint8) | Outside valid range [0, 100] |
+The [RoutePointWire table](#appendix-routepointwire-binary-format) lists the
+binary sentinels. Measures CBOR omits unavailable fields; Status always emits
+its snapshot keys and substitutes zero for unavailable battery readings.

@@ -60,17 +60,19 @@ public:
   /// It also initialises the BLE server, creates GATT services, and
   /// begins BLE advertising.
   ///
-  /// Contract: the caller-supplied HttpServer must NOT be started yet
-  /// and must NOT have any routes registered. The caller-supplied
-  /// AgBleServer must NOT be initialised yet. ProvisioningManager owns
-  /// the HTTP route table, mDNS profile, and BLE server lifecycle for the
-  /// duration of the provisioning session. Provisioning attempts to replace
+  /// Contract: when the Wi-Fi transport is selected, HttpServer must have
+  /// no registered routes. Its listener may be retained on config.http_port
+  /// if the backend supports live route registration and idempotent start()
+  /// (as IdfHttpServer does); stop it before changing ports. When the BLE
+  /// transport is selected, AgBleServer must NOT be initialised yet.
+  /// ProvisioningManager owns the selected transports' HTTP route table,
+  /// mDNS profile, and BLE server lifecycle for the session. It attempts to replace
   /// any previously retained mDNS profile; the caller must reinstall its
   /// profile after stop() when replacement succeeds.
   ///
   /// @param wifi   Wi-Fi manager — borrowed for AP, scan, STA connect
   /// @param ble    BLE server — borrowed for GATT provisioning service
-  /// @param http   HTTP server — fresh instance, not yet started
+  /// @param http   HTTP server — empty route table when Wi-Fi transport is selected
   /// @param config provisioning configuration
   /// @return false if already running or arguments are invalid
   bool start(WifiManager &wifi, AgBleServer &ble, HttpServer &http,

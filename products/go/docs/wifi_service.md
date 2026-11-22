@@ -12,9 +12,9 @@ and network endpoint ordering. Active only in `OperatingMode::Stationary`.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_wifi.h` | `WifiService` class declaration, `Deps` and `Config` structs, public action and state APIs |
-| `products/go/main/go_wifi.cpp` | Callback adapters, saved-credential / fallback connect, provisioning lifecycle, deadline tick, event posting |
-| `products/go/main/go_wifi_types.h` | `ProvisioningEventPayload` struct shared with `go_events.h` |
+| [`go_wifi.h`](../main/go_wifi.h) | `WifiService` class declaration, `Deps` and `Config` structs, public action and state APIs |
+| [`go_wifi.cpp`](../main/go_wifi.cpp) | Callback adapters, saved-credential / fallback connect, provisioning lifecycle, deadline tick, event posting |
+| [`go_wifi_types.h`](../main/go_wifi_types.h) | `ProvisioningEventPayload` struct shared with `go_events.h` |
 
 ## Dependencies
 
@@ -34,38 +34,41 @@ and network endpoint ordering. Active only in `OperatingMode::Stationary`.
 
 `WifiService` is constructed once by `GoApp` at boot, borrows four shared
 network objects via the `Deps` struct, and stays alive for the lifetime of the
-process. All action methods and lifecycle/deadline queries are orchestrator-task
+process. Construction installs Wi-Fi callbacks; provisioning is allocated on
+demand. All action methods and lifecycle/deadline queries are orchestrator-task
 only. The atomic online, IP, RSSI, and disconnect mirrors are safe for cross-task
 reads.
 
-| Method | Returns | Purpose |
-|---|---|---|
-| `WifiService(event_queue, deps, cfg)` | — | Construct with the central event queue, borrowed Wi-Fi/BLE/HTTP/local-server dependencies, and product config. Installs Wi-Fi callbacks; provisioning is allocated on demand. |
-| `has_saved_networks()` | `bool` | True when at least one network is saved. Delegates to `WifiManager`. |
-| `set_power_save_enabled(enabled)` | `void` | Retain the preference and apply it immediately in STA mode outside provisioning, without disconnecting. |
-| `connect_with_saved_credentials(static_ip)` | `void` | Restore Wi-Fi callbacks, arm the initial-connect deadline, and call `WifiManager::connect` with an empty SSID. One saved network connects directly with normal retry/backoff; multiple networks are scanned, ranked by RSSI, and tried with single-attempt failover. Applies `static_ip` when non-null, clears it otherwise. Resets the online latches (fresh bring-up). Posts a synthetic `WifiDisconnected` when the manager returns `NotFound`. |
-| `schedule_reconnect(static_ip)` | `void` | Arm the runtime reconnect timer `reconnect_delay_ms` from now. Preserves `has_been_online()` and arms no connect window. `tick()` reuses the credential source explicitly selected at entry: saved networks in normal mode, transient factory Wi-Fi in manufacturing. |
-| `try_default_fallback_credentials()` | `void` | Manufacturing-only, single-shot STA connect to the factory AP (`airgradient` / `cleanair`). The explicit SSID makes the connect transient, so nothing is written to the saved-networks store. Bounded by the fallback window even when the driver rejects the attempt immediately. |
-| `start_provisioning(transport)` | `void` | Clear retained success, stop the local endpoint, cancel STA/deadlines, and start the requested provisioning transport. Defaults to `BleOnly`. |
-| `switch_provisioning_transport()` | `void` | Back-to-back stop/start that flips transport, swallows the intermediate `Stopped`, and requests listener retention when one is already bound. |
-| `stop_provisioning(stop_http_server = true)` | `void` | Stop and delete the provisioning manager, releasing transport caches and timers. Optionally retain the HTTP listener. After `Connected`, includes the post-connect hold before teardown and restoring Wi-Fi callbacks. |
-| `ensure_local_http()` | `bool` | Idempotently register local routes before ensuring the configured listener is active. Rolls routes back on listener failure. |
-| `ensure_local_mdns()` | `bool` | Install the local `StaIpAuto` profile once and explicitly start mDNS. HTTP must already be active. |
-| `stop_local_endpoint()` | `void` | Stop/clear mDNS, stop the listener, then unregister only local API routes. Idempotent. |
-| `shutdown()` | `void` | Clear retained success/deadlines, stop provisioning and the local endpoint, drop STA, set Wi-Fi mode `Off`, detach callbacks, and reset online latches. |
-| `clear_credentials()` | `void` | Erase all saved networks (`WifiManager::clear_networks`) and reset the online latches. Used by factory reset. |
-| `is_online()` | `bool` | True after the first IP for the current attempt; cleared on disconnect. |
-| `is_connecting()` | `bool` | True while the initial-connect or fallback deadline is armed and no IP has been observed. |
-| `is_provisioning()` | `bool` | True while a transport is active. |
-| `current_transport()` | `ProvisioningTransport` | Active transport (only meaningful while `is_provisioning()`). |
-| `ip()` | `uint32_t` | Last observed IP (network byte order). 0 when not online. |
-| `rssi()` | `int` | Snapshot RSSI from `WifiManager`. |
-| `last_disconnect_reason()` | `WifiDisconnectReason` | Last reported disconnect reason (defaults to `unknown` on construction). |
-| `has_been_online()` | `bool` | Latches true on the first IP for the current Stationary entry. Reset by `shutdown()`, `clear_credentials()`, and fresh STA connect attempts. The orchestrator gates the disconnect policy on this flag. |
-| `next_deadline_ms()` | `uint32_t` | Nearer of the initial-connect / fallback window and the runtime reconnect timer, or 0 when neither is armed. Drives `Orchestrator::compute_queue_timeout_ms()`. |
-| `tick(now_ms)` | `void` | Retry a retained provisioning `Connected` event, consume the pending deadline clear, expire the connect window, and issue a due runtime reconnect. |
+### Lifecycle and Actions
 
-See [`go_wifi.h`](../main/go_wifi.h) for full signatures.
+| Caller Operation | Contract |
+|---|---|
+| Leave Stationary: `shutdown()` | Stop provisioning and the local endpoint, drop STA, turn Wi-Fi off, detach callbacks, and clear retained success, deadlines, and online latches. Saved credentials remain. |
+| Factory reset: `clear_credentials()` | Erase saved networks and reset online latches. Does not itself disconnect STA or cancel deadlines. |
+| Fresh connection: `connect_with_saved_credentials(static_ip)` | Restore callbacks and reset online latches. Apply the supplied static IP, or clear it when null. Results arrive through events; see [saved-credentials connect](#saved-credentials-connect) for rejection and timeout behavior. |
+| Runtime recovery: `schedule_reconnect(static_ip)` | Schedule a delayed attempt through `tick()`, preserving `has_been_online()` and the selected credential source without a startup window. See [runtime reconnect](#runtime-reconnect). |
+| Manufacturing: `try_default_fallback_credentials()` | Start a bounded, single-attempt factory connection without saving credentials. Restricted to the [manufacturing flow](#manufacturing-factory-wi-fi). |
+| Provisioning: start, switch, stop | Starting cancels STA/deadlines and takes endpoint ownership. Switching retains an existing HTTP listener. Stopping an active session includes the post-connect hold after success, deletes its manager, and restores Wi-Fi callbacks; `stop_provisioning(false)` retains HTTP for handoff. See [provisioning start](#provisioning-start) and [transport switching](#transport-switching). |
+| Local endpoint: `ensure_local_http()`, then `ensure_local_mdns()` | Idempotent activation, with HTTP required before mDNS; each returns success/failure. `stop_local_endpoint()` tears down discovery, listener, then routes. See [ordering and rollback](#local-http-and-mdns). |
+| Power preference: `set_power_save_enabled(enabled)` | Retain the preference and apply it live in STA mode outside provisioning, without disconnecting. |
+| Drive deadlines: `next_deadline_ms()` and `tick(now_ms)` | The caller must wake for the next deadline and drive `tick()`; no service task advances timers. See [timer integration](#timer-integration) for timeout and retained-event delivery. |
+
+### Reading Connection State
+
+`is_online()` is the service's last observed connection state. It remains true
+during the manager's internal retries until a terminal disconnect is delivered.
+`ip()` and `rssi()` retain their last values after disconnect; RSSI is sampled
+on got-IP or provisioning success rather than continuously refreshed. Check
+online state separately before using those cached values. Lifecycle resets
+clear IP to `0` and RSSI to `WIFI_RSSI_INVALID`.
+
+`has_been_online()` distinguishes startup from runtime recovery. It latches on
+the first IP and resets on shutdown, credential clearing, or a fresh connection
+attempt, while scheduled reconnects preserve it. `is_connecting()` covers only
+the armed startup/fallback window, not every internal retry. The provisioning
+transport query is meaningful only while provisioning is active.
+
+See [`go_wifi.h`](../main/go_wifi.h) for full signatures and routine state queries.
 
 ## Construction
 
@@ -154,12 +157,14 @@ stateDiagram-v2
     Off --> TryingFallback: try_default_fallback_credentials
     ConnectingSaved --> Online: on_got_ip
     ConnectingSaved --> Off: shutdown
-    ConnectingSaved --> Off: deadline expires (synthetic connection_lost)
+    ConnectingSaved --> AwaitPolicy: connect rejected or deadline expires
     TryingFallback --> Online: on_got_ip
-    TryingFallback --> Off: deadline expires
+    TryingFallback --> AwaitPolicy: deadline expires
+    AwaitPolicy --> Provisioning: normal startup policy
+    AwaitPolicy --> Off: manufacturing shutdown and reboot
     Off --> Provisioning: start_provisioning
-    Provisioning --> Online: ProvisioningEvent::Connected
-    Provisioning --> Off: stop_provisioning
+    Provisioning --> Online: Connected, then orchestrator handoff
+    Provisioning --> Off: cancel session, then shutdown
     Online --> Reconnecting: on_disconnected (runtime)
     Reconnecting --> Online: on_got_ip
     Reconnecting --> Reconnecting: reconnect cycle fails
@@ -169,8 +174,10 @@ stateDiagram-v2
 
 The service does not store an explicit state enum. State is reconstructed from
 atomic online mirrors plus orchestrator-task-owned provisioning and deadline
-fields. The diagram above is the intended lifecycle the orchestrator's policy
-keys off.
+fields. The diagram includes orchestrator policy transitions: deadline expiry
+posts an event without turning the radio off, and provisioning success leaves
+the session active until the orchestrator stops it. A successful portal session
+normally reboots instead of continuing online in the same boot.
 
 ### Saved-Credentials Connect
 
@@ -187,8 +194,8 @@ routing applies. Other non-OK statuses post a synthetic
 The saved-network initial-connect deadline is armed only when the manager
 accepts the request (returns `Ok`). The deadline is single-writer: only
 `shutdown()`, `connect_with_saved_credentials()`,
-`try_default_fallback_credentials()`, and `tick()` mutate it. The IP
-callback signals a pending clear via the `_clear_deadline_pending`
+`try_default_fallback_credentials()`, `start_provisioning()`, and `tick()` mutate
+it. The IP callback signals a pending clear via the `_clear_deadline_pending`
 atomic, which the next `tick()` consumes — keeping the deadline write
 off the Wi-Fi event-task thread.
 
@@ -248,15 +255,15 @@ winning AP_ before emitting the terminal disconnect that triggers
 saved networks, so a different saved SSID is not considered until that
 budget is spent. The three configured retry delays total 7 seconds; connection
 attempt latency is HAL-dependent, and the product then adds its 5-second
-inter-cycle delay. The budget was lowered from 5 to 3 to shorten this path. This
-still favours recovering the _same_ AP (e.g. a router reboot) over fast failover.
-During that window `WifiManager` reports itself online, so the
-status-bar Wi-Fi icon shows connected and cloud posts keep failing
-(`Host is unreachable`); both flip once the terminal disconnect fires —
+inter-cycle delay. This still favours recovering the _same_ AP (e.g. a router
+reboot) over fast failover.
+During that window `WifiManager` is reconnecting, but `WifiService` retains its
+online mirror because the manager has not delivered a terminal disconnect.
+The status-bar Wi-Fi icon therefore stays connected and cloud requests can
+fail; both change once the terminal disconnect fires —
 `on_wifi_disconnected()` disarms cloud and repaints the disconnected
 glyph. Surfacing the L2 drop sooner (so the icon and cloud track the
-outage immediately) would need a `WifiManager` link-down notification —
-intentionally deferred.
+outage immediately) would need a separate `WifiManager` link-down notification.
 
 The local routes and listener remain installed across a runtime STA outage.
 `WifiManager` stops the `StaIpAuto` mDNS instance on link loss and restarts it
@@ -336,8 +343,10 @@ synthesizes an unwanted `WifiDisconnected{connection_lost}`.
 
 When `_start_provisioning_internal()` succeeds the service marks
 `_provisioning_active = true` and remembers the active transport.
-The manager and its event callback are created lazily. `stop_provisioning()`
-deletes the manager; another session recreates it. Transport switches reuse it.
+The manager and its event callback are created lazily. Stopping an active
+session with `stop_provisioning()` deletes the manager; another session recreates
+it. Transport switches reuse it. `shutdown()` stops provisioning but retains
+the allocated manager for reuse or later destruction.
 
 ### Provisioning Completion
 
@@ -371,8 +380,8 @@ sequenceDiagram
     Prov-->>Svc: Stopped (swallowed)
     Svc->>Prov: start(new transport)
     Prov-->>Svc: Started
-    Svc->>Svc: _switching_transport = false
     Svc-->>Orch: ProvisioningStateChanged(Started, new transport)
+    Svc->>Svc: _switching_transport = false
 ```
 
 `stop_http_server = false` keeps an already-bound borrowed HTTP listener across
@@ -383,7 +392,8 @@ the destination transport and not the stale source. If `_prov->start()` returns
 false the service rolls `_transport` back, clears the latch, marks
 `_provisioning_active = false`, and synthesizes a
 `Stopped(ProductRequested)` so the orchestrator's existing
-"Stopped before online -> change_mode(Portable)" rule rescues the user.
+"Stopped before online -> change_mode(Portable)" rule returns to Portable if the
+event is admitted to the central queue.
 
 ### Callback Ownership
 
@@ -391,8 +401,8 @@ false the service rolls `_transport` back, clears the latch, marks
 borrowed `WifiManager` and `stop()` clears them. The service follows a
 strict ownership rule:
 
-- `WifiService` owns `on_got_ip` and `on_disconnected` at all times
-  outside an active provisioning session.
+- `WifiService` owns `on_got_ip` and `on_disconnected` during Stationary STA
+  operation outside an active provisioning session.
 - `ProvisioningManager` owns those slots while a session is active.
 - `ProvisioningManager::set_on_event` is installed when each manager is created
   and retained across transport switches.
@@ -400,8 +410,9 @@ strict ownership rule:
 `stop_provisioning()` calls `_install_wifi_callbacks()` after the
 component returns so post-online disconnects and `shutdown()` continue
 to route through `WifiService`. `shutdown()` calls
-`_detach_wifi_callbacks()` so the orchestrator never sees a callback
-firing after the service has been told to tear down.
+`_detach_wifi_callbacks()` to prevent future callback dispatch through those
+slots. It does not retract events already queued or callbacks already in flight.
+Portable mode uses its separate [provisioner](portable_provisioner.md).
 
 Fresh STA entry paths (`connect_with_saved_credentials()` and
 `try_default_fallback_credentials()`) also call `_install_wifi_callbacks()`.
@@ -419,10 +430,11 @@ subsequent `Stopped` teardown.
 
 ## Events
 
-`WifiService` is the sole producer of three event types on the central
-queue. All events are consumed by `Orchestrator::dispatch()`.
+`WifiService` posts these events for Stationary operation. All are consumed by
+`Orchestrator::dispatch()`. `PortableWifiProvisioner` also posts
+`ProvisioningStateChanged` for the attached BLE transport.
 
-| EventType | Payload | Producer path |
+| EventType | Payload | Producer Path |
 |---|---|---|
 | `WifiConnected` | `uint32_t wifi_ip` (network byte order) | `_on_got_ip()` after a successful STA association outside provisioning |
 | `WifiDisconnected` | `uint8_t wifi_disconnect_reason` (`WifiDisconnectReason`) | `_on_disconnected()` for every reason except `requested_by_user`, plus synthetic `connection_lost` from `tick()` on deadline expiry and synthetic `no_ap_found` / `unknown` on connect rejection |
@@ -498,12 +510,12 @@ that armed it.
   latch so the orchestrator's "Stopped before online" rule does not
   bounce out of provisioning.
 - **`start()` failure during transport switch.** Synthesizes a
-  `Stopped(ProductRequested)` event so the orchestrator's existing
-  fall-back-to-Portable rule rescues the user.
-- **Late events after `shutdown()`.** Callbacks are detached in
-  `shutdown()`, so no event posts after the service is torn down. The
-  orchestrator also gates `on_wifi_connected()` and
-  `on_wifi_disconnected()` on `_mode == Stationary` to ignore strays.
+  best-effort `Stopped(ProductRequested)` event. When delivered before the
+  session has been online, the orchestrator returns to Portable.
+- **Late events after `shutdown()`.** Detaching callbacks does not retract
+  queued events or in-flight callbacks. The orchestrator gates
+  `on_wifi_connected()` and `on_wifi_disconnected()` on `_mode == Stationary`;
+  ordinary Wi-Fi events carry no session generation identifier.
 - **Cold-boot Stationary with no saved networks.** The board's
   `init_wifi_subsystem()` runs lazily on first `enter_stationary()`
   call; constructing `WifiService` against an uninitialized HAL is safe
@@ -531,23 +543,22 @@ that armed it.
 - Provisioning lifecycle paths emit `log_heap()` probes around transport
   start, stop, and BLE / Wi-Fi transport switching. These are target-only
   diagnostics for tracking contiguous heap pressure during Stationary setup.
-- **WiFi pull OTA** rides this Stationary link but is owned by the orchestrator,
-  not `WifiService`. The orchestrator gates its hourly OTA check on
-  `is_online() && !_setup_session_active && !_settings.disable_cloud`, pauses
-  cloud around it, and never runs it concurrently with provisioning or a
-  download. A mid-download Wi-Fi drop surfaces as the OTA source read failing
+- **Wi-Fi pull OTA** uses this Stationary link. `CloudService` schedules
+  availability probes alongside POST/FETCH; the orchestrator rechecks
+  eligibility and runs the transfer. See [cloud OTA scheduling](cloud_service.md#ota-interaction).
+  A mid-download Wi-Fi drop surfaces as the OTA source read failing
   (`TransportError`). A disconnect queued during a speculative check survives;
   during a committed transfer, the exit queue drain can discard it, so automatic
   reconnect is not guaranteed after a non-rebooting terminal. See
   [`ota_service.md`](ota_service.md) and
   [`orchestrator.md` → OTA](orchestrator.md#firmware-update-ota).
 
-## Testability
+## Verification
 
 `WifiService` is host-testable via friend-class access
 (`WifiServiceTestAccess`) and link-time stubs for `WifiManager`,
 `ProvisioningManager`, `AgBleServer`, and `HttpServer`. Host tests live
-in `products/go/tests/go_wifi.tests.cpp` and cover:
+in [`go_wifi.tests.cpp`](../tests/go_wifi.tests.cpp) and cover:
 
 - Saved-credentials connect, including `NotFound` synthesizing a
   disconnect, deadline arming, and the IP callback latching the
@@ -567,8 +578,15 @@ in `products/go/tests/go_wifi.tests.cpp` and cover:
   credentials. Lifecycle boundaries clear the factory selection, and
   `next_deadline_ms()` returns the nearer of the two timers.
 - Shutdown path (detaches callbacks, zeroes latches, sets mode `Off`).
+- Local endpoint ordering, route/listener failure rollback, independent mDNS
+  retries, and listener retention across provisioning and STA reconnects.
+- Retention and retry of provisioning success when the central queue is full.
 
-The orchestrator tests in `products/go/tests/go_orchestrator.tests.cpp`
+The orchestrator tests in [`go_orchestrator.tests.cpp`](../tests/go_orchestrator.tests.cpp)
 drive the higher-level mode policy against a stubbed `WifiService`, including
 immediate normal provisioning, manufacturing failure display and post-paint
 hold before reboot, and unchanged manufacturing reconnection after first IP.
+
+See the [host-test workflow](../../../tests/README.md) for running these tests.
+The stubs do not exercise ESP-IDF radio behavior, real AP failover, or BLE/portal
+interoperability; those require hardware verification.

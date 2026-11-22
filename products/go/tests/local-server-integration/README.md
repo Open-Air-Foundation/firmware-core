@@ -1,4 +1,4 @@
-# AGo Local Server Integration Tests
+# AirGradient Go Local Server Integration Tests
 
 Hardware integration tests for the AirGradient Go Local Server API. The suite
 connects to a real device in Stationary mode and verifies mDNS discovery, HTTP
@@ -9,10 +9,13 @@ OTA access policy.
 
 - Python >= 3.11
 - An AirGradient Go connected to the same network as the test host
-- The device running in **Stationary** mode
+- The device running in **Stationary** mode with **Local Server enabled**,
+  outside manufacturing mode
 - Multicast DNS available between the host and device, or the device IP address
 
 ## Install
+
+Run from the repository root in a Python virtual environment:
 
 ```sh
 pip install -e products/go/tests/local-server-integration
@@ -84,10 +87,12 @@ pytest products/go/tests/local-server-integration/ -v \
 
 ## Safety
 
-The default suite does not change durable configuration. It submits only an
-empty configuration update, malformed requests, and the LED and GPS test
-actions. The GPS action leaves the live GPS Test screen open for the operator to
-exit.
+The default suite submits reads, an empty configuration update, requests
+expected to be rejected, and LED/GPS test actions. It is designed not to change
+durable configuration on conforming firmware. Rejection tests without an opt-in
+fixture do not restore state if a regression accepts their input. The GPS action
+can leave the live GPS Test screen open for the operator to exit; HTTP success
+alone does not prove that either diagnostic ran.
 
 Persisted mutation tests require `--ago-allow-config-write`. They round-trip the
 temperature and altitude units, Pinned Chart, measurement and GPS settings,
@@ -95,9 +100,10 @@ back LED indicator (`aqi`/`co2`), back LED and V1 touch LED levels, buzzer, CO2 
 and TVOC/NOx learning offsets.
 Each parameterized case
 changes one field, polls the asynchronous GET snapshot for convergence, and
-restores that field during fixture teardown. They run only when
-`configurationControl` is `local`, preventing cloud updates from racing with
-restoration.
+attempts to restore that field during fixture teardown. A lost connection or
+interrupted run can prevent cleanup; read back settings after a failure.
+They run only when `configurationControl` is `local`, preventing cloud updates
+from racing with restoration.
 
 Extended invalid-value cases use the same opt-in and restoration fixture. If a
 firmware regression accepts and persists an invalid value, teardown restores the
@@ -200,18 +206,17 @@ products/go/tests/local-server-integration/
 
 ## Coverage Limits
 
-The suite currently has collection evidence only; no physical AirGradient Go run
-has been recorded. The native host suite passed
-`1240/1240` tests and the Go firmware build passed at revision `c17f2d3`; those
-checks do not replace hardware execution.
+The [shared HTTP reference](../../../../docs/local_http_api.md) owns the wire
+contract; [Go Local Server](../../docs/local_server.md) owns product policy.
+[`ago_local_api.py`](ago_local_api.py) contains this suite's schema assertions.
+They target the current Go firmware and reject unknown keys; production clients
+should tolerate future response fields.
 
-No physical-device integration-suite evidence is available yet for concurrent
-PUT behavior, provisioning listener handoff, transient reconnect, the mDNS
-lifecycle across disconnect/reconnect, Home Assistant interoperability, or heap
-headroom during listener, local GET, cloud TLS, and OTA activity. Host tests
-cover policy and lifecycle logic, but not on-device behavior. The existing mDNS
-and OTA test cases describe intended hardware checks, but collection alone does
-not prove those paths on a device.
+The suite does not exercise concurrent PUT behavior, provisioning listener
+handoff, transient reconnect, discovery across disconnect/reconnect, Home
+Assistant interoperability, or heap headroom during local GET, cloud TLS, and
+OTA. The [native host tests](../../../../tests/README.md) cover policy and
+lifecycle logic; they do not establish these physical-device results.
 
 The suite also does not prove deterministic four-entry FIFO saturation or
 hardware `503` pressure, HTTP responsiveness during calibration or TLS work,
@@ -219,3 +224,13 @@ correction numerical accuracy, persistence across reboot, physical calibration
 completion, or compatibility with `python-airgradient`. Configuration mutation
 and calibration remain explicit opt-ins, and OTA tests trust the operator's
 `--ago-ota-active` assertion rather than detecting or starting OTA themselves.
+
+To inspect collection without contacting a device:
+
+```sh
+pytest products/go/tests/local-server-integration/ --collect-only -q
+```
+
+Collection confirms test discovery only. Record the firmware revision, board,
+network setup, opt-in flags, selected tests, skips, and results for a hardware
+verification run.

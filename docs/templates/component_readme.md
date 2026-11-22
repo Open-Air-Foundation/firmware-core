@@ -2,6 +2,10 @@
 
 One-line summary of what this component owns and why it exists.
 
+Template instructions: keep applicable sections, remove placeholders, and
+adjust paths for the destination. Use the actual component directory name in
+the title. Remove this paragraph when using the template.
+
 ## Status
 
 `Stable` | `Experimental` | `Scaffold`
@@ -57,11 +61,11 @@ Guideline:
 For a simple linear chain, ASCII is enough:
 
 ```text
-caller -> AbstractInterface& -> ConcreteDriver -> vendor SDK -> hardware
+caller -> abstract interface -> driver -> hardware
 ```
 
 For anything with branching, state, or multiple actors, use Mermaid (see
-`docs/STYLE.md` for when to pick which):
+`docs/GUIDE.md` for when to pick which):
 
 ```mermaid
 flowchart LR
@@ -72,11 +76,13 @@ flowchart LR
 ```
 
 Short prose explaining the layering and why callers depend on the HAL rather
-than the driver.
+than the driver. Describe ownership, lifecycle, error handling, and concurrency
+constraints when relevant. Link to a detailed topic doc if needed instead of
+duplicating its explanation here.
 
 ## Usage
 
-A minimal call site (≤ 15 lines, per `docs/STYLE.md`):
+A minimal call site (≤ 15 lines, per `docs/GUIDE.md`):
 
 ```cpp
 ConcreteDriver driver(/* config */);

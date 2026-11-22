@@ -19,6 +19,9 @@ local network access. When it does, it advertises the following mDNS service:
 | API version TXT record | `api=1` |
 | Identity TXT records | `vendor=AirGradient`, `model`, `serialno`, `fw_ver` |
 
+The discovery profile is implemented by
+[`airgradient-wifi`](../components/airgradient-wifi/README.md).
+
 `serialno` is the same value returned as `serialNumber` by the measures
 endpoint. Clients should use the service record's advertised host and port;
 they must not assume a fixed port. If mDNS is unavailable on the client
@@ -61,8 +64,9 @@ error instead.
 
 `GET /api/v1/measures` returns a JSON object containing device identity and
 the latest valid readings. `serialNumber`, `model`, `firmware`, and `boot` are
-always present. `boot` is the completed uptime in minutes. `wifiRssi` is in
-dBm and is present only when link quality is available.
+always present. `boot` is the completed uptime in minutes; the product defines
+which sleep and reset transitions retain that session. `wifiRssi` is in dBm and
+is present only when link quality is available.
 
 All other measurement fields are optional. A product omits a field when it
 lacks the sensor or the latest value is invalid; it does not send JSON `null`.
@@ -74,7 +78,7 @@ lacks the sensor or the latest value is invalid; it does not send JSON `null`.
 | `serialNumber` | String | — | Device serial number. Always present. |
 | `model` | String | — | AirGradient product model identifier. Always present. |
 | `firmware` | String | — | Firmware version. Always present. |
-| `boot` | Integer | Completed minutes | Uptime for the current boot session, saturated at `4294967295`. Always present. |
+| `boot` | Integer | Completed minutes | Uptime for the product-defined session, saturated at `4294967295`. Always present. |
 | `wifiRssi` | Integer | dBm | Received Wi-Fi signal strength. Omitted when unavailable. |
 
 #### Air Measurements
@@ -137,7 +141,9 @@ Voltages are rounded to two decimal places.
 
 `GET /api/v1/config` returns the complete active subset supported by the
 device. Products omit unsupported fields. A client should use this response as
-the capability source for subsequent configuration writes.
+a starting point for subsequent configuration writes. Presence does not
+guarantee writability: a product may retain a read field for compatibility while
+rejecting writes on a board without that capability. See [Product Support](#product-support).
 
 The configuration catalog below defines all standardized v1 fields. The generic
 parser enforces each JSON type and the listed enum values. Products define the
@@ -152,8 +158,14 @@ and cross-field policy.
 | `pmStandard` | String | `ugm3`, `us-aqi` | PM display standard: mass concentration or US AQI. |
 | `temperatureUnit` | String | `c`, `f` | Display temperature unit. Measurements remain Celsius. |
 | `altitudeUnit` | String | `m`, `ft` | Display altitude unit. Raw GPS and stored route altitude remain in meters. |
+| `pinnedChart` | String | `none`, `pm25`, `co2`, `temperature`, `humidity`, `tvoc`, `nox`, `pressure`, `altitude` | Home chart selection. |
 | `measurementInterval` | Integer | Seconds; product-defined range | Measurement interval. |
 | `gpsMode` | String | `off`, `tracking`, `always` | GPS operating mode. |
+
+#### Feedback Fields
+
+| Field | JSON Type | Values | Description |
+|---|---|---|---|
 | `frontLedBrightness` | Integer | Product-defined range | Front LED brightness. |
 | `backLedIndicator` | String | `aqi`, `co2` | Back LED indicator selection, independent of brightness. |
 | `backLedBrightness` | Integer | Product-defined range | Back LED brightness. |
@@ -199,6 +211,11 @@ semantics. `useEpa2021` is not valid for temperature or humidity corrections.
 
 `PUT /api/v1/config` accepts a JSON object containing only the fields to
 change. The body must be complete, valid JSON, and use only recognized fields.
+Integer fields reject fractional numbers. Unknown nested correction keys also
+cause rejection; their error `field` uses a dotted path such as
+`corrections.pm25.slr.extra`. Parsing happens before product access policy, so a
+malformed request can return `400` even when valid writes would be forbidden.
+
 For example, a client may request a supported PM display standard:
 
 ```sh
@@ -210,8 +227,10 @@ curl -X PUT "$AG_URL/api/v1/config" \
 `202 Accepted` has an empty body. It confirms that the device accepted the
 validated update for later processing; it does not confirm persistence or
 runtime application. Poll `GET /api/v1/config` until the requested values are
-visible, using a client-selected deadline. An empty object is a valid no-op
-when writes are allowed.
+visible, using a client-selected deadline. Later persistence failures, policy
+changes, or other writers can prevent convergence; there is no completion
+resource or request ID. Read back before retrying after an uncertain outcome.
+An empty object is a valid no-op when writes are allowed.
 
 ### Trigger Actions
 
@@ -267,76 +286,14 @@ error envelope.
 ## Compatibility and Capabilities
 
 The API version is in the path: `/api/v1/`. Within a version, clients must
-preserve unknown response fields and tolerate omitted optional fields. A product
+tolerate unknown response fields and omitted optional fields. A product
 may support a subset of the shared measurement, configuration, and action
 catalog. Read configuration before writing it, and handle `404 not_found` for
 model-specific fields and actions.
 
-## AirGradient Go Support
+## Product Support
 
-AirGradient Go exposes the local API in Stationary mode after Wi-Fi obtains an
-IP address. It uses the common mDNS discovery contract above. The API remains
-available by LAN address through a transient reconnect after it has first been
-activated; its mDNS advertisement follows Wi-Fi address availability.
-
-### Supported Endpoints
-
-| Method | Path | Availability | Purpose |
-|---|---|---|---|
-| `GET` | `/api/v1/measures` | Always while the Go local API is active | Read the latest corrected measurements and device identity. |
-| `GET` | `/api/v1/config` | Always while the Go local API is active | Read Go's active local-API configuration. |
-| `PUT` | `/api/v1/config` | When local configuration writes are allowed | Submit supported Go configuration changes. |
-| `POST` | `/api/v1/actions/calibrate-co2` | When actions are allowed | Request CO2 calibration. |
-| `POST` | `/api/v1/actions/test-leds` | When actions are allowed | Request the LED diagnostic. |
-| `POST` | `/api/v1/actions/test-gps` | When actions are allowed | Open the live GPS test. |
-
-### Measures Fields
-
-Go returns the following fields from `GET /api/v1/measures`. Identity fields
-are always present. All other fields are present only when their latest value is
-valid; `wifiRssi` is present only while Stationary Wi-Fi is online.
-
-| Field Group | Fields |
-|---|---|
-| Identity | `serialNumber`, `model`, `firmware`, `boot` |
-| Link | `wifiRssi` |
-| Air measurements | `co2`, `pm01`, `pm25`, `pm10`, `temperature`, `humidity`, `tvocIndex`, `tvocRaw`, `noxIndex`, `noxRaw` |
-| Particle counts | `pm003Count`, `pm005Count`, `pm01Count`, `pm02Count`, `pm50Count`, `pm10Count` |
-| Power | `battPercent`, `battVolt`, `chargeVolt` |
-
-Local measurement values use Go's corrected PM2.5, temperature, and humidity
-values.
-
-### Configuration Fields
-
-Go returns these fields from `GET /api/v1/config` and accepts them in partial
-`PUT /api/v1/config` requests when its local-write policy allows the request.
-
-| Field Group | Supported Fields |
-|---|---|
-| Device behavior | `pmStandard`, `temperatureUnit`, `altitudeUnit`, `measurementInterval`, `gpsMode` |
-| LEDs and buzzer | `backLedIndicator`, `backLedBrightness`, `touchLedIntensity`, `buzzerEnabled` |
-| Connectivity policy | `cloudConnection`, `configurationControl` |
-| Sensor configuration | `co2AbcDays`, `tvocLearningOffset`, `noxLearningOffset`, `corrections` |
-
-`altitudeUnit` changes only Go's display presentation. GPS and derived altitude
-remain meters in raw and stored data.
-
-### Actions
-
-| Action | Endpoint | Availability |
-|---|---|---|
-| CO2 calibration | `POST /api/v1/actions/calibrate-co2` | Available when actions are allowed. |
-| LED test | `POST /api/v1/actions/test-leds` | Available when actions are allowed. |
-| GPS test | `POST /api/v1/actions/test-gps` | Available when actions are allowed. |
-
-`configurationControl` determines whether local configuration writes, cloud
-configuration Fetch, or both are permitted. `cloudConnection` controls cloud
-communication but does not disable the local API or mDNS. During a committed
-Stationary Wi-Fi OTA, Go keeps its available local endpoint read-only: GET
-requests continue to return cached snapshots, while valid writes and actions
-return `403 forbidden`.
-
-See the [Go Local Server service doc](../products/go/docs/local_server.md) for
-the complete Go lifecycle, configuration ranges, and asynchronous request
-handling details.
+[AirGradient Go Local Server](../products/go/docs/local_server.md) documents
+Go availability, supported fields and ranges, board capabilities, configuration
+source policy, asynchronous execution, and OTA behavior. Those are product
+policies; the shared wire contract above does not imply support on every device.

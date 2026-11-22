@@ -206,7 +206,7 @@ ownership. Raw BLE history export is verified in
 
 The locked Offline timer-wake path loads persisted `GoSettings` before sensor
 measurement and does not construct the cloud service or orchestrator. It keeps
-the one-shot measurement raw for the RTC measurement cache and route append,
+the one-shot measurement raw for the RTC measurement cache, without route recording,
 then `build_fast_path_display()` applies the shared transform with the effective
 Go corrections to a copy for the e-paper frame. Temperature and humidity stay
 raw in Energy Saving, including chart history; PM2.5 keeps its configured
@@ -244,3 +244,15 @@ only. Normal acquisition still runs and replaces the restored reading.
 - Temperature and humidity are not clamped into range.
 - A settings write or commit failure retains the previous in-memory settings
   and corrected presentation.
+
+## Verification
+
+[Shared transform tests](../../../components/airgradient-common/tests/measurement_corrections.tests.cpp)
+cover correction math and invalid inputs. [Settings tests](../tests/go_settings.tests.cpp)
+cover grouped loading and persistence; [cloud](../tests/go_cloud.tests.cpp),
+[local API](../tests/go_local_api.tests.cpp), and [BLE](../tests/go_ble.tests.cpp)
+tests cover transport mappings. [Orchestrator](../tests/go_orchestrator.tests.cpp)
+and [app](../tests/go_app.tests.cpp) tests cover raw/corrected routing and
+Energy Saving presentation. See the [host-test workflow](../../../tests/README.md).
+These tests verify software transforms, not the physical accuracy of calibration
+coefficients supplied by an operator or server.

@@ -9,8 +9,8 @@ power-off). Called synchronously by the orchestrator — no independent task.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_storage.h` | `RoutePoint`, `CacheField`, and `StorageService` declarations |
-| `products/go/main/go_storage.cpp` | Temporary cache delegation to `PayloadCache`; persistent route file I/O |
+| [`products/go/main/go_storage.h`](../main/go_storage.h) | `RoutePoint`, `CacheField`, and `StorageService` declarations |
+| [`products/go/main/go_storage.cpp`](../main/go_storage.cpp) | Temporary cache delegation to `PayloadCache`; persistent route file I/O |
 
 ## Dependencies
 
@@ -19,7 +19,7 @@ power-off). Called synchronously by the orchestrator — no independent task.
 | `PayloadCache` | `airgradient-payload-cache` (service) | Temporary chart ring buffer |
 | `RtcPayloadCacheStorage` | `airgradient-payload-cache` (backend) | RTC memory backend wired at construction time in `GoHardwareBoard::storage()` |
 | `NandStorage` | `airgradient-nand-storage` (HAL) | NAND flash filesystem mount; provides `mount_path()` for POSIX I/O |
-| `GpsData` | `airgradient-gps` (`types/gps_types.h`) | GPS position and fix included in each `RoutePoint` |
+| `GpsData` | product ([`gps/gps_types.h`](../main/gps/gps_types.h)) | GPS position and fix included in each `RoutePoint` |
 | `MeasuresAGo` | `airgradient-common` (`measures_types.h`) | Sensor readings in each `RoutePoint` and in the cache |
 | `ag_log.h` | `airgradient-common` | Platform-portable logging (no-ops under `TEST_HOST`) |
 
@@ -70,8 +70,10 @@ Each route file is a flat sequence of `RoutePoint` structs with no header:
 [RoutePoint][RoutePoint][RoutePoint]...
 ```
 
-Fixed struct size allows O(1) seeks to the Nth point during off-device
-processing.
+Fixed struct size allows O(1) seeks within the matching firmware layout. Native
+padding, `time_t`, and nested struct layouts are not a portable wire format, and
+files have no schema version. External clients should use the
+[BLE history format](../go_ble_client.md#appendix-routepointwire-binary-format).
 
 Before writing a point, `append_route_point()` checks `is_fix_valid()`. If the
 fix is `NoFix`, it stores `GPS_LATITUDE_INVALID`, `GPS_LONGITUDE_INVALID`, and
@@ -89,7 +91,7 @@ coordinates on disk.
 Used with `read_cached_field()` to identify which measurement field to
 extract from the cache history.
 
-| Enumerator | Source field | Unit |
+| Enumerator | Source Field | Unit |
 |---|---|---|
 | `Temperature` | `MeasuresAGo::temp_hum_a.temperature` | °C |
 | `Humidity` | `MeasuresAGo::temp_hum_a.humidity` | % |
@@ -112,7 +114,7 @@ leaves correction policy to the client. See the
 [measurement-correction ownership matrix](measurement_corrections.md#consumer-ownership)
 for all raw and corrected consumers.
 
-## API Reference
+## Public API
 
 ### Initialization
 
@@ -124,6 +126,11 @@ for all raw and corrected consumers.
 wake if the previous chart data should be recovered.
 
 ### Temporary Cache Operations
+
+The borrowed cache and NAND objects must outlive this service. Calls are
+synchronous and require caller serialization; the service does not provide a
+worker or general-purpose locking around route I/O. See
+[`go_storage.h`](../main/go_storage.h) for complete signatures.
 
 | Method | Description |
 |---|---|
@@ -154,7 +161,7 @@ a route is already active, leaving the existing route untouched.
 | `create_route(session_id)` | Open a brand-new route file. Refuses if the file already exists (no truncating-open) or if `stat()` fails with anything other than `ENOENT`. On success performs an immediate `fflush + fsync` of the empty file so the directory entry is durable on NAND before the orchestrator tells the user / phone the session started. Marked `[[nodiscard]]`. |
 | `resume_route(session_id)` | Reopen an existing route file in append mode after Pause or deep-sleep wake. Truncates any torn trailing record (size not aligned to `sizeof(RoutePoint)`) via `ftruncate()` before opening so the next append lands on a clean boundary. Marked `[[nodiscard]]`. |
 | `route_file_exists(session_id)` | Cheap `stat()` check used by the orchestrator's session-ID retry loop and BLE history start/delete. It distinguishes an existing empty route from a missing route. Returns `false` when NAND is not mounted. |
-| `append_route_point(point)` | Write one `RoutePoint` via `fwrite`. Internally enforces the durability budget below — flushes + fsyncs at most every `CONFIG_TRACKING_FSYNC_INTERVAL_MS`, plus an unconditional sync on the very first post-open append. Returns `false` on `fwrite`, `fflush`, or `fsync` failure. Marked `[[nodiscard]]`. |
+| `append_route_point(point)` | Write one `RoutePoint` via `fwrite`. Sync the first post-open append, then sync on an append when the durability interval has elapsed. There is no background flush timer. Returns `false` on `fwrite`, `fflush`, or `fsync` failure. Marked `[[nodiscard]]`. |
 | `end_route()` | `fflush` + `fsync` + `fclose`. Returns `false` on sync or close failure; releases the file handle either way. Preserves empty files. Resets storage-local session ID, point count, and the budget anchor. Returns `true` if no route is open. |
 | `is_route_active()` | Returns `true` while a route file is open. |
 | `current_route_point_count()` | Total points written in the current session (includes points from previous boots when resuming). Returns 0 when no route is active. |
@@ -185,17 +192,17 @@ caller's output unchanged.
 - The query does not flush, sync, reopen, scan, or write files. It adds no
   retained count and uses the existing route-path naming convention.
 
-This checked query has no production consumer yet. It provides the storage
-API for a future Status UI to load the count on opening and visible refresh;
-that UI is not implemented here. The legacy `get_session_point_count()` and
-its callers keep their existing file-size-only behavior, returning zero for
-both empty and unavailable sessions.
+The orchestrator uses this query when building the visible
+[Tracking Status](ui_manager.md#tracking-status) snapshot. The UI distinguishes
+a known zero count from an unavailable count. The legacy
+`get_session_point_count()` and its callers keep their file-size-only behavior,
+returning zero for both empty and unavailable sessions.
 
 ### Durability Budget
 
-`append_route_point()` forces an `fflush + fsync` to NAND under three
-conditions, bounding the worst-case data loss on a power cut to the
-configured window regardless of the measurement period:
+Route creation, the first append, and subsequent appends have separate
+synchronization rules. These prevent a successful Start from existing only in
+RAM and reduce buffered data loss on a power cut:
 
 1. **Empty-file sync** — `create_route()` syncs the newly opened (still empty)
    file before returning success. The session's existence is durable from the
@@ -203,20 +210,37 @@ configured window regardless of the measurement period:
    failure of this sync fails the whole `create_route()` call and leaves no
    half-open state.
 2. **First-append sync** — both `create_route()` and `resume_route()` initialise
-   the budget anchor (`_last_fsync_ms = 0`) so the first successful
+   the budget anchor to `FSYNC_ANCHOR_NONE` (`UINT32_MAX`) so the first successful
    `append_route_point()` after open unconditionally crosses the threshold and
    syncs. This guarantees that the first point of a fresh session, or the
    first point after Resume, lands on NAND regardless of
    cadence.
-3. **Steady-state cadence** — subsequent appends sync at most every
-   `CONFIG_TRACKING_FSYNC_INTERVAL_MS` (default 30 s).
+3. **Steady-state cadence** — a subsequent append syncs when at least
+   `CONFIG_TRACKING_FSYNC_INTERVAL_MS` (default 30 s) has elapsed since the last
+   successful sync. This is checked on append, not by a background timer.
+   A buffered point can remain unsynced beyond 30 seconds if the next append
+   is delayed. Pause and Stop also attempt to flush and sync before closing.
+
+The explicit anchor sentinel makes the first-append rule work even when the
+host-test clock starts at zero. A failed sync preserves the previous anchor so
+the next append retries. These guarantees depend on successful filesystem
+operations; neither a buffered point count nor a BLE tracking flag proves
+that all points are durable.
 
 Any `fflush` or `fsync` failure inside `append_route_point()` surfaces as a
-`false` return. The orchestrator logs and ignores the failure, keeping the
-session running so subsequent appends can retry. Pause closes the file while
+`false` return. Storage logs the failure; the orchestrator ignores the return,
+keeping the session running so subsequent appends can retry. Pause closes the file while
 retaining the logical session; Stop or leaving Portable ends it.
 
-### Resume-time Torn-Record Truncate
+Repeated-append-failure auto-stop is **not implemented**. It was deferred because
+the observed missing-tail problem was addressed by synchronization, while a
+separate automatic-stop policy had no field evidence to justify its timeout or
+user feedback. Revisit that policy if multiple field reports show nonempty routes
+ending early without a power cut, write/sync failures recur in shipped logs, or
+a new NAND device changes the failure profile. Historical timeout proposals
+are not current configuration or behavior.
+
+### Resume-Time Torn-Record Truncate
 
 `resume_route()` runs a `stat()` of the file before reopening. If the
 returned size is not a clean multiple of `sizeof(RoutePoint)` — i.e. a prior
@@ -230,6 +254,19 @@ The implementation uses `ftruncate()` (on an open fd) rather than the
 path-based `truncate()` because ESP-IDF FATFS VFS explicitly supports
 `ftruncate()`, while `truncate()` is not guaranteed across all VFS
 implementations.
+
+### Integrity Limits
+
+Route files contain native `RoutePoint` records without a per-record checksum
+or framing layer. Resume repairs a partial trailing record by size; it cannot
+detect arbitrary corruption inside an otherwise complete record. Filesystem
+integrity still depends on the NAND/FATFS stack.
+
+There is no per-session file-size cap or storage-full auto-stop. Subsequent
+measurements retry appends on the existing writer; automatic close/reopen recovery
+after repeated write failures is not implemented. An unavailable NAND mount is
+reported when the user attempts Start rather than hiding the menu action. See
+[Tracking Lifecycle](orchestrator.md#tracking-lifecycle) for user-visible results.
 
 ### Host-Test Seam
 
@@ -257,7 +294,7 @@ struct RtcAppState {
 };
 ```
 
-### Generation algorithm
+### Generation Algorithm
 
 The orchestrator generates a new ID each time the user starts a fresh tracking
 session (not when resuming from Pause or sleep). It draws 5-digit random integers
@@ -268,7 +305,8 @@ it retries up to `SESSION_ID_MAX_RETRIES` (5) times before giving up.
 
 At ~1000 stored sessions across the 90,000-slot space the
 all-five-collide probability is on the order of `(1000/90000)^5 ≈ 1.7×10⁻¹⁰`,
-so retry exhaustion is effectively never observed. When it does happen,
+under independent uniform draws. This estimate is not an operational guarantee:
+on retry exhaustion,
 `generate_tracking_session_id()` returns 0 and `start_tracking()` treats that as a
 storage error — the user sees the standard `"Storage error — can't track"`
 snackbar.
@@ -277,7 +315,7 @@ snackbar.
 (fresh session) or `resume_route()` (after Pause or deep sleep) and does not generate
 or persist it internally.
 
-## Pause And Route Continuity
+## Pause and Route Continuity
 
 Pause closes the route while the orchestrator retains its Paused state and ID.
 The storage-local ID resets to zero because no writer is open; BLE Status uses
@@ -299,12 +337,14 @@ orchestrator rejects deletion of the current Recording or Paused session.
 
 ### On Sensor Data Ready
 
-`on_sensor_data()` updates the live measurement cache regardless of tracking
-state. It appends a `RoutePoint` only when `is_recording()` is true: state is
+`on_sensor_data()` caches only `Scheduled` measurements, regardless of tracking
+state. Manual `Refresh` results update live presentation without adding chart
+samples or route points. Scheduled results append a `RoutePoint` only when
+`is_recording()` is true: state is
 Recording and the route file is open. Paused measurements are not backfilled
 into the route on Resume.
 
-### On Start, Pause, Resume, And Stop
+### On Start, Pause, Resume, and Stop
 
 - Start generates an unused session ID and calls `create_route()`. Only success
   changes the state to Recording.
@@ -331,8 +371,9 @@ state and session ID in RTC memory. A Paused session remains Paused.
 
 ### After Deep Sleep Wake
 
-Storage restores the cache and remounts NAND. The orchestrator or fast path
-reopens the route only for a saved Recording state. A persistent reopen failure
+Storage restores the cache and remounts NAND. Interactive initialization
+reopens the route only for a saved Recording state. The Energy Saving fast path
+clears tracking state and never reopens a route. A persistent reopen failure
 in interactive initialization clears the session and shows
 `"Tracking stopped — storage"`; Status Read on connect reports Idle.
 
@@ -350,24 +391,25 @@ If `init()` returns `false`:
 
 ## Wear and File Size
 
-At one `RoutePoint` per 60 seconds:
-
-| Duration | Points | Approximate size |
-|---|---|---|
-| 1 hour | 60 | ~12 KB |
-| 8 hours | 480 | ~96 KB |
-| 1 day | 1440 | ~288 KB |
-
-For a 128 MB NAND with typical wear leveling this is entirely manageable.
+Route growth is `point_count × sizeof(RoutePoint)` for the firmware build that
+wrote it. At one point per minute, one hour contributes 60 records and one day
+1440 records. Use the target struct size and actual free filesystem capacity
+when budgeting retention; native host sizes can differ.
 
 `append_route_point()` enforces the durability budget — at 1 s sample with a
 30 s window the steady-state cost is ~2 NAND syncs per minute, plus the
 empty-file sync on each `create_route()` and the unconditional first-append
 sync. At long sample cadences (period ≥ window) every append syncs anyway
-because each one is more than one window after the previous, with no
-regression from the pre-spec "sync only in `end_route()`" behavior.
+because each one is at least one window after the previous successful sync.
 
-## Testability
+## Verification
+
+[`go_storage.tests.cpp`](../tests/go_storage.tests.cpp) covers create/resume intent,
+empty-file and first-append synchronization, sync failures, and torn-record
+truncation. [`go_orchestrator.tests.cpp`](../tests/go_orchestrator.tests.cpp) covers
+tracking transitions and storage-error handling. Use the
+[host-test workflow](../../../tests/README.md). Host fault injection verifies
+control flow; real power-cut behavior still requires device verification.
 
 - **PayloadCache tier**: Inject a `MockPayloadCacheStorage` into `PayloadCache`
   (see `airgradient-payload-cache` test infrastructure). `StorageService`

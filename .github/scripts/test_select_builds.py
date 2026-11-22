@@ -32,7 +32,7 @@ class ClassifyPathsTest(unittest.TestCase):
 
     def test_documentation_only_selects_no_builds(self) -> None:
         self.assert_selection(
-            ["README.md", "docs/STYLE.md", "products/go/docs/ble.md"],
+            ["README.md", "docs/GUIDE.md", "products/go/docs/ble.md"],
             (),
             False,
         )

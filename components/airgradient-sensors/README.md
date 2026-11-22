@@ -59,8 +59,9 @@ Guideline:
 
 ## Design
 
-```text
-caller -> SensorManager(Sensors&) -> HAL interfaces -> concrete drivers -> bus (I2C / serial / ADC)
+```mermaid
+flowchart LR
+    Caller["Caller"] --> Manager["SensorManager"] --> HAL["Sensor HAL interfaces"] --> Drivers["Concrete drivers"] --> Bus["I2C, serial, or ADC"]
 ```
 
 Product code instantiates the concrete drivers it needs, packs HAL pointers

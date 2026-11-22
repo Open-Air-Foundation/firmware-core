@@ -16,12 +16,12 @@ synchronized buzzer/LED playback.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_ui.h` / `go_ui.cpp` | Submenu + per-flow screens, `UIAction` values, row population, dispatch, navigation (hardware-free) |
-| `products/go/main/go_display.h` / `go_display.cpp` | `Screen` values + full-screen-list rendering for each test screen |
-| `products/go/main/go_orchestrator.h` / `go_orchestrator.cpp` | Flow state machines, actuator drives, AQ trigger, GPS/accel polling, cues, FG-learning arm |
-| `products/go/main/go_sensor_producer.h` / `go_sensor_producer.cpp` | `request_self_test()` — bulk AQ sweep in the producer task |
-| `products/go/main/go_events.h` | `SensorTestResults`, `EventType::SensorTestDone` |
-| `products/go/main/accel/` | LIS2DH12 driver, shared worker, shake detector, and pure sanity helpers |
+| [`products/go/main/go_ui.h`](../main/go_ui.h) / [`go_ui.cpp`](../main/go_ui.cpp) | Submenu + per-flow screens, `UIAction` values, row population, dispatch, navigation (hardware-free) |
+| [`products/go/main/go_display.h`](../main/go_display.h) / [`go_display.cpp`](../main/go_display.cpp) | `Screen` values + full-screen-list rendering for each test screen |
+| [`products/go/main/go_orchestrator.h`](../main/go_orchestrator.h) / [`go_orchestrator.cpp`](../main/go_orchestrator.cpp) | Flow state machines, actuator drives, AQ trigger, GPS/accel polling, cues, FG-learning arm |
+| [`products/go/main/go_sensor_producer.h`](../main/go_sensor_producer.h) / [`go_sensor_producer.cpp`](../main/go_sensor_producer.cpp) | `request_self_test()` — bulk AQ sweep in the producer task |
+| [`products/go/main/go_events.h`](../main/go_events.h) | `SensorTestResults`, `EventType::SensorTestDone` |
+| [`products/go/main/accel/`](../main/accel) | LIS2DH12 driver, shared worker, shake detector, and pure sanity helpers |
 
 ## Dependencies
 
@@ -31,7 +31,7 @@ synchronized buzzer/LED playback.
 | `DisplayService` | `go_display.h` | Full-screen list renderer for every test screen |
 | `LedService` | `led/go_led.h` | Actuator drives + PASS/FAIL colour cues; restored on exit |
 | `BuzzerService` | `buzzer/go_buzzer.h` | Actuator tone + success/alert cues |
-| `SensorProducer` | `go_sensor_producer.h` | `request_self_test()` runs the AQ sweep as the single I2C bus owner |
+| `SensorProducer` | `go_sensor_producer.h` | `request_self_test()` runs the AQ sweep on the existing sensor acquisition task |
 | `GpsService` | `gps/gps_service.h` | Ungates the receiver + fast posting for the live GPS screen |
 | `AccelService` | `accel/accel_service.h` | Worker-owned configuration and live X/Y/Z + WHO_AM_I reads |
 | `accel_sanity.h` | `accel/accel_sanity.h` | Pure identity + rest-magnitude classification |
@@ -43,7 +43,7 @@ The surface is driven by `UIAction` values that `UIManager` emits and the
 orchestrator consumes. Opening the submenu is internal navigation
 (`open_hardware_test()`); it emits no action.
 
-| `UIAction` | Emitted by | Orchestrator response |
+| `UIAction` | Emitted By | Orchestrator Response |
 |---|---|---|
 | `RunPeripheralTest` | Peripheral Test row | `start_peripheral_test()` — wake PM and drive first actuator |
 | `PeripheralStepPass` / `PeripheralStepFail` | Actuator step Pass/Fail | `peripheral_step_result()` — record + advance |
@@ -59,12 +59,30 @@ Cross-service hooks used by the flows:
 | `SensorProducer::request_self_test()` | `go_sensor_producer.h` | Kick the AQ sweep; posts one `SensorTestDone` |
 | `AccelService::begin_hardware_test(out)` | `accel/accel_service.h` | Select unfiltered ±4 g configuration and return the first sample |
 | `AccelService::read_hardware_test(out)` | `accel/accel_service.h` | Poll the live test sample through the worker |
-| `AccelService::end_hardware_test()` | `accel/accel_service.h` | Restore filtered interrupt capture |
+| `AccelService::end_hardware_test()` | `accel/accel_service.h` | Restore V1 interrupt capture or power down the V2 sensor |
 
 See [`go_ui.h`](../main/go_ui.h) and [`go_orchestrator.h`](../main/go_orchestrator.h)
 for full signatures.
 
 ## Behavior
+
+### Ownership and Entry Points
+
+```mermaid
+flowchart TD
+    Settings["Settings"] --> Menu["Hardware Test"]
+    Menu --> Peripheral["Peripheral Test: guided actuators and automatic AQ sweep"]
+    Menu --> GPS["GPS Test: live fix and TTFF"]
+    Menu --> Accel["Accelerometer Test: live samples and sanity check"]
+    Menu --> Melody["Play Melody: synchronized buzzer and LEDs"]
+    Menu --> Confirm["V1 Battery Calibration confirmation"]
+    Confirm -->|Yes| Factory["Persist factory state and reboot"]
+    Factory --> Runner["Fuel-gauge learning boot path"]
+```
+
+The diagnostic screens reuse the running services. Only confirmed Battery
+Calibration starts a separate boot path. Hardware Test is available through
+ordinary Settings; manufacturing mode is not a prerequisite.
 
 ### Navigation
 
@@ -123,12 +141,19 @@ After the buzzer check, the screen shows the automatic testing view while
 orchestrator start the sweep once both conditions are met. If PM is already
 ready and the producer is available, the sweep starts immediately.
 
-The AQ sweep runs **inside the sensor producer task** (the normal I2C bus owner)
+The AQ sweep runs **inside the sensor producer task** (the sensor acquisition owner)
 via `request_self_test()`: a single `start_measures(1, All)` iteration classified
 per Go sensor role by field validity, posted back as one `SensorTestDone` event
 carrying `SensorTestResults`. The summary cue fires on the overall result —
 **PASS**: green back LED + `PATTERN_CHARGE_DONE`; **FAIL**: red back LED +
 `PATTERN_UNPLUG`. On exit the LED/buzzer are restored to persisted settings.
+
+Results describe the five configured sensor roles, not every physical device
+independently. An absent sensor and an invalid reading both produce **FAIL**;
+there is no separate `ABSENT` result or per-address probe report. Temperature
+and humidity use the configured fallback sources, so the role can pass without
+a dedicated SHT40. LED and buzzer results are operator judgments; the firmware
+does not electrically verify their output.
 
 The sweep shares `_measurement_pending` with normal measurements to prevent
 overlapping requests. Its completion event is `SensorTestDone`;
@@ -148,7 +173,10 @@ event-driven: `on_gps_fix()` re-renders on each `GpsFixUpdate` while the screen
 is open. TTFF latches on the first valid fix and freezes; a green breathing back
 LED marks the fix. The screen shows TTFF (`mm:ss`), fix type, satellites, HDOP,
 latitude/longitude, and UTC. On exit the posting cadence and back LED are
-restored, and the receiver is stopped only if the test ungated it.
+restored. If settings no longer require acquisition, the orchestrator applies
+the inactive-GPS policy: sleep maintenance normally, or worker shutdown during
+manufacturing. Existing receiver sleep can delay the first fix; TTFF includes
+that wait.
 
 A cloud Fetch response can set `gpsTestRequested: true`, or a Local API client
 can call `POST /api/v1/actions/test-gps`, to open this screen without manual
@@ -211,8 +239,9 @@ See [`fg_learning.md`](fg_learning.md) for the runner.
   only.
 - **AQ warm-up.** SGP41 (TVOC/NOx) and CO2 may read invalid until conditioned,
   so a still-warming unit can report those roles as FAIL in the summary.
-- **GPS already active.** In `AlwaysOn` mode the receiver is left running on exit
-  and TTFF reads ~0 (entry-relative, and the receiver was already fixed).
+- **GPS already active.** In `AlwaysOn` mode the receiver is left running on exit.
+  TTFF is entry-relative and latches on the next valid fix event; an already
+  fixed receiver does not guarantee an immediate zero value.
 - **Mid-flow exit.** Any exit gesture that bypasses a flow's on-screen control
   (double-press Back, long-press Home) still restores hardware: the orchestrator
   detects the screen transition and runs the matching `finish_*`.
@@ -220,6 +249,9 @@ See [`fg_learning.md`](fg_learning.md) for the runner.
   waiting sweep. A sweep already running keeps PM awake until `SensorTestDone`,
   then releases it without changing the screen. Reopening the test waits for
   that completion and discards the old result before starting a new sweep.
+- **Lost sweep completion.** `SensorTestDone` is best-effort. A full central queue
+  can drop it and leave the pending sweep unresolved; there is no per-sweep
+  completion retry. See [producer event delivery](sensor_producer.md#task-ownership-and-errors).
 - **Sensor worker stopped.** Provisioning or committed OTA clears the pending
   measurement state and finishes the peripheral test when stopping the worker.
 - **Unavailable actuators.** If LED or buzzer initialization fails, their cues
@@ -229,3 +261,19 @@ See [`fg_learning.md`](fg_learning.md) for the runner.
   locked and returned Home mid-test. Auto-lock resumes once the surface is
   exited. The Play Melody choice screen and Battery Calibration confirmation retain
   ordinary auto-lock behavior.
+
+## Verification
+
+[`go_orchestrator.tests.cpp`](../tests/go_orchestrator.tests.cpp) covers peripheral
+step ordering, restoration on exit, GPS TTFF, accelerometer failures, and the
+factory-learning arm. [`go_ui.tests.cpp`](../tests/go_ui.tests.cpp) covers navigation;
+[`go_accel_sanity.tests.cpp`](../tests/go_accel_sanity.tests.cpp) covers the identity
+and magnitude classifier. Run these through the [host-test workflow](../../../tests/README.md).
+
+On-device verification must check actuator output, sensor results, GPS fix and
+TTFF, orientation-dependent acceleration, and restoration after exiting a test.
+The implemented rest band is 850–1150 mg; field validation should account for
+motion and device noise. Confirm live-screen refresh usability and check AQ
+results after sensor warmup before treating an early bad reading as a hardware
+failure. Battery Calibration remains explicitly confirmed and V1-only; see
+[Fuel-Gauge Learning](fg_learning.md) for its prerequisites and procedure.

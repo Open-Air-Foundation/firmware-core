@@ -39,7 +39,9 @@ worker, wake deadline, latest fix, clock sync, and `GpsFixUpdate` events.
 
 `start()` leaves an already-running worker unchanged. Job requests never create
 a worker, and acceptance does not mean GPS is ready or has a fix. Lifecycle calls
-have one owning caller; `stop()` interrupts a pending wake wait.
+have one owning caller; `stop()` interrupts a pending wake wait. External callers
+must stop the worker before reading either sleep-deadline query. Fix snapshots
+and aiding-data updates use mutex-protected copies.
 
 ### Configuration
 
@@ -144,10 +146,24 @@ for its existing deadline. Sensor points can be recorded before a valid GPS fix.
   left UART, not that hardware sleep was confirmed; no sleep ACK is awaited.
 - Failed sleep commands do not create a deadline. Sleep maintenance retries
   after one second; one-shot callers receive `false`.
-- Failure to connect at both bauds or switch baud ends acquisition setup.
+- Failure to connect at both bauds or switch baud fails that acquisition setup
+  attempt. The worker retries after one second while acquisition remains
+  requested; a notification can retry sooner or change the job.
   A wake deadline alone does not prove the receiver is awake or tracking.
 - `stop: GPS worker and UART; receiver state unchanged` logs worker shutdown, not a receiver
   status check. The module may already be asleep or acquisition may have failed.
 - A failed or ineffective mode-change reset leaves the existing GPS deadline
   in force. Leaving Energy Saving can therefore leave GPS unavailable until
   its long sleep ends or receiver power is cycled.
+- Fix events use nonblocking queue sends. A full queue drops that update; the
+  latest snapshot remains available and later intervals post again.
+
+## Verification
+
+[`go_gps_service.tests.cpp`](../tests/go_gps_service.tests.cpp) covers acquisition
+jobs, retained wake deadlines, stop/wake behavior, and sleep maintenance.
+[`go_gps_driver.tests.cpp`](../tests/go_gps_driver.tests.cpp) covers NMEA parsing,
+CASIC commands, baud changes, aiding data, and transport failures;
+[`go_gps_types.tests.cpp`](../tests/go_gps_types.tests.cpp) covers field validity.
+See the [host-test workflow](../../../tests/README.md). Receiver sleep, RF fix
+acquisition, and reset behavior still need physical-device verification.

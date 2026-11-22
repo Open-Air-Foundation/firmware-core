@@ -98,7 +98,7 @@ If LOW, it clears the CAP1203 latch and checks again; if still LOW, it
 reinitializes the controller. V2's check uses I2C through the expander.
 Noisy channels are excluded from events and recalibrated when supported.
 
-### Sleep And Wake
+### Sleep and Wake
 
 `start()` and `stop()` do not change CAP1203 power mode. Touch remains active
 in ESP sleep but is not a wake source. Interactive boot initializes CAP1203
@@ -116,5 +116,9 @@ later press. Touch events are never suppressed by this flag.
 - Event posting is nonblocking; a full queue drops the event.
 - `pause()` suppresses event delivery while the worker continues processing.
 
+## Verification
+
 [Host tests](../tests/go_input.tests.cpp) cover gesture timing, board mappings,
-polling, wake suppression, and touch recovery with mocked hardware.
+polling, wake suppression, and touch recovery with mocked hardware. See the
+[host-test workflow](../../../tests/README.md). Physical touch sensitivity,
+interrupt wiring, and expander timing require device verification.

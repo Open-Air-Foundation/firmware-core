@@ -17,9 +17,8 @@ teardown ordering) and routes events to the service.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_portable_provisioner.h` | `PortableWifiProvisioner` class declaration |
-| `products/go/main/go_portable_provisioner.cpp` | Attach/stop, request marshaling, radio lifecycle, idle timer |
-| `products/go/specs/portable_wifi_provisioning.md` | Feature spec (design rationale) |
+| [`products/go/main/go_portable_provisioner.h`](../main/go_portable_provisioner.h) | `PortableWifiProvisioner` class declaration |
+| [`products/go/main/go_portable_provisioner.cpp`](../main/go_portable_provisioner.cpp) | Attach/stop, request marshaling, radio lifecycle, idle timer |
 
 ## Dependencies
 
@@ -43,6 +42,11 @@ bool is_radio_active() const;   // gate History export (notification contention)
 uint32_t next_deadline_ms() const;
 void tick(uint32_t now_ms);     // drop the radio on idle timeout
 ```
+
+Lifecycle and request-driving calls run on the orchestrator task. Attach before
+BLE advertising; stop before the owning `BleService` tears its server down.
+Dependencies and borrowed identity strings must outlive this service. See
+[`go_portable_provisioner.h`](../main/go_portable_provisioner.h) for signatures.
 
 ## Behavior
 
@@ -71,6 +75,14 @@ callbacks are marshaled onto the central queue as `ProvisioningStateChanged`
 tagged with `transport = BleAttached`, which the orchestrator routes to silent
 Portable handling.
 
+The pending buffer holds only the latest request: a new BLE request can replace
+one not yet consumed. Event sends are nonblocking and are not retried. If the
+request notification is dropped, the pending request remains until another
+notification is handled or `stop()` clears it. Result events, including
+`Connected`, have no retained retry slot; if success delivery is lost, the radio
+idle deadline still provides cleanup. Clients should wait for each operation's
+result before submitting another.
+
 See [`go_portable_provisioner.cpp`](../main/go_portable_provisioner.cpp) for
 the full request/marshal sequence.
 
@@ -83,10 +95,19 @@ the full request/marshal sequence.
 | Disconnect mid-scan / mid-connect | Radio dropped; a late notify to a gone characteristic is harmless |
 | Radio-idle timeout while app connected | Radio dropped after `CONFIG_GO_PORTABLE_PROV_RADIO_IDLE_MS` |
 | History export while radio active | Rejected with `busy`; allowed when the radio is off (the common case) |
-| Portable exit mid-provisioning | `stop()` aborts the session and drops the radio before `BleService::deinit()`; candidate creds already in NVS persist |
+| Portable exit mid-provisioning | `stop()` aborts the session and drops the radio before `BleService::deinit()`; any credentials already saved by the shared manager remain persisted |
 
 ## Configuration
 
 | Symbol | Default | Purpose |
 |---|---|---|
 | `CONFIG_GO_PORTABLE_PROV_RADIO_IDLE_MS` | `90000` | Drop the radio after this much inactivity even while the app stays connected |
+
+## Verification
+
+[`go_portable_provisioner.tests.cpp`](../tests/go_portable_provisioner.tests.cpp)
+covers lazy manager creation, attach, scan/credential requests, radio startup
+failure, verify-then-drop, idle expiry, disconnect, and borrowed-server teardown.
+The [BLE client reference](../go_ble_client.md) owns the wire protocol; use the
+[host-test workflow](../../../tests/README.md) for service tests and the
+[BLE integration workflow](../tests/ble-integration/README.md) for device checks.

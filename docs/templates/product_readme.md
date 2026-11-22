@@ -3,6 +3,10 @@
 Firmware for the AirGradient \<Product\> (one-line description and a link to
 the product page if applicable).
 
+Template instructions: keep applicable sections, remove placeholders, and
+adjust paths for the destination. Link only to documents that exist. Remove
+this paragraph when using the template.
+
 ## Sensors
 
 - **PM** — vendor model (PM1.0, PM2.5, PM10)
@@ -14,21 +18,20 @@ the product page if applicable).
 
 ## Hardware Notes
 
-Capture product-specific quirks that affect bring-up order, power rails, or
-runtime behavior. For example: which rail powers which sensor, required
-init ordering, runtime power-path re-evaluation.
+Summarize essential setup constraints and hardware variants. Link to the
+authoritative hardware or power document for initialization sequences, timing,
+failure handling, and design rationale. Keep this section short enough for a
+reader getting started with the product.
 
 ## Build
 
-```sh
-. "$HOME/Tools/esp/esp-idf/export.sh"
-idf.py -C products/<product> build
-```
+Optional: document only product-specific requirements not covered by the root
+README. Remove this section when the shared build instructions are sufficient.
 
 ## Documentation
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — boot paths, event model, module
   structure
-- [`docs/`](docs) — feature specifications and design notes
-- [`specs/`](specs) — design specs and refactor plans
+- [`docs/`](docs) — current behavior, service contracts, and design rationale
+- [`specs/`](specs) — proposed changes and implementation plans
 - `main/board_config.h` — pin assignments and I2C addresses

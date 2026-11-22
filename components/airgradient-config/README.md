@@ -15,8 +15,7 @@ This component owns:
 - typed key-value persistence for `int`, `bool`, `string`, and `float`
 - a shared storage interface for configuration backends
 - an ESP-IDF NVS backend
-- common result semantics for storage operations (`success`,
-  `not_found`, `error`)
+- common result semantics for storage operations (`OK`, `NOT_FOUND`, `ERROR`)
 
 This component does not own:
 
@@ -37,14 +36,12 @@ while the shared component provides the persistence API and backends.
 components/airgradient-config/
   hal/
   backends/
-  tests/
   CMakeLists.txt
   README.md
 ```
 
 - `hal/` — `ConfigStore` interface and `ConfigStoreResult` enum
 - `backends/` — concrete storage implementations (currently NVS)
-- `tests/` — reserved for future shared config tests; empty today
 
 ## Public Includes
 
@@ -60,8 +57,11 @@ Guideline:
 
 ## Design
 
-```text
-product settings struct -> key mapping -> ConfigStore& -> NvsConfigStore -> NVS partition
+```mermaid
+flowchart LR
+    Settings[Product settings and key mapping] --> Store[ConfigStore]
+    Store --> Backend[NvsConfigStore]
+    Backend --> NVS[NVS partition]
 ```
 
 Each product owns the settings struct, defaults, validation, and the
@@ -72,9 +72,9 @@ sees the product-specific struct.
 
 Storage operations return one of:
 
-- `success`
-- `not_found`
-- `error`
+- `OK`
+- `NOT_FOUND`
+- `ERROR`
 
 Product-level invalid values are not treated as storage errors. Recommended
 handling:
@@ -103,20 +103,24 @@ The backend requires a four-byte IEEE-754 `float`; missing keys return
 
 ## Usage
 
+The product initializes NVS before using the backend. `NvsConfigStore` opens
+its namespace lazily on the first operation and closes it on destruction;
+there is no separate `init()` method. Check both write and commit results.
+
 ```cpp
 NvsConfigStore store("settings");
-if (!store.init()) { /* handle init failure */ }
-
-int interval = 0;
-if (store.get_int("pm_interval", interval) != ConfigStoreResult::Success) {
-    interval = DEFAULT_PM_INTERVAL_SEC;  // product default
+int interval = DEFAULT_PM_INTERVAL_SEC;
+const auto result = store.get_int("pm_interval", interval);
+if (result == ConfigStoreResult::ERROR) { return; }
+// NOT_FOUND leaves the product default in place; validate loaded values.
+if (store.set_int("pm_interval", interval) != ConfigStoreResult::OK) {
+    return;
 }
-
-store.set_int("pm_interval", interval);
-store.commit();
+if (store.commit() != ConfigStoreResult::OK) { return; }
 ```
 
-For a concrete product example, see `products/go/main/go_settings.cpp`.
+For a concrete product example, see
+[`go_settings.cpp`](../../products/go/main/go_settings.cpp).
 
 ## Dependencies
 
@@ -126,5 +130,5 @@ For a concrete product example, see `products/go/main/go_settings.cpp`.
 
 Host tests are not yet provided for this component. Product-specific
 config logic is tested where that logic lives (e.g.
-`products/go/tests/go_settings.tests.cpp`). The `tests/` directory is
-reserved for future shared config tests if shared config logic grows.
+[`go_settings.tests.cpp`](../../products/go/tests/go_settings.tests.cpp)).
+There is no component-local `tests/` directory.

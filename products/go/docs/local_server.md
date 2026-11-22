@@ -11,15 +11,15 @@ incomplete.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_local_api.h` | Product providers, snapshots, access state, and fixed request FIFO |
-| `products/go/main/go_local_api.cpp` | Go measures/config mapping, validation, admission, and queue signaling |
-| `components/airgradient-common/include/retained_uptime.h`, `retained_uptime.cpp` | Shared RTC-retained monotonic uptime calculation |
-| `products/go/main/go_orchestrator.h` | Local endpoint state, retry deadline, and orchestration declarations |
-| `products/go/main/go_orchestrator.cpp` | Request processing, persistence, OTA policy, and Stationary lifecycle |
-| `products/go/main/go_wifi.h` | Shared listener and local mDNS lifecycle API |
-| `products/go/main/go_wifi.cpp` | Provisioning handoff, route/listener ownership, and mDNS profile wiring |
-| `products/go/tests/go_local_api.tests.cpp` | Host tests for mappings, policy, snapshots, FIFO, and queue epochs |
-| `products/go/tests/local-server-integration/` | Hardware integration test collection for the HTTP and mDNS contract |
+| [`products/go/main/go_local_api.h`](../main/go_local_api.h) | Product providers, snapshots, access state, and fixed request FIFO |
+| [`products/go/main/go_local_api.cpp`](../main/go_local_api.cpp) | Go measures/config mapping, validation, admission, and queue signaling |
+| [`components/airgradient-common/include/retained_uptime.h`](../../../components/airgradient-common/include/retained_uptime.h), `retained_uptime.cpp` | Shared RTC-retained monotonic uptime calculation |
+| [`products/go/main/go_orchestrator.h`](../main/go_orchestrator.h) | Local endpoint state, retry deadline, and orchestration declarations |
+| [`products/go/main/go_orchestrator.cpp`](../main/go_orchestrator.cpp) | Request processing, persistence, OTA policy, and Stationary lifecycle |
+| [`products/go/main/go_wifi.h`](../main/go_wifi.h) | Shared listener and local mDNS lifecycle API |
+| [`products/go/main/go_wifi.cpp`](../main/go_wifi.cpp) | Provisioning handoff, route/listener ownership, and mDNS profile wiring |
+| [`products/go/tests/go_local_api.tests.cpp`](../tests/go_local_api.tests.cpp) | Host tests for mappings, policy, snapshots, FIFO, and queue epochs |
+| [`products/go/tests/local-server-integration/`](../tests/local-server-integration) | Hardware integration test collection for the HTTP and mDNS contract |
 
 ## Dependencies
 
@@ -38,22 +38,16 @@ incomplete.
 `GoLocalApiService` implements the three provider interfaces consumed by
 `LocalServer`. The orchestrator and `WifiService` drive the remaining methods.
 
-| Method | Returns | Purpose |
-|---|---|---|
-| `GoLocalApiService(queue, config)` | Constructor | Capture the event queue and process-lifetime identity |
-| `is_valid()` | `bool` | Report whether queue and synchronization dependencies are usable |
-| `get_measures()`, `get_system_info()` | Value snapshots | Supply thread-safe GET measures data |
-| `get_config()` | `LocalServerConfig` | Supply the complete active Go config snapshot |
-| `submit_config(partial)` | `ConfigSubmitResult` | Validate and admit a non-blocking config request |
-| `trigger(action)` | `ActionResult` | Admit a fire-and-forget action request |
-| `publish_measurement_snapshot(...)` | `void` | Publish corrected common measures |
-| `publish_config_snapshot(settings)` | `void` | Publish active supported configuration |
-| `publish_wifi_rssi(rssi)` | `void` | Publish or omit the online RSSI sample |
-| `set_access(access)`, `access()` | `void`, `ConfigAccess` | Gate writes/actions or expose cached GET data during OTA |
-| `pop_request(epoch, request)` | `bool` | Pop one request only for the current queue generation |
-| `clear_requests()`, `queue_epoch()` | `size_t`, `uint32_t` | Discard queued work and inspect the generation |
+| Responsibility | Caller Contract |
+|---|---|
+| Construction | Supply the central event queue and device identity; check `is_valid()` before enabling the endpoint. |
+| GET providers | Return mutex-protected copies of measures, system information, and active config. HTTP handlers do not access live sensor drivers. |
+| Writes and actions | `submit_config()` and `trigger()` validate/admit work without waiting for execution. Successful admission is not successful persistence or hardware completion. |
+| Snapshot publication | The orchestrator publishes corrected measurements, active settings, and optional online RSSI. Readers see cached values until publication. |
+| Access and request lifecycle | `set_access()` gates mutations. Clear queued work at lifecycle boundaries; `pop_request(epoch, ...)` accepts only the current generation. |
 
-See [`go_local_api.h`](../main/go_local_api.h) for full signatures.
+See [`go_local_api.h`](../main/go_local_api.h) for full signatures and
+[request admission](#configuration) for FIFO capacity and policy ordering.
 
 ## Behavior
 
@@ -72,49 +66,25 @@ queued requests and activation retries, and enables Wi-Fi power saving. Cloud
 connectivity continues. Portable and **Energy Saving** modes do not expose the
 endpoint.
 
-The Go configuration uses plain HTTP on `CONFIG_AG_HTTP_PORT`, currently port
-80, and advertises this profile after the HTTP routes are reachable:
+Go uses model `P-1PSG` with the
+[shared discovery contract](../../../docs/local_http_api.md#availability-and-discovery).
 
-| Property | Value |
-|---|---|
-| Hostname | `airgradient_<serial>.local` |
-| Service | `_airgradient._tcp` |
-| Port | `80` |
-| TXT `vendor` | `AirGradient` |
-| TXT `model` | `P-1PSG` |
-| TXT `serialno` | Same value as `serialNumber` in measures |
-| TXT `fw_ver` | Same value as `firmware` in measures |
-| TXT `api` | `1` |
+| Symbol | Default | Purpose |
+|---|---|---|
+| `CONFIG_AG_HTTP_PORT` | `80` | Shared local API/provisioning listener port |
+
+Discovery starts only after the HTTP routes are reachable.
 
 ### Routes and Statuses
 
-The Go integration registers exactly these routes:
+Go implements all routes in the [shared endpoint catalog](../../../docs/local_http_api.md#endpoints):
+measurement/configuration GET, configuration PUT, and the calibration, LED-test,
+and GPS-test actions. Response bodies, status codes, and the error envelope are
+defined by the [shared HTTP contract](../../../docs/local_http_api.md#errors).
 
-| Method | Route | Success | Other Handler Statuses |
-|---|---|---:|---|
-| `GET` | `/api/v1/measures` | `200` JSON | `500` if serialization fails |
-| `GET` | `/api/v1/config` | `200` JSON | `500` if serialization fails |
-| `PUT` | `/api/v1/config` | Empty `202` | `400`, `403`, `404`, `503`, `500` |
-| `POST` | `/api/v1/actions/calibrate-co2` | Empty `200` | `403`, `503` |
-| `POST` | `/api/v1/actions/test-leds` | Empty `200` | `403`, `503` |
-| `POST` | `/api/v1/actions/test-gps` | Empty `200` | `403`, `503` |
-
-Errors produced by these handlers use an `application/json` envelope with
-`error.code`, optional `error.field`, and `error.message`:
-
-| Status | Code | Meaning |
-|---:|---|---|
-| `400` | `invalid_body` | Empty, incomplete, malformed, non-object, or trailing request body |
-| `400` | `unknown_field` | Unknown top-level or nested config key |
-| `400` | `invalid_value` | Invalid type, enum, correction, or merged Go setting |
-| `403` | `forbidden` | Endpoint access or configuration source policy rejects the request |
-| `404` | `not_found` | A known catalog field or action is unsupported by Go |
-| `503` | `busy` | The local FIFO or central event queue cannot admit work |
-| `500` | `internal` | Provider or serialization failure |
-
-Successful writes and actions have no body. A `503` response has no
-`Retry-After` header. Routes outside the registered catalog use the underlying
-HTTP server's default `404`, not the Local Server structured error envelope.
+Go-specific admission and execution behavior is described below. In particular,
+queue saturation returns `503 busy`, while source policy or OTA can reject an
+otherwise valid operation with `403 forbidden`.
 
 ### Measures
 
@@ -141,8 +111,8 @@ when available, with the charger voltage-curve estimate as fallback. `chargeVolt
 is measured input/VBUS voltage, not a charging-state indicator.
 
 Each field passes its field-specific validator before serialization; invalid
-fields are omitted rather than emitted as JSON `null`. `temperature` remains
-Celsius regardless of the configured display temperature unit. Corrections are
+fields are omitted. Units, precision, and omission rules follow the
+[shared measurement schema](../../../docs/local_http_api.md#read-measurements). Corrections are
 applied before the Go common-measures snapshot is published, so local clients
 receive the corrected PM2.5, temperature, and humidity view rather than the raw
 cloud, storage, and BLE view.
@@ -183,12 +153,9 @@ or types return `400 invalid_value` with field `pinnedChart`. Existing
 five minutes, where Home shows “Not available”; the preference is preserved.
 
 The API edits the shared Portable/Stationary interval; Energy Saving retains its
-separate preference. Accepted values are persisted and scheduled exactly. In
-Portable/Stationary, the menu offers 3s, 10s, 30s, 60s, 5m, 15m, and 1h. For
-another valid value such as 17, the Settings summary shows `Measure Int.: 17s`
-and the interval submenu prepends and selects `Custom (17s)`. Changing another UI
-setting preserves 17 seconds; explicitly selecting a fixed interval replaces
-it.
+separate preference. Accepted values are persisted and scheduled exactly. See
+[interval presentation](settings.md#measurement-interval-presentation) for how
+the UI preserves custom values.
 
 Connectivity, sensor, and correction fields are:
 
@@ -287,11 +254,14 @@ stateDiagram-v2
     [*] --> Connecting: enter Stationary
     Connecting --> Active: first IP
     Connecting --> Provisioning: initial connection fails
-    Provisioning --> Active: credentials connect and listener handoff completes
+    Provisioning --> Restart: successful portal setup requires restart
+    Restart --> Connecting: saved-network boot
+    Provisioning --> Active: success without restart and listener handoff completes
     Provisioning --> Inactive: abort or mode change
     Active --> Reconnecting: transient link loss
     Reconnecting --> Active: IP returns
     Active --> Inactive: disable Local Server or leave Stationary
+    Reconnecting --> Inactive: disable Local Server or leave Stationary
     Inactive --> [*]
 ```
 
@@ -314,11 +284,12 @@ listener and leaves routes and discovery inactive.
 
 With Local Server enabled, a transient disconnect after the first connection
 does not return to provisioning. It omits `wifiRssi`, retains local routes and
-the HTTP listener, leaves admitted FIFO work intact, and requests a reconnect after the
-configured 5-second delay. The reconnect uses saved networks when present or
-retries the transient factory-default network otherwise. The `StaIpAuto` mDNS
-profile follows the STA address lifecycle; reconnect reuses the local server
-and starts mDNS again instead of rebuilding the route set.
+the HTTP listener, leaves admitted FIFO work intact, and requests a reconnect
+after the configured 5-second delay. Normal reconnect uses saved networks only;
+the factory network belongs to the separate
+[manufacturing policy](wifi_service.md#manufacturing-factory-wi-fi). The
+`StaIpAuto` mDNS profile follows the STA address lifecycle; reconnect reuses the
+local server and starts mDNS again instead of rebuilding the route set.
 
 Disabling Local Server, entering provisioning, leaving Stationary, and entering
 committed OTA clear the mixed FIFO and increment its epoch. Stale central events
@@ -339,27 +310,23 @@ disabled remains disabled. When the endpoint is reachable during that interval:
 | `GET /api/v1/config` | `200` with the last active config snapshot |
 | Structurally valid config PUT | `403 forbidden` |
 | Malformed config PUT | `400` parse error before OTA policy |
-| Either registered action | `403 forbidden` before model support policy |
+| Any registered action | `403 forbidden` before model support policy |
 
 A non-rebooting OTA outcome restores the previous access state with an empty
 FIFO. A successful OTA reboots.
 
 ### Trust Boundary
 
-The endpoint is plain HTTP with no TLS, authentication, authorization, or CORS
-policy. Any host that can reach the Stationary device on the local network can
-read snapshots, attempt configuration changes allowed by
-`configurationControl`, and dispatch supported actions. Deployment therefore
-relies on a trusted and appropriately isolated LAN; the endpoint must not be
-treated as safe for direct exposure to untrusted networks.
+Go uses the [shared local API security model](../../../docs/local_http_api.md#security).
+Its `configurationControl` setting arbitrates configuration sources; it does not
+authenticate clients or restrict read access to a particular caller.
 
-### External Client Follow-Ups
+### External Clients
 
-`python-airgradient` and Home Assistant require separate client-integration
-follow-up work. Clients need to accept asynchronous `202`, treat `503 busy` as
-temporary, poll GET for configuration convergence, and preserve compatibility
-with existing device behavior. No external pull request or issue URLs are
-recorded here; links should be added only when concrete follow-ups exist.
+Clients must treat `202` as asynchronous admission and `503 busy` as temporary,
+then poll GET when configuration convergence matters. Compatibility with
+`python-airgradient` or Home Assistant requires separate integration validation;
+firmware host tests do not establish it.
 
 ## Edge Cases / Errors
 
@@ -382,17 +349,15 @@ recorded here; links should be added only when concrete follow-ups exist.
 
 ## Verification
 
-The available evidence is limited to automated work completed at revision
-`c17f2d3` and static collection of the hardware suite:
+[`go_local_api.tests.cpp`](../tests/go_local_api.tests.cpp) covers snapshots,
+field mapping, board support, correction shapes, authority checks, FIFO
+admission, and queue epochs. [Orchestrator tests](../tests/go_orchestrator.tests.cpp)
+cover activation, lifecycle, and OTA policy; [Wi-Fi tests](../tests/go_wifi.tests.cpp)
+cover listener/discovery ordering and failure handling. Run them through the
+[host-test workflow](../../../tests/README.md).
 
-| Check | Evidence |
-|---|---|
-| Native host suite | `1240/1240` tests passed at `c17f2d3` |
-| Go firmware build | Passed at `c17f2d3`; `0x1cfe30` bytes with `0x201d0` bytes (6%) app-partition headroom |
-| Hardware integration suite | Pytest collects 24 tests |
-
-The 24 hardware tests have not been run against a physical AirGradient Go.
-There is no physical evidence for concurrent PUT behavior, provisioning
-listener handoff, transient reconnect, mDNS lifecycle, Home Assistant
-interoperability, or heap headroom during listener, local GET, cloud TLS, or OTA
-activity.
+The [local-server integration suite](../tests/local-server-integration/README.md)
+describes physical-device checks. Hardware validation must establish concurrent
+PUT behavior, provisioning listener handoff, reconnect, mDNS lifecycle, client
+interoperability, and heap headroom during local GET, cloud TLS, and OTA.
+Test collection or host success alone does not establish these results.
