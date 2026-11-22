@@ -14,7 +14,8 @@ connectivity, Wi-Fi support, local storage, LEDs, and buzzer feedback.
 AirGradient Go is designed for people who want to understand the air quality
 around them throughout the day. It can be carried outdoors, used during travel,
 or placed in a fixed location. The device can work with a phone app over BLE,
-connect to Wi-Fi in stationary use, or operate without radios in Offline mode.
+connect to Wi-Fi in stationary use, or sleep between measurements in Energy
+Saving mode with brief BLE broadcasts.
 
 Key product ideas:
 
@@ -141,9 +142,11 @@ the Accelerometer Test.
 The device has a lock state so accidental touches do not change settings while
 it is being carried.
 
-- A short press on the power button locks or unlocks the interface.
+- A short press on the power button locks or unlocks the interface, except
+  during startup and setup screens.
 - Touch navigation is ignored while locked.
-- A long press powers the device off.
+- A long press powers the device off on battery or enters charging-only
+  operation with USB attached.
 - If the user keeps holding the power button after shutdown on battery, the
   hardware can restart the device.
 - Auto-lock can be configured or disabled.
@@ -181,7 +184,7 @@ Wi-Fi and cloud features include:
 
 - Connecting with saved Wi-Fi credentials.
 - Wi-Fi setup through BLE or a captive portal flow.
-- Factory-default fallback credentials for setup scenarios.
+- Dedicated factory Wi-Fi for manufacturing checks before onboarding.
 - Saved network reconnect behavior after temporary outages.
 - Optional cloud posting of latest readings.
 - Static IP support when configured during provisioning.
@@ -191,6 +194,9 @@ Wi-Fi and cloud features include:
   device serial number.
 - A versioned local HTTP API for corrected live measurements, system identity,
   and selected active configuration.
+
+Normal setup uses saved networks or asks for credentials; it does not fall back
+to factory Wi-Fi automatically.
 
 The device can also receive Wi-Fi credentials while still in Portable mode over
 the already bonded BLE link. In that case the Wi-Fi radio is powered only when
@@ -214,11 +220,14 @@ Local clients can change this selected configuration:
 - PM display standard: mass concentration or US AQI.
 - Temperature unit: Celsius or Fahrenheit.
 - Altitude unit: meters or feet for the device display.
+- Pinned Home chart.
 - Measurement interval: any whole second from 1 through 3600.
+- GPS mode, LED indicator and brightness, touch LED intensity on V1, and buzzer.
 - Cloud connection enabled or disabled.
 - Configuration source: cloud, local, or both.
 - PM2.5, temperature, and humidity measurement corrections.
 - CO2 automatic background calibration period (1 to 200 days), or disabled.
+- TVOC and NOx learning-time offsets.
 
 Configuration writes are asynchronous. For an update carrying at least one
 actual setting field, an accepted response means the request entered the device
@@ -242,8 +251,9 @@ Two settings control different concerns:
 | Cloud connection | Master switch for subsequent cloud measurement upload, cloud config Fetch, and automatic Stationary Wi-Fi update checks. Local HTTP and mDNS remain active when it is off. An in-flight Fetch is not cancelled. |
 | Configuration source | Selects whether cloud Fetch, Local Server writes, or both can update remotely managed settings. BLE, on-device UI, provisioning, and factory reset remain available. |
 
-Cloud Fetch applies supported PM standard, temperature unit, CO2 ABC period, and measurement
-correction fields. It cannot change the
+Cloud configuration applies supported display, measurement-interval, GPS, LED,
+buzzer, sensor-learning, CO2 calibration-period, and measurement-correction
+settings. It cannot change the
 cloud-connection or configuration-source controls themselves. When the source
 is `local`, the device does not issue cloud config Fetch requests, although
 cloud measurement upload can continue. When the source is `cloud`, normal local
@@ -276,14 +286,15 @@ User-visible battery features:
 - Charging while powered off, with Charging and Battery Full screens. Hold
   the power button to turn on, or unplug to power off.
 - USB plugged-in indication.
-- Low-battery warnings.
-- Automatic protective shutdown when the battery is critically low.
+- A low-battery shutdown screen when sustained low cell voltage triggers
+  protective shutdown.
 - Battery-temperature protection, including charge inhibition, invalid-NTC
   handling, and distinct hot/cold protective shutdowns.
-- Charging pause when the battery is full to reduce battery stress.
+- Charger-controlled charge completion and recharge; a displayed 100% does not
+  itself stop charging.
 
 The firmware also manages sensor power to reduce drain. For example, the PM
-sensor can be powered down between measurements when the measurement interval is
+sensor's fan can sleep between measurements when the measurement interval is
 long enough.
 
 ## LEDs And Buzzer Feedback
@@ -346,9 +357,8 @@ time including pauses, point count, last-point age, and GPS time. A second view
 shows GPS signal and location details. Values refresh every five seconds while
 the page is open. Unavailable values show `--`.
 
-The page does not auto-lock; use Power to lock or leave to restore normal
-auto-lock. Keeping it open in Offline mode keeps the device awake and uses more
-battery.
+The page is available only in Portable and does not auto-lock; use Power to
+lock or leave to restore normal auto-lock.
 
 The Go stores user settings on the device, so they survive power cycles.
 
@@ -356,12 +366,13 @@ Common configurable settings include:
 
 - Measurement interval choices of 3s, 10s, 30s, 60s, 5m, 15m, and 1h. A
   different valid value supplied through a firmware interface appears as an
-  exact custom interval until the user selects a fixed choice.
+  exact custom interval until the user selects a fixed choice. Energy Saving
+  has its own saved interval, with menu choices of 5m, 15m, and 1h.
 - Temperature unit: Celsius or Fahrenheit.
 - Altitude unit: meters or feet.
 - PM display: micrograms per cubic meter or US AQI.
 - GPS mode: always off, on when tracking, or always on.
-- Operating mode: Portable, Stationary, or Offline.
+- Operating mode: Portable, Stationary, or Energy Saving.
 - Auto-lock timeout.
 - LED Indicator (AQI or CO2) and LED Brightness.
 - Touch LED brightness (V1 only).
@@ -379,7 +390,7 @@ Firmware update behavior depends on the current operating mode.
 |---|---|
 | Portable | Phone-initiated update over BLE |
 | Stationary | Device-initiated update check over Wi-Fi while cloud connection is enabled |
-| Offline | No update path while Offline |
+| Energy Saving | No update path until the operating mode changes |
 
 During a firmware update, normal sensing and data transfer are paused so the
 update can complete safely. During a committed Stationary update, an
@@ -414,4 +425,5 @@ from the device menu or the app.
   not as zero.
 - Portable BLE is the main app experience for carrying the device.
 - Stationary Wi-Fi is the main experience for fixed-location use.
-- Offline mode is local-only and radio-off.
+- Energy Saving has no Wi-Fi or connectable BLE, but briefly broadcasts readings
+  over BLE during timer wakes.

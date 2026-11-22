@@ -5,6 +5,11 @@ polling, battery monitoring, sleep cycle management, RTC state persistence,
 and shutdown. Called synchronously by the orchestrator and GoApp boot paths —
 no independent task.
 
+[Orchestrator](orchestrator.md) owns application shutdown and service teardown.
+[Hardware Initialization](hardware_init.md) owns boot composition and wake-path
+sequencing. This document explains the power policy and hardware constraints
+those callers rely on.
+
 For AGo, the power service also manages:
 
 - **Session-armed PMID:** `EN_OTG` is armed once during `BQ25629Bms::init()`
@@ -14,8 +19,8 @@ For AGo, the power service also manages:
   below for the cell-OCP rationale
 - **EDV (over-discharge) trip:** requests ship mode
   (`ShipModeRequest::OverDischarge`) when cell voltage stays below 2.9 V
-  for 3 consecutive polls while on battery. The orchestrator shows a
-  warning on `Screen::Info` then calls `shutdown()`
+  for 3 consecutive polls while on battery. The orchestrator's `shutdown()`
+  paints `Screen::ShutdownDischarge` before requesting ship mode
 - **Battery-temperature protection:** charging is allowed from 0 °C through
   45 °C. After a temperature or invalid-NTC block, charging resumes only from
   2 °C through 43 °C. Discharging is allowed from -10 °C through 60 °C;
@@ -31,8 +36,9 @@ For AGo, the power service also manages:
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_power.h` | `PowerSnapshot` struct, `PowerService` class declaration |
-| `products/go/main/go_power.cpp` | BMS polling, sleep entry/exit, RTC state, fast-path boot logic |
+| [`go_power.h`](../main/go_power.h) | `PowerSnapshot`, `PowerService`, configuration, and constants |
+| [`go_power.cpp`](../main/go_power.cpp) | BMS polling, sleep entry, RTC state, wake-cause helpers |
+| [`go_app.cpp`](../main/go_app.cpp) | Charging-only, timer, button-wake, and interactive boot paths |
 
 ## Dependencies
 
@@ -48,8 +54,10 @@ For AGo, the power service also manages:
 
 ## PowerSnapshot Fields
 
-`PowerSnapshot` aggregates BMS data for the orchestrator and display.  All
-fields default to invalid sentinels (`BmsInvalid::VOLT` / `-1.0f` / `false`).
+`PowerSnapshot` aggregates charger and fuel-gauge data for the orchestrator and
+display. Measurements default to invalid sentinels; flags use safe defaults and
+charging state starts as `Unknown`. The table covers normal runtime fields;
+factory-learning fields are described [below](#fuel-gauge-learning-surface).
 
 | Field | Type | Sentinel | Description |
 |---|---|---|---|
@@ -78,8 +86,10 @@ fields default to invalid sentinels (`BmsInvalid::VOLT` / `-1.0f` / `false`).
 1. If an FG is attached (`_fg != nullptr && _fg->ready()`) and
    `read_soc_percent()` succeeds: `battery_percentage` comes from the FG,
    `battery_percent_source = FuelGauge`
-2. Otherwise: `battery_percentage` comes from `_bms.get_battery_percentage()`
-   (BQ25629 voltage-curve estimate), `battery_percent_source = BatteryCharger`
+2. Otherwise, a successful charger percentage read supplies the BQ25629
+   voltage-curve estimate and sets `battery_percent_source = BatteryCharger`.
+3. If neither source succeeds, percentage stays invalid and its source stays
+   `Unknown`. An unavailable charger does not prevent independent gauge reads.
 
 FG telemetry fields are read independently. A partial FG read failure blanks
 only the failed field; the remaining FG fields populate normally.
@@ -115,15 +125,18 @@ bits must not be interpreted with this table.
 
 ## Critical Battery Threshold
 
-```cpp
-static constexpr float PowerService::BATTERY_CRITICAL_PERCENT = 5.0f;
-```
+`BATTERY_CRITICAL_PERCENT` is a fixed 5% threshold for the snapshot's `critical`
+flag. A valid percentage below it sets the flag; invalid percentage does not.
+The flag itself does not trigger a warning or shutdown in the current
+orchestrator. Protective shutdown uses `ship_mode_request`, set by the voltage
+and temperature checks in `poll_bms()`.
 
-This is a **fixed constant**, not a user-configurable setting.  When the
-orchestrator receives a `PowerSnapshot` with `critical == true` it should:
-
-1. Show a low-battery warning on the display.
-2. Initiate an automatic shutdown to protect the battery cell.
+The voltage check requires valid battery voltage below `EDV_SHIP_THRESHOLD_V`
+(2.9 V) for `EDV_SHIP_DEBOUNCE_SAMPLES` (3) consecutive full polls with confirmed
+battery operation (`None` or `OtgMode`). A failed read, invalid voltage,
+external input, or a reading at or above the threshold resets the counter.
+Temperature trips do not use this debounce and take precedence if both checks
+request shutdown in the same poll.
 
 ## PowerService Config
 
@@ -178,14 +191,15 @@ they do not change the charger's hardware JEITA configuration.
 `decide_sleep(settings, lock_state, mode, awake_ms)` is pure logic (no
 platform calls, testable on host). Returns `SleepDecision {type, duration_ms}`:
 
-```text
-Not Offline mode → {None, 0}   (only Offline mode sleeps)
-Unlocked         → {None, 0}   (never sleep while user is active)
-
-sleep_ms = (energy_saving_measure_interval_seconds * 1000) - awake_ms   (clamped to 0)
-
-sleep_ms >= deep_sleep_threshold_ms → {Deep, sleep_ms}
-sleep_ms <  deep_sleep_threshold_ms → {None, 0}   (stay awake)
+```mermaid
+flowchart TD
+    Mode{Energy Saving mode?} -->|No| Awake[Return None, duration 0]
+    Mode -->|Yes| Locked{Device locked?}
+    Locked -->|No| Awake
+    Locked -->|Yes| Remaining[Subtract awake time from interval, clamp to zero]
+    Remaining --> Threshold{Remaining time at least deep-sleep threshold?}
+    Threshold -->|No| Awake
+    Threshold -->|Yes| Deep[Return Deep with remaining duration]
 ```
 
 The Energy Saving interval (300–3600 seconds, default 300) determines sleep
@@ -280,8 +294,8 @@ refreshes only when the selected page changes and sleeps afterward. Unknown
 charging state, failed reads, and `NotCharging` retain the current page;
 `NotCharging` alone is not evidence of a full battery. At startup, Charging is
 the default unless charge completion is confirmed. This loop uses status
-polling only; the orchestrator's runtime thermal and full-charge-pause policies
-do not run here. Charger-chip protections and charge termination remain active.
+polling only; `poll_bms()` firmware temperature and voltage protection checks do
+not run here. Charger-chip protections and charge termination remain active.
 User-requested shutdown with USB attached also enters this boot path through
 the one-shot RTC request described under [Shutdown](#shutdown-qon--ship-mode).
 
@@ -298,7 +312,7 @@ On the next timer wake the fast path reads
 | `SensorsWarm` | Behavior |
 |---|---|
 | `true` | Release the native GPIO hold on V1, then reattach SPS30 without resetting on either board; skip PM warmup |
-| `false` | Reset/start SPS30 and allow 10 s of PM warmup, overlapping GPS work and gas conditioning |
+| `false` | Reset/start SPS30 and allow PM warmup (default 10 s), overlapping gas conditioning; Energy Saving keeps GPS inactive |
 
 The same warm flag lets SCD4x reattach to periodic measurement retained across
 deep sleep. When an unread sample is ready, the driver skips wake, stop,
@@ -412,7 +426,7 @@ orchestrator then isolates the bus); `request_prepare()` wakes + warms.
 autonomously (VBUS present → buck pass-through with `EN_OTG` masked
 internally; VBUS absent → boost runs to drive PMID = 5 V from VBAT).
 
-### Why PMID is session-armed
+### Why PMID Is Session-Armed
 
 An earlier implementation toggled `EN_OTG` on every PM measurement cycle
 to save ~220 µA quiescent on battery when PM was off. This was reverted
@@ -426,36 +440,40 @@ correlated with cold-start count rather than SOC or instantaneous load.
 
 The trade is ~220 µA of additional quiescent draw on battery (when PM is
 idle) in exchange for indefinite uptime relative to this failure mode.
-See `components/airgradient-bms/drivers/bq25629/bq25629_bms.cpp` `init()`
+See [`BQ25629Bms::init()`](../../../components/airgradient-bms/drivers/bq25629/bq25629_bms.cpp)
 for the one-shot sequence (HIZ off → TS check on → VOTG=5100 →
 EN_BYPASS_OTG=0 → EN_OTG=1 → settle → register-readback verify).
 
 The `BmsDevice::set_pmid_enabled()` HAL primitive is retained for
-explicit lifecycle control (e.g. shutdown sequencing) but is no longer
-called on the per-measurement path.
+fault recovery. Normal measurement scheduling uses sensor sleep and bus
+isolation rather than toggling the boost supply.
 
-### PMID recovery via PM-invalid hint
+### PMID and Sensor Recovery
 
-`poll_bms(bool pm_invalid_hint)` accepts a caller-supplied flag. When
-`true` **and** the chip reports on battery (`power_source == None`),
-`poll_bms` calls `BmsDevice::resync_pmid()` to re-apply the full PMID
-prep sequence (HIZ off → TS on → VOTG → BYPASS off → EN_OTG=1 → settle
-→ verify). This recovers from a suspected autonomous `EN_OTG` clear
-(BAT_OTGZ / OTG hiccup / TS faults per BQ25629 datasheet §8.3.10.3-4).
+Recovery has two distinct triggers in
+[`go_power.cpp`](../main/go_power.cpp):
 
-The orchestrator computes the hint inline at every `poll_bms` call site
-from existing state:
+- **Measured rail collapse:** `poll_bms()` calls `rekick_pmid_if_collapsed()`
+  only after successful status and telemetry reads. With battery operation
+  (`None` or `OtgMode`) and valid PMID below `PMID_HEALTHY_MIN_MV` (4500 mV), it
+  disables boost, waits `PMID_REKICK_OFF_MS` (15 ms), and re-enables it.
+  `ensure_pmid_healthy()` reads fresh status/telemetry for the same check when
+  the orchestrator observes a charging or power-source transition.
+- **Persistent invalid PM2.5:** the orchestrator checks failure duration on
+  each sensor result. After `PM_RECOVERY_TIMEOUT_MS` (30 s), it calls
+  `recover_pm_sensor()`: isolate the bus, disable boost for `PM_RECOVER_OFF_MS`
+  (50 ms), re-enable boost, wait `PM_RECOVER_SETTLE_MS` (100 ms), and reconnect
+  the bus. The orchestrator then requests PM preparation again. A valid PM2.5
+  result resets the failure timer.
 
-```cpp
-_svc.power_service.poll_bms(_first_measurement_done &&
-                            !_raw_measures.pm_a.is_pm_25_valid());
-```
+The measured-rail path skips external input and unavailable readings. The
+persistent-sensor path requires a configured PM pin and charger, but has no
+power-source gate. Neither path verifies rail recovery after its writes;
+subsequent telemetry and measurements show whether recovery worked. Recovery
+is attempted at those call sites, not by an independent retry task.
 
-USB-present is skipped (the chip masks `EN_OTG` internally, so the boost
-isn't in play). A partial status read (no power-source available) is
-also skipped to avoid acting on stale state. The recovery is bounded by
-the BMS poll cadence — at most one resync per poll cycle — so a stuck
-chip cannot trigger thrashing.
+`poll_bms(bool pm_invalid_hint)` still accepts the caller's hint, but the current
+implementation does not use it and does not call `resync_pmid()`.
 
 ## Wake Cause Mapping
 
@@ -486,7 +504,7 @@ see [Hardware Init](hardware_init.md#boot-path-selection) for retry behavior.
 Energy Saving boot clears retained tracking state. Charging-only boot also
 requests long GPS sleep when that mode is saved.
 
-### Fast-path (timer wake, locked)
+### Fast-Path (Timer Wake, Locked)
 
 `is_fast_path_wake(cause, state)` returns `true` when:
 
@@ -512,7 +530,7 @@ A failed early GPS sleep request is retried before the final sleep calculation.
 The retry time is subtracted from the remaining measurement interval; insufficient
 time promotes to interactive operation. No route points are written on this path.
 
-### Button-wake path (button wake, Offline mode)
+### Button-Wake Path (Button Wake, Offline Mode)
 
 ```cpp
 cause == WakeCause::Button && state.mode == OperatingMode::Offline
@@ -529,14 +547,15 @@ parallel while the display refreshes. See
 [Hardware Initialization → Button-Wake Path](hardware_init.md#button-wake-path-goapprun_button_wake_path)
 for the four-phase sequence.
 
-### All other cases
+### All Other Cases
 
 `GoApp::run_interactive(cause, {})` is called with a default `BootHandoff`.
 All init runs via idempotent GoBoard methods.
 
 ## RTC State Persistence
 
-Two separate RTC-memory regions survive deep sleep:
+Application state and the early-display snapshot are stored separately in RTC
+memory. The chart cache and retained-uptime anchor also survive deep sleep.
 
 ### App State (`go_power.cpp`)
 
@@ -557,7 +576,7 @@ RTC_DATA_ATTR static bool s_rtc_state_valid = false;
 | Flag | Bit | Default | Purpose |
 |---|---|---|---|
 | `GpsEnabled` | 0 (`1u << 0`) | Set | Cached GPS-enabled setting |
-| `SensorsWarm` | 1 (`1u << 1`) | Clear | Sensors kept powered during deep sleep |
+| `SensorsWarm` | 1 (`1u << 1`) | Clear | PM measurement state retained for warm reattachment; not a guarantee that all sensors are ready |
 | `ChargingOnlyRequested` | 2 (`1u << 2`) | Clear | One-shot charging-only boot request |
 | Reserved | 3–31 | Clear | Future flags |
 
@@ -619,12 +638,16 @@ sensors.
 
 ### RTC Memory Budget
 
-| Region | Size | Location |
+| Region | Size / Definition | Location |
 |---|---|---|
 | `RtcAppState` + valid flag | 40 B + 1 B, excluding linker alignment | `go_power.cpp` |
-| `PayloadCacheStorageData` | ~1.5 KB | `rtc_payload_cache_storage.cpp` |
-| `RtcDisplaySnapshot` + valid flag | ~45 B | `go_display.cpp` |
-| **Total** | **~1.6 KB** | ESP32-C5: 8 KB available |
+| `PayloadCacheStorageData` | Depends on configured payload type and cache capacity | [`payload_cache_types.h`](../../../components/airgradient-payload-cache/hal/payload_cache_types.h) |
+| `RtcDisplaySnapshot` + valid flag | Snapshot fields plus alignment and validity flag | [`go_display.h`](../main/go_display.h) and `go_display.cpp` |
+| Retained uptime anchor | One `uint64_t` | [`retained_uptime.cpp`](../../../components/airgradient-common/retained_uptime.cpp) |
+
+These are data allocations, not a complete RTC-memory total. Check the firmware
+linker map when changing them; LP-core program reservation and alignment also
+consume the available memory.
 
 ## LP Core Watchdog Feed (Deep Sleep)
 
@@ -638,31 +661,31 @@ intervals longer than that, the LP Core takes over.
 |---|---|
 | `products/go/main/ulp/wdt_feed.c` | LP Core program: pulse LP_IO_2 HIGH 20 ms, return |
 | `products/go/main/go_ulp.h` | Declare `ulp_wdt_start()`, `ulp_wdt_stop()` |
-| `products/go/main/go_ulp.cpp` | Load binary, start/stop with `stall_rdy` polling |
+| [`go_ulp.cpp`](../main/go_ulp.cpp) | Load/start the LP program; stop after a pulse-completion delay |
 
 ### Lifecycle
 
 | Phase | Call | Where |
 |---|---|---|
 | Fast-path boot | `ulp_wdt_stop()` | Before `init_core()` |
-| Button-wake boot | `ulp_wdt_stop()` | After Phase 1 (SPI/display), before Phase 2 (I2C) |
+| Button-wake boot | `ulp_wdt_stop()` | After early display submission, before main-CPU watchdog setup; V2 initializes I2C/expander before display access |
 | Fast-path sleep | `ulp_wdt_start()` | After ISR removal, before `enter_sleep()` |
 | Orchestrator sleep | `ulp_wdt_start()` | End of `prepare_for_sleep()`, after `reset_ext_watchdog()` |
 | Fresh boot | (none) | LP Core not running on first power-on |
 
-### LP timer interval
+### LP Timer Interval
 
 60 s — matches the orchestrator's awake-mode watchdog interval.  With a
 6-minute watchdog timeout this gives a 6x safety margin.
 
-### GPIO2 pin mux
+### GPIO2 Pin Mux
 
 GPIO2 is driven by the regular GPIO matrix (main CPU) while awake and
 by the RTCIO subsystem (LP Core) during sleep.  `ulp_wdt_start()` calls
 `rtc_gpio_init(PIN_EXT_WDT)` to switch to RTCIO mode; `init_ext_watchdog()`
-inside `init_power()` naturally switches back on the next wake.
+inside `GoHardwareBoard::power()` switches back on the next wake.
 
-### Stop safety
+### Stop Safety
 
 `ulp_wdt_stop()` waits 20 ms (the pulse duration) then calls
 `ulp_lp_core_stop()`.  After deep sleep wake the LP Core is not
@@ -750,20 +773,9 @@ safety trips (EDV and high- or low-battery-temperature) set
 shutdown after displaying a warning. An invalid NTC reading disables charging
 without setting a ship-mode request.
 
-The orchestrator's unified `shutdown(ShipModeRequest reason)` pipeline:
-
-1. Show the reason-specific shutdown screen — all variants share the
-   same unified template: `Screen::ShutdownDischarge` (EDV),
-   `Screen::ShutdownTemperature` (high temperature),
-   `Screen::ShutdownTemperatureLow` (low temperature), or
-   `Screen::ShutdownUser` (user-initiated long-press)
-2. Queue the shutdown frame with `update_display(wait=true)` and
-   `DisplayService::flush()` so the e-paper paint is complete before continuing
-3. Stop tracking if active; backup chart cache
-4. Disable PM sensor power (`set_pm_power(false)`)
-5. Slow down before power cut (`SHUTDOWN_POWER_OFF_SETTLE_MS`) so the painted
-   reason screen remains visible and BLE disconnect notice can drain
-6. `power_service.shutdown()` — BMS QoN → deep sleep fallback
+The [orchestrator shutdown sequence](orchestrator.md#shutdownreason) owns the
+reason-specific display, BLE notice, storage cleanup, PM bus isolation, and
+settle delay before choosing charging-only reboot or ship mode.
 
 ## External Watchdog
 
@@ -803,7 +815,7 @@ transfer fitting inside a single ~6 min window. See
 | `decide_sleep()` | Yes | Pure logic |
 | `should_hold_pm_sensor()` | Yes | Pure logic |
 | `should_sleep_pm_sensor()` | Yes | Pure logic |
-| `set_pm_power()` | Yes (mock gpio::Hal + BmsDevice) | PMID arm + GPIO level |
+| `set_pm_power()` | Yes (mock gpio::Hal) | Native or expander bus-enable output; no PMID writes |
 | `set_fuel_gauge()` | Yes (mock FuelGaugeDevice) | Non-owning pointer setter |
 | `is_fast_path_wake()` | Yes | Pure logic |
 | `poll_bms()` | Yes (mock BmsDevice + FuelGaugeDevice) | I2C reads via driver; FG reads when attached |
@@ -840,3 +852,18 @@ derived `edv_cutoff_reached`), keeping that read off the field hot path.
 | `set_update_status_learning()` | `bool` | Lift / restore gauge change limits |
 
 See [`fg_learning.md`](fg_learning.md) for the full factory boot path.
+
+## Verification
+
+- [Power-service tests](../tests/go_power.tests.cpp) cover SOC fallback, invalid
+  readings, voltage and temperature protection, charging inhibits, measured-PMID
+  recovery, PM bus control, sleep decisions, and RTC state.
+- [Application tests](../tests/go_app.tests.cpp) cover charging-only entry,
+  status-poll failures, wake handoff, fast-path acquisition, and PM warm state.
+- [Orchestrator tests](../tests/go_orchestrator.tests.cpp) cover shutdown routing,
+  PM scheduling, mode transitions, and sleep preparation.
+
+Use the [host-test workflow](../../../tests/README.md). Host tests verify policy
+and mocked driver calls; real rail levels, charge termination, GPIO holds,
+watchdog timing, and physical power cuts require hardware verification through
+the relevant [VHUB cases](../../../vhub/README.md).
