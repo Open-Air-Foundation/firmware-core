@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "rev": "960fd68",
+  "rev": "b53aabd",
   "product": {
     "slug": "airgradient-go",
     "name": "AirGradient Go",
@@ -1019,7 +1019,7 @@
     {
       "id": "go.power.charging-only-full",
       "title": "Battery Full screen remains readable and stable",
-      "objective": "Verify the full-charge screen’s layout and stability while Go is off.",
+      "objective": "Verify shutdown with inactive charging shows a readable, stable Battery Full screen.",
       "category": "Power",
       "sub_category": "Charging-Only",
       "applicability": [
@@ -1027,11 +1027,11 @@
         "V2"
       ],
       "setup": [
-        "Go is powered off with USB connected, and the charging screen shows Battery Full."
+        "Go has completed a normal charge cycle and remains connected to USB, with Home showing a plug icon without the charging bolt."
       ],
       "steps": [
         {
-          "action": "Inspect the screen.",
+          "action": "Keep USB connected. Hold Power until the shutdown screen appears, release Power, and allow 30 seconds for the charging-only screen.",
           "expected_result": "Battery Full, a filled-battery icon and Hold power button / to turn on are fully visible without clipped or overlapping text."
         },
         {

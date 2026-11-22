@@ -456,7 +456,9 @@ Screen dispatch:
   outline and filled lightning bolt drawn with u8g2 primitives. It has no
   percentage or animation. `ShutdownCharged` fills the battery outline and
   shows "Battery Full". The display sleeps after painting and refreshes only
-  when charging completes or resumes. On unplug, the charging-only
+  when charging stops or resumes, following the
+  [charging-only page policy](power_management.md#charging-only-light-sleep).
+  On unplug, the charging-only
   runner wakes the display for a full `ShutdownUser` refresh before shutdown.
 
 ### Home Charts

@@ -87,12 +87,11 @@ static constexpr uint32_t CHARGING_ONLY_POLL_INTERVAL_MS = 2000;
 // Stack-allocated in run_*; lifetime = process (functions never return).
 namespace {
 Screen charging_screen(const BmsStatus &status, Screen current) {
-  if (!status.is_charging_state_valid() || status.charging_state == BmsChargingState::NotCharging) {
+  if (!status.is_charging_state_valid()) {
     return current;
   }
-  return status.charging_state == BmsChargingState::ChargeTerminationDone
-             ? Screen::ShutdownCharged
-             : Screen::ShutdownCharging;
+  return is_bms_charging(status.charging_state) ? Screen::ShutdownCharging
+                                                : Screen::ShutdownCharged;
 }
 
 struct StationaryStrings {
