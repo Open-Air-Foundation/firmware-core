@@ -34,6 +34,9 @@ Today it includes:
 
 ## Build Firmware
 
+Source your installed ESP-IDF environment in the same shell before building.
+Adjust the example export-script path to your installation.
+
 ```sh
 . "$HOME/Tools/esp/esp-idf/export.sh"
 
@@ -129,16 +132,20 @@ Before creating or updating documentation, read the documentation guide:
 
 ## Contributing
 
-Before opening a PR, verify the relevant firmware build succeeds and all
-relevant host tests pass:
+Before opening a PR, verify the checks relevant to the change:
 
-```sh
-. "$HOME/Tools/esp/esp-idf/export.sh"
-idf.py -C products/<product> build
-cmake -S tests -B tests/build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-cmake --build tests/build
-ctest --test-dir tests/build --output-on-failure
-```
+- Production code changes require builds of the affected firmware products.
+  See [Build Firmware](#build-firmware).
+- Application logic changes require relevant host tests. Host tests cover
+  application logic in shared components and products; concrete drivers are
+  verified on hardware. See the [testing boundary](tests/README.md#scope).
+- Shared interface changes require the existing affected host tests to pass.
+- Test-only changes require the affected host tests to build and pass.
+- Documentation-only changes require Markdown checks, not firmware or host builds.
+
+Follow [tests/README.md](tests/README.md) for native setup and commands. Run native
+tests in a separate shell from the ESP-IDF environment. Record checks performed
+and any pending hardware verification or checks blocked by the environment.
 
 Update related documentation after the implementation changes are complete and
 before final verification. For Markdown changes, run the documentation lint or
