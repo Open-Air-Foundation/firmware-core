@@ -4,16 +4,17 @@ Product service that owns the Stationary cloud transport for AirGradient Go:
 measurement POST, configuration FETCH, and Wi-Fi OTA availability checks on a
 single low-priority task. The
 orchestrator owns mode policy and event dispatch; `CloudService` owns the
-HTTP cadence and snapshot lifetime. Active only in
-`OperatingMode::Stationary` while Wi-Fi is online.
+HTTP cadence and snapshot lifetime. The orchestrator arms requests in
+`OperatingMode::Stationary` while Wi-Fi is online; a disconnect disarms the
+worker but leaves its task and buffers allocated until mode exit.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_cloud.h` | `CloudService` class declaration, `Deps` and `Config` structs |
-| `products/go/main/go_cloud.cpp` | Task body, deadline math, snapshot mutex, `AgClient` calls, event posting |
-| `products/go/main/go_cloud_types.h` | Fixed cloud result and correction-update payloads shared with `go_events.h` |
+| [`go_cloud.h`](../main/go_cloud.h) | `CloudService` class declaration, `Deps` and `Config` structs |
+| [`go_cloud.cpp`](../main/go_cloud.cpp) | Task body, deadline math, snapshot mutex, `AgClient` calls, event posting |
+| [`go_cloud_types.h`](../main/go_cloud_types.h) | Fixed cloud result and correction-update payloads shared with `go_events.h` |
 
 ## Dependencies
 
@@ -35,14 +36,14 @@ orchestrator task at any time, including before `start()` or after `stop()`.
 
 | Method | Purpose |
 |---|---|
-| `CloudService(queue, deps, cfg)` | Construct with event queue, borrowed `AgClient`, `WifiService`, and `OtaService`, and cadence config. No heap claimed. |
+| `CloudService(queue, deps, cfg)` | Construct with event queue, borrowed `AgClient`, `WifiService`, and `OtaService`, and cadence config. Creates the snapshot mutex; task and fetch buffer are deferred. |
 | `start()` | Allocate fetch buffer + semaphore, spawn task. Idempotent. Returns false on failure (self-cleans). |
-| `stop()` | Drain in-flight HTTP, delete task, free heap. Bounded by ~15 s. Idempotent. |
-| `arm(fire_now)` | Enable periodic ticks. `fire_now` makes the first cycle immediate (consumed on Disarmed→Armed transition only). |
+| `stop()` | Wait for in-flight HTTP, delete task, and free worker resources. No independent shutdown timeout. Idempotent. |
+| `arm(fire_now)` | Enable periodic ticks. `fire_now` makes the first cycle immediate when the worker observes a Disarmed→Armed transition. |
 | `disarm()` | Disable periodic requests; in-flight HTTP still drains. |
 | `set_disable_cloud(disable)` | Push the `disable_cloud` flag; sampled on the next iteration. |
 | `set_config_fetch_enabled(enabled)` | Gate config FETCH independently of POST. Enabling while armed and cloud-enabled makes FETCH immediately due without changing POST cadence. |
-| `update_measures_snapshot(m)` | Replace the cached `MeasuresAGo` under a mutex (~µs hold). |
+| `update_measures_snapshot(m)` | Replace the cached `MeasuresAGo` under a mutex; HTTP runs after the worker releases the snapshot lock. |
 
 See [`go_cloud.h`](../main/go_cloud.h) for full signatures.
 
@@ -73,12 +74,14 @@ File-local constants in `go_cloud.cpp`:
 
 ### Heap Lifecycle
 
-The constructor claims only the small object footprint (atomics, snapshot
-member, mutex). Real heap is deferred to `start()`:
+The constructor initializes the object and its snapshot mutex. The mutex
+allocates its RTOS resource on target; the larger worker allocations are deferred
+to `start()`:
 
 - **`start()`** — allocates 8 KB task stack + 2 KB fetch buffer +
   semaphore. Called by the orchestrator only after Wi-Fi is online.
-- **`stop()`** — frees all heap; returns to boot-time footprint.
+- **`stop()`** — frees the task, fetch buffer, and semaphore; the object and
+  snapshot mutex remain alive.
 - Portable / Offline modes never call `start()`.
 
 ### Task Loop
@@ -119,7 +122,14 @@ disabled, expired deadlines are moved forward and FETCH resumes on the normal
 cadence rather than immediately.
 
 Deadlines are start-anchored: `_post_due = post_started_at + interval`,
-not completion time. A 15 s POST leaves 45 s before the next one.
+not completion time. A 15 s POST leaves 45 s before the next one at the default
+interval. Missed intervals are not replayed as a backlog. A POST that repeatedly
+takes longer than its interval can keep POST due and delay FETCH or OTA checks.
+
+Arming is sampled state, not a command queue. A disarm/re-arm pair that completes
+before the worker observes the disarmed state can preserve the old schedule.
+Each POST copies the latest measurement snapshot; there is no queued history or
+replay of measurements missed while offline.
 
 ### RSSI Translation
 
@@ -139,12 +149,15 @@ resets start at `0`, and the wire value saturates at `UINT32_MAX`.
 
 `stop()` sets the shutdown latch, wakes the task, and waits on the
 done-semaphore. After the current request drains, the task acknowledges
-shutdown and parks until `stop()` deletes it and frees resources. Worst-case latency is one HTTP
-timeout (~15 s).
+shutdown and parks until `stop()` deletes it and frees resources. The semaphore
+wait has no timeout and does not cancel the request. Shutdown latency depends on
+the in-flight POST, FETCH, or OTA probe completing. The HTTP backends configure
+15 s operation timeouts by default; these are not a separate overall shutdown
+deadline.
 
 ## Orchestrator Wiring
 
-| Orchestrator method | Cloud action |
+| Orchestrator Method | Cloud Action |
 |---|---|
 | `enter_stationary()` | `set_disable_cloud()` + set first-post latch (no `start()`) |
 | `on_wifi_connected()` | Set both runtime gates, then `start()` + `arm(first_post_pending)` |
@@ -222,12 +235,15 @@ the Peripheral or Accelerometer test is active, and is a no-op if the GPS Test
 screen is already open. `false`, a missing field, or a non-boolean value does
 nothing. The parser stores the action values directly in
 `FetchConfigEventPayload`; they never enter `GoConfigUpdate`, settings, or NVS.
-The firmware performs no edge detection because the backend returns `true` once
-per request and then returns `false` until another request is made.
+The firmware performs no edge detection: repeated `true` responses can repeat
+an action. The backend must clear one-shot requests. Actions are handled
+separately from settings persistence, so failure to save the accompanying
+settings does not itself suppress an otherwise authorized action.
 
 Cloud result delivery is best-effort. A full central queue drops the zero-wait
-event, so no update is applied; the next periodic FETCH is the next retry
-opportunity.
+event, so no settings or actions from that response are applied. The next
+periodic FETCH can deliver settings again, but transient action delivery is not
+guaranteed and there is no local retry of the dropped result.
 
 The orchestrator rechecks `configuration_control` when it consumes the result.
 If control changes to `Local` while HTTP is in flight, the successful event is
@@ -271,20 +287,22 @@ Successful portal sessions normally reboot before cloud startup to recover
 heap headroom for TLS. BLE-only sessions continue without reboot. See the
 [restart conditions](wifi_service.md#provisioning-completion).
 
-The ESP32-C5 has ~183 KB of available heap. The TLS handshake with the
-AirGradient backend's 4096-bit RSA certificate temporarily consumes most
-of the largest free contiguous block. The Go product's sdkconfig is tuned
-for this:
+TLS handshakes and Wi-Fi buffers compete with the cloud task and provisioning
+allocations for heap. Available heap and the largest free block vary with the
+active services; they are not a fixed device budget. The checked-in
+[`sdkconfig`](../sdkconfig) selects:
 
-| Setting | Default | Go value | Saving |
-|---|---|---|---|
-| `CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN` | `16384` | `4096` | 12 KB per TLS connection |
-| `CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM` | `32` | `16` | Steady-state heap headroom |
-| `CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM` | `32` | `16` | Steady-state heap headroom |
+| Setting | Configured Value | Purpose |
+|---|---|---|
+| `CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN` | `4096` | TLS input buffer limit |
+| `CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM` | `6` | Static Wi-Fi receive buffer count |
+| `CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM` | `10` | Dynamic Wi-Fi receive buffer limit |
+| `CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM` | `16` | Dynamic Wi-Fi transmit buffer limit |
 
-The 4 KB TLS input buffer is sufficient for the Go product's small
-payloads (POST response < 256 bytes, FETCH config < 1 KB). The reduced
-Wi-Fi buffers serve the regular POST/FETCH workload plus the hourly OTA probe.
+The receive-buffer counts are also set in
+[`sdkconfig.defaults`](../sdkconfig.defaults). Changes to these limits need
+target verification of POST, FETCH, and OTA traffic; small JSON bodies alone
+do not establish TLS compatibility or sufficient heap headroom.
 
 Lifecycle and HTTP paths emit `log_heap()` probes around `start()`,
 `stop()`, POST, FETCH, and OTA availability. These probes track whether task
@@ -299,9 +317,10 @@ Stationary Wi-Fi / provisioning flows.
 - **`start()` failure.** Self-cleans on partial allocation failure. The
   orchestrator logs the error; the next `on_wifi_connected()` retries.
 - **Reconnect after AP outage.** `disarm()` on disconnect, `arm(false)`
-  on reconnect — POST/FETCH resume at the next interval; OTA keeps its deadline.
+  on reconnect — when the worker observes the transition, POST/FETCH resume at
+  the next interval; OTA keeps its deadline.
 - **Mode change during in-flight HTTP.** `stop()` drains the call
-  (bounded ~15 s), then Wi-Fi shuts down.
+  before Wi-Fi shuts down; there is no independent shutdown timeout.
 - **`set_disable_cloud(true)` while armed.** Expired POST/FETCH deadlines slide
   forward; an overdue OTA probe runs after cloud is re-enabled.
 - **Config FETCH disabled while POST is armed.** POST keeps its cadence; the
@@ -315,14 +334,14 @@ Stationary Wi-Fi / provisioning flows.
   `set_disable_cloud()`, and `set_config_fetch_enabled()` write atomics; the
   values persist and take effect when the task eventually starts.
 
-## Testability
+## Verification
 
 `CloudService` is host-testable via friend-class access
 (`CloudServiceTestAccess`) and link-time stubs for `AgClient` (concrete
 class, no virtuals), `WifiService`, and `OtaService`. Tests drive the task body
 deterministically via `_run_iteration(now)` with injected clock values.
 
-Host tests live in `products/go/tests/go_cloud.tests.cpp` and cover:
+Host tests live in [`go_cloud.tests.cpp`](../tests/go_cloud.tests.cpp) and cover:
 transition handling, snapshot round-trip, POST/FETCH forwarding, POST
 priority, scalar/correction FETCH mapping, independent FETCH gating,
 start-time anchoring, overrun, disarm/disable mid-POST, RSSI translation,
@@ -330,4 +349,6 @@ shutdown latch, deadline clamp, first-POST sentinels, and OTA ordering, cadence,
 self-disarm, and full-queue recovery.
 
 Orchestrator-level wiring is tested through the stubbed `CloudService` in
-`products/go/tests/go_orchestrator.tests.cpp`.
+[`go_orchestrator.tests.cpp`](../tests/go_orchestrator.tests.cpp).
+See the [host-test workflow](../../../tests/README.md) for running them.
+These tests do not establish target TLS heap headroom or real backend behavior.
