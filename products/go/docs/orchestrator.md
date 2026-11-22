@@ -260,8 +260,9 @@ between full polls. On a charging-state transition (plug in, unplug, charge
 complete — a change in `is_bms_charging()` or the BMS power source) it refreshes
 the display and, when a BLE client is connected, pushes a `{charging, bat_pct,
 bat_v}` Status delta via `notify_charging_status()` so the app reflects the
-change without polling. Other transitions, such as tracking and GPS changes,
-have their own Status notifications. See
+change without polling. Tracking transitions have their own Status notifications.
+GPS fix events update the internal GPS cache without refreshing or notifying
+Status independently; clients poll Status for its GPS fields. See
 [Status](../go_ble_client.md#6-status-characteristic) for the wire contract.
 
 `compute_queue_timeout_ms()` selects the minimum remaining time across active

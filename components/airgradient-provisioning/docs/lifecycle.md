@@ -68,11 +68,12 @@ instance. Contract:
 - `stop()` (default `stop_http_server=true`) satisfies the next
   `start()`'s preconditions: BLE deinit'd, routes unregistered, HTTP
   server stopped, Wi-Fi back to `Sta`.
-- `stop(false)` keeps the HTTP server running. A subsequent
-  `start(WifiOnly)` or `start(Both)` requires a fresh HTTP server and
-  will fail its precondition. Use `stop()` (default) if you intend to
-  switch into a transport that needs the portal, or stop the HTTP
-  server yourself before the next `start()`.
+- `stop(false)` removes the session's HTTP routes but retains its listener.
+  With `IdfHttpServer`, a subsequent `start()` using `WifiOnly` or `Both`
+  registers portal routes on that listener without a bind/unbind cycle.
+  Go uses this reuse during transport switching. Keep `http_port` unchanged:
+  the backend's `start()` is a no-op while running. Stop the listener explicitly
+  before changing ports or when using a backend that cannot register live routes.
 - Repeated `BleOnly ↔ WifiOnly` round trips have been observed to
   fragment the heap by ~3 KB free / ~3.3 KB DMA per cycle. A single
   switch in a provisioning session sits well above the
@@ -160,10 +161,11 @@ Attached mode disables this timer and leaves session duration to the product.
 
 ## Preconditions for `start()`
 
-- The `HttpServer` instance must **not** be started and must **not**
-  have any routes registered — but only when the selected transport
-  will run the Wi-Fi side (`WifiOnly` or `Both`). For `BleOnly` the
-  HTTP server is borrowed-but-untouched.
+- For `WifiOnly` or `Both`, the `HttpServer` route table must be empty because
+  provisioning takes exclusive ownership of it. The listener may be stopped,
+  or retained on `http_port` if the backend supports live route registration
+  and idempotent `start()` as `IdfHttpServer` does. For `BleOnly` the HTTP
+  server is borrowed-but-untouched.
 - The `AgBleServer` instance must **not** be initialized — but only
   when the selected transport will run the BLE side (`BleOnly` or
   `Both`). For `WifiOnly` the BLE server is borrowed-but-untouched.
