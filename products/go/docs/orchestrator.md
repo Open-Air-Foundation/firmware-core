@@ -23,7 +23,7 @@ For system composition and the producer-to-consumer overview, start with
 | `SensorProducer` | product (`go_sensor_producer.h`) | Request measurement cycles |
 | `AccelService` | product (`accel/accel_service.h`) | Deliver shake events; serialize Hardware Test sensor access |
 | `BuzzerService` | product (`buzzer/go_buzzer.h`) | Acknowledge accepted refreshes, respecting sound settings |
-| `GpsService` | product (`go_gps.h`) | Read latest GPS fix |
+| `GpsService` | product ([`gps/gps_service.h`](../main/gps/gps_service.h)) | Read latest GPS fix |
 | `InputService` | product (`go_input.h`) | Started/stopped by orchestrator; posts `InputPress` events |
 | `DisplayService` | product (`go_display.h`) | Render display frames |
 | `StorageService` | product (`go_storage.h`) | Cache measurements, persist route data |
