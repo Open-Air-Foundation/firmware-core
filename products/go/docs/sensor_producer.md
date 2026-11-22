@@ -18,8 +18,8 @@ of which sensors are wired — that is the product wiring layer's responsibility
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_sensor_producer.h` | `SensorProducer` class declaration, `Config` struct |
-| `products/go/main/go_sensor_producer.cpp` | Task loop, notification handling, event posting |
+| [`products/go/main/go_sensor_producer.h`](../main/go_sensor_producer.h) | `SensorProducer` class declaration, `Config` struct |
+| [`products/go/main/go_sensor_producer.cpp`](../main/go_sensor_producer.cpp) | Task loop, notification handling, event posting |
 
 ## Dependencies
 
@@ -84,38 +84,19 @@ Battery data comes from `PowerService::poll_bms()`, not from `SensorManager`.
 ## Usage
 
 ```cpp
-#include "go_sensor_producer.h"
-#include "services/sensor_manager.h"
-
-// Sensor drivers and Sensors struct owned by the wiring layer.
-Sensors sensors{};
-sensors.temp_hum = &sht40_driver;
-sensors.co2      = &co2_driver;
-sensors.pms_a    = &pms5003_driver;
-sensors.tvoc_nox = &sgp41_driver;
-// pms_b, o3_no2 remain nullptr
-
-SensorManager sensor_manager(sensors);
-
-SensorProducer::Config cfg{};  // defaults: stack=4096, priority=5
-SensorProducer sensor_producer(sensor_manager, event_queue, cfg);
-sensor_producer.start();
-
-// Orchestrator triggers a measurement cycle when a sensor timer fires:
-sensor_producer.request_measurement(1, SensorGroup::All);  // single iteration, all sensors
-
-// Orchestrator triggers PM warmup after powering on the sensor via GPIO:
-sensor_producer.request_prepare();  // schedules ~10 s of PM-only warmup
-
-// BLE, local HTTP, or UI requests CO2 calibration asynchronously:
-sensor_producer.request_co2_calibration();
-
-// Short sleep: stop the task but keep SPS30 measuring for a warm wake.
-sensor_producer.stop(false);
-
-// Long sleep or PM power-off: stop the task and put SPS30 to sleep.
-sensor_producer.stop(true);
+// Borrow the board's initialized SensorManager and central event queue.
+SensorProducer producer(manager, event_queue, SensorProducer::Config{});
+if (!producer.start()) {
+    return; // caller handles unavailable worker
+}
+producer.request_measurement(1, SensorGroup::All);
+// Later, stop before destroying the manager or event queue.
+producer.stop(true);
 ```
+
+See [`go_app.cpp`](../main/go_app.cpp) for composition and
+[`go_orchestrator.cpp`](../main/go_orchestrator.cpp) for request admission.
+Call `start()` only when stopped; it does not guard against duplicate workers.
 
 The orchestrator selects the shutdown mode from the planned sleep duration.
 Short sleeps that hold PM power pass `sleep_pm=false` and set the saved
@@ -233,7 +214,7 @@ While PM preparation is active, the wait timeout includes its next discard-read
 or iteration-completion deadline, even when no gas sensor is wired. If both
 sensors are due, the gas sample runs first.
 
-#### `handle_prepare()` And `handle_pm_warmup_tick()`
+#### PM Preparation Handlers
 
 `handle_prepare()` wakes PM, sets the remaining iteration count using the same
 duration / interval calculation as `SensorManager::warmup()`, and schedules the
@@ -338,26 +319,24 @@ sampler cache when the sampler is active. CO2 calibration remains blocking.
 
 ### Task Duration
 
-The sensor task is blocked for the full measurement window:
-`iterations × CONFIG_AVERAGING_ITERATION_INTERVAL_MS`.  During this time the
-orchestrator continues processing other events (GPS fixes, button presses,
-timers) uninterrupted.  This is the primary reason for the independent task —
+Sensor reads and averaging block the producer task. Multi-iteration requests
+include the configured pacing delays; a single iteration skips that delay but
+still incurs driver I/O latency. During this time the orchestrator can continue
+processing other events (GPS fixes, button presses, timers).  This is the primary reason for the independent task —
 `SensorManager::start_measures()` is inherently blocking.
 
-## stop() Behaviour
+## Shutdown Behavior
 
-`stop()` sets `_running = false`, synchronously asks `SensorManager` to sleep the
-PM sensor, sends a zero-value task notification to
-unblock `task_notify_wait()`, waits briefly (10 ms), then forcefully deletes
-the task via `RTOS::task_delete(_task_handle)`. The forced delete is safe
-because `SensorManager` holds no mutexes, so there is no risk of deadlock or
-resource leak.
+`stop(sleep_pm)` clears `_running` and, when `sleep_pm` is true, calls
+`SensorManager::pm_sleep()` synchronously on the caller. It wakes the worker,
+waits 10 ms, then deletes the task without a completion handshake. It finally
+stops the gas heater, after the worker can no longer issue gas reads.
 
-The task entry function blocks indefinitely after `run()` returns (rather than
-self-deleting) to avoid a double-delete race with `stop()`.
-
-After `stop()` returns, `_task_handle` is `nullptr`.  A subsequent call to
-`start()` creates a fresh task.
+The 10 ms grace period does not prove that an in-flight driver call or blocking
+queue send finished. Callers must coordinate shutdown with sensor work; this
+implementation is not a general cancellation-safe join. The task entry parks
+after `run()` returns so only `stop()` deletes it, avoiding double deletion.
+A later `start()` creates a new task and reruns startup conditioning.
 
 ## Initialization Order
 
@@ -371,31 +350,28 @@ The wiring layer must follow this sequence:
 6. Construct `SensorProducer(sensor_manager, event_queue, config)`.
 7. Call `sensor_producer.start()`.
 
-## Thread Safety
+## Task Ownership and Errors
 
-`SensorProducer` has no shared mutable state accessed from multiple threads
-other than:
+Lifecycle and request methods have one orchestrator-side caller. The producer
+owns normal sensor I/O. Requests use the overwrite notification slot described
+above; they are not an acknowledged queue. Runtime ABC and gas-learning setters
+also update fields in `_config` that the worker reads. `_running` is a volatile
+flag, not a mutex or atomic synchronization primitive; these fields do not make
+the service safe for arbitrary concurrent callers.
 
-- `_running` (`volatile bool`): written by the orchestrator via `stop()` and
-  read by the sensor task.  No mutex needed — the flag is used only to signal
-   exit; the task is deleted immediately after by `RTOS::task_delete()`.
-- `_task_handle`: written by `start()` / `stop()` (orchestrator thread) and
-  read by `request_measurement()` (also orchestrator thread).  Both callers
-  are in the same thread, so no protection is required.
+Measurement and PM-boundary events wait indefinitely for central queue space.
+The orchestrator must continue draining that queue during normal operation.
+Calibration, self-test, ABC, and gas-learning completion events use zero-wait
+sends and can be lost when the queue is full. A completed operation therefore
+does not guarantee that its UI acknowledgement is delivered.
 
-## Testability
+## Verification
 
-RTOS task notification and queue calls are no-ops under `TEST_HOST`, allowing
-the file to compile in native host test builds.
-
-For host testing:
-
-- Inject a mock `SensorManager` (or construct one with mock sensor HALs via
-  the `Sensors` struct pattern).
-- Replace the RTOS queue with a test double or inspect the `Event` struct
-  directly.
-- `start()` is a no-op in `TEST_HOST` mode (`RTOS::task_create` returns
-  `false`); call `run()` directly in tests to exercise the task loop.
-- Verify `request_measurement(0)` causes the task to use 1 iteration.
-- Verify `SensorDataReady` carries the readings and the requested origin in
-  `SensorEventData`.
+[`go_sensor_producer.tests.cpp`](../tests/go_sensor_producer.tests.cpp) uses
+mock sensor HALs, RTOS test doubles, and friend access to exercise handlers and
+the task loop. Coverage includes origin tags, calibration, PM/CO2 cache expiry,
+PM preparation, gas sampling, and shutdown heater handling. The orchestrator's
+admission policy is covered in
+[`go_orchestrator.tests.cpp`](../tests/go_orchestrator.tests.cpp).
+See the [host-test workflow](../../../tests/README.md). Host tests do not prove
+safe cancellation of target I/O or physical sensor warmup and power behavior.

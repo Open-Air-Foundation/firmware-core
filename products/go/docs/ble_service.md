@@ -16,11 +16,11 @@ lifecycle, task boundaries, and integration with the orchestrator.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_ble.h` | `BleService` class declaration |
-| `products/go/main/go_ble.cpp` | GATT setup, CBOR encoding, NimBLE callbacks, binary history streaming |
-| `products/go/main/go_ble_protocol.h` | BLE CBOR protocol string constants (`BLE_KEY_*`, `BLE_VAL_*`) shared across BLE and orchestrator |
-| `products/go/main/go_ble_advertisement.h`, `.cpp` | Offline 9-byte measurement encoder and wire constants |
-| `products/go/main/go_app.cpp` | Offline broadcast lifecycle around display refresh |
+| [`products/go/main/go_ble.h`](../main/go_ble.h) | `BleService` class declaration |
+| [`products/go/main/go_ble.cpp`](../main/go_ble.cpp) | GATT setup, CBOR encoding, NimBLE callbacks, binary history streaming |
+| [`products/go/main/go_ble_protocol.h`](../main/go_ble_protocol.h) | BLE CBOR protocol string constants (`BLE_KEY_*`, `BLE_VAL_*`) shared across BLE and orchestrator |
+| [`products/go/main/go_ble_advertisement.h`](../main/go_ble_advertisement.h), `.cpp` | Offline 9-byte measurement encoder and wire constants |
+| [`products/go/main/go_app.cpp`](../main/go_app.cpp) | Offline broadcast lifecycle around display refresh |
 
 ## Dependencies
 
@@ -80,21 +80,20 @@ failed `setup_ble()` is non-fatal (advertise without OTA). See
 
 ### Data Output
 
-| Method | Description |
+| Output | Caller Contract |
 |---|---|
-| `notify_measures(measures, gps, timestamp)` | Encode via `encode_measures()`, always `set_value()` for READ access, additionally `notify()` when `_connected`. No-op if `_measures_char == nullptr`. |
-| `update_status(power, gps, session_id, tracking_state)` | Encode via `encode_status()`, `set_value()` only. Sole writer of the Status snapshot. Derives the legacy boolean from the enum. |
-| `notify_tracking_status(power, gps, session_id, tracking_state)` | Refreshes the full 10-key Read snapshot, then pushes `{tracking, session, trk}` via `notify(data, len)` on start success/failure, pause, resume, and stop. Read remains authoritative. |
-| `notify_charging_status(power, gps, session_id, tracking_state)` | Refreshes the full 10-key Read snapshot, then pushes `{charging, bat_pct, bat_v}` on charging transitions. Tracking state remains in the Read snapshot. |
-| `notify_disconnect(reason)` | Pushes a NOTIFY-only `{disc}` delta via `notify(data, len)` (snapshot untouched) announcing an imminent link drop and why (`overheat`/`low_batt`/`user`/`op_stationary`/`op_offline`). Both `OverTemperature` and `UnderTemperature` use the legacy `overheat` value. Called from `change_mode()` (leaving Portable) and `shutdown()`; gated on `is_connected()`; the caller settles before teardown so it can drain. |
-| `update_config(settings)` | Encode the full snapshot via `encode_config()` (18 keys, no `"type"`), `set_value()` only. Sole writer of the Config snapshot; buffer sized to the 512-byte ATT ceiling. |
-| `notify_config(prev, cur)` | Refreshes the snapshot via `update_config(cur)`, then sends the changed-fields delta (`encode_config_delta()`: `"type":"config"` + changed keys) via `notify(data, len)`. |
-| `notify_command_progress(cmd)` | Inline CBOR encoding (2 keys: type + cmd), `notify(data, len)` (stored value untouched). Sent before long-running commands. |
-| `notify_command_result(cmd, success, error)` | Inline CBOR encoding (3-4 keys), `notify(data, len)` (stored value untouched). |
+| Measures | `notify_measures()` updates the readable raw snapshot and attempts notification while connected. Missing characteristics make it a no-op. |
+| Status | `update_status()` owns the full Read value. Tracking and charging helpers refresh that value before sending a delta; disconnect notices leave it unchanged. |
+| Config | `update_config()` owns the active settings Read value. `notify_config()` refreshes it before sending changed fields. Snapshot and notification size budgets differ. |
+| Command feedback | Progress and result notifications do not replace stored Config. They report application progress separately from GATT write acknowledgement. |
+
+The [client reference](../go_ble_client.md) owns field names and payload shapes.
+See [snapshot ownership](#snapshot-and-notification-ownership) for publication
+ordering and [`go_ble.h`](../main/go_ble.h) for full signatures.
 
 ### Pending Write Retrieval
 
-| Method | Thread safety | Description |
+| Method | Thread Safety | Description |
 |---|---|---|
 | `take_pending_config_write(buf, buf_size)` | Locks `_config_write_mutex` | Copies raw CBOR, clears pending flag, returns byte count (0 if none pending). |
 | `take_pending_history_write(buf, buf_size)` | Locks `_history_write_mutex` | Same pattern for history writes. |
@@ -118,13 +117,13 @@ History export reads raw route points and encodes those values directly. Both
 the BLE client. Route files are never rewritten, and route points do not carry a
 correction-version identifier.
 
-### State Queries
+### Connection State
 
-| Method | Implementation | Description |
-|---|---|---|
-| `is_initialized()` | `_initialized` | True after successful `init()`, false after `deinit()`. The `_server` pointer is always non-null (borrowed from the board for the lifetime of the service), so pointer presence alone does not indicate initialization. |
-| `is_connected()` | `_connected.load()` | `std::atomic<bool>`, thread-safe. True while a GAP link exists; does not imply the link is usable. |
-| `is_authenticated()` | `_connected.load() && _server->is_peer_authenticated()` | Reads the stack's live security state (`getPeerInfoByHandle(handle).isAuthenticated()`) instead of caching the encryption-change event, so it cannot get stuck after a bonded reconnect. True only while the active link is authenticated (MITM-paired). Drives the BLE "connected" icon. |
+`is_connected()` is an atomic GAP-link observation, not proof of authentication,
+subscription, or delivery. `is_authenticated()` reads the stack's live security
+state and requires an active link; the UI uses it for the connected icon.
+`is_initialized()` latches only after advertising starts successfully. The
+borrowed server exists before that point, so pointer presence is not readiness.
 
 ## Behavior
 

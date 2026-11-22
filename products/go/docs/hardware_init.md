@@ -9,15 +9,15 @@ Boot path logic lives in `GoApp`. Pin assignments are in `board_config.h`.
 
 | File | Purpose |
 |---|---|
-| `main/main.cpp` | Thin shell: constructs `GoHardwareBoard` + `GoApp`, calls `run()` |
-| `main/go_board.h` | Abstract `GoBoard` interface (init methods, service accessors, factories) |
-| `main/go_board_capabilities.h` | Typed feature set and central board-to-capability mapping |
-| `main/go_hardware_board.h` | `GoHardwareBoard` class declaration |
-| `main/go_hardware_board.cpp` | Real ESP-IDF init calls, driver creation, bus management |
-| `main/go_app.h` | `GoApp` class, `select_boot_path()`, pure utility functions |
-| `main/go_app.cpp` | Boot path logic, `execute_fast_path()`, service wiring |
-| `main/board_config.h` | Pin assignments and peripheral constants |
-| `main/go_types.h` | `BootHandoff`, `RtcAppState`, `WakeCause`, `LockState` |
+| [`main/main.cpp`](../main/main.cpp) | Thin shell: constructs `GoHardwareBoard` + `GoApp`, calls `run()` |
+| [`main/go_board.h`](../main/go_board.h) | Abstract `GoBoard` interface (init methods, service accessors, factories) |
+| [`main/go_board_capabilities.h`](../main/go_board_capabilities.h) | Typed feature set and central board-to-capability mapping |
+| [`main/go_hardware_board.h`](../main/go_hardware_board.h) | `GoHardwareBoard` class declaration |
+| [`main/go_hardware_board.cpp`](../main/go_hardware_board.cpp) | Real ESP-IDF init calls, driver creation, bus management |
+| [`main/go_app.h`](../main/go_app.h) | `GoApp` class, `select_boot_path()`, pure utility functions |
+| [`main/go_app.cpp`](../main/go_app.cpp) | Boot path logic, `execute_fast_path()`, service wiring |
+| [`main/board_config.h`](../main/board_config.h) | Pin assignments and peripheral constants |
+| [`main/go_types.h`](../main/go_types.h) | `BootHandoff`, `RtcAppState`, `WakeCause`, `LockState` |
 
 ## Architecture
 
@@ -35,7 +35,7 @@ flowchart TD
     GoApp --> Orch
 ```
 
-| Layer | Responsibility | Testable on host? |
+| Layer | Responsibility | Host-Testable? |
 |---|---|---|
 | **main.cpp** | Construct board, construct app, call `run()` | No |
 | **GoApp** | Boot path selection, fast-path logic, service construction, orchestrator launch | **Yes** |
@@ -125,7 +125,7 @@ LP-core task. Button wake restarts the ESP into normal startup. A valid unplug
 reading triggers the Powered off page and shutdown without another charger
 check. See [Power Management](power_management.md#charging-only-light-sleep).
 
-### load_rtc_app_state()
+### Loading RTC State
 
 Free function declared in `go_power.h`, implemented in `go_power.cpp`. Reads
 `RTC_DATA_ATTR` static variables that `PowerService::save_state()` /
@@ -142,22 +142,22 @@ Each initializes one subsystem. Successful initialization is idempotent;
 `init_bms()` remains retryable after failure. Boot paths call these in the order
 their hardware sequencing requires.
 
-| Method | What it initialises |
+| Method | What It Initializes |
 |---|---|
 | `init_nvs()` | NVS flash |
 | `init_buses()` | SPS30 bus isolation + I2C bus + settling delays + SPS30 bus connection |
 | `init_spi()` | SPI bus |
 | `init_fuel_gauge()` | V1 BQ27427 recovery/configuration or V2 BQ27742 cell configuration; requires buses, independent from the charger |
 | `init_bms()` | BQ25629 charger driver (requires buses); returns availability and remains retryable after failure |
-| `init_wifi_subsystem()` | ESP-IDF Wi-Fi stack: netif, event loop, `esp_wifi_init`, storage mode, event handlers, single-shot timers. **Not** called by `init_core()` — only `Orchestrator::enter_stationary()` invokes it, so Portable-only boots never pay the cost. Idempotent at both the board layer (`_wifi_inited` flag) and the HAL layer. |
+| `init_wifi_subsystem()` | ESP-IDF Wi-Fi stack: netif, event loop, `esp_wifi_init`, storage mode, event handlers, single-shot timers. **Not** called by `init_core()` — `Orchestrator::enter_stationary()` and on-demand Portable provisioning invoke it. Portable boots without a provisioning request avoid the cost. Idempotent at both the board layer (`_wifi_inited` flag) and the HAL layer. |
 | `init_core()` | Convenience gate: calls `init_nvs` + `init_buses` + `init_spi` (skips what's done). Deliberately excludes fuel-gauge, BMS, and Wi-Fi initialization. |
 
-### Lazy service accessors
+### Lazy Service Accessors
 
 Create-on-first-call. Objects are owned by the board and live for the
 process lifetime (never freed — the app never returns).
 
-| Accessor | What it creates | Prerequisites |
+| Accessor | What It Creates | Prerequisites |
 |---|---|---|
 | `config_store()` | NvsConfigStore | NVS |
 | `load_settings()` | Loads GoSettings from NVS | NVS (via config_store) |
@@ -168,18 +168,18 @@ process lifetime (never freed — the app never returns).
 | `led_service()` | LedService with LP5036 driver | Buses |
 | `power()` | PowerService + ext watchdog; accepts a nullable BMS and optional fuel gauge | Fuel-gauge and BMS init attempted |
 | `wifi_hal()` | `EspWifiHal` instance | — (lazy C++ construction only; ESP-IDF Wi-Fi init runs in `init_wifi_subsystem()`) |
-| `wifi_manager()` | `WifiManager` constructed against the HAL | `wifi_hal()` — the manager's constructor only registers callbacks, so construction against an uninitialised HAL is safe; driver calls fire when `WifiService` actions run |
+| `wifi_manager()` | `WifiManager` constructed against the HAL | NVS for the saved-networks store, then `wifi_hal()` — the manager's constructor only registers callbacks, so construction against an uninitialised HAL is safe; driver calls fire when `WifiService` actions run |
 | `http_server()` | `IdfHttpServer` for the Wi-Fi captive-portal transport | — (lazy) |
 | `ble_server()` | `NimbleBleServer` shared between Portable BLE and Stationary BLE provisioning | — (lazy) |
-| `ag_client()` | `AgClient` with `begin(serial, Wifi)` on first call | — (lazy; sub-millisecond, no sockets) |
+| `ag_client()` | `AgClient` with `begin(serial, Wifi)` on first call | — (lazy construction; no HTTP request) |
 
 GoHardwareBoard enforces these prerequisites with `assert()` — calling an
 accessor before its prerequisite init method triggers an assertion failure
 with a descriptive message (e.g., `"sensors() requires init_buses()"`).
-Assertions are stripped in release builds (`-DNDEBUG`) so there is zero
-runtime overhead in production.
+The checked-in `sdkconfig` enables assertions. Their presence depends on the
+compiler configuration; callers must satisfy prerequisites regardless of it.
 
-### Per-call factories
+### Per-Call Factories
 
 | Factory | Returns | Prerequisites | Notes |
 |---|---|---|---|
@@ -191,7 +191,7 @@ runtime overhead in production.
 `accel_interrupt_pin()` returns GPIO3 on V1 and `INVALID_PIN` on V2, keeping
 the accelerometer available for diagnostics without shake polling.
 
-### Platform info and hardware operations
+### Platform Information and Hardware Operations
 
 `serial_number()`, `firmware_version()`, `gpio_hal()`,
 `release_gpio_holds()`, `ulp_stop()`, `ulp_start()`,
@@ -199,7 +199,7 @@ the accelerometer available for diagnostics without shake polling.
 
 ## GoHardwareBoard Init Method Ordering
 
-| Boot path | Init sequence |
+| Boot Path | Init Sequence |
 |---|---|
 | **Charging only** | Detection: `init_buses()` → BMS retry; runner: `init_fuel_gauge()` → `power().set_pm_power(false)` → `init_spi()` → `display()` → light-sleep polling |
 | **Fast path** | `init_core()` → `init_fuel_gauge()` → BMS retry → `release_gpio_holds()` → `power().set_pm_power(true)` → `sensors(warm)` → `storage()` → `display()`; may sleep degraded after BMS failure |
@@ -232,7 +232,8 @@ Hardware sequencing constraints:
 - **Wi-Fi subsystem** must be initialised before any STA / AP / scan
   call hits the driver. The lazy accessors only construct the C++
   objects; the orchestrator's first Stationary entry triggers
-  `init_wifi_subsystem()`. Portable-only boots never call it.
+  `init_wifi_subsystem()`. Portable provisioning also calls it lazily on its
+  first scan/connect request; ordinary Portable BLE use does not.
 
 ## BootHandoff
 
@@ -257,7 +258,7 @@ snapshot or `Getting Ready` splash refresh before completing core initialization
 V2 initializes I2C and the expander before painting; V1 can initialize I2C while
 the display refreshes. Initialization is idempotent:
 
-| # | What | GoBoard call |
+| # | What | GoBoard Call |
 |---|---|---|
 | 1 | Early display | V2: `_board.init_buses()` first; both: `_board.init_spi()` → `_board.display().init(..., true)` if `!handoff.display_painted` |
 | 2 | Core init | `_board.init_core()` (no-op if already done) |
@@ -300,7 +301,7 @@ the watchdog ULP. Timer wakes leave CAP1203 active and untouched. Before
 interactive promotion, missing BMS initialization is retried; failure restarts
 the device. See [GPS sleep probing](gps_service.md#fast-path-sleep-probing).
 
-### Button detection during fast path
+### Button Detection During Fast Path
 
 GoBoard's `install_button_isr()` / `remove_button_isr()` manage a
 falling-edge ISR that latches presses while the CPU is awake. Gas and PM
@@ -308,7 +309,7 @@ light sleep use timer wake only. Acquisition, storage, and display finish
 before the final promotion check, including any final GPS sleep retry.
 The ISR is removed before `InputService` construction.
 
-### Promotion handoff
+### Promotion Handoff
 
 On button press: unlocked, suppress wake press, display snapshot from RTC
 (stale values + "Unlocked" snackbar), fresh measures if available.
@@ -496,3 +497,15 @@ Host-testable free functions co-located with GoApp:
 | `measures_to_ago()` | Convert shared `Measures` → product `MeasuresAGo` |
 | `build_fast_path_display()` | Build `DisplayValues` for locked dashboard |
 | `build_wake_values()` | Build `DisplayValues` from RTC snapshot |
+
+## Verification
+
+[`go_app.tests.cpp`](../tests/go_app.tests.cpp) covers boot routing, initialization
+ordering through a fake board, fast-path acquisition, promotion, board
+capabilities, and display handoff. Shared driver tests cover individual
+peripheral protocols; see the component READMEs linked from
+[`components/README.md`](../../../components/README.md) and the
+[host-test workflow](../../../tests/README.md).
+The concrete `GoHardwareBoard` uses ESP-IDF and is not exercised by fake-board
+tests. Physical V1/V2 checks must establish pin wiring, expander ordering,
+power sequencing, and wake behavior.

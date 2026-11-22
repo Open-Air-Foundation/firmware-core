@@ -11,15 +11,15 @@ incomplete.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_local_api.h` | Product providers, snapshots, access state, and fixed request FIFO |
-| `products/go/main/go_local_api.cpp` | Go measures/config mapping, validation, admission, and queue signaling |
-| `components/airgradient-common/include/retained_uptime.h`, `retained_uptime.cpp` | Shared RTC-retained monotonic uptime calculation |
-| `products/go/main/go_orchestrator.h` | Local endpoint state, retry deadline, and orchestration declarations |
-| `products/go/main/go_orchestrator.cpp` | Request processing, persistence, OTA policy, and Stationary lifecycle |
-| `products/go/main/go_wifi.h` | Shared listener and local mDNS lifecycle API |
-| `products/go/main/go_wifi.cpp` | Provisioning handoff, route/listener ownership, and mDNS profile wiring |
-| `products/go/tests/go_local_api.tests.cpp` | Host tests for mappings, policy, snapshots, FIFO, and queue epochs |
-| `products/go/tests/local-server-integration/` | Hardware integration test collection for the HTTP and mDNS contract |
+| [`products/go/main/go_local_api.h`](../main/go_local_api.h) | Product providers, snapshots, access state, and fixed request FIFO |
+| [`products/go/main/go_local_api.cpp`](../main/go_local_api.cpp) | Go measures/config mapping, validation, admission, and queue signaling |
+| [`components/airgradient-common/include/retained_uptime.h`](../../../components/airgradient-common/include/retained_uptime.h), `retained_uptime.cpp` | Shared RTC-retained monotonic uptime calculation |
+| [`products/go/main/go_orchestrator.h`](../main/go_orchestrator.h) | Local endpoint state, retry deadline, and orchestration declarations |
+| [`products/go/main/go_orchestrator.cpp`](../main/go_orchestrator.cpp) | Request processing, persistence, OTA policy, and Stationary lifecycle |
+| [`products/go/main/go_wifi.h`](../main/go_wifi.h) | Shared listener and local mDNS lifecycle API |
+| [`products/go/main/go_wifi.cpp`](../main/go_wifi.cpp) | Provisioning handoff, route/listener ownership, and mDNS profile wiring |
+| [`products/go/tests/go_local_api.tests.cpp`](../tests/go_local_api.tests.cpp) | Host tests for mappings, policy, snapshots, FIFO, and queue epochs |
+| [`products/go/tests/local-server-integration/`](../tests/local-server-integration) | Hardware integration test collection for the HTTP and mDNS contract |
 
 ## Dependencies
 
@@ -38,22 +38,16 @@ incomplete.
 `GoLocalApiService` implements the three provider interfaces consumed by
 `LocalServer`. The orchestrator and `WifiService` drive the remaining methods.
 
-| Method | Returns | Purpose |
-|---|---|---|
-| `GoLocalApiService(queue, config)` | Constructor | Capture the event queue and process-lifetime identity |
-| `is_valid()` | `bool` | Report whether queue and synchronization dependencies are usable |
-| `get_measures()`, `get_system_info()` | Value snapshots | Supply thread-safe GET measures data |
-| `get_config()` | `LocalServerConfig` | Supply the complete active Go config snapshot |
-| `submit_config(partial)` | `ConfigSubmitResult` | Validate and admit a non-blocking config request |
-| `trigger(action)` | `ActionResult` | Admit a fire-and-forget action request |
-| `publish_measurement_snapshot(...)` | `void` | Publish corrected common measures |
-| `publish_config_snapshot(settings)` | `void` | Publish active supported configuration |
-| `publish_wifi_rssi(rssi)` | `void` | Publish or omit the online RSSI sample |
-| `set_access(access)`, `access()` | `void`, `ConfigAccess` | Gate writes/actions or expose cached GET data during OTA |
-| `pop_request(epoch, request)` | `bool` | Pop one request only for the current queue generation |
-| `clear_requests()`, `queue_epoch()` | `size_t`, `uint32_t` | Discard queued work and inspect the generation |
+| Responsibility | Caller Contract |
+|---|---|
+| Construction | Supply the central event queue and device identity; check `is_valid()` before enabling the endpoint. |
+| GET providers | Return mutex-protected copies of measures, system information, and active config. HTTP handlers do not access live sensor drivers. |
+| Writes and actions | `submit_config()` and `trigger()` validate/admit work without waiting for execution. Successful admission is not successful persistence or hardware completion. |
+| Snapshot publication | The orchestrator publishes corrected measurements, active settings, and optional online RSSI. Readers see cached values until publication. |
+| Access and request lifecycle | `set_access()` gates mutations. Clear queued work at lifecycle boundaries; `pop_request(epoch, ...)` accepts only the current generation. |
 
-See [`go_local_api.h`](../main/go_local_api.h) for full signatures.
+See [`go_local_api.h`](../main/go_local_api.h) for full signatures and
+[request admission](#configuration) for FIFO capacity and policy ordering.
 
 ## Behavior
 
@@ -72,8 +66,13 @@ queued requests and activation retries, and enables Wi-Fi power saving. Cloud
 connectivity continues. Portable and **Energy Saving** modes do not expose the
 endpoint.
 
-Go uses `CONFIG_AG_HTTP_PORT` (currently 80) and model `P-1PSG` with the
+Go uses model `P-1PSG` with the
 [shared discovery contract](../../../docs/local_http_api.md#availability-and-discovery).
+
+| Symbol | Default | Purpose |
+|---|---|---|
+| `CONFIG_AG_HTTP_PORT` | `80` | Shared local API/provisioning listener port |
+
 Discovery starts only after the HTTP routes are reachable.
 
 ### Routes and Statuses
@@ -154,12 +153,9 @@ or types return `400 invalid_value` with field `pinnedChart`. Existing
 five minutes, where Home shows “Not available”; the preference is preserved.
 
 The API edits the shared Portable/Stationary interval; Energy Saving retains its
-separate preference. Accepted values are persisted and scheduled exactly. In
-Portable/Stationary, the menu offers 3s, 10s, 30s, 60s, 5m, 15m, and 1h. For
-another valid value such as 17, the Settings summary shows `Measure Int.: 17s`
-and the interval submenu prepends and selects `Custom (17s)`. Changing another UI
-setting preserves 17 seconds; explicitly selecting a fixed interval replaces
-it.
+separate preference. Accepted values are persisted and scheduled exactly. See
+[interval presentation](settings.md#measurement-interval-presentation) for how
+the UI preserves custom values.
 
 Connectivity, sensor, and correction fields are:
 
@@ -325,13 +321,12 @@ Go uses the [shared local API security model](../../../docs/local_http_api.md#se
 Its `configurationControl` setting arbitrates configuration sources; it does not
 authenticate clients or restrict read access to a particular caller.
 
-### External Client Follow-Ups
+### External Clients
 
-`python-airgradient` and Home Assistant require separate client-integration
-follow-up work. Clients need to accept asynchronous `202`, treat `503 busy` as
-temporary, poll GET for configuration convergence, and preserve compatibility
-with existing device behavior. No external pull request or issue URLs are
-recorded here; links should be added only when concrete follow-ups exist.
+Clients must treat `202` as asynchronous admission and `503 busy` as temporary,
+then poll GET when configuration convergence matters. Compatibility with
+`python-airgradient` or Home Assistant requires separate integration validation;
+firmware host tests do not establish it.
 
 ## Edge Cases / Errors
 
@@ -354,17 +349,15 @@ recorded here; links should be added only when concrete follow-ups exist.
 
 ## Verification
 
-The available evidence is limited to automated work completed at revision
-`c17f2d3` and static collection of the hardware suite:
+[`go_local_api.tests.cpp`](../tests/go_local_api.tests.cpp) covers snapshots,
+field mapping, board support, correction shapes, authority checks, FIFO
+admission, and queue epochs. [Orchestrator tests](../tests/go_orchestrator.tests.cpp)
+cover activation, lifecycle, and OTA policy; [Wi-Fi tests](../tests/go_wifi.tests.cpp)
+cover listener/discovery ordering and failure handling. Run them through the
+[host-test workflow](../../../tests/README.md).
 
-| Check | Evidence |
-|---|---|
-| Native host suite | `1240/1240` tests passed at `c17f2d3` |
-| Go firmware build | Passed at `c17f2d3`; `0x1cfe30` bytes with `0x201d0` bytes (6%) app-partition headroom |
-| Hardware integration suite | Pytest collects 24 tests |
-
-The 24 hardware tests have not been run against a physical AirGradient Go.
-There is no physical evidence for concurrent PUT behavior, provisioning
-listener handoff, transient reconnect, mDNS lifecycle, Home Assistant
-interoperability, or heap headroom during listener, local GET, cloud TLS, or OTA
-activity.
+The [local-server integration suite](../tests/local-server-integration/README.md)
+describes physical-device checks. Hardware validation must establish concurrent
+PUT behavior, provisioning listener handoff, reconnect, mDNS lifecycle, client
+interoperability, and heap headroom during local GET, cloud TLS, and OTA.
+Test collection or host success alone does not establish these results.

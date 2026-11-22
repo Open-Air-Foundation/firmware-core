@@ -60,10 +60,10 @@ read, and then blocks indefinitely. Calling `start()` again resumes it.
 stateDiagram-v2
     [*] --> Inactive
     Inactive --> Receiving: un-onboarded full boot
+    Inactive --> Receiving: manufacturing entry
     Receiving --> Receiving: manufacturing entry or serial reset
     Receiving --> Parked: onboarding completes
     Parked --> Receiving: start resumes task
-    Inactive --> [*]: onboarded boot ends
     Receiving --> [*]: reboot or power off
     Parked --> [*]: reboot or power off
 ```
@@ -74,8 +74,8 @@ write-only `/dev/usbserjtag` descriptor, registered by IDF for Go's primary USB
 console. Each response is emitted by one VFS
 `write()` call. It starts with LF and ends with LF, so it terminates a partial
 normal log line before emitting its `#AG` response line. The channel
-is not installed on onboarded boots, never uses UART0, and is not uninstalled
-when command reception is parked.
+is not installed during an onboarded boot unless manufacturing activates it.
+It never uses UART0 and is not uninstalled when command reception is parked.
 
 The task uses a 3072-byte stack at priority 3 and waits up to 50 ms per USB RX
 read. This finite wait lets it poll the one-item result queue. A command is
@@ -127,3 +127,13 @@ arguments, unknown targets, invalid numbers, and arguments supplied to
 argument-free commands are `INVALID_ARGUMENT`. A valid request that cannot be
 queued, persisted, or completed is `OPERATION_FAILED`. A failed or short VFS
 write is not retried because retrying could interleave with a log message.
+
+## Verification
+
+[`serial_command.tests.cpp`](../tests/serial_command.tests.cpp) covers framing,
+overlong-line recovery, validation, one-command admission, response formatting,
+queue rejection, and stop/resume. Settings activation and manufacturing policy
+are covered in [`go_orchestrator.tests.cpp`](../tests/go_orchestrator.tests.cpp).
+See the [host-test workflow](../../../tests/README.md). USB/VFS behavior and
+responses interleaved with real device logs require device verification using
+the [host CLI](../../../scripts/ago_serial_command.py).

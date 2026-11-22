@@ -9,12 +9,12 @@ the new frame is painted by the worker.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_display.h` | `DisplayService` class, `DisplayValues` struct, `RtcDisplaySnapshot` struct, `Screen` enum, free functions |
-| `products/go/main/go_display.cpp` | Rendering pipeline, refresh logic, worker task, display driver, RTC snapshot storage, session-screen draw routines |
-| `products/go/main/go_display_refresh.h` | Host-testable Home cooldown policy and completed-refresh counter |
-| `products/go/main/go_display_chart.h` | Shared history extraction for interactive and timer-wake rendering |
-| `products/go/main/go_text_wrap.h` | Pure host-testable word-wrap helper (`compute_wrapped_lines`) used by `_draw_info()` and the auto-wrapped Provisioning status line |
-| `products/go/main/go_text_wrap.cpp` | Implementation of the word-wrap helper |
+| [`products/go/main/go_display.h`](../main/go_display.h) | `DisplayService` class, `DisplayValues` struct, `RtcDisplaySnapshot` struct, `Screen` enum, free functions |
+| [`products/go/main/go_display.cpp`](../main/go_display.cpp) | Rendering pipeline, refresh logic, worker task, display driver, RTC snapshot storage, session-screen draw routines |
+| [`products/go/main/go_display_refresh.h`](../main/go_display_refresh.h) | Host-testable Home cooldown policy and completed-refresh counter |
+| [`products/go/main/go_display_chart.h`](../main/go_display_chart.h) | Shared history extraction for interactive and timer-wake rendering |
+| [`products/go/main/go_text_wrap.h`](../main/go_text_wrap.h) | Pure host-testable word-wrap helper (`compute_wrapped_lines`) used by `_draw_info()` and the auto-wrapped Provisioning status line |
+| [`products/go/main/go_text_wrap.cpp`](../main/go_text_wrap.cpp) | Implementation of the word-wrap helper |
 
 ## Dependencies
 
@@ -70,13 +70,13 @@ expander-controlled NAND CS.
 |---|---|---|
 | `init(initial, defer_refresh=false)` | Depends | Init driver + u8g2, render initial frame. See below. |
 | `update(values, wait)` | No* | Render frame, signal worker. `wait=true` blocks until any prior worker job clears so the new frame queues without being dropped (does **not** wait for the new frame to finish painting; use `flush()` for that). |
-| `update_sync(values)` | Yes | Render + SPI inline; for fast-path boot without worker |
-| `flush()` | Yes | Spin until `_worker_busy` clears so the most-recently-queued frame is fully painted. Cheap polling with `RTOS::delay_ms(1)`, mirroring `clear()` / `stop()`. Used by every session transition that gates a fixed-duration on-screen dwell (the 500 ms STA `Connected!` hold, the 1.5 s provisioning `Connected!` hold, the `SwitchingTransport` ack, both leave-session renders) and by shutdown before the post-paint power-off dwell. MUST NOT be called from the display worker task itself. |
+| `update_sync(values)` | Yes | Render + SPI inline; used by fast-path and factory rendering |
+| `flush()` | Yes | Spin until `_worker_busy` clears so the queued refresh has finished attempting to paint. It does not report hardware success. Cheap polling with `RTOS::delay_ms(1)`, mirroring `clear()` / `stop()`. Used by every session transition that gates a fixed-duration on-screen dwell (the 500 ms STA `Connected!` hold, the 1.5 s provisioning `Connected!` hold, the `SwitchingTransport` ack, both leave-session renders) and by shutdown before the post-paint power-off dwell. MUST NOT be called from the display worker task itself. |
 | `clear()` | Yes | Clear display to white via full refresh |
-| `deep_sleep()` | Yes | Put SSD1680 into deep sleep mode 1 (~100 µA → <1 µA) |
+| `deep_sleep()` | Yes | Put SSD1680 into deep sleep mode 1 |
 | `stop()` | Yes | Stop worker task; call before ESP deep sleep |
 
-#### `init()` — `defer_refresh` parameter
+#### Initial Refresh
 
 ```cpp
 bool init(const DisplayValues &initial, bool defer_refresh = false);
@@ -84,10 +84,11 @@ bool init(const DisplayValues &initial, bool defer_refresh = false);
 
 | `defer_refresh` | Behavior |
 |---|---|
-| `false` (default) | Synchronous: renders frame, performs full SPI refresh (~3 s), then starts worker. Used by `run_fast_path()`. |
-| `true` | Deferred: renders and reserves the framebuffer, marks a full refresh pending, starts the worker, and immediately signals it to run the initial refresh in the background. Returns in ~10 ms. Used by button-wake and interactive boots with no painted frame. |
+| `false` (default) | Synchronous: renders frame, performs full SPI refresh (~3 s), then starts worker. Used by the timer-wake path when initializing its frame. |
+| `true` | Deferred: renders and reserves the framebuffer, marks a full refresh pending, starts the worker, and immediately signals it to run the initial refresh in the background. Returns after worker creation and notification without waiting for painting. Used by button-wake and interactive boots with no painted frame. |
 
-When `defer_refresh=true`, `init()` returns before the SPI refresh begins.
+When `defer_refresh=true`, `init()` does not wait for the SPI refresh to finish;
+the worker may already be running when it returns.
 The worker task acquires the SPI bus and holds it for the duration of the
 refresh (~3 s). Button-wake storage relies on the SPI bus arbitration during
 this window. Interactive boot calls `flush()` before mounting NAND storage, so
@@ -103,26 +104,14 @@ RTC slow memory so it survives deep sleep. It is saved by
 `prepare_for_sleep()` just before the device enters deep sleep, and loaded by
 `run_button_wake_path()` at the very start of a button-wake boot.
 
-```cpp
-struct RtcDisplaySnapshot {
-  // Sensor values
-  int   co2_ppm;          float pm25_ugm3;
-  float temperature_c;    float humidity_pct;
-  int   tvoc_index;       int   nox_index;
-  float pressure_hpa;     float altitude_m;
-  // Battery
-  uint8_t battery_pct;  bool is_battery_charging;  bool is_plugged_in;
-  // Status flags & rendering settings
-  bool gps_enabled;  bool gps_fix;  bool ble_enabled;
-  TrackingState tracking_state;
-  bool use_fahrenheit;  bool use_feet;  bool pm_use_usaqi;
-};
-```
+The [snapshot definition](../main/go_display.h) holds readings, battery and
+connection indicators, tracking state, units, thermal visibility, and the pinned
+chart selection. It contains no chart samples or borrowed UI pointers. Treat it
+as presentation state, never as the authoritative raw measurement cache.
+See [RTC memory ownership](power_management.md#rtc-memory-budget) for its place
+alongside the app and measurement caches.
 
-Estimated size: ~44 bytes (well within the ~50 B budget; total RTC usage
-~1.6 KB of the 8 KB available on ESP32-C5).
-
-### Free functions
+### Snapshot Helpers
 
 ```cpp
 // Save the last displayed state to RTC memory (go_display.cpp).
@@ -252,8 +241,8 @@ multi-second refresh.
 ### Display Driver
 
 The SSD1680 display driver is file-local (anonymous namespace in
-`go_display.cpp`). It follows the SPI protocol documented in
-`UI-IMPLEMENTATION.md` sections 2.3-2.4:
+`go_display.cpp`). The SPI command sequences are maintained in
+the local implementation in [`go_display.cpp`](../main/go_display.cpp):
 
 - `driver_init()` — GPIO setup, SPI device attachment, DMA bounce buffer
 - `driver_hw_init_full()` — Full SSD1680 init (SW reset, gate config, RAM window)
@@ -416,8 +405,9 @@ Frame assembly order:
 
 1. Clear buffer to 0xFF (white)
 2. Set draw color to 0 (black)
-3. If any `Shutdown*` variant or `PairingPasskey`: dedicated draw (no status bar, no snackbar)
-4. Else: `draw_status_bar()` + screen-specific draw + `draw_snackbar()`
+3. Dispatch full-canvas dashboards, shutdown, pairing, and setup screens without
+   ordinary status-bar/snackbar chrome
+4. Otherwise draw the status bar, screen body, and snackbar
 
 Screen dispatch:
 
@@ -477,7 +467,7 @@ collection, storage, and cloud, BLE, and local-server payloads retain those fiel
 
 With no active browsing selection, the lower rows are:
 
-| Interval | Visible Pinned Chart | Rows Below PM2.5 And CO2 |
+| Interval | Visible Pinned Chart | Rows Below PM2.5 and CO2 |
 |---|---|---|
 | Below 300 s | Yes | TVOC/NOx; pressure/altitude; chart |
 | Below 300 s | No | TVOC/NOx; pressure/altitude; chart hint |
@@ -560,3 +550,26 @@ transitions trigger a status bar redraw.
 | Pressure | Integer hPa; >9999: "9999+ hPa" |
 | Altitude | Integer meters by default; `use_feet` converts with `m × 3.28084` and renders the full rounded value with `ft`; meters >9999 render `9999+ m` |
 | Invalid | "-" for any metric |
+
+## Edge Cases / Errors
+
+- `update(wait=false)` rejects a busy framebuffer; the caller chooses whether
+  to retry. `wait=true` waits for ownership, not completion of the new refresh.
+- Driver initialization or worker creation failure returns `false` from `init()`.
+  Deferred SPI failure occurs later and is logged by the worker.
+- `flush()` has no success result. Hardware failures release the framebuffer but
+  do not advance the successful-refresh counter or cooldown timestamp.
+- Display and storage share SPI arbitration. Keep borrowed GPIO backends alive
+  and initialize the board's expander before either peripheral uses it.
+
+## Verification
+
+Host tests cover [refresh policy](../tests/go_display_refresh.tests.cpp),
+[geometry](../tests/go_display_geometry.tests.cpp),
+[timer-wake charts](../tests/go_app.tests.cpp), and
+[text wrapping](../tests/go_text_wrap.tests.cpp). The
+[UI tests](../tests/go_ui.tests.cpp) verify frame values and navigation; the
+[host-test workflow](../../../tests/README.md) describes execution.
+The real SPI worker and panel driver are excluded under `TEST_HOST`. Device
+checks must establish waveform timing, ghosting, shared-bus behavior, and
+readability; host stubs do not prove a frame was physically painted.

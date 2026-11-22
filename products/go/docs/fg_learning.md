@@ -4,14 +4,14 @@ AirGradient Go V1 uses a BQ27427 Impedance-Track fuel gauge whose accuracy
 depends on two learned values — `Qmax` (true cell capacity) and the `Ra` table
 (per-SOC internal resistance). The gauge learns them only by observing clean
 charge → rest → discharge → rest cycles. This is a **per-unit, end-of-line
-operation**: a unit learns its own gauge once on the assembly line and never
-again in the field. Learning runs in a **dedicated factory boot path** that
+operation** intended for factory calibration, not ordinary measurement use.
+The UI can explicitly arm another run; firmware does not enforce a once-only limit. Learning runs in a **dedicated factory boot path** that
 `GoApp::run()` routes into before normal boot-path selection. The path is
-self-contained — it brings up only the display, LED, and buzzer, owns its own
-poll loop, and never constructs the `Orchestrator` or any normal producer. The
+self-contained — it manages display and feedback, journaling, and controlled
+loads, owns its poll loop, and never constructs the `Orchestrator` or any normal producer. The
 run survives the end-of-discharge ship-mode power-off and resumes on re-plug
-with no operator input, then verifies once after the final cycle and hands back
-to normal operation.
+with no operator input, then verifies after the final cycle and holds a sticky result screen until
+the operator exits.
 
 V2 uses BQ27742, hides Battery Calibration, and skips this factory boot path.
 Its pack provisioning remains deferred.
@@ -86,7 +86,7 @@ for `FgLearningAction`, `VerifyInputs`, and the accessors (`stage`, `cycle`,
 |---|---|---|
 | `is_factory_learning_stage_active(stage)` | `bool` | Boot predicate — true for every stage except `Idle` (both terminals are sticky) |
 | `load_factory_settings(store, out)` | `bool` | Read `fs_*` keys from the `"go"` namespace |
-| `save_fg_learning_state(store, stage, cycle, losses)` | `bool` | Atomic single-commit run-state write |
+| `save_fg_learning_state(store, stage, cycle, losses)` | `bool` | Write the run-state keys and commit once; no multi-key rollback |
 | `clear_factory_settings(store)` | `bool` | Explicit clear (not called by `factory_reset()`) |
 
 ## Behavior
@@ -116,8 +116,8 @@ stateDiagram-v2
 
     Verify --> Complete: verify_pass
     Verify --> Failed: fail at cycle cap
-    Complete --> [*]
-    Failed --> [*]
+    Complete --> Idle: POWER clears run, reboot
+    Failed --> Idle: POWER clears run, reboot
 ```
 
 ### Cycle Timeline
@@ -127,13 +127,18 @@ The run repeats one full charge → rest → discharge → ship → re-plug cycl
 starts at the **full** top and ends **empty** at the EDV cutoff, so the battery
 is full only at the _start_ of a discharge.
 
-```text
-Arm
- └─ Cycle 1: Charge(empty->full) -> Rest(OCV1) -> Discharge(full->EDV) -> CycleDone -> ship
- re-plug   (cycle 1 below target -> next Charge)
- └─ Cycle 2: Charge(empty->full) -> Rest(OCV1) -> Discharge(full->EDV) -> CycleDone -> ship
- re-plug   (cycle 2 at target -> Verify)
- └─ Verify (battery empty, read-only) -> Complete / Failed
+```mermaid
+flowchart TD
+    Arm --> Charge1[Cycle 1: charge]
+    Charge1 --> Rest1[Rest for OCV1]
+    Rest1 --> Discharge1[Discharge to EDV]
+    Discharge1 --> Ship1[Persist CycleDone, ship mode]
+    Ship1 -->|Re-plug, no POR| Charge2[Cycle 2: charge]
+    Charge2 --> Rest2[Rest for OCV1]
+    Rest2 --> Discharge2[Discharge to EDV]
+    Discharge2 --> Ship2[Persist CycleDone, ship mode]
+    Ship2 -->|Re-plug, no POR| Verify[Read learned values with charge off]
+    Verify --> Result[Complete or Failed, await POWER exit]
 ```
 
 The boot resume matrix sequences this: on re-plug from `CycleDone`, `cycle below
@@ -152,18 +157,18 @@ The factory path runs no background producers, so the runner controls a
 deliberate load stack per stage. Learning is gated by the gauge's battery-side
 current thresholds (Quit Current 80 mA, Dsg Current Threshold 120 mA).
 
-| Stage | Charge | Toggled loads (PM + CPU duty) | Resulting profile |
+| Stage | Charge | Toggled Loads (PM + CPU Duty) | Resulting Profile |
 |---|---|---|---|
 | `Charge` | on, ICHG 1500 mA | off | Charger-dominated |
 | `Rest` | off | off | Quiet — under 80 mA for clean OCV1 |
 | `Discharge` | off | PM + CPU duty on | Steady draw above the 120 mA threshold |
 | `Verify` | off | off | Quiet |
 
-GPS is **never managed** by the factory path (the TAU1113 has no power GPIO and
-auto-acquires at power-on), so its steady ~16–21 mA is always present and stays
-under the Quit Current during the quiet stages. The discharge stack adds the PM
-fan plus a deliberate CPU-active duty so battery-side current clears the
-discharge threshold; the margin grows as the cell drains.
+GPS is **not managed** by the factory path: it does not explicitly wake or
+sleep the receiver. Its contribution to the load depends on receiver state.
+The discharge stack adds the PM fan plus a deliberate CPU-active duty to bring
+battery-side current above the discharge threshold; verify the resulting load
+and quiet-stage current on hardware.
 
 The CPU duty is **sustained**, not a one-shot burst: during `Discharge`,
 `idle_poll()` spends most of every `ABORT_POLL_MS` slice in a busy-spin
@@ -191,11 +196,11 @@ re-enable (`stop_pm_fan()` clears the inited flag), so the per-poll
 ### Manual-Intervention Cues (LED + Buzzer)
 
 The pure FSM emits a `ManualCue`; `FgLearningRunner::apply_action()` maps it to
-one **solid** back-LED colour (`LedService::back_solid()`), and
+a back-LED cue (solid colours or the unplug breathing effect), and
 `handback_terminal()` lights the terminal colour. So an operator servicing a
 rack can see at a glance what each unit needs.
 
-| Phase | Back LED | Buzzer | Operator action |
+| Phase | Back LED | Buzzer | Operator Action |
 |---|---|---|---|
 | `Rest` | Solid amber `{255,140,0}` | — | Wait — OCV settling |
 | `UnplugPrompt` (Discharge, plugged) | Breathing purple `{160,0,255}` | `PATTERN_UNPLUG` melody once on entry | Unplug the charger |
@@ -217,7 +222,7 @@ a clean OCV2, let the unit rest briefly while powered off before re-plugging.
 
 ### Boot Routing and Resume
 
-`GoApp::run()` gains a single early branch before `select_boot_path()`. Only the
+`GoApp::run()` checks board capability and factory state in an early branch before `select_boot_path()`. Only the
 lightweight, idempotent `init_nvs()` is needed to read `FactorySettings`; the
 heavy `init_core()` happens inside the factory path.
 
@@ -343,14 +348,14 @@ mount** (`/nand/fglearn.log`), mounted by reusing `board.storage()`:
   unit re-dumps the log; this is the answer to "I already lost the logs."
 - **Event-driven, never per-poll.** Lines are written only on boots, stage
   transitions, learning-flag edges, verify, EDV-ship, and the result — a few
-  dozen writes per run, each `fsync`'d so a sudden reset loses at most the
-  in-flight record. NAND wear stays trivial.
+  dozen writes per run. Each append attempts `fflush` and `fsync`; their return
+  values are not checked, so the journal cannot guarantee a power-loss bound.
 - **Survives power-off / ship mode** (unlike RTC memory), so the trail
   accumulates across the whole multi-reboot run.
 
 Logged events (`FGJ #seq <uptime>s ...`):
 
-| Event | When | Key fields |
+| Event | When | Key Fields |
 |---|---|---|
 | `BOOT` | every boot | **`esp_reset_reason()`**, resumed stage/cycle/itpor, ITPOR-now, soc, vbat |
 | `STAGE` | stage transition | stage, cycle, soc, vbat |
@@ -406,7 +411,8 @@ frame, lights the result LED (green / red), and holds until the POWER press.
 
 - **CycleDone commit fails before ship:** the runner retries up to
   `EDV_COMMIT_RETRY_MAX`, then ships regardless — ship mode is a safe power-off,
-  and the lost cycle is recovered by the resume / POR-loss path on re-plug. The
+  and resume uses whichever state remains readable on re-plug. Recovery of the
+  latest cycle is not guaranteed after a failed commit. The
   runner never lingers discharging at the cutoff.
 - **POR during a run:** `fg_itpor` triggers a cap-guarded restart; after
   `ITPOR_LOSS_CAP` (3) losses the run trips `Failed` for investigation.
@@ -422,6 +428,33 @@ frame, lights the result LED (green / red), and holds until the POWER press.
   sentinel indicates no valid read.
 - **Abort:** a short power press (during a run or in a terminal hold) calls
   `reset()` + `clear_factory_settings()` and reboots into normal operation.
-- **Boot cost:** every normal fast / button-wake boot now pays one `init_nvs()`
-  plus a single key read before path selection; confirm on hardware that this is
-  not measurable.
+  The runner does not check the clear result; a persistence failure can leave
+  factory state active on the next boot.
+- **Boot cost:** factory-state loading runs before normal path selection on V1
+  and reads several keys after `init_nvs()`. Wake-latency impact requires target
+  measurement; the V2 capability gate skips factory learning.
+
+## Configuration
+
+Controller constants in
+[`fg_learning_controller.h`](../main/fg_learning/fg_learning_controller.h):
+
+| Symbol | Default | Purpose |
+|---|---|---|
+| `CYCLE_TARGET` | `2` | Full cycles before verification |
+| `ITPOR_LOSS_CAP` | `3` | Limit on restarts caused by gauge POR loss |
+| `REST_TIMEOUT_MS` | `500000` | Minimum rest before discharge; OCV is also required |
+| `CHARGE_TIMEOUT_MS` | `28800000` | Eight-hour charge timeout |
+| `CHARGE_CURRENT_MA` | `1500` | Requested charge current |
+| `QMAX_MIN_FRACTION` / `QMAX_MAX_FRACTION` | `0.7` / `1.4` | Accepted Qmax relative to design capacity |
+
+## Verification
+
+[`fg_learning_controller.tests.cpp`](../tests/fg_learning_controller.tests.cpp)
+covers stage transitions, resume, POR limits, verify criteria, and failure
+reasons. [Settings tests](../tests/go_settings.tests.cpp) cover factory-key
+persistence and isolation; [app tests](../tests/go_app.tests.cpp) cover boot
+routing. See the [host-test workflow](../../../tests/README.md).
+The target runner, load profile, gauge flags, learned capacity, ship/re-plug
+behavior, and journal durability need physical V1 verification. Controller tests
+alone do not qualify a learned battery pack.

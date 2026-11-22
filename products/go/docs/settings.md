@@ -1,16 +1,15 @@
 # Settings Service
 
 Persistent device configuration for AirGradient Go, stored in NVS via
-`ConfigStore`. Follows the same pattern as the reference product
-(`ReferenceSettings`): a plain struct with default member initializers and free
-functions for load/save.
+`ConfigStore`. `GoSettings` owns durable values and validation; the orchestrator
+owns candidate activation and applying changes to running services.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_settings.h` | `GoSettings` struct and load/save declarations |
-| `products/go/main/go_settings.cpp` | NVS key constants, validation functions, load/save implementations |
+| [`products/go/main/go_settings.h`](../main/go_settings.h) | `GoSettings` struct and load/save declarations |
+| [`products/go/main/go_settings.cpp`](../main/go_settings.cpp) | NVS key constants, validation functions, load/save implementations |
 
 ## Dependencies
 
@@ -34,32 +33,50 @@ See [`go_settings.h`](../main/go_settings.h) for full signatures.
 
 ## GoSettings Fields
 
+### Measurement and Sensor Preferences
+
 | Field | NVS Key | Type | Default | Valid Range | Notes |
 |---|---|---|---|---|---|
 | `measure_interval_seconds` | `"mi"` | `int` | `10` | 1 .. 3600 | Shared cadence for Portable and Stationary |
 | `energy_saving_measure_interval_seconds` | `"es_mi"` | `int` | `300` | 300 .. 3600 | Separate Energy Saving cadence |
+| `co2_abc_days` | `"cad"` | `int` | `7` | -1 or 1 .. 200 | Automatic background calibration period. `-1` disables it; positive values are applied as 24 hours per day to supported S12 and SCD41 CO2 sensors. |
+| `tvoc_learning_offset` | `"tlo"` | `int` | `12` | 1 .. 1000 | Sensirion VOC gas-index learning-time offset in whole hours. |
+| `nox_learning_offset` | `"nlo"` | `int` | `12` | 1 .. 1000 | Sensirion NOx gas-index learning-time offset in whole hours. |
+
+### Display and Feedback
+
+| Field | NVS Key | Type | Default | Valid Range | Notes |
+|---|---|---|---|---|---|
 | `use_fahrenheit` | `"uf"` | `bool` | `false` | — | Temperature display unit (false=C, true=F) |
 | `use_feet` | `"auf"` | `bool` | `false` | — | Altitude display unit (false=m, true=ft); stored altitude remains meters |
 | `pm_use_usaqi` | `"pmu"` | `bool` | `false` | — | PM display format (false=µg/m³, true=USAQI) |
 | `pinned_chart` | `"pchart"` | `int` (stored) / `Metric` (in struct) | `Pm25` (1) | 0 .. 8 | Pinned Chart choice shared by UI, BLE, and Local Server; None (0) disables the automatic chart |
+| `back_led_indicator` | `"bli"` | `int` (stored) / `BackLedIndicator` (in struct) | `Aqi` (0) | 0 .. 1 | Back LED indicator: AQI / CO2 |
+| `back_led_brightness` | `"blb"` | `int` (stored) / `LedBrightness` (in struct) | `Off` (0) | 0 .. 3 | Back LED brightness: Off / Dim / Mid / Bright |
+| `touch_led_intensity` | `"tlb"` | `int` (stored) / `TouchLedIntensity` (in struct) | `Off` (0) | 0 .. 2 | Touch feedback LED intensity: Off / Dim / Bright |
+| `buzzer_enabled` | `"bv"` | `bool` | `false` | — | Enable ordinary audible feedback; diagnostics can temporarily override it |
+
+### Operating and Connectivity Preferences
+
+| Field | NVS Key | Type | Default | Valid Range | Notes |
+|---|---|---|---|---|---|
 | `gps_mode` | `"gpm"` | `int` (stored) / `GpsMode` (in struct) | `OnWhenTracking` (1) | 0 .. 2 | GPS operating mode: AlwaysOff / OnWhenTracking / AlwaysOn |
 | `operating_mode` | `"opm"` | `int` (stored) / `OperatingMode` (in struct) | `Portable` (0) | 0 .. 2 | Serialized as int; cast to `OperatingMode` on load |
 | `auto_lock_seconds` | `"als"` | `int` | `10` | 0, 10, 30, 60 | Runtime auto-lock timeout; `0` = disabled |
 | `disable_cloud` | `"dc"` | `bool` | `false` | — | Outbound cloud transport kill switch. Suppresses POST, FETCH, and Stationary OTA checks; does not disable the local API. |
 | `local_server_enabled` | `"lsrv"` | `bool` | `true` | — | Local API and discovery; editable through Operations in Stationary only. |
 | `configuration_control` | `"cc"` | `int` (stored) / `ConfigurationControl` (in struct) | `Both` (2) | 0 .. 2 | Remote configuration authority: `Cloud`, `Local`, or `Both`. Does not control measurement POST. |
-| `co2_abc_days` | `"cad"` | `int` | `7` | -1 or 1 .. 200 | Automatic background calibration period. `-1` disables it; positive values are applied as 24 hours per day to supported S12 and SCD41 CO2 sensors. |
-| `tvoc_learning_offset` | `"tlo"` | `int` | `12` | 1 .. 1000 | Sensirion VOC gas-index learning-time offset in whole hours. |
-| `nox_learning_offset` | `"nlo"` | `int` | `12` | 1 .. 1000 | Sensirion NOx gas-index learning-time offset in whole hours. |
+| `onboarding_done` | `"obd"` | `bool` | `false` | — | First-boot guide latch. `false` shows the one-time Getting Started screen after the boot splash; flips `true` on first real engagement (Menu hold on the guide, BLE pair/bond, or any operating-mode change). Cleared by factory reset. |
+
+### Static IP Record
+
+| Field | NVS Key | Type | Default | Valid Range | Notes |
+|---|---|---|---|---|---|
 | `static_ip.ip` | `"sip"` | `uint32_t` (stored as `int`) | `0` (DHCP) | — | Static-IP address (network byte order). Zero means DHCP and skips the other static-IP fields on load. |
 | `static_ip.netmask` | `"snm"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
 | `static_ip.gateway` | `"sgw"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
 | `static_ip.dns_primary` | `"sd1"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
 | `static_ip.dns_secondary` | `"sd2"` | `uint32_t` (stored as `int`) | `0` | — | Loaded only when `static_ip.ip != 0`. |
-| `back_led_indicator` | `"bli"` | `int` (stored) / `BackLedIndicator` (in struct) | `Aqi` (0) | 0 .. 1 | Back LED indicator: AQI / CO2 |
-| `back_led_brightness` | `"blb"` | `int` (stored) / `LedBrightness` (in struct) | `Off` (0) | 0 .. 3 | Back LED brightness: Off / Dim / Mid / Bright |
-| `touch_led_intensity` | `"tlb"` | `int` (stored) / `TouchLedIntensity` (in struct) | `Off` (0) | 0 .. 2 | Touch feedback LED intensity: Off / Dim / Bright |
-| `onboarding_done` | `"obd"` | `bool` | `false` | — | First-boot guide latch. `false` shows the one-time Getting Started screen after the boot splash; flips `true` on first real engagement (Menu hold on the guide, BLE pair/bond, or any operating-mode change). Cleared by factory reset. |
 
 Missing or invalid `bli` defaults to AQI. Indicator and brightness persist
 independently.
@@ -108,17 +125,16 @@ Portable and Stationary apply the saved algorithms. PM2.5 correction remains
 active in all modes. Mode changes never erase saved coefficients. See
 [Operating Mode](measurement_corrections.md#operating-mode).
 
-| Measure | Supported algorithms | Required custom values |
-|---|---|---|
-| PM2.5 | `none`, `custom_via_pm25_raw` | `intercept`, `scalingFactorViaPm25` |
-| Temperature | `none`, `custom` | `intercept`, `scalingFactor` |
-| Humidity | `none`, `custom` | `intercept`, `scalingFactor` |
+The [supported algorithms](measurement_corrections.md#supported-algorithms)
+include factory PM calibration as well as custom corrections. That document
+owns transform behavior and interface-specific algorithm names.
 
 Missing or invalid algorithms fall back to `none`. A custom correction is
 active only when every required coefficient is present and finite. PM2.5
 `none` does not require persisted coefficients and loads with
-identity parameters. Factory reset writes the default all-`none` correction
-set. Go ignores the retired `useEpa2021` custom-PM option and does not read or
+identity parameters. Ordinary factory reset writes the default all-`none` correction
+set; [serial factory reset](serial_command_service.md#lifecycle) preserves active
+measurement corrections. Go ignores the retired `useEpa2021` custom-PM option and does not read or
 write its former `mc_pe` NVS key.
 
 Wi-Fi SSID and password are owned by `WifiManager`'s saved-networks store
@@ -170,27 +186,17 @@ after `save_go_settings()` returns `true`.
 bounds and validators live in `go_config_types.h`; local checks stay in
 `go_settings.cpp`.
 
-| Field | Rule |
-|---|---|
-| `measure_interval_seconds` | `>= 1 && <= 3600` |
-| `energy_saving_measure_interval_seconds` | `>= 300 && <= 3600` |
-| `use_fahrenheit` | No range check (bool) |
-| `use_feet` | No range check (bool) |
-| `pm_use_usaqi` | No range check (bool) |
-| `gps_mode` | Underlying int in `0 .. 2` (matches `GpsMode` enum values) |
-| `operating_mode` | Underlying int in `0 .. 2` (matches `OperatingMode` enum values) |
-| `auto_lock_seconds` | `0`, `10`, `30`, or `60` |
-| `disable_cloud` | No range check (bool) |
-| `local_server_enabled` | No range check (bool) |
-| `configuration_control` | Underlying int in `0 .. 2`; `Cloud` is invalid when `disable_cloud == true` |
-| `co2_abc_days` | `-1`, or `>= 1 && <= 200` |
-| `tvoc_learning_offset` | `>= 1 && <= 1000` |
-| `nox_learning_offset` | `>= 1 && <= 1000` |
-| `static_ip.*` | No range check; the loader treats `static_ip.ip == 0` as DHCP and short-circuits the other four fields |
-| `back_led_indicator` | Underlying int in `0 .. 1` (AQI / CO2) |
-| `back_led_brightness` | Underlying int in `0 .. 3` (matches `LedBrightness` enum values) |
-| `touch_led_intensity` | Underlying int in `0 .. 2` (matches `TouchLedIntensity` enum values) |
-| `onboarding_done` | No range check (bool) |
+Scalar bounds are listed once in [GoSettings Fields](#gosettings-fields).
+Additional rules and boundaries are:
+
+- `pinned_chart` must be one of the supported metric identifiers.
+- `configuration_control=Cloud` cannot be combined with `disable_cloud=true`.
+- Booleans need no numeric range check. Static IP fields have no semantic
+  validation here; a zero address selects DHCP on load.
+- Correction validators check supported algorithm enums. Wire adapters and
+  persisted loading check finite coefficients; the shared correction validator
+  itself does not establish coefficient finiteness. Callers constructing
+  settings directly must preserve that precondition.
 
 ## Stationary Networking Fields
 
@@ -266,8 +272,8 @@ clears it. Operating mode is controlled by the existing `GoSettings` setting.
 
 `FactorySettings` is **production-level** state, distinct from user `GoSettings`.
 It holds the fuel-gauge learning run state (`fg_learning_stage`,
-`fg_learning_cycle`, `fg_learning_itpor_losses`) and lives under distinct keys
-(`fs_s` / `fs_c` / `fs_i`) in the **same `"go"` NVS namespace**. Because
+`fg_learning_cycle`, `fg_learning_itpor_losses`, and `fg_learning_fail_reason`)
+and lives under distinct keys (`fs_s` / `fs_c` / `fs_i` / `fs_r`) in the **same `"go"` NVS namespace**. Because
 `save_go_settings()` only rewrites the keys it enumerates, these keys are never
 touched by `factory_reset()` and therefore **survive it** — a finished
 (`Complete` / `Failed`) unit cannot accidentally look normal after a user reset.
@@ -277,8 +283,9 @@ only by the learning exit gesture (a POWER press).
 | Function | Purpose |
 |---|---|
 | `is_factory_learning_stage_active(stage)` | Boot predicate (true for every stage except `Idle`; both terminals are sticky) |
-| `load_factory_settings()` / `save_factory_settings()` | Full struct round-trip |
-| `save_fg_learning_state()` | Atomic single-commit run-state write (pre-ship `CycleDone`) |
+| `load_factory_settings()` / `save_factory_settings()` | Load all factory fields; save stage, cycle, and ITPOR-loss count only |
+| `save_fg_learning_state()` | Write stage, cycle, and ITPOR-loss count, then commit once; no multi-key rollback |
+| `save_fg_learning_fail_reason()` | Persist and commit the failure reason separately |
 | `clear_factory_settings()` | Explicit clear — **not** called by `factory_reset()` |
 
 See [`fg_learning.md`](fg_learning.md) for the factory learning boot path.
@@ -305,41 +312,23 @@ flag layout and defaults.
   from `RtcAppState`; load settings to apply the current GPS mode.
 - **Mode or GPS toggle:** Write both `GoSettings` (NVS) and `RtcAppState`.
 
-## Usage Example
+## Usage and Activation
 
-```cpp
-#include "go_settings.h"
+Use the board's existing `ConfigStore` in the `"go"` namespace; see
+[`go_hardware_board.cpp`](../main/go_hardware_board.cpp). Runtime changes should
+use the orchestrator's candidate activation path so successful persistence also
+updates the affected services. A direct `save_go_settings()` call only writes
+storage; it does not activate runtime policy.
 
-// Provided by the NVS backend (platform-specific):
-NvsConfigStore store("go_cfg");
+## Verification
 
-// Load — always succeeds, falls back to defaults for missing/invalid keys.
-GoSettings settings = load_go_settings(store);
-
-// Mutate a field.
-settings.measure_interval_seconds = 30;
-
-// Save — returns false if any field is invalid.
-if (!save_go_settings(store, settings)) {
-    ESP_LOGE(TAG, "save_go_settings: invalid settings, not written");
-}
-```
-
-## Testability
-
-`load_go_settings` and `save_go_settings` depend only on the `ConfigStore`
-abstract interface. In host tests, inject a mock `ConfigStore` (e.g., via
-Trompeloeil) that returns controlled values. No ESP-IDF dependency exists in
-the settings logic itself.
-
-Recommended test cases:
-
-- Load with empty store returns all defaults.
-- Load with valid stored values returns the stored values.
-- Load with out-of-range stored values falls back to defaults.
-- Save with valid settings returns `true` and calls `commit()`.
-- Save with any single invalid field returns `false` without writing.
-- Round-trip: save then load returns identical values.
+[`go_settings.tests.cpp`](../tests/go_settings.tests.cpp) covers defaults,
+round-trips, invalid fields, grouped corrections, configuration authority,
+write failures, and factory-key isolation. Runtime activation and failure
+handling are covered in
+[`go_orchestrator.tests.cpp`](../tests/go_orchestrator.tests.cpp).
+See the [host-test workflow](../../../tests/README.md). Fake-store tests do not
+establish NVS power-loss atomicity or hardware sensor-setting persistence.
 
 ## Build-Time Options
 

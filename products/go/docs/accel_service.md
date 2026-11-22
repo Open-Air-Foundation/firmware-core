@@ -10,11 +10,11 @@ polling or shake detection.
 
 | File | Purpose |
 |---|---|
-| `main/accel/accel_sensor.h` | Hardware-neutral configuration and reading interface |
-| `main/accel/lis2dh12.h` / `lis2dh12.cpp` | LIS2DH12 register configuration, reads, and interrupt clearing |
-| `main/accel/shake_detector.h` / `shake_detector.cpp` | Sample-based gesture classification and cooldown timing |
-| `main/accel/accel_service.h` / `accel_service.cpp` | Worker, interrupt capture, and Hardware Test commands |
-| `main/go_app.cpp` | Sensor creation and service startup |
+| [`main/accel/accel_sensor.h`](../main/accel/accel_sensor.h) | Hardware-neutral configuration and reading interface |
+| [`main/accel/lis2dh12.h`](../main/accel/lis2dh12.h) / [`lis2dh12.cpp`](../main/accel/lis2dh12.cpp) | LIS2DH12 register configuration, reads, and interrupt clearing |
+| [`main/accel/shake_detector.h`](../main/accel/shake_detector.h) / [`shake_detector.cpp`](../main/accel/shake_detector.cpp) | Sample-based gesture classification and cooldown timing |
+| [`main/accel/accel_service.h`](../main/accel/accel_service.h) / [`accel_service.cpp`](../main/accel/accel_service.cpp) | Worker, interrupt capture, and Hardware Test commands |
+| [`main/go_app.cpp`](../main/go_app.cpp) | Sensor creation and service startup |
 
 Paths above are relative to `products/go/`.
 
@@ -106,7 +106,7 @@ A peak is one qualifying acceleration excursion, not each sample or a travel
 distance. Invalid, clipped, or overrun samples reset the partial sequence.
 Intermediate off-axis samples do not count as peaks.
 
-### Hardware Test And Event Delivery
+### Hardware Test and Event Delivery
 
 The worker owns all driver access. Hardware Test temporarily ends capture and
 uses unfiltered ±4 g samples so gravity is available for the rest-magnitude
@@ -144,3 +144,13 @@ info logs. Interrupt log timestamps are worker-service times, not ISR times.
 - Bench tuning does not establish false-trigger performance while walking,
   cycling, or carrying Go on a backpack. Those scenarios still need hardware
   validation.
+
+## Verification
+
+[`go_accel.tests.cpp`](../tests/go_accel.tests.cpp) covers gesture classification,
+timing, invalid samples, and worker capture/diagnostics with fake hardware.
+[`go_accel_sanity.tests.cpp`](../tests/go_accel_sanity.tests.cpp) covers identity
+and rest-magnitude classification. Orchestrator admission is covered in
+[`go_orchestrator.tests.cpp`](../tests/go_orchestrator.tests.cpp).
+Run them through the [host-test workflow](../../../tests/README.md); these
+tests do not establish real-world gesture sensitivity or false-trigger rates.

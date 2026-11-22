@@ -8,8 +8,8 @@ and chart data extraction.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_ui.h` | `UIManager` class, `UIAction`, `BuildContext` |
-| `products/go/main/go_ui.cpp` | Screen state machine, input dispatch, row population, chart extraction |
+| [`products/go/main/go_ui.h`](../main/go_ui.h) | `UIManager` class, `UIAction`, `BuildContext` |
+| [`products/go/main/go_ui.cpp`](../main/go_ui.cpp) | Screen state machine, input dispatch, row population, chart extraction |
 
 ## Dependencies
 
@@ -52,6 +52,8 @@ on-screen password line agree.
 
 | Field | Default | Purpose |
 |---|---|---|
+| `firmware_version` / `serial_number` | Supplied by caller | Borrowed identity strings; keep alive for the UI lifetime |
+| `ap_password` | `"cleanair"` | Match the Wi-Fi provisioning password |
 | `capabilities` | Empty set | Board features supplied by application wiring; controls Touch LED and Battery Calibration visibility |
 
 Without calibration, Play Melody follows Accelerometer Test directly; navigation
@@ -61,33 +63,25 @@ at LED Brightness and the Peripheral Test summary omits Touch LED. See
 
 ## Public API
 
-| Method | Purpose |
+The orchestrator is the single owner of mutable UI state. Calls return actions
+or frame descriptions; they do not persist settings, operate hardware, or
+submit display work themselves.
+
+| Caller Task | Contract |
 |---|---|
-| `handle_input(source, type)` | Process touch input. Returns `UIActionResult` if an app-level state change occurred. |
-| `build_values(ctx)` | Render a snapshot without changing tracking state or navigation. |
-| `set_screen(screen)` | Assign the screen without initializing its view or cursor. |
-| `open_tracking_status()` | Open Session with Back selected; requires an active session. |
-| `sync_tracking_state(state)` | Update tracking state; on Idle, dismiss tracking menus to MainMenu; select Tracking in Portable, otherwise Operating Mode. |
-| `current_screen()` | Read current screen. |
-| `is_on_menu_screen()` | Identify screens that suppress background renders: menus, diagnostics, and GettingStarted. |
-| `show_snackbar(text, persistent = false)` | Show a 3-second message, or persistent text until explicitly cleared. A persistent message ignores ordinary replacement and clear calls. |
-| `snackbar_persistent()` | True for an explicitly persistent message. |
-| `snackbar_pending()` | True for a transient message awaiting successful submission. |
-| `mark_snackbar_submitted(now_ms)` | Start a pending message’s deadline once; return whether it was armed. |
-| `clear_expired_snackbar(now_ms)` | Clear an expired message and return whether it expired; pending messages stay active. |
-| `sync_settings(settings)` | Synchronise internal state from persisted `GoSettings`, retaining exact measurement-interval seconds. Called by the orchestrator on boot and after settings activation. |
-| `apply_to_settings(settings)` | Convert internal state back to `GoSettings` field values without normalizing a custom measurement interval. Reverse of `sync_settings`. |
-| `reset_to_home()` | Reset to Home with no metric. Used on auto-lock and by the session-leave helpers. |
-| `show_pairing_passkey(passkey)` | Show 6-digit BLE passkey on dedicated screen. |
-| `dismiss_pairing_passkey()` | Dismiss passkey screen, return to Home. |
-| `show_info(text)` | Copy ASCII `text` into an internal buffer and switch to `Screen::Info`. Caller does not need to keep `text` alive. Null or empty renders a blank canvas. Used by cold boot for `Booting...`, by `Orchestrator::enter_stationary()` for the bring-up narration, and by `on_wifi_connected()` for the `Connected!\n<ip>` page. |
-| `open_provisioning(active)` | Enter `Screen::Provisioning` with the given active transport. Idempotently resets the per-session UI sub-state (connected-IP, ui-state, confirm-kind, confirm-index, row-index) and re-encodes the Provisioning-page QR so the first frame of every session is clean regardless of how the prior session was torn down. |
-| `open_provisioning_confirm(kind)` | Switch to `Screen::ProvisioningConfirm`, store `kind` (0 = switch transport, 1 = cancel setup), and reset the confirm cursor to `No`. |
-| `set_provisioning_transport(t)` | Set the active provisioning transport, keep the row cursor on row 0 (the switch button), and re-encode the Provisioning-page QR for the new transport. Used after `Started` event updates. |
-| `set_provisioning_ui_state(s)` | Update the page status enum (`WaitingForCredentials`, `SwitchingTransport`, `Connecting`, `ConnectFailed`, `Connected`). Status text is derived from this plus the active transport. |
-| `set_provisioning_connected(ip)` | Latch the network-byte-order IP for the Provisioning success state. Non-zero flips the status to `Connected! a.b.c.d`; zero clears it (called from the session-leave helpers). |
-| `provisioning_transport()` | Read the active provisioning transport. |
-| `show_getting_started(from_boot)` | Enter `Screen::GettingStarted` (first-boot guide). Encodes the usage-guide QR (`https://l.airgradient.net/GO`) on entry. `from_boot=true` (boot gate) sets the action row to `Hold menu to start` and a Menu long press emits `AckOnboarding`; `from_boot=false` (`Settings → Setup Guide`) sets it to `Back` and a short press returns to `Settings`. |
+| Handle input | `handle_input()` updates local navigation and returns a `UIActionResult`; the orchestrator executes effects and supplies success/failure feedback. |
+| Build a frame | Synchronize tracking/settings state, then call `build_values(ctx)`. It preserves navigation and tracking state. Its context must agree with the synchronized state. |
+| Apply settings | `sync_settings()` imports active settings; `apply_to_settings()` merges UI choices into a supplied candidate without losing custom interval seconds. Persistence remains external. |
+| Enter a screen | Use entry helpers such as `open_tracking_status()` and `open_provisioning()` to initialize cursors and session state. `set_screen()` only changes the enum. |
+| Show narration | `show_info()` copies text, so the caller need not retain its string. Setup and pairing helpers own their screen-specific state. |
+| Show feedback | `show_snackbar()` copies text. Mark transient messages submitted only after frame acceptance; see [snackbar lifecycle](#snackbar-lifecycle) for expiry and persistent-message priority. |
+| Leave a session | `reset_to_home()` clears the transient metric selection; saved pinned-chart preference remains intact. |
+
+`DisplayValues` contains borrowed text, chart, and QR pointers as well as copied
+scalars. Build and render it before changing the owning UI buffers or releasing
+the caller's chart buffer; it is not an independently owned frame object.
+See [`go_ui.h`](../main/go_ui.h) for complete entrypoints and
+[Display Service](display_service.md#framebuffer-ownership) for frame submission.
 
 ## UIAction Events
 
@@ -263,7 +257,8 @@ storage, or clocks.
 
 ### TouchEnter Gestures (Back / Exit)
 
-`TouchEnter` (CH1) also carries two gestures handled at the top of
+`TouchEnter` (CH1 on V1, CH3 on V2; see [input mapping](input_service.md#board-configuration))
+also carries two gestures handled at the top of
 `handle_input()`:
 
 - **Double-press** → `navigate_back()`: go one level up to the parent screen,
@@ -305,7 +300,7 @@ factory-state write and reboot path.
 | Screen | Style | Wrapping | Scroll |
 |---|---|---|---|
 | Home (metrics) | None, PM2.5, CO2, Temperature, Humidity, TVOC, NOx, Pressure, Altitude; skip Temperature/Humidity below 300 s | Yes | N/A |
-| MainMenu | Circular (4 rows, all always enabled) | Yes | N/A |
+| MainMenu | Circular; four rows in Portable, three without tracking in other modes | Yes | N/A |
 | TrackingMenu | Circular (5 rows) | Yes | None |
 | TrackingStatus | Circular (3 selectable rows, 6 informational rows) | Yes | None; Session/GPS view switch |
 | Settings / Operations / DisplayTouch / HardwareTest | Circular | Yes | None; at most 9 rows including Exit/Back |
@@ -408,7 +403,7 @@ UIManager owns the per-session sub-state for these screens.
 Drives the Provisioning page status line. `UIManager` maps each state
 to display text using the currently-active transport:
 
-| State | BleOnly text | WifiOnly text |
+| State | BleOnly Text | WifiOnly Text |
 |---|---|---|
 | `Idle` | (no status line) | (no status line) |
 | `WaitingForCredentials` | `Waiting for app...` | `Waiting for setup...` |
@@ -470,7 +465,7 @@ is active.
 question line and two buttons. Question text is derived from
 `_provisioning_confirm_kind` and the active transport:
 
-| Kind | Active transport | Question |
+| Kind | Active Transport | Question |
 |---|---|---|
 | 0 (switch) | BleOnly | `Switch to Wi-Fi setup?` |
 | 0 (switch) | WifiOnly | `Switch to app setup?` |
@@ -517,3 +512,23 @@ another chart or changing the saved choice. The empty chart area shows
 text, visible while locked or unselected, and absent during chart browsing.
 The selected thermal chart returns at 300 seconds or longer.
 See [Home Charts](display_service.md#home-charts) for the visible layout.
+
+## Edge Cases / Errors
+
+- Input actions do not imply successful persistence or hardware operations.
+  The orchestrator decides whether to activate a candidate and resynchronize UI.
+- A rejected display submission leaves a transient snackbar pending; its timer
+  starts only when a frame containing it is accepted.
+- Unsupported board controls are omitted from navigation. Empty chart history
+  has no sample pointer; hidden thermal charts preserve the saved preference.
+- Entry helpers reset session state; assigning a screen enum alone can retain
+  an old cursor or provisioning status.
+
+## Verification
+
+[`go_ui.tests.cpp`](../tests/go_ui.tests.cpp) covers navigation, settings
+round-trips, board capabilities, provisioning state, snackbar timing, and chart
+selection. [`go_app.tests.cpp`](../tests/go_app.tests.cpp) covers the corresponding
+timer-wake chart behavior. The orchestrator tests cover action execution
+and display admission. See the [host-test workflow](../../../tests/README.md).
+These tests exercise state and frame data, not e-paper appearance or QR scanning.

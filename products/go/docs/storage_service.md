@@ -9,8 +9,8 @@ power-off). Called synchronously by the orchestrator — no independent task.
 
 | File | Purpose |
 |---|---|
-| `products/go/main/go_storage.h` | `RoutePoint`, `CacheField`, and `StorageService` declarations |
-| `products/go/main/go_storage.cpp` | Temporary cache delegation to `PayloadCache`; persistent route file I/O |
+| [`products/go/main/go_storage.h`](../main/go_storage.h) | `RoutePoint`, `CacheField`, and `StorageService` declarations |
+| [`products/go/main/go_storage.cpp`](../main/go_storage.cpp) | Temporary cache delegation to `PayloadCache`; persistent route file I/O |
 
 ## Dependencies
 
@@ -19,7 +19,7 @@ power-off). Called synchronously by the orchestrator — no independent task.
 | `PayloadCache` | `airgradient-payload-cache` (service) | Temporary chart ring buffer |
 | `RtcPayloadCacheStorage` | `airgradient-payload-cache` (backend) | RTC memory backend wired at construction time in `GoHardwareBoard::storage()` |
 | `NandStorage` | `airgradient-nand-storage` (HAL) | NAND flash filesystem mount; provides `mount_path()` for POSIX I/O |
-| `GpsData` | `airgradient-gps` (`types/gps_types.h`) | GPS position and fix included in each `RoutePoint` |
+| `GpsData` | product ([`gps/gps_types.h`](../main/gps/gps_types.h)) | GPS position and fix included in each `RoutePoint` |
 | `MeasuresAGo` | `airgradient-common` (`measures_types.h`) | Sensor readings in each `RoutePoint` and in the cache |
 | `ag_log.h` | `airgradient-common` | Platform-portable logging (no-ops under `TEST_HOST`) |
 
@@ -70,8 +70,10 @@ Each route file is a flat sequence of `RoutePoint` structs with no header:
 [RoutePoint][RoutePoint][RoutePoint]...
 ```
 
-Fixed struct size allows O(1) seeks to the Nth point during off-device
-processing.
+Fixed struct size allows O(1) seeks within the matching firmware layout. Native
+padding, `time_t`, and nested struct layouts are not a portable wire format, and
+files have no schema version. External clients should use the
+[BLE history format](../go_ble_client.md#appendix-routepointwire-binary-format).
 
 Before writing a point, `append_route_point()` checks `is_fix_valid()`. If the
 fix is `NoFix`, it stores `GPS_LATITUDE_INVALID`, `GPS_LONGITUDE_INVALID`, and
@@ -89,7 +91,7 @@ coordinates on disk.
 Used with `read_cached_field()` to identify which measurement field to
 extract from the cache history.
 
-| Enumerator | Source field | Unit |
+| Enumerator | Source Field | Unit |
 |---|---|---|
 | `Temperature` | `MeasuresAGo::temp_hum_a.temperature` | °C |
 | `Humidity` | `MeasuresAGo::temp_hum_a.humidity` | % |
@@ -112,7 +114,7 @@ leaves correction policy to the client. See the
 [measurement-correction ownership matrix](measurement_corrections.md#consumer-ownership)
 for all raw and corrected consumers.
 
-## API Reference
+## Public API
 
 ### Initialization
 
@@ -124,6 +126,11 @@ for all raw and corrected consumers.
 wake if the previous chart data should be recovered.
 
 ### Temporary Cache Operations
+
+The borrowed cache and NAND objects must outlive this service. Calls are
+synchronous and require caller serialization; the service does not provide a
+worker or general-purpose locking around route I/O. See
+[`go_storage.h`](../main/go_storage.h) for complete signatures.
 
 | Method | Description |
 |---|---|
@@ -298,7 +305,8 @@ it retries up to `SESSION_ID_MAX_RETRIES` (5) times before giving up.
 
 At ~1000 stored sessions across the 90,000-slot space the
 all-five-collide probability is on the order of `(1000/90000)^5 ≈ 1.7×10⁻¹⁰`,
-so retry exhaustion is effectively never observed. When it does happen,
+under independent uniform draws. This estimate is not an operational guarantee:
+on retry exhaustion,
 `generate_tracking_session_id()` returns 0 and `start_tracking()` treats that as a
 storage error — the user sees the standard `"Storage error — can't track"`
 snackbar.
@@ -307,7 +315,7 @@ snackbar.
 (fresh session) or `resume_route()` (after Pause or deep sleep) and does not generate
 or persist it internally.
 
-## Pause And Route Continuity
+## Pause and Route Continuity
 
 Pause closes the route while the orchestrator retains its Paused state and ID.
 The storage-local ID resets to zero because no writer is open; BLE Status uses
@@ -329,12 +337,14 @@ orchestrator rejects deletion of the current Recording or Paused session.
 
 ### On Sensor Data Ready
 
-`on_sensor_data()` updates the live measurement cache regardless of tracking
-state. It appends a `RoutePoint` only when `is_recording()` is true: state is
+`on_sensor_data()` caches only `Scheduled` measurements, regardless of tracking
+state. Manual `Refresh` results update live presentation without adding chart
+samples or route points. Scheduled results append a `RoutePoint` only when
+`is_recording()` is true: state is
 Recording and the route file is open. Paused measurements are not backfilled
 into the route on Resume.
 
-### On Start, Pause, Resume, And Stop
+### On Start, Pause, Resume, and Stop
 
 - Start generates an unused session ID and calls `create_route()`. Only success
   changes the state to Recording.
@@ -361,8 +371,9 @@ state and session ID in RTC memory. A Paused session remains Paused.
 
 ### After Deep Sleep Wake
 
-Storage restores the cache and remounts NAND. The orchestrator or fast path
-reopens the route only for a saved Recording state. A persistent reopen failure
+Storage restores the cache and remounts NAND. Interactive initialization
+reopens the route only for a saved Recording state. The Energy Saving fast path
+clears tracking state and never reopens a route. A persistent reopen failure
 in interactive initialization clears the session and shows
 `"Tracking stopped — storage"`; Status Read on connect reports Idle.
 
@@ -380,22 +391,16 @@ If `init()` returns `false`:
 
 ## Wear and File Size
 
-At one `RoutePoint` per 60 seconds:
-
-| Duration | Points | Approximate size |
-|---|---|---|
-| 1 hour | 60 | ~12 KB |
-| 8 hours | 480 | ~96 KB |
-| 1 day | 1440 | ~288 KB |
-
-For a 128 MB NAND with typical wear leveling this is entirely manageable.
+Route growth is `point_count × sizeof(RoutePoint)` for the firmware build that
+wrote it. At one point per minute, one hour contributes 60 records and one day
+1440 records. Use the target struct size and actual free filesystem capacity
+when budgeting retention; native host sizes can differ.
 
 `append_route_point()` enforces the durability budget — at 1 s sample with a
 30 s window the steady-state cost is ~2 NAND syncs per minute, plus the
 empty-file sync on each `create_route()` and the unconditional first-append
 sync. At long sample cadences (period ≥ window) every append syncs anyway
-because each one is more than one window after the previous, with no
-regression from the pre-spec "sync only in `end_route()`" behavior.
+because each one is at least one window after the previous successful sync.
 
 ## Verification
 
