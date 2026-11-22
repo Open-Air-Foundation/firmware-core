@@ -19,6 +19,9 @@ local network access. When it does, it advertises the following mDNS service:
 | API version TXT record | `api=1` |
 | Identity TXT records | `vendor=AirGradient`, `model`, `serialno`, `fw_ver` |
 
+The discovery profile is implemented by
+[`airgradient-wifi`](../components/airgradient-wifi/README.md).
+
 `serialno` is the same value returned as `serialNumber` by the measures
 endpoint. Clients should use the service record's advertised host and port;
 they must not assume a fixed port. If mDNS is unavailable on the client
@@ -61,8 +64,9 @@ error instead.
 
 `GET /api/v1/measures` returns a JSON object containing device identity and
 the latest valid readings. `serialNumber`, `model`, `firmware`, and `boot` are
-always present. `boot` is the completed uptime in minutes. `wifiRssi` is in
-dBm and is present only when link quality is available.
+always present. `boot` is the completed uptime in minutes; the product defines
+which sleep and reset transitions retain that session. `wifiRssi` is in dBm and
+is present only when link quality is available.
 
 All other measurement fields are optional. A product omits a field when it
 lacks the sensor or the latest value is invalid; it does not send JSON `null`.
@@ -74,7 +78,7 @@ lacks the sensor or the latest value is invalid; it does not send JSON `null`.
 | `serialNumber` | String | — | Device serial number. Always present. |
 | `model` | String | — | AirGradient product model identifier. Always present. |
 | `firmware` | String | — | Firmware version. Always present. |
-| `boot` | Integer | Completed minutes | Uptime for the current boot session, saturated at `4294967295`. Always present. |
+| `boot` | Integer | Completed minutes | Uptime for the product-defined session, saturated at `4294967295`. Always present. |
 | `wifiRssi` | Integer | dBm | Received Wi-Fi signal strength. Omitted when unavailable. |
 
 #### Air Measurements
@@ -137,7 +141,9 @@ Voltages are rounded to two decimal places.
 
 `GET /api/v1/config` returns the complete active subset supported by the
 device. Products omit unsupported fields. A client should use this response as
-the capability source for subsequent configuration writes.
+a starting point for subsequent configuration writes. Presence does not
+guarantee writability: a product may retain a read field for compatibility while
+rejecting writes on a board without that capability. See [Product Support](#product-support).
 
 The configuration catalog below defines all standardized v1 fields. The generic
 parser enforces each JSON type and the listed enum values. Products define the
@@ -155,6 +161,11 @@ and cross-field policy.
 | `pinnedChart` | String | `none`, `pm25`, `co2`, `temperature`, `humidity`, `tvoc`, `nox`, `pressure`, `altitude` | Home chart selection. |
 | `measurementInterval` | Integer | Seconds; product-defined range | Measurement interval. |
 | `gpsMode` | String | `off`, `tracking`, `always` | GPS operating mode. |
+
+#### Feedback Fields
+
+| Field | JSON Type | Values | Description |
+|---|---|---|---|
 | `frontLedBrightness` | Integer | Product-defined range | Front LED brightness. |
 | `backLedIndicator` | String | `aqi`, `co2` | Back LED indicator selection, independent of brightness. |
 | `backLedBrightness` | Integer | Product-defined range | Back LED brightness. |
@@ -200,6 +211,11 @@ semantics. `useEpa2021` is not valid for temperature or humidity corrections.
 
 `PUT /api/v1/config` accepts a JSON object containing only the fields to
 change. The body must be complete, valid JSON, and use only recognized fields.
+Integer fields reject fractional numbers. Unknown nested correction keys also
+cause rejection; their error `field` uses a dotted path such as
+`corrections.pm25.slr.extra`. Parsing happens before product access policy, so a
+malformed request can return `400` even when valid writes would be forbidden.
+
 For example, a client may request a supported PM display standard:
 
 ```sh
@@ -211,8 +227,10 @@ curl -X PUT "$AG_URL/api/v1/config" \
 `202 Accepted` has an empty body. It confirms that the device accepted the
 validated update for later processing; it does not confirm persistence or
 runtime application. Poll `GET /api/v1/config` until the requested values are
-visible, using a client-selected deadline. An empty object is a valid no-op
-when writes are allowed.
+visible, using a client-selected deadline. Later persistence failures, policy
+changes, or other writers can prevent convergence; there is no completion
+resource or request ID. Read back before retrying after an uncertain outcome.
+An empty object is a valid no-op when writes are allowed.
 
 ### Trigger Actions
 
@@ -268,7 +286,7 @@ error envelope.
 ## Compatibility and Capabilities
 
 The API version is in the path: `/api/v1/`. Within a version, clients must
-preserve unknown response fields and tolerate omitted optional fields. A product
+tolerate unknown response fields and omitted optional fields. A product
 may support a subset of the shared measurement, configuration, and action
 catalog. Read configuration before writing it, and handle `404 not_found` for
 model-specific fields and actions.

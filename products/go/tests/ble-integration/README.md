@@ -1,4 +1,4 @@
-# AGo BLE Integration Tests
+# AirGradient Go BLE Integration Tests
 
 Hardware integration tests for the AirGradient Go BLE service. Connects to a
 real AGo device over Bluetooth Low Energy and verifies the GATT protocol:
@@ -14,11 +14,17 @@ history download state machine.
 
 ## Install
 
+Run from the repository root in a Python virtual environment:
+
 ```sh
 pip install -e products/go/tests/ble-integration
 ```
 
 ## Run
+
+The full suite changes device state; read [Device Side Effects](#device-side-effects)
+before running it. Auto-scan chooses the first matching device, so select an
+explicit address when more than one Go is nearby.
 
 ```sh
 # Auto-scan for a device whose name starts with "AirGradient Go "
@@ -35,7 +41,7 @@ pytest products/go/tests/ble-integration/test_measures.py -v
 
 | Option | Default | Description |
 |---|---|---|
-| `--ago-address` | _(auto-scan)_ | BLE address or name of the AGo device |
+| `--ago-address` | _(auto-scan)_ | BLE address or platform device identifier; passed directly to Bleak, without name lookup |
 | `--ago-scan-timeout` | `10` | Seconds to scan before giving up |
 | `--ago-notify-timeout` | `30` | Max seconds to wait for a notification |
 | `--ago-board-variant` | `v1` | Expected board: `v1` or `v2`; does not change firmware board detection |
@@ -68,17 +74,48 @@ payload is shown as a decoded CBOR value (or a hex dump for binary data):
 DEBUG ago_ble_test:conftest.py WRITE Config   {'op': 'set', 'temp_f': True}
 DEBUG ago_ble_test:conftest.py NOTIFY Config   {'type': 'config', 'temp_f': True, ...}
 DEBUG ago_ble_test:conftest.py READ   Status   {'bat_pct': 87, 'used_kb': 8192, ...}
-DEBUG ago_ble_test:conftest.py NOTIFY History  <binary 58B> 0102...
+DEBUG ago_ble_test:conftest.py NOTIFY History  <binary pts=1 idx=2>
 ```
+
+## Device Side Effects
+
+The BLE suite has **no opt-in gates** for mutations. Use a dedicated device,
+export any routes you need to keep, and run one test process at a time:
+
+- Config write tests change settings and attempt restoration in cleanup. An
+  interrupted run or lost connection can leave changed settings behind.
+- `TestConfigCommand` in `test_config.py` requests physical CO2 calibration.
+  Run it only under the sensor's calibration conditions. Use
+  `--ago-notify-timeout=90` for these cases; the default 30 seconds is shorter
+  than the firmware's approximately 60-second calibration polling window.
+- `test_status_notify.py` stops any existing tracking session, creates test
+  sessions, exercises pause/resume, and leaves tracking idle. It does not
+  restore the original session.
+- `TestHistoryDelete::test_delete_session` deletes an existing non-active
+  route. Deleted data is not restored.
+
+For an initial read/notification check without those mutations:
+
+```sh
+pytest products/go/tests/ble-integration/test_service_discovery.py \
+  products/go/tests/ble-integration/test_measures.py \
+  products/go/tests/ble-integration/test_status.py \
+  products/go/tests/ble-integration/test_device_info.py -v \
+  --ago-address AA:BB:CC:DD:EE:FF
+```
+
+Choose a notification timeout longer than the configured measurement interval
+when checking Measures. After a failed mutation test, read back settings and
+tracking state before retrying; a timeout does not undo a device action.
 
 ## Test Overview
 
-### `test_service_discovery.py` — GATT Profile (3 tests)
+### `test_service_discovery.py` — GATT Profile
 
 Verifies the AGo service UUID and all four characteristic UUIDs are present
 with the correct properties (read/write/notify).
 
-### `test_measures.py` — Measures Characteristic (6 tests)
+### `test_measures.py` — Measures Characteristic
 
 Subscribes to Measures notifications once (module-scoped fixture), captures a
 single notification, then validates it across all tests:
@@ -92,7 +129,7 @@ single notification, then validates it across all tests:
 - GPS fields follow the grouping rule: `fix`+`sat` always appear together;
   position fields only appear when the fix group is present
 
-### `test_status.py` — Status Characteristic (7 Tests)
+### `test_status.py` — Status Characteristic
 
 Reads the Status characteristic once (module-scoped fixture), then validates
 the payload across all tests:
@@ -108,7 +145,7 @@ the payload across all tests:
 The firmware version is no longer part of Status; it is validated via DIS
 (see `test_device_info.py`).
 
-### `test_status_notify.py` — Status NOTIFY (tracking transitions)
+### `test_status_notify.py` — Status Notifications
 
 Verifies tracking transitions through the existing Status and Config
 characteristics. Each tracking push is a **delta** carrying
@@ -122,17 +159,18 @@ characteristics. Each tracking push is a **delta** carrying
   has a matching successful Config result
 - a redundant `start_tracking` (already tracking) sends no spurious Status NOTIFY
 
-The BLE `tracking` field will be deprecated soon. Clients should use `trk`;
+Clients should use `trk` for the full tracking state;
 the tests continue checking `tracking` because the current firmware retains it
 for compatibility. See the [BLE client guide](../../go_ble_client.md#6-status-characteristic).
 
-### `test_config.py` — Config Characteristic (read/write/notify/command)
+### `test_config.py` — Config Operations
 
 Covers read, write, delta-notify, and command operations:
 
 - **Read** (sync): reads Config once (module-scoped fixture), then validates the
-  18 config keys present with correct types; versioned correction
-  arrays, `bledi`, `gps_mode`, and `op_mode` use valid fields and enum values
+  expected config keys present with correct types; versioned correction
+  maps and their value arrays, `bledi`, `gps_mode`, and `op_mode` use valid fields
+  and enum values
 - **Set config** (async): writes a single-field `{"op": "set", ...}`, verifies
   the device sends a Config **delta** notification — `"type": "config"` plus
   only the changed key
@@ -161,7 +199,7 @@ Covers read, write, delta-notify, and command operations:
   **READ after a command still returns the full config snapshot** (not the
   `cmd_result`)
 
-### `test_history.py` — History Characteristic (10 tests)
+### `test_history.py` — History Characteristic
 
 Exercises the full download protocol. Download tests select a session with at
 least one point and are **skipped** when the device has no non-empty sessions.
@@ -179,7 +217,7 @@ least one point and are **skipped** when the device has no non-empty sessions.
 - **Delete**: a nonexistent session returns `"session_not_found"`; deleting a
   listed non-active session returns `"deleted"` and removes only that session
 
-### `test_device_info.py` — Device Information Service (5 tests)
+### `test_device_info.py` — Device Information Service
 
 Verifies the standard DIS (`0x180A`), present in Portable mode, exposes valid
 read-only identity strings over the encrypted bonded link:
@@ -223,7 +261,31 @@ products/go/tests/ble-integration/
 - **Per-test notification fixtures**: interactive tests (Config write, History)
   use function-scoped `NotificationCollector` fixtures that
   subscribe/unsubscribe per test.
-- **Non-destructive config tests**: original settings are read, modified, then
-  restored after each test.
+- **Config cleanup**: write tests attempt to restore original settings; this
+  does not reverse calibration or route deletion.
 - **No security handling**: assumes the device is already bonded. If not bonded,
-  authenticated reads/writes will fail with a bleak error.
+  authenticated reads/writes may trigger platform pairing or fail; the suite
+  does not drive the passkey exchange.
+
+## Coverage Limits
+
+These are physical-device protocol tests, separate from the
+[native host tests](../../../../tests/README.md). The authoritative wire contract
+is the [BLE client reference](../../go_ble_client.md); test constants live in
+[`ago_protocol.py`](ago_protocol.py). Exact key-set assertions target the current
+firmware and are stricter than the forward-compatible parsing expected of apps.
+
+The suite does not cover Offline broadcasts, provisioning, OTA transfer, fresh
+pairing, charging/disconnect notifications, or reconnect recovery. History tests
+skip download checks without a non-empty route and do not simulate packet loss
+or verify successful gap filling. Passing schema and notification checks does
+not establish physical sensor accuracy or calibration quality.
+
+To inspect collection without connecting to a device:
+
+```sh
+pytest products/go/tests/ble-integration/ --collect-only -q
+```
+
+Collection confirms test discovery only. Record the firmware revision, board,
+host platform, selected tests, skips, and results for a hardware verification run.
