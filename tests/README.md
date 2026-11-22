@@ -1,15 +1,23 @@
 # Host Tests
 
-Native tests for shared components and product application logic. The top-level
+Native tests for application logic in shared components and products. The top-level
 CMake project builds the test dependencies once and registers component and
 product executables with CTest. Production sources selected by each test target
 compile with `TEST_HOST` and run on the development machine.
 
 ## Scope
 
-Use host tests for data validation, calculations, protocol handling, state
-transitions, and policy exercised through mocks or fakes. They do not establish
-electrical behavior, real RTOS scheduling, radio performance, or display quality.
+Use host tests for application-level data validation, calculations, protocol
+handling, state transitions, policy, and service orchestration. Exercise this
+logic through mocks or fakes at existing hardware and service boundaries.
+
+Concrete hardware drivers are verified on hardware. Do not add driver host tests,
+require drivers to compile with `TEST_HOST`, or introduce abstractions, bus mocks,
+or driver refactors solely to make drivers host-testable. Existing interfaces
+allow application tests to substitute a peripheral without testing its driver.
+
+Host tests do not establish electrical behavior, real RTOS scheduling, radio
+performance, or display quality.
 Use the [reference product](../products/reference/README.md) for component
 hardware smoke tests and the [VHUB workflow](../vhub/README.md) for product
 manual verification.
@@ -152,12 +160,13 @@ verification of the intended behavior.
 1. Put tests beside their owner: `components/<component>/tests/` for shared
    behavior or `products/<product>/tests/` for product policy and wiring.
 2. Extend an existing executable when appropriate. For a new target, select the
-   production sources, define `TEST_HOST`, link the needed test libraries, and
+   application logic sources, define `TEST_HOST`, link the needed test libraries, and
    register cases with `catch_discover_tests()`.
 3. Add a new test directory to this [CMake entrypoint](CMakeLists.txt) using
    `add_subdirectory()`. Existing registered directories need no second entry.
-4. Add mocks at hardware or service boundaries. Test observable behavior,
-   including applicable invalid inputs, partial failures, and timing decisions.
+4. Use mocks or fakes at existing hardware or service boundaries. Test observable
+   application behavior, including applicable invalid inputs, partial failures,
+   and timing decisions. Keep concrete drivers outside the host-test target.
 5. Reconfigure, build, and confirm the expected tests are discovered and pass.
    Update the owning component/product documentation when coverage boundaries
    or test setup change.

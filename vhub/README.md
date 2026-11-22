@@ -320,12 +320,30 @@ Review the relevant product template before opening each pull request. Update it
 only when firmware changes behavior that a tester can observe through the
 device, hardware, serial logs, network interfaces, or server data.
 
+Establish the review scope from the requested PR, commit range, local diff,
+behavior change, or template review. State the comparison base when reviewing
+code changes. For a branch review, use the merge base with the intended target
+branch unless another range is requested; comparing against the target tip can
+include changes absent from the reviewed branch. A review-only request produces
+findings without edits. Group overlapping changes across commits or PRs before
+assessing coverage so one behavior does not acquire duplicate cases.
+
 Inspect existing coverage before adding cases. Update a case when its scenario
 is unchanged; add a case for a distinct scenario. Preserve unrelated checks and
 case IDs. When a split, merge, or removal is necessary, explain the old-to-new
 coverage mapping in the change summary so reviewers can detect lost coverage.
 Identify developer checks that already exist separately from planned or deferred
 work; do not claim automation results merely because coverage was assigned to it.
+
+Walk through the device states created by each changed procedure. Check whether
+USB power, locking, an open Status screen, or the logging setup changes the
+behavior under test. Confirm that the intended trigger still occurs and that
+the specified tools can observe its outcome.
+
+Report affected files and case IDs, the evidence behind coverage decisions,
+and remaining gaps or deferred work. Explain when no template change is needed.
+Report template validation separately from firmware, automated, or manual tests
+actually executed; a valid template does not establish a passing release check.
 
 Set `rev` to the current seven-character Git HEAD when template content changes:
 
@@ -336,11 +354,6 @@ git rev-parse --short=7 HEAD
 This is the repository's current revision convention. Several uncommitted edits
 at the same HEAD can share a value; `rev` alone is not proof of an immutable
 snapshot. Do not change it for a review that leaves template content unchanged.
-
-The agent workflow is in
-[`update-vhub`](../.agents/skills/update-vhub/SKILL.md). It applies this guide to
-requested firmware changes; the guide remains the shared source for case format
-and writing rules.
 
 ## Validation
 
