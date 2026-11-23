@@ -45,6 +45,30 @@ void enable_heap_failure_logging() {
 #endif
 }
 
+void log_task_stack(const char *tag, const char *label, const char *task_name) {
+#if !defined(TEST_HOST) && defined(CONFIG_FREERTOS_UNICORE)
+  // On a single core, prevent task teardown between lookup and watermark scan.
+  // Scheduler suspension alone would not protect a task on another core.
+  vTaskSuspendAll();
+  const TaskHandle_t task = xTaskGetHandle(task_name);
+  const bool found = task != nullptr;
+  const unsigned stack_min = found ? static_cast<unsigned>(uxTaskGetStackHighWaterMark(task)) : 0;
+  xTaskResumeAll();
+
+  // Log after resuming: normal logging may block. Never query a missing task
+  // with a null handle, which would return the calling task's watermark.
+  if (found) {
+    AG_LOGI(tag, "[STACK] %s task=%s stack_min=%u", label, task_name, stack_min);
+  } else {
+    AG_LOGI(tag, "[STACK] %s task=%s state=absent", label, task_name);
+  }
+#else
+  (void)tag;
+  (void)label;
+  (void)task_name;
+#endif
+}
+
 std::string build_serial_number() {
 #ifndef TEST_HOST
   uint8_t mac_address[6];

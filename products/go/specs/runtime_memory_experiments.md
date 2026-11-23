@@ -685,7 +685,7 @@ output is confirmed in the user-supplied excerpt described below.
 ### Experiment 4: Cloud and TLS Memory Reduction
 
 The user set both TLS content limits to 2,048 bytes through configuration and
-authorized the remaining code changes. Current values for this experiment are:
+authorized the remaining code changes. Initial values for this experiment were:
 
 | Setting | Baseline | Experiment | Owner |
 |---|---:|---:|---|
@@ -737,6 +737,121 @@ availability checks, recording `[HEAP_FAIL]`, minimum heap, and Cloud stack
 watermarks. Smaller TLS RX capacity must also accommodate server handshake
 records, including certificates; a sub-500-byte JSON body alone does not establish
 that the new limit is compatible. No on-device acceptance is claimed yet.
+
+The subsequent `result.cloud.log` capture with RX/TX both at 2 KiB reports
+TLS `-0x7100` for all four completed POST/fetch attempts, with no allocation
+failure callback and a 10,504-byte minimum heap. This does not establish that
+the handshake fits; it aborts before successful communication.
+
+The user restored RX to 4,096 bytes, retaining TX at 2,048 bytes. This is the
+configuration committed in baseline `860e485`. In `result.cloud.log.1`, Cloud
+startup costs 7,604 bytes, confirming the 3,072-byte reduction. The first TLS
+attempt starts with 34,336 bytes free, but allocation failures recur and the
+minimum-ever heap reaches 264 bytes. All four completed POST/fetch attempts
+fail. Cloud's minimum untouched stack is 3,076 bytes out of 6,144 reserved;
+successful requests and OTA still need coverage. With only TX reduced, the
+expected TLS buffer saving is 2,048 bytes, rather than the initial 4,096.
+
+### Local Server and mDNS Usage Measurements
+
+After committing the current experiment baseline, add named task stack
+watermarks without initially changing stack sizes, buffers, or configuration.
+The measurement baseline reserves 6,144 bytes for Local HTTP and 4,096 bytes
+for mDNS. Existing startup heap deltas
+include these reservations plus service allocations; they are not stack usage.
+
+Go's existing 30-second BMS timer logs `[STACK]` entries for `httpd` and `mdns`,
+including when no HTTP request is in progress. Startup logs report reserved stack sizes.
+The HTTP driver also samples its task after startup and before shutdown, and
+the WiFi driver samples mDNS after profile configuration and before normal
+mDNS shutdown. HTTP shutdown gets before/after heap snapshots; mDNS already
+has them. A new `mdns.start:configured` heap snapshot includes the profile
+setup following `mdns.init:post`.
+
+`stack_min` is the minimum untouched stack in bytes since that task was created.
+Subtract it from the reserved size to estimate the maximum stack touched so far:
+`6144 - stack_min` for HTTP and `4096 - stack_min` for mDNS. A stopped task logs
+`state=absent`; it does not report the caller's watermark. A restart creates a
+new task and resets that task's history. These readings include instrumentation
+overhead and do not establish requirements for unexercised paths.
+
+The shared platform helper looks up uniquely named tasks without retaining
+handles or allocating memory. On single-core firmware it suspends scheduling
+during lookup and watermark scanning to prevent concurrent task deletion, then
+resumes before logging. It is a no-op on host builds and multicore firmware,
+where scheduler suspension alone cannot protect another core's task lifetime.
+No extra task, timer, tracing buffer, or vendor modification is introduced.
+
+For the next device capture, leave Local Server enabled and exercise measurement
+GETs, configuration GET/PUTs, and repeated mDNS discovery from another device.
+Include concurrent Cloud activity, at least one BMS timer tick after requests,
+and Local Server disable/re-enable. Compare each task's lowest `stack_min` and
+the heap snapshots across those operations. Heap deltas are system-wide and
+can include concurrent allocations; this does not attribute every allocation
+or transient heap peak to HTTP or mDNS. Device measurements remain user-only.
+
+Verification: Go and reference firmware builds passed, all 1,761 host tests
+passed, and Markdown lint and whitespace checks passed. The actual named task
+watermarks were subsequently captured below; teardown/restart behavior remains
+to be verified on hardware.
+
+### Experiment 5: Local HTTP and mDNS Stack Reduction
+
+The user authorized trying both smaller stacks together. Set the shared HTTP
+driver stack to 4,096 bytes and Go's `CONFIG_MDNS_TASK_STACK_SIZE` to 2,048 bytes.
+Keep the heap and stack diagnostics enabled. These changes should release
+4,096 bytes while both services run. The shared HTTP constant also applies to
+provisioning and the reference product; Go's mDNS change is product-specific.
+Keep these as experiments without promoting settings into `sdkconfig.defaults`.
+
+The baseline captures establish the following observed stack usage:
+
+| Task / Operation | Reserved | Maximum Observed Use | Headroom at Trial Size |
+|---|---:|---:|---:|
+| HTTP configuration GET | 6,144 B | 2,212 B | 1,884 B |
+| HTTP measurements GET | 6,144 B | 2,824 B | 1,272 B |
+| mDNS | 4,096 B | 852 B | 1,196 B |
+
+The user identified the first request in `result.local.log.1` as configuration
+GET and the second as measurements GET. In `result.local.log.2`, configuration
+PUTs and completed LED tests do not lower HTTP's 3,320-byte minimum untouched
+stack. mDNS's minimum stays at 3,244 bytes across all three captures; explicit
+discovery and GPS-test coverage are not established by those logs.
+
+Heap exhaustion still occurs in the larger-stack baseline. The last capture
+contains failed Cloud, WiFi, and network-task allocations, with a historical
+minimum of 124 bytes already present at its start. Cloud's minimum untouched
+stack is 2,976 bytes out of 6,144, or 3,168 bytes touched.
+
+For this trial, compute observed usage as `4096 - stack_min` for HTTP and
+`2048 - stack_min` for mDNS. Repeat GETs, configuration PUTs, actions, mDNS
+discovery, and service restart alongside Cloud traffic. Include provisioning
+before accepting the shared HTTP reduction. Check for successful Cloud POST
+and GET, allocation failures, stack headroom, and the expected heap improvement.
+The 4 KiB saving does not guarantee sufficient memory for the TLS peak.
+
+Verification: Go and reference firmware builds passed, and Go's generated
+configuration confirms the 2,048-byte mDNS stack. Markdown lint and whitespace
+checks passed. This trial changes only a driver stack constant and Go's build
+configuration; host tests were not rerun after changing the sizes.
+
+#### Smaller-Stack Capture
+
+`result.local.log.3` confirms HTTP at 4,096 bytes and mDNS at 2,048 bytes.
+HTTP's minimum untouched stack is 1,268 bytes (2,828 bytes touched), and mDNS's
+is 1,192 bytes (856 bytes touched). Requests, configuration PUTs, and LED tests
+run without a recorded stack overflow. Disabling WiFi stops both services;
+the following periodic diagnostic reports both tasks absent. Both services
+start again after the subsequent button wake. This covers lifecycle behavior,
+but does not establish provisioning, GPS-test, or explicit discovery coverage.
+
+Two Cloud POSTs return HTTP 200, one in each boot period. After the second
+boot's successful POST, minimum-ever free heap is only 732 bytes. The following
+four POSTs fail with allocation failures; Cloud, WiFi, and the network task are
+affected. The minimum eventually reaches 276 bytes. No Cloud configuration GET
+appears in this capture. The stack reduction helps, but repeated TLS connections
+remain unreliable. Retain these trial sizes and diagnostics as the progress
+checkpoint; this is not acceptance of the overall memory budget.
 
 ### Verification Status and Remaining Decisions
 

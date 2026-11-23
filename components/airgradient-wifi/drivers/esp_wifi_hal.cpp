@@ -335,6 +335,7 @@ WifiStatus EspWifiHal::start_mdns(const WifiMdnsConfig &config) {
       return WifiStatus::Failed;
     }
     _mdns_started = true;
+    AG_LOGI(TAG, "mDNS started (stack=%u)", static_cast<unsigned>(CONFIG_MDNS_TASK_STACK_SIZE));
   }
   if (mdns_hostname_set(config.hostname) != ESP_OK) {
     mdns_free();
@@ -389,11 +390,14 @@ WifiStatus EspWifiHal::start_mdns(const WifiMdnsConfig &config) {
       }
     }
   }
+  log_heap(TAG, "mdns.start:configured");
+  log_task_stack(TAG, "mdns.start:configured", "mdns");
   return WifiStatus::Ok;
 }
 
 WifiStatus EspWifiHal::stop_mdns() {
   if (_mdns_started) {
+    log_task_stack(TAG, "mdns.stop:pre", "mdns");
     log_heap(TAG, "mdns.stop:pre");
     mdns_free();
     log_heap(TAG, "mdns.stop:post");

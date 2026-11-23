@@ -23,7 +23,7 @@
 namespace {
 
 static constexpr const char *TAG = "IdfHttpServer";
-static constexpr size_t HTTP_SERVER_TASK_STACK_SIZE_BYTES = 6144;
+static constexpr size_t HTTP_SERVER_TASK_STACK_SIZE_BYTES = 4096;
 
 httpd_method_t to_httpd_method(HttpMethod m) {
   switch (m) {
@@ -131,7 +131,9 @@ bool IdfHttpServer::start(uint16_t port) {
   }
 
   _started = true;
-  ESP_LOGI(TAG, "server started on port %u", static_cast<unsigned>(port));
+  ESP_LOGI(TAG, "server started on port %u (stack=%u)", static_cast<unsigned>(port),
+           static_cast<unsigned>(HTTP_SERVER_TASK_STACK_SIZE_BYTES));
+  log_task_stack(TAG, "http.start:post", "httpd");
   return true;
 }
 
@@ -140,8 +142,11 @@ void IdfHttpServer::stop() {
     return;
   }
   if (_handle != nullptr) {
+    log_task_stack(TAG, "http.stop:pre", "httpd");
+    log_heap(TAG, "http.stop:pre");
     httpd_stop(_handle);
     _handle = nullptr;
+    log_heap(TAG, "http.stop:post");
   }
   _started = false;
   ESP_LOGI(TAG, "server stopped");

@@ -664,6 +664,8 @@ void Orchestrator::check_timers() {
 
 void Orchestrator::on_bms_timer() {
   log_heap(TAG, "bms.timer:tick");
+  log_task_stack(TAG, "bms.timer:tick", "httpd");
+  log_task_stack(TAG, "bms.timer:tick", "mdns");
   _latest_power =
       _svc.power_service.poll_bms(_first_measurement_done && !_raw_measures.pm_a.is_pm_25_valid());
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());

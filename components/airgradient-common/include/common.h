@@ -39,6 +39,11 @@ void reboot();
 // Reports failures without allocating memory. No-op under TEST_HOST.
 void enable_heap_failure_logging();
 
+// Task-context diagnostic for a uniquely named task on single-core firmware.
+// Logs historical minimum untouched stack in bytes, or an absent task. Does not
+// retain a task handle. No-op under TEST_HOST and on multicore firmware.
+void log_task_stack(const char *tag, const char *label, const char *task_name);
+
 // Formats a network-byte-order IPv4 address into a dotted-decimal string
 // (e.g. 0x0104a8c0 -> "192.168.4.1"). The output buffer must be at least
 // 16 bytes (covers "255.255.255.255" + NUL). The caller is responsible
