@@ -20,6 +20,7 @@ extern "C" {
 }
 
 #include "rtos.h"
+#include "common.h"
 
 static constexpr const char *TAG = "go_display";
 
@@ -1282,7 +1283,9 @@ DisplayService::DisplayService(const Config &config)
       _task_handle(nullptr), _running(false), _worker_busy(false) {}
 
 bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
+  log_heap(TAG, "display.init:enter");
   esp_err_t err = driver_init(_config);
+  log_heap(TAG, "display.init:after-driver");
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "driver init failed: %s", esp_err_to_name(err));
     return false;
@@ -1296,6 +1299,7 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
 
   _prev_values = initial;
   _render_frame(initial);
+  log_heap(TAG, "display.init:after-render");
 
   if (!defer_refresh) {
     // Synchronous initial full refresh (worker not yet started).
@@ -1344,6 +1348,7 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
     RTOS::task_notify_give(_task_handle);
   }
 
+  log_heap(TAG, "display.init:worker-started");
   return true;
 }
 
@@ -2469,6 +2474,7 @@ void DisplayService::_worker_loop() {
     }
 
     driver_bus_release();
+    log_heap(TAG, "display.worker:refresh-complete");
     _release_framebuffer();
   }
 }

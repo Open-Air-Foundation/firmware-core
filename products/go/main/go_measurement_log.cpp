@@ -1,4 +1,5 @@
 #include "go_storage.h"
+#include "common.h"
 
 #include <cerrno>
 #include <cinttypes>
@@ -78,6 +79,7 @@ bool StorageService::close_measurements() {
   const bool synced = sync_measurements();
   const bool closed = fclose(_log_file) == 0;
   _log_file = nullptr;
+  log_heap(TAG, "storage.measurements:closed");
   return synced && closed;
 }
 
@@ -221,6 +223,7 @@ bool StorageService::create_measurement_log() {
   struct stat st{};
   if (stat(path, &st) == 0 || errno != ENOENT)
     return false;
+  log_heap(TAG, "storage.measurements:create-pre-open");
   _log_file = fopen(path, "wb");
   if (_log_file == nullptr)
     return false;
@@ -234,6 +237,7 @@ bool StorageService::create_measurement_log() {
   _log_sequence = next;
   _log_count = 0;
   _log_sync_ms = FSYNC_ANCHOR_NONE;
+  log_heap(TAG, "storage.measurements:created");
   return true;
 }
 
@@ -245,6 +249,7 @@ bool StorageService::resume_measurements(uint32_t sequence) {
     return false;
   char path[LOG_PATH_SIZE];
   format_log_path(sequence, path, sizeof(path));
+  log_heap(TAG, "storage.measurements:resume-pre-open");
   FILE *file = fopen(path, "r+b");
   if (file == nullptr)
     return false;
@@ -257,6 +262,7 @@ bool StorageService::resume_measurements(uint32_t sequence) {
   _log_sequence = sequence;
   _log_count = info.count;
   _log_sync_ms = FSYNC_ANCHOR_NONE;
+  log_heap(TAG, "storage.measurements:resumed");
   return true;
 }
 

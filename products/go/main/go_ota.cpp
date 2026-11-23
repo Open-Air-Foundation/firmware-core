@@ -10,6 +10,7 @@
 #include "go_ota.h"
 
 #include "ag_log.h"
+#include "common.h"
 #include "go_power.h"
 #include "hal/ble_server.h"
 #include "services/ota_updater.h"
@@ -32,7 +33,10 @@ bool OtaService::is_ble_active() const { return _ble_ota.is_active(); }
 OtaStatus OtaService::run_ble() {
   // START is already latched (is_ble_active() returned true), so run(0) drives
   // the transfer immediately with no idle park.
-  return _ble_ota.run(0);
+  log_heap(TAG, "ota.ble:enter");
+  const OtaStatus status = _ble_ota.run(0);
+  log_heap(TAG, "ota.ble:return");
+  return status;
 }
 
 OtaStatus OtaService::check_wifi_update() const {

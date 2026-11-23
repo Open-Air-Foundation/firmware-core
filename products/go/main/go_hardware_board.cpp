@@ -613,6 +613,7 @@ StorageService &GoHardwareBoard::storage() {
   const bool v2 = variant() == BoardVariant::V2;
   assert((!v2 || _buses_ready) && "V2 storage() requires init_buses()");
   if (!_storage) {
+    log_heap(TAG, "storage:pre-construct");
     auto *rtc_storage = new RtcPayloadCacheStorage();
     auto *cache = new PayloadCache(*rtc_storage, PAYLOAD_CACHE_MAX_SIZE);
 
@@ -624,9 +625,11 @@ StorageService &GoHardwareBoard::storage() {
 
     _storage = new StorageService(*cache, *nand);
     _storage->restore_cache();
+    log_heap(TAG, "storage:cache-restored");
     if (!_storage->init()) {
       AG_LOGE(TAG, "NAND storage init failed");
     }
+    log_heap(TAG, "storage:post-init");
   }
   return *_storage;
 }
@@ -636,6 +639,7 @@ DisplayService &GoHardwareBoard::display() {
   const bool v2 = variant() == BoardVariant::V2;
   assert((!v2 || _buses_ready) && "V2 display() requires init_buses()");
   if (!_display) {
+    log_heap(TAG, "display:pre-construct");
     _display = new DisplayService({
         .spi_host = SPI_HOST,
         .pin_cs = PIN_DISPLAY_CS,
@@ -644,6 +648,7 @@ DisplayService &GoHardwareBoard::display() {
         .pin_busy = PIN_DISPLAY_BUSY,
         .dc_gpio = v2 ? &_expander_gpio : nullptr,
     });
+    log_heap(TAG, "display:post-construct");
   }
   return *_display;
 }

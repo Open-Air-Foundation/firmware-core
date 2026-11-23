@@ -6,6 +6,7 @@
  */
 
 #include "esp_wifi_hal.h"
+#include "common.h"
 
 #include <cstring>
 #include <memory>
@@ -327,7 +328,10 @@ WifiStatus EspWifiHal::start_mdns(const WifiMdnsConfig &config) {
     return WifiStatus::InvalidArgument;
   }
   if (!_mdns_started) {
-    if (mdns_init() != ESP_OK) {
+    log_heap(TAG, "mdns.init:pre");
+    const esp_err_t err = mdns_init();
+    log_heap(TAG, "mdns.init:post");
+    if (err != ESP_OK) {
       return WifiStatus::Failed;
     }
     _mdns_started = true;
@@ -390,7 +394,9 @@ WifiStatus EspWifiHal::start_mdns(const WifiMdnsConfig &config) {
 
 WifiStatus EspWifiHal::stop_mdns() {
   if (_mdns_started) {
+    log_heap(TAG, "mdns.stop:pre");
     mdns_free();
+    log_heap(TAG, "mdns.stop:post");
     _mdns_started = false;
   }
   return WifiStatus::Ok;

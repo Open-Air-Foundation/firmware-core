@@ -6,6 +6,7 @@
  */
 
 #include "spi_nand_storage.h"
+#include "common.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -39,6 +40,7 @@ bool SpiNandStorage::init() {
     return false;
   }
 
+  log_heap(TAG, "nand.init:enter");
   // Register SPI device on the pre-initialised bus.
   spi_device_interface_config_t dev_cfg = {};
   dev_cfg.mode = 0;
@@ -66,13 +68,23 @@ bool SpiNandStorage::init() {
     nand_cfg.cs_context = this;
   }
 
+  log_heap(TAG, "nand.device:pre-init");
   err = spi_nand_flash_init_device(&nand_cfg, &_nand_device);
+  log_heap(TAG, "nand.device:post-init");
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "spi_nand_flash_init_device failed: %s", esp_err_to_name(err));
     _nand_device = nullptr; // The NAND driver frees its device on init failure.
     spi_bus_remove_device(_spi_device);
     _spi_device = nullptr;
     return false;
+  }
+
+  uint32_t page_bytes = 0;
+  uint32_t block_bytes = 0;
+  if (spi_nand_flash_get_sector_size(_nand_device, &page_bytes) == ESP_OK &&
+      spi_nand_flash_get_block_size(_nand_device, &block_bytes) == ESP_OK) {
+    ESP_LOGI(TAG, "geometry: page_bytes=%lu block_bytes=%lu",
+             static_cast<unsigned long>(page_bytes), static_cast<unsigned long>(block_bytes));
   }
 
   // Mount the FATFS filesystem.
@@ -83,7 +95,9 @@ bool SpiNandStorage::init() {
   mount_cfg.disk_status_check_enable = false;
   mount_cfg.use_one_fat = false;
 
+  log_heap(TAG, "nand.fat:pre-mount");
   err = esp_vfs_fat_nand_mount(_mount_path, _nand_device, &mount_cfg);
+  log_heap(TAG, "nand.fat:post-mount");
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "esp_vfs_fat_nand_mount failed: %s", esp_err_to_name(err));
     spi_nand_flash_deinit_device(_nand_device);

@@ -17,6 +17,7 @@
 #include "hal/http_request.h"
 #include "hal/http_response.h"
 #include "idf_http_request.h"
+#include "common.h"
 #include "types/http_types.h"
 
 namespace {
@@ -192,7 +193,9 @@ esp_err_t IdfHttpServer::_trampoline(httpd_req_t *req) {
   IdfHttpRequest request(req, from_httpd_method(req->method));
   HttpResponse response;
 
+  log_heap(TAG, "http.request:pre-handler");
   route->handler(request, response);
+  log_heap(TAG, "http.request:post-handler");
 
   httpd_resp_set_status(req, http_status_phrase(response.status));
   if (response.content_type != nullptr) {
@@ -211,6 +214,7 @@ esp_err_t IdfHttpServer::_trampoline(httpd_req_t *req) {
   // always pass an explicit length to support binary payloads.
   const esp_err_t send_result =
       httpd_resp_send(req, body == nullptr ? "" : body, static_cast<ssize_t>(len));
+  log_heap(TAG, "http.request:response-sent");
   // Close a connection whose declared body was not consumed completely. This
   // prevents unread or failed body bytes from corrupting a subsequent request.
   return request.has_incomplete_body() ? ESP_FAIL : send_result;

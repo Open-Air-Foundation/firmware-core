@@ -408,6 +408,7 @@ void GoApp::run_fast_path(const RtcAppState &state) {
   bool snapshot_valid = load_rtc_display_snapshot(&snapshot);
 
   auto result = execute_fast_path(state, button_pressed, &snapshot, snapshot_valid);
+  log_heap(TAG, "boot:fast-path:after-execute");
 
   _board.remove_button_isr(PIN_BUTTON_POWER);
 

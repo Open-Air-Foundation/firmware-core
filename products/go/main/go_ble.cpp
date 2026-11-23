@@ -14,6 +14,7 @@
 #include "go_ble.h"
 
 #include "ag_log.h"
+#include "common.h"
 #include "go_ble_protocol.h"
 #include "go_events.h"
 #include "go_storage.h"
@@ -706,7 +707,9 @@ void BleService::deinit() {
   // lifetime.  Clearing characteristic pointers prevents stale pointer
   // dereferences if the next owner (e.g. provisioning) rebuilds the GATT
   // table differently.
+  log_heap(TAG, "ble.deinit:pre");
   _server->deinit();
+  log_heap(TAG, "ble.deinit:post");
   _initialized = false;
   _measures_char = nullptr;
   _status_char = nullptr;
@@ -2591,11 +2594,14 @@ BleHistoryDecodeResult BleService::decode_history_write(const uint8_t *buf, size
 }
 
 void BleService::release_export() {
+  const bool was_active = _export_active;
   _export_active = false;
   _export_streaming = false;
   _export_session_id = 0;
   _fill_count = _fill_offset = 0;
   _storage.release_measurement_log();
+  if (was_active)
+    log_heap(TAG, "ble.export:released");
 }
 
 void BleService::begin_export(uint32_t id, uint32_t count, bool measurements) {
@@ -2610,6 +2616,7 @@ void BleService::begin_export(uint32_t id, uint32_t count, bool measurements) {
   _fill_count = _fill_offset = 0;
   _pass_sent = 0;
   _export_measurements = measurements;
+  log_heap(TAG, measurements ? "ble.export:measurements-start" : "ble.export:tracking-start");
   _export_active = true;
   _export_streaming = true;
   _export_activity_ms = RTOS::get_time_ms();
@@ -2661,6 +2668,7 @@ void BleService::tick_history() {
     cbor_encode_uint(&map, _pass_sent);
     cbor_encoder_close_container(&encoder, &map);
     if (send_history_cbor(buf, cbor_encoder_get_buffer_size(&encoder, buf))) {
+      log_heap(TAG, "ble.export:pass-complete");
       _export_streaming = false;
       _fill_count = _fill_offset = 0;
       _export_activity_ms = now;

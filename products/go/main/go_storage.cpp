@@ -8,6 +8,7 @@
  */
 
 #include "go_storage.h"
+#include "common.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -166,6 +167,7 @@ bool StorageService::create_route(uint32_t session_id) {
     return false;
   }
 
+  log_heap(TAG, "storage.route:create-pre-open");
   _route_file = fopen(path, "wb");
   if (_route_file == nullptr) {
     AG_LOGE(TAG, "create_route: fopen failed for %s (errno=%d)", path, errno);
@@ -186,6 +188,7 @@ bool StorageService::create_route(uint32_t session_id) {
   _last_fsync_ms = FSYNC_ANCHOR_NONE; // first append syncs unconditionally
 
   AG_LOGI(TAG, "create_route: opened %s", path);
+  log_heap(TAG, "storage.route:created");
   return true;
 }
 
@@ -235,6 +238,7 @@ bool StorageService::resume_route(uint32_t session_id) {
     st.st_size -= rem;
   }
 
+  log_heap(TAG, "storage.route:resume-pre-open");
   _route_file = fopen(path, "ab");
   if (_route_file == nullptr) {
     AG_LOGE(TAG, "resume_route: fopen failed for %s (errno=%d)", path, errno);
@@ -246,6 +250,7 @@ bool StorageService::resume_route(uint32_t session_id) {
   _last_fsync_ms = FSYNC_ANCHOR_NONE; // first append syncs unconditionally
 
   AG_LOGI(TAG, "resume_route: opened %s (%" PRIu32 " points existing)", path, _current_point_count);
+  log_heap(TAG, "storage.route:resumed");
   return true;
 }
 
@@ -318,6 +323,7 @@ bool StorageService::end_route() {
   _current_point_count = 0;
   _current_session_id = 0;
   _last_fsync_ms = FSYNC_ANCHOR_NONE;
+  log_heap(TAG, "storage.route:closed");
   return synced && closed;
 }
 
