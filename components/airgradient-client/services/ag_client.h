@@ -72,7 +72,6 @@ private:
   static constexpr const char *DEFAULT_HTTP_DOMAIN = "hw.airgradient.com";
   static constexpr const char *DEFAULT_COAP_HOST = "128.140.49.53";
   static constexpr int DEFAULT_COAP_PORT = 5683;
-  static constexpr size_t POST_BODY_BUFFER_SIZE = 1024;
   static constexpr size_t URL_BUFFER_SIZE = 128;
 
   static MeasuresInput _make_input(const Measures &m);

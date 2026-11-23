@@ -3,5 +3,5 @@ idf_component_register(
          "measurement_corrections.cpp"
     INCLUDE_DIRS "include"
     REQUIRES freertos esp_timer esp_system heap esp_app_format driver
-    PRIV_REQUIRES esp_common esp_hw_support
+    PRIV_REQUIRES esp_common esp_hw_support esp_rom
 )

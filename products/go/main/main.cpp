@@ -11,8 +11,10 @@
 
 #include "go_app.h"
 #include "go_hardware_board.h"
+#include "common.h"
 
 extern "C" void app_main() {
+  enable_heap_failure_logging();
   GoHardwareBoard board;
   GoApp app(board);
   app.run();

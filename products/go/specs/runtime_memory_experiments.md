@@ -1,9 +1,11 @@
 # AirGradient Go Runtime Memory Experiments
 
-> **Status: diagnostics added; memory reductions not applied.** Heap and stack
-> checkpoints are authorized for baseline measurement. The agreed first reduction
-> experiment is to set both BLE packet-pool counts to 12. Do not change firmware
-> settings until implementation of the reductions is requested.
+> **Status: combined WiFi IRAM experiment confirms 13.25 KiB more boot heap.**
+> The device capture still shows critically low heap during TLS and unsuccessful
+> cloud requests. BLE counts of 12 showed no initialization saving; counts have
+> returned to 24 and further BLE investigation is deferred. The user's 8 KiB
+> main-stack capture confirms another 8 KiB of heap, with partial stack-path
+> coverage. Apply further configuration changes only when requested.
 
 This specification records the memory investigation and proposed experiments
 for AirGradient Go, covering runtime allocations and WiFi code placement in
@@ -33,7 +35,7 @@ allocation failure.
 
 ## Goals
 
-- Reduce BLE's resident runtime allocation while preserving supported transfers.
+- Evaluate BLE memory limits and allocation behavior while preserving transfers.
 - Evaluate freeing SRAM by moving optional WiFi code out of IRAM.
 - Account for Cloud and Local Server stacks and additional heap use separately.
 - Compare free heap, minimum free heap, and largest free block at matching stages.
@@ -63,11 +65,13 @@ Apply these changes together when implementation is requested:
 | `CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU` | 512 | 512 |
 | `CONFIG_BT_NIMBLE_MAX_CONNECTIONS` | 1 | 1 |
 
-The nominal buffer capacity will decrease from 15,744 to 7,872 bytes, a saving
-of 7,872 bytes (approximately 7.7 KiB). Actual heap savings may differ because
-of pool metadata and allocation alignment. These pools are reserved while the
-BLE stack is initialized; returning a buffer to its pool does not return that
-memory to the general heap.
+The nominal buffer budget decreases from 15,744 to 7,872 bytes. This is not a
+fixed 7,872-byte heap saving. Investigation of the built ESP32-C5 controller
+path shows that, with `CONFIG_BT_NIMBLE_MSYS_BUF_FROM_HEAP=y`, these buffers
+allocate on demand. The counts and aligned sizes set a combined byte budget;
+they do not reserve all blocks at initialization. Reducing counts constrains
+peak buffer allocation but does not free memory that was never allocated.
+This corrects the initial assumption that both pools were fully reserved.
 
 The existing implementation supports trying fewer buffers:
 
@@ -88,7 +92,7 @@ receive pressure and transfer integrity must be checked as well as throughput.
 ### Experiment 2: Move Optional WiFi Code Out of IRAM
 
 Evaluate disabling WiFi's optional IRAM speed optimizations separately from
-Experiment 1. All three options are enabled in the current Go configuration:
+Experiment 1. All three options are enabled in the baseline Go configuration:
 
 | Symbol | Baseline | Candidate | ESP-IDF Help Estimate |
 |---|---|---|---|
@@ -136,7 +140,8 @@ completes; bursts and processing delays can increase simultaneous occupancy.
 TCP and TLS allocations are separate from these WiFi driver buffers.
 
 Reducing dynamic limits could constrain peak memory use, but would not provide
-the same fixed baseline saving as shrinking BLE pools. Reducing static RX count
+a fixed baseline saving; the current C5 MSYS mode is also demand-allocated.
+Reducing static RX count
 could save resident memory, but requires checking the receive aggregation window
 and traffic behavior. Neither change is agreed for this experiment.
 
@@ -181,7 +186,7 @@ Cloud requests need additional heap after startup for HTTP/TLS, certificate and
 cryptographic state, TCP buffers, and JSON processing. Current TLS configuration
 uses the following content-buffer capacities:
 
-| Symbol | Current Value | Meaning |
+| Symbol | Baseline Value | Meaning |
 |---|---:|---|
 | `CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN` | 4096 | Incoming TLS content capacity |
 | `CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN` | 4096 | Outgoing TLS content capacity |
@@ -270,8 +275,8 @@ does not establish that the resulting implementation requires the full 16 KiB.
 Reducing a function's frame can reduce peak stack demand, but only lowering the
 configured task stack releases that capacity for other allocations. Moving local
 data onto the heap is not automatically a net RAM saving. A possible later
-experiment is 12 KiB, saving 4 KiB; 8 KiB would save 8 KiB but is not established
-as safe. Neither value is selected or applied. First measure remaining stack
+experiment is 12 KiB, saving 4 KiB. The user has now tried 8 KiB, recovering
+8 KiB as recorded below; this is not established as safe for every path. Measure remaining stack
 across cold boot, measurement wake and handoff, provisioning, storage operations,
 and BLE/WiFi OTA, then retain margin above the largest observed requirement.
 
@@ -361,10 +366,10 @@ minimum free heap is historical for that boot.
 6. Repeat disconnect, reconnect, lock, and unlock cycles. Check for allocation
    failures, transfer stalls, resets, and progressive heap loss.
 
-Retain the experiment only after observing lower BLE allocation and successful
-functional checks. Record any throughput regression for review. A successful
-build or a nominal 7.7 KiB saving alone does not establish that the original
-low-heap failure is resolved.
+Retain the experiment only after establishing a useful reduction in peak BLE
+allocation and successful functional checks. Record any throughput regression
+for review. A successful build or a smaller configured budget alone does not
+establish that the original low-heap failure is resolved.
 
 For Experiment 2, also compare WiFi connection/reconnection, cloud HTTPS success
 and request duration, Local Server responses under repeated requests, and WiFi
@@ -448,9 +453,297 @@ handlers. It contains no `httpd` stack reading and no full display-initializatio
 checkpoint pair. Those paths remain required before final stack reductions;
 the cloud watermark in particular covers a failed TLS path, not successful TLS.
 
+### Experiment 2: Three WiFi IRAM Options Disabled
+
+The user disabled `ESP_WIFI_IRAM_OPT`, `ESP_WIFI_EXTRA_IRAM_OPT`, and
+`ESP_WIFI_RX_IRAM_OPT` in Go's `sdkconfig` and built the firmware. Generated
+configuration confirms all three are disabled and `ESP_WIFI_SLP_IRAM_OPT`
+remains enabled. This is a combined experiment; individual-option savings have
+not been measured. `sdkconfig.defaults` has not been changed for this experiment.
+
+For comparison, the committed `04ac638` configuration was rebuilt in a separate
+temporary build directory using the same source and installed ESP-IDF, leaving
+the user's configuration and build artifacts untouched. Its binary size matches
+the recorded instrumented baseline.
+
+| Metric | Instrumented Baseline | Three Options Off | Change |
+|---|---:|---:|---:|
+| IRAM text | 137,692 B | 124,078 B | -13,614 B |
+| Static data | 18,260 B | 18,260 B | 0 B |
+| Static BSS | 27,928 B | 27,928 B | 0 B |
+| Flash-mapped text | 1,444,190 B | 1,457,278 B | +13,088 B |
+| Complete binary | 1,943,696 B | 1,943,088 B | -608 B |
+
+The linked heap-start address moves down by 13,568 bytes (13.25 KiB), accounting
+for section alignment. The device capture below confirms this increase at matching
+boot checkpoints. The binary gets slightly smaller
+because placement also changes linking/layout; IRAM code already had a flash
+load image. The combined IRAM reduction is substantially below the sum of generic
+menuconfig estimates. The runtime saving does not establish sufficient memory
+for successful TLS or acceptable connectivity under load.
+
+`ESP_WIFI_SLP_IRAM_OPT` optimizes connected WiFi power-saving operation: expected
+beacon timing (TBTT), beacon reception, buffered-traffic indication processing,
+and related sleep/wakeup work. It retains both sleep-specific and shared receive
+sections in IRAM even when `ESP_WIFI_RX_IRAM_OPT` is disabled. The new map retains
+1,948 bytes in `.wifislpiram` and 7,476 bytes in `.wifislprxiram`, about 9.2 KiB
+combined. This is not the option's complete marginal cost: it also selects
+power-management/peripheral/PHY options whose placement and defaults must be
+evaluated separately.
+
+Keeping this work in IRAM aims to shorten active processing around wakeups and
+reduce average current in WiFi power-save mode. It is relevant when Go keeps
+WiFi connected with Local Server off, where current policy selects MAX_MODEM.
+It is distinct from the deep-sleep measurement-wake path. Disabling this option
+would not itself switch off modem-sleep, but can change processing overhead,
+power consumption, and related selected power-management settings. Keep it
+enabled for the present comparison; any further experiment should measure power
+as well as memory and connectivity.
+
+#### Device Capture
+
+The user supplied `result.wifi-iram.log` (712 lines, SHA-256
+`4ec0a6990421f579fd518484282cb36a6642572e39e99376c8da5199408a7e65`).
+Compare it with the instrumented `result.base.log` capture above. Values below
+are free heap in bytes:
+
+| Checkpoint | Baseline | Three Options Off | Change |
+|---|---:|---:|---:|
+| Cold boot, storage initialized | 149,548 | 163,116 | +13,568 |
+| Cold boot, before interactive run | 115,416 | 128,984 | +13,568 |
+| Button wake, phase 3 complete | 124,760 | 138,328 | +13,568 |
+| WiFi initialized | 39,220 | 53,344 | +14,124 |
+| First cloud POST, before TLS | 9,132 | 22,436 | +13,304 |
+
+The exact boot increase confirms the linker prediction. Later checkpoints vary
+with timing and concurrent allocations; they are not identical workloads.
+WiFi initialization itself consumes 40,588 bytes in both captures. Moving code
+out of IRAM has not reduced that runtime allocation. Cloud startup still consumes
+10,676 bytes.
+
+The additional heap is insufficient to establish a healthy operating margin:
+
+- Minimum-ever free heap reaches 1,588 bytes, versus 156 bytes in the baseline.
+- During a config-fetch TLS attempt, a checkpoint records 2,456 bytes free and
+  a largest free block of only 1,024 bytes. Total free heap is not a guarantee
+  that a larger contiguous allocation can succeed.
+- The first cloud POST times out. Two config-fetch attempts report `-0x004C`
+  immediately after beacon timeout and WiFi disassociation. Installed mbedTLS
+  defines this as `MBEDTLS_ERR_NET_RECV_FAILED`, a socket-read failure, rather
+  than the baseline's explicit `-0x3F80` allocation failure.
+- No successful cloud POST or config fetch appears in this capture. Heap returns
+  to roughly 23 KiB after TLS cleanup and 27 KiB after mDNS stops; that recovery
+  does not establish sufficient headroom during a handshake.
+- Beacon timeout also occurred in the baseline. These captures cannot attribute
+  the connectivity failure to flash execution, memory pressure, or the network.
+  A controlled comparison is still required before accepting WiFi reliability.
+
+This capture confirms the memory saving, but does not validate throughput,
+power consumption, OTA, or successful concurrent network workloads. Main-task
+stack minimum remains 10,988 bytes on the cold-boot path and 11,276 bytes on
+the button-wake path; it adds no evidence for a lower worst-case stack capacity.
+
+### Experiment 1: BLE Pool Counts Built at 12
+
+Following the WiFi IRAM capture, the user reduced both
+`CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT` and
+`CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT` from 24 to 12 and rebuilt. Pool block
+sizes remain 128 and 528 bytes. Generated configuration confirms these values.
+Disassembly of `os_msys_init` independently confirms the built ELF passes
+`128, 528, 12, 12, 1` to `r_esp_ble_msys_init`; the final argument selects heap
+allocation. The baseline passes counts of 24.
+
+Relative to the preceding WiFi-only experiment, the linker map is unchanged,
+including static SRAM use of 170,266 bytes. The binary still occupies 1,943,088
+bytes, although its contents have changed. This is expected for a change to a
+runtime allocation budget rather than static SRAM or executable code size.
+The earlier prediction of 7.69 KiB more heap at BLE initialization, or 20.94 KiB
+combined with the WiFi change, was incorrect for this controller configuration.
+
+The three WiFi IRAM options remain disabled and SLP remains enabled, so this is
+an incremental BLE experiment on top of the WiFi change. `sdkconfig.defaults`
+still specifies BLE counts of 24. BLE history/log downloads and OTA remain
+unverified at these counts.
+
+#### Device Captures and Allocator Correction
+
+The initial `result.ble-pool.log` capture showed no initialization saving. The
+user explicitly re-flashed and supplied `result.ble-pool.log.1` (682 lines,
+SHA-256 `bb9cfa689957d8554ae710843a95e4078d3678ca1fd2a40d2640b3c813f6ad9d`).
+All three captures have exactly the same BLE initialization checkpoints:
+
+| Metric | WiFi-Only Capture | BLE Counts 12 | Re-Flashed Counts 12 |
+|---|---:|---:|---:|
+| Free heap before BLE initialization | 133,572 B | 133,572 B | 133,572 B |
+| Free heap after BLE initialization | 98,424 B | 98,424 B | 98,424 B |
+| Initialization decrease | 35,148 B | 35,148 B | 35,148 B |
+
+The installed `components/bt/porting/mem/os_msys_init.c` delegates initialization
+to the controller because `CONFIG_BT_LE_MSYS_INIT_IN_CONTROLLER=y`.
+Disassembly of `r_ble_ll_mem_msys_init` shows the heap-source branch initializes
+empty pools, computes the combined budget from counts and aligned sizes, and
+registers allocation callbacks. `r_ble_ll_mem_memblock_get_cb` checks that
+budget through `r_ble_ll_mem_msys_alloc_check` before allocating a requested
+block. Thus unchanged initialization heap is consistent with the compiled
+allocator; it is not evidence that the device was running the old build.
+
+The re-flashed capture reaches 1,632 bytes minimum-ever free heap. Its lowest
+sampled free heap is 2,508 bytes and its smallest sampled largest block is
+1,024 bytes. Cloud POST times out, config fetches fail with socket-read error
+`-0x004C` after beacon timeouts, and no successful cloud request appears.
+The earlier BLE capture additionally reports `-0x2880`, which installed
+mbedTLS defines as `MBEDTLS_ERR_X509_ALLOC_FAILED`. The last re-flashed fetch
+is still in progress when the capture ends.
+
+No fixed idle heap benefit or resolution of the TLS pressure is demonstrated.
+The confirmed baseline gain remains the WiFi change's 13.25 KiB. Whether a
+lower MSYS budget usefully limits peaks during actual BLE transfers, without
+breaking those transfers, remains unverified.
+
+### Experiment 3: User's 8 KiB Main-Stack Capture
+
+The user reduced `CONFIG_ESP_MAIN_TASK_STACK_SIZE` to 8,192 bytes and supplied
+`result.main-task.log` (435 lines, SHA-256
+`72c6c5a2f76b6b8755cd1a19c81d3ecb6b18b5393fe35d44399741456a653d84`).
+Local and generated build configuration agree on 8 KiB; both BLE MSYS counts
+are 24 and the preceding WiFi IRAM changes remain in place.
+
+Compared with `result.wifi-iram.log`, matching button-wake checkpoints confirm
+an exact 8,192-byte heap increase:
+
+| Checkpoint | Main Stack 16 KiB | Main Stack 8 KiB | Change |
+|---|---:|---:|---:|
+| Button wake, phase 3 complete | 138,328 B | 146,520 B | +8,192 B |
+| Before BLE initialization | 133,572 B | 141,764 B | +8,192 B |
+| After BLE initialization | 98,424 B | 106,616 B | +8,192 B |
+
+This establishes 21,760 bytes (21.25 KiB) of combined heap improvement from the
+WiFi code-placement and main-stack changes at matching button-wake checkpoints
+before BLE initialization, relative to the original instrumented baseline.
+BLE initialization still costs 35,148 bytes in this capture.
+
+The main-task minimum remaining stack is 2,796 bytes during cold-boot logging
+and sleep preparation, corresponding to 5,396 bytes touched. On the subsequent
+button-wake interactive path it remains at 3,084 bytes (5,108 bytes touched).
+These match previous usage with the smaller reservation. No stack overflow or
+panic appears, but scheduled measurement wakes and handoff, provisioning, OTA,
+and other unexercised paths still need coverage before accepting 8 KiB broadly.
+
+Before the first cloud POST, free heap is 31,240 bytes with a 20,480-byte largest
+block. After failed TLS attempts, free heap recovers to roughly 30 KiB. The
+minimum-ever free heap nevertheless reaches 1,336 bytes, so transient memory
+pressure remains. The sampled largest blocks after cleanup do not show the
+smallest contiguous block during the handshake.
+
+All four completed cloud POST/config-fetch attempts report `-0x2700`, defined
+by installed mbedTLS as `MBEDTLS_ERR_X509_CERT_VERIFY_FAILED`. This differs from
+the earlier allocation and socket-read errors; the capture does not provide
+verification flags identifying the certificate failure's underlying cause.
+Do not infer that memory pressure is resolved or that device time or a CA is
+necessarily responsible. No successful cloud request appears. The OTA
+availability request receives HTTP 400; its configured URL uses HTTP, so this
+does not validate HTTPS. No beacon timeout or WiFi disconnection appears in
+this shorter capture; that is not a complete connectivity qualification.
+
+### Allocation-Failure Callback
+
+The user requested direct allocation-failure evidence after the 8 KiB main-stack
+capture. Go now calls `enable_heap_failure_logging()` before constructing the
+board in `app_main`. The shared platform helper registers ESP-IDF's process-wide
+failed-allocation callback; it is a no-op under `TEST_HOST`. Startup logs confirm
+registration. It observes failures after registration, not earlier boot work.
+
+Each failure emits a `[HEAP_FAIL]` line with these fields:
+
+| Field | Meaning |
+|---|---|
+| `size` | Requested allocation bytes |
+| `caps` | Requested ESP-IDF memory-capability bitmask, in hexadecimal |
+| `function` | Allocator function reporting the failure, not the application caller |
+| `task` | Calling task name, or `ISR` for interrupt context |
+| `free` | Current free bytes matching the requested capabilities |
+| `largest` | Largest current free block matching those capabilities |
+
+The callback uses ROM output and heap queries without allocating a message
+buffer, creating a task, scanning stack watermarks, or invoking the normal
+logging backend. Free and largest-block queries are separate snapshots and can
+change under concurrent activity. Serial output can affect timing on failure;
+this is diagnostic instrumentation, not a memory fix. It does not enable
+abort-on-allocation-failure or change configuration.
+
+Repeat the cloud scenario and correlate `[HEAP_FAIL]` lines with TLS errors.
+An allocation failure in the cloud task is evidence of heap pressure even if
+the higher-level TLS result is certificate verification failure. It does not
+alone prove that a particular failed allocation caused that TLS result, since
+some callers can recover or retry. Absence of the callback cannot exclude
+exhaustion in a separate fixed pool that does not call ESP-IDF's heap allocator.
+
+Verification: Go and reference firmware builds passed; all 1,760 existing host
+tests passed, along with Markdown lint and whitespace checks. Actual callback
+output is confirmed in the user-supplied excerpt described below.
+
+### Experiment 4: Cloud and TLS Memory Reduction
+
+The user set both TLS content limits to 2,048 bytes through configuration and
+authorized the remaining code changes. Current values for this experiment are:
+
+| Setting | Baseline | Experiment | Owner |
+|---|---:|---:|---|
+| Cloud task stack | 8,192 B | 6,144 B | `go_cloud.cpp` |
+| Config-response buffer | 2,048 B | 1,024 B | `go_cloud.cpp` |
+| Go POST body buffer | 1,024 B | 512 B | `ag_client.cpp`, Go model only |
+| TLS RX content limit | 4,096 B | 2,048 B | User's `sdkconfig` |
+| TLS TX content limit | 4,096 B | 2,048 B | User's `sdkconfig` |
+
+Other products keep their 1,024-byte POST buffer. This experiment does not
+change HTTP RX/TX buffers, BLE, WiFi packet buffers, SLP IRAM, or NAND settings.
+Further BLE investigation is deferred, and the user excluded SLP and NAND from
+further reductions. Product documentation and VHUB consolidation remain deferred;
+this specification records the experiment.
+
+The Cloud stack and response-buffer reductions should release 3,072 bytes while
+Cloud is started, reducing the previously observed 10,676-byte startup cost to
+approximately 7,604 bytes. The two TLS buffer changes should release another
+4,096 bytes while a connection has both buffers allocated, for approximately
+7 KiB combined relative to Experiment 3. The smaller POST body reduces stack
+demand by 512 bytes, not an additional heap reservation. Runtime gains remain
+to be measured; these figures are not guarantees that TLS will complete.
+
+The proposed 5 KiB Cloud stack was discussed but not selected. The largest
+previously observed usage is 3,652 bytes, leaving only 1,468 bytes at 5 KiB,
+before covering successful TLS and config parsing. The 6 KiB trial leaves
+2,492 bytes above that observed usage. The smaller POST frame helps that path
+but does not lower every call chain's requirement.
+
+The user reports config GET responses below 500 bytes. The new response buffer
+accepts up to 1,023 bytes plus the terminator. Existing truncation handling
+returns `BufferTooSmall` and avoids applying partial configuration. The boundary
+test applies a padded 1,023-byte configuration and rejects a larger response.
+A serializer test checks that all 23 Go fields with large representative values
+and maximum uptime fit in 512 bytes; this is not an exhaustive upper bound for
+all values accepted by the shared measurement types. Serialization failure
+continues to prevent transmission rather than sending truncated JSON.
+
+The allocation-failure callback confirms that the preceding TLS attempts ran
+out of heap. In the supplied POST excerpt, Cloud requests 2,584 bytes with
+1,220 bytes free and an 832-byte largest block. WiFi also fails to allocate
+1,856 bytes. During config fetch, another 2,584-byte Cloud request fails with
+1,772 bytes free; the network task fails a 257-byte request with only 64 matching
+bytes free. TLS returns `-0x2700` after these failures. The callback establishes
+heap pressure even though the reported TLS result is certificate verification.
+
+After the user flashes this experiment, repeat POST, config GET, and OTA
+availability checks, recording `[HEAP_FAIL]`, minimum heap, and Cloud stack
+watermarks. Smaller TLS RX capacity must also accommodate server handshake
+records, including certificates; a sub-500-byte JSON body alone does not establish
+that the new limit is compatible. No on-device acceptance is claimed yet.
+
 ### Verification Status and Remaining Decisions
 
-- Reduction experiment configuration: not applied.
+- Combined WiFi IRAM experiment: build and device heap compared above; successful
+  cloud operation and performance remain unverified. BLE count reduction is
+  built and measured as described above, then restored to 24. The user's 8 KiB
+  main stack confirms an 8 KiB heap gain with partial hardware-path coverage.
 - Diagnostic Go and reference firmware builds: passed. Existing host suite:
   1,760 tests passed. The instrumented baseline capture has been analyzed above;
   broader hardware-path coverage remains pending.
@@ -458,10 +751,13 @@ the cloud watermark in particular covers a failed TLS path, not successful TLS.
   baseline; 87,920 bytes remain in the smallest OTA slot. Diagnostics consume
   some flash and execution time; compare subsequent experiments with this
   instrumented baseline.
-- Measured heap saving and transfer performance: unknown.
+- WiFi code-placement heap saving: 13,568 bytes at matching boot checkpoints.
+  BLE count reduction shows zero initialization saving; transfer peaks and
+  performance remain unmeasured.
 - Whether both pools can remain at 12 under OTA and concurrent WiFi: unverified.
-- WiFi IRAM options: candidate experiment documented; all remain enabled.
-- Actual IRAM/heap saving, binary-size change, and WiFi performance: unmeasured.
+- Three WiFi IRAM options: disabled in the user's local build; SLP remains on.
+- IRAM text reduction, binary-size change, and runtime boot heap improvement
+  measured. WiFi performance and reliability remain unverified.
 - Cloud and Local Server: startup costs and stack capacities documented;
   baseline Cloud watermark captured; Local Server handler stack use and
   worst-case request allocation peaks remain unmeasured.

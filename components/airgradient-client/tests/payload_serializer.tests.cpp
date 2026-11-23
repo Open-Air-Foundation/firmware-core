@@ -135,6 +135,41 @@ TEST_CASE("serializer preserves the uint32 boot range", "[payload_serializer]") 
   REQUIRE(p.number("boot") == static_cast<double>(boot));
 }
 
+TEST_CASE("Go sensor payload fits 512 bytes with all fields and long uptime",
+          "[payload_serializer][go][buffer]") {
+  MeasuresAGo m{};
+  m.co2.co2 = MeasuresRange::MAX_VALID_CO2;
+  m.temp_hum_a.temperature = -39.99f;
+  m.temp_hum_a.humidity = 99.99f;
+  m.pm_a.pm_01 = m.pm_a.pm_25 = m.pm_a.pm_10 = 9999.9f;
+  m.pm_a.pm_01_sp = m.pm_a.pm_25_sp = m.pm_a.pm_10_sp = 9999.9f;
+  m.pm_a.pm_03_pc = m.pm_a.pm_05_pc = m.pm_a.pm_01_pc = 3000000;
+  m.pm_a.pm_25_pc = m.pm_a.pm_5_pc = m.pm_a.pm_10_pc = 3000000;
+  m.tvoc_nox.tvoc_index = m.tvoc_nox.nox_index = 500;
+  m.tvoc_nox.tvoc_raw = m.tvoc_nox.nox_raw = 65535;
+  m.power.battery_voltage = 4.25f;
+  m.power.charging_voltage = 5.25f;
+
+  MeasuresInput in{};
+  in.co2 = &m.co2;
+  in.temp_hum_a = &m.temp_hum_a;
+  in.pm_a = &m.pm_a;
+  in.tvoc_nox = &m.tvoc_nox;
+  in.power = &m.power;
+  char buf[512];
+  size_t written = 0;
+  REQUIRE(serialize_measures_json(in, -127, std::numeric_limits<uint32_t>::max(), buf, sizeof(buf),
+                                  &written));
+  REQUIRE(written < sizeof(buf));
+  ParsedJson p(buf);
+  REQUIRE(p.doc != nullptr);
+  REQUIRE(cJSON_GetArraySize(p.doc) == 23);
+  REQUIRE(p.number("boot") == static_cast<double>(std::numeric_limits<uint32_t>::max()));
+  REQUIRE(p.number("pm10Count") == 3000000);
+  REQUIRE(p.number("noxRaw") == 65535);
+  REQUIRE_THAT(p.number("light"), Catch::Matchers::WithinAbs(5.25, 0.001));
+}
+
 TEST_CASE("serializer omits invalid fields", "[payload_serializer]") {
   const auto m = make_invalid_measures();
   const auto in = input_from_full(m);

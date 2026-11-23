@@ -35,6 +35,10 @@ uint32_t generate_random_number(uint8_t length);
 // Reboots the MCU. No-op when running under TEST_HOST.
 void reboot();
 
+// Registers the process-wide ESP-IDF allocation-failure logger. Call once at startup.
+// Reports failures without allocating memory. No-op under TEST_HOST.
+void enable_heap_failure_logging();
+
 // Formats a network-byte-order IPv4 address into a dotted-decimal string
 // (e.g. 0x0104a8c0 -> "192.168.4.1"). The output buffer must be at least
 // 16 bytes (covers "255.255.255.255" + NUL). The caller is responsible

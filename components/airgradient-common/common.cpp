@@ -14,8 +14,36 @@
 #include "esp_app_desc.h"
 #include "esp_mac.h"
 #include "esp_random.h"
+#include "esp_rom_sys.h"
 #include "esp_system.h"
+
+namespace {
+constexpr const char *TAG = "HeapDiagnostics";
+
+void log_heap_allocation_failure(size_t size, uint32_t caps, const char *function_name) {
+  // Avoid normal logging, formatting buffers, or stack scans on the failure path.
+  const bool in_isr = xPortInIsrContext();
+  const char *task = in_isr ? "ISR" : pcTaskGetName(nullptr);
+  const size_t free = heap_caps_get_free_size(caps);
+  const size_t largest = heap_caps_get_largest_free_block(caps);
+  esp_rom_printf("[HEAP_FAIL] size=%u caps=0x%08x function=%s task=%s free=%u largest=%u\n",
+                 static_cast<unsigned>(size), static_cast<unsigned>(caps),
+                 function_name ? function_name : "unknown", task ? task : "unknown",
+                 static_cast<unsigned>(free), static_cast<unsigned>(largest));
+}
+} // namespace
 #endif
+
+void enable_heap_failure_logging() {
+#ifndef TEST_HOST
+  const esp_err_t err = heap_caps_register_failed_alloc_callback(log_heap_allocation_failure);
+  if (err != ESP_OK) {
+    AG_LOGE(TAG, "Allocation-failure callback registration failed: %s", esp_err_to_name(err));
+    return;
+  }
+  AG_LOGI(TAG, "Allocation-failure callback registered");
+#endif
+}
 
 std::string build_serial_number() {
 #ifndef TEST_HOST
