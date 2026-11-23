@@ -20,13 +20,7 @@ inline constexpr bool is_chart_metric_valid(int value) {
   return value >= static_cast<int>(Metric::None) && value <= static_cast<int>(Metric::Altitude);
 }
 
-// --- Operating mode and behavior ---
-
-enum class OperatingMode : uint8_t {
-  Portable,
-  Stationary,
-  Offline,
-};
+// --- Runtime behavior ---
 
 enum class Behavior : uint8_t {
   Tracking,
@@ -53,6 +47,9 @@ struct TrackingTiming {
 };
 
 static_assert(sizeof(TrackingTiming) == 16, "Tracking timing must contain four 32-bit fields");
+
+inline constexpr uint16_t TRACKING_DURATION_MAX_MINUTES = 1440;
+enum class TrackingStopReason : uint8_t { None, User, Duration, StorageFull };
 
 enum class LockState : uint8_t {
   Locked,
@@ -89,17 +86,18 @@ enum class InputType : uint8_t {
 //
 // Saved to RTC memory before deep sleep; restored on wake to resume application
 // state without full re-initialization. Defaults represent a safe starting
-// point for a fresh power-on (Portable, Idle, Locked).
+// point for a fresh power-on (Idle, Locked).
 
 enum class RtcAppFlag : uint32_t {
   GpsEnabled = 1u << 0,
   SensorsWarm = 1u << 1,           ///< Sensors kept powered during last deep sleep
   ChargingOnlyRequested = 1u << 2, ///< One-shot request after USB-powered user shutdown
-  // Bits 3–31 are reserved for future flags.
+  StorageStopWarning = 1u << 3,
+  // Bits 4–31 are reserved for future flags.
 };
 
 struct RtcAppState {
-  OperatingMode mode = OperatingMode::Portable;
+  uint8_t reserved = 0;
   Behavior behavior = Behavior::Idle;
   LockState lock_state = LockState::Locked;
   TrackingState tracking_state = TrackingState::Idle;
@@ -110,6 +108,8 @@ struct RtcAppState {
 
   // Expected GPS wake on retained clock; zero if no sleep is scheduled.
   uint64_t gps_wake_deadline_ms = 0;
+  uint64_t next_measurement_ms = 0;
+  uint32_t measurement_log_sequence = 0;
 
   constexpr bool has_flag(RtcAppFlag flag) const {
     return (flags & static_cast<uint32_t>(flag)) != 0;
@@ -121,7 +121,7 @@ struct RtcAppState {
   }
 };
 
-static_assert(sizeof(RtcAppState) == 40, "RTC app state layout must remain 40 bytes");
+static_assert(sizeof(RtcAppState) == 56, "RTC app state layout must remain 56 bytes");
 
 // --- Forward declarations for BootHandoff pointer members ---
 

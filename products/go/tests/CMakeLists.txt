@@ -154,6 +154,7 @@ catch_discover_tests(go_input_tests)
 
 add_library(go_storage_test_support
     "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_storage.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_measurement_log.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-payload-cache/services/payload_cache.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/rtos.cpp"
 )

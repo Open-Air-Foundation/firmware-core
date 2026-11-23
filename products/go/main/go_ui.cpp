@@ -43,16 +43,10 @@ static_assert(MEASURE_INTERVAL_OPTIONS[ENERGY_SAVING_MEASURE_INTERVAL_START].sec
 static const char *const GPS_MODE_OPTIONS[] = {"Always Off", "On When Tracking", "Always On"};
 static constexpr uint8_t GPS_MODE_COUNT = 3;
 
-struct ModeOption {
-  OperatingMode mode;
-  const char *label;
-};
-static constexpr ModeOption MODE_OPTIONS[] = {
-    {OperatingMode::Portable, "Portable"},
-    {OperatingMode::Stationary, "Stationary"},
-    {OperatingMode::Offline, "Energy Saving"},
-};
-static constexpr uint8_t MODE_COUNT = sizeof(MODE_OPTIONS) / sizeof(MODE_OPTIONS[0]);
+static constexpr uint16_t TRACKING_DURATION_MINUTES[] = {0, 15, 30, 60, 120, 240, 480};
+static const char *const TRACKING_DURATION_OPTIONS[] = {
+    "Off", "15 minutes", "30 minutes", "1 hour", "2 hours", "4 hours", "8 hours"};
+static constexpr uint8_t TRACKING_DURATION_COUNT = 7;
 
 static const char *const AUTO_LOCK_OPTIONS[] = {"Off", "10 Seconds", "30 Seconds", "60 Seconds"};
 static constexpr uint8_t AUTO_LOCK_COUNT = 4;
@@ -87,11 +81,12 @@ static constexpr uint8_t TAG_COUNT = 10;
 // ---------------------------------------------------------------------------
 
 static constexpr uint8_t MENU_TRACKING = 1;
-static constexpr uint8_t TRACKING_MENU_TOTAL = 5;
+static constexpr uint8_t TRACKING_MENU_TOTAL = 6;
 static constexpr uint8_t TRACKING_BACK = 1;
 static constexpr uint8_t TRACKING_STATUS = 2;
 static constexpr uint8_t TRACKING_PAUSE_RESUME = 3;
 static constexpr uint8_t TRACKING_STOP = 4;
+static constexpr uint8_t TRACKING_DURATION = 5;
 static constexpr uint8_t TRACKING_STATUS_SWITCH = 2;
 static constexpr uint8_t TRACKING_STATUS_SELECTABLE_ROWS = 3;
 static constexpr uint8_t TRACKING_STATUS_TOTAL = 9;
@@ -101,8 +96,7 @@ static constexpr uint32_t SECONDS_PER_MINUTE = 60;
 static constexpr uint32_t SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE;
 static constexpr uint32_t SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR;
 static constexpr float HDOP_SCIENTIFIC_THRESHOLD = 10000.0f;
-static constexpr uint8_t MENU_MODE = 2;
-static constexpr uint8_t MENU_SETTINGS = 3;
+static constexpr uint8_t MENU_SETTINGS = 2;
 static constexpr uint8_t SETTINGS_OPERATIONS = 2;
 static constexpr uint8_t SETTINGS_DISPLAY_TOUCH = 3;
 static constexpr uint8_t SETTINGS_HARDWARE_TEST = 4;
@@ -111,7 +105,7 @@ static constexpr uint8_t SETTINGS_SETUP_GUIDE = 6;
 static constexpr uint8_t SETTINGS_ABOUT = 7;
 static constexpr uint8_t SETTINGS_TOTAL = 8;        // indices 0..7
 static constexpr uint8_t TAG_LIST_TOTAL = 12;       // indices 0..11
-static constexpr uint8_t MAIN_MENU_TOTAL = 4;       // indices 0..3
+static constexpr uint8_t MAIN_MENU_TOTAL = 3;       // indices 0..3
 static constexpr uint8_t CONFIRM_TOTAL = 5;         // indices 0..4
 static constexpr uint8_t ABOUT_SELECTABLE_ROWS = 2; // indices 0..1
 
@@ -182,8 +176,8 @@ static bool is_custom_measure_interval(int seconds) {
   return measure_interval_option_index(seconds) < 0;
 }
 
-static uint8_t measure_interval_option_start(OperatingMode mode) {
-  return mode == OperatingMode::Offline ? ENERGY_SAVING_MEASURE_INTERVAL_START : 0;
+static uint8_t measure_interval_option_start(bool normal) {
+  return normal ? ENERGY_SAVING_MEASURE_INTERVAL_START : 0;
 }
 
 static void copy_tracking_duration(DisplayValues &v, uint8_t row, const char *label,
@@ -346,6 +340,7 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   // --- Screen navigation ---
   v.screen = _screen;
   v.active_metric = _active_metric;
+  v.storage_warning = ctx.storage_warning;
   v.show_temp_hum = display_temp_hum_for_interval(setting_measure_interval_seconds());
   v.pinned_chart = _setting_pinned_chart;
   if (ctx.locked)
@@ -361,7 +356,7 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     populate_chart(v, ctx.cache, ctx.cache_count);
     break;
   case Screen::TrackingMenu:
-    populate_tracking_rows(v);
+    populate_tracking_rows(v, ctx);
     break;
   case Screen::TrackingStatus:
     populate_tracking_status_rows(v, ctx);
@@ -557,17 +552,16 @@ void UIManager::sync_settings(const GoSettings &s) {
 
   _setting_measure_interval_seconds = s.measure_interval_seconds;
   _setting_energy_saving_measure_interval_seconds = s.energy_saving_measure_interval_seconds;
-  _setting_mode = s.operating_mode;
-  if (_setting_mode != OperatingMode::Portable && _menu_index == MENU_TRACKING) {
-    _menu_index = MENU_MODE;
-  }
+  _setting_wifi = s.wifi_enabled;
+  _setting_log_measurements = s.log_measurements;
   if (!display_temp_hum_for_interval(setting_measure_interval_seconds()) &&
       (_active_metric == Metric::Temp || _active_metric == Metric::Humidity)) {
     _active_metric = Metric::None;
   }
 
-  if (_screen == Screen::SettingsChoice && _editing_setting_id == SettingId::MeasureInterval) {
-    _settings_choice_index = (uint8_t)(2 + setting_current_option(SettingId::MeasureInterval));
+  if (_screen == Screen::SettingsChoice && (_editing_setting_id == SettingId::MeasureInterval ||
+                                            _editing_setting_id == SettingId::TrackingInterval)) {
+    _settings_choice_index = (uint8_t)(2 + setting_current_option(_editing_setting_id));
     sync_choice_scroll();
   }
 
@@ -600,18 +594,6 @@ void UIManager::sync_settings(const GoSettings &s) {
   _setting_touch_led = static_cast<uint8_t>(s.touch_led_intensity);
   _setting_buzzer_volume = s.buzzer_enabled ? 1 : 0;
   _setting_local_server = s.local_server_enabled ? 1 : 0;
-  if (_setting_mode != OperatingMode::Stationary) {
-    if (_screen == Screen::SettingsChoice && _editing_setting_id == SettingId::LocalServer) {
-      _screen = Screen::Operations;
-    }
-    if (_screen == Screen::Operations) {
-      uint8_t count = 0;
-      group_items(_screen, count);
-      if (_group_index >= count + 2) {
-        _group_index = 2;
-      }
-    }
-  }
 }
 
 void UIManager::apply_to_settings(GoSettings &settings) const {
@@ -640,7 +622,8 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
     break;
   }
 
-  settings.operating_mode = _setting_mode;
+  settings.wifi_enabled = _setting_wifi;
+  settings.log_measurements = _setting_log_measurements;
 
   // Auto-lock: index 0=Off(0s), 1=10s, 2=30s, 3=60s
   static constexpr int AUTO_LOCK_SECONDS[] = {0, 10, 30, 60};
@@ -815,7 +798,7 @@ void UIManager::navigate_back() {
     break;
   case Screen::TrackingMenu:
     _screen = Screen::MainMenu;
-    _menu_index = _setting_mode != OperatingMode::Portable ? MENU_MODE : MENU_TRACKING;
+    _menu_index = MENU_TRACKING;
     break;
   case Screen::TrackingStatus:
     _screen = Screen::TrackingMenu;
@@ -956,10 +939,7 @@ void UIManager::open_accel_test() { _screen = Screen::AccelTest; }
 // ---------------------------------------------------------------------------
 
 void UIManager::move_menu(int delta) {
-  // Keep action indices stable while skipping the hidden tracking row.
-  do {
-    _menu_index = (uint8_t)wrap((int)_menu_index + delta, MAIN_MENU_TOTAL);
-  } while (_setting_mode != OperatingMode::Portable && _menu_index == MENU_TRACKING);
+  _menu_index = (uint8_t)wrap((int)_menu_index + delta, MAIN_MENU_TOTAL);
 }
 
 void UIManager::move_settings(int delta) {
@@ -1023,9 +1003,14 @@ void UIManager::browse_metric(int delta) {
 // ---------------------------------------------------------------------------
 
 const UIManager::SettingId *UIManager::group_items(Screen screen, uint8_t &count) const {
-  static constexpr SettingId OPERATIONS[] = {SettingId::MeasureInterval, SettingId::Co2Calibration,
-                                             SettingId::GpsMode, SettingId::Buzzer,
-                                             SettingId::LocalServer};
+  static constexpr SettingId OPERATIONS[] = {SettingId::MeasureInterval,
+                                             SettingId::TrackingInterval,
+                                             SettingId::Co2Calibration,
+                                             SettingId::GpsMode,
+                                             SettingId::Buzzer,
+                                             SettingId::LocalServer,
+                                             SettingId::Wifi,
+                                             SettingId::LogMeasurements};
   static constexpr SettingId DISPLAY_TOUCH[] = {
       SettingId::PinnedChart,       SettingId::Units,    SettingId::AltitudeUnit,
       SettingId::PmDisplay,         SettingId::AutoLock, SettingId::BackLedIndicator,
@@ -1035,9 +1020,6 @@ const UIManager::SettingId *UIManager::group_items(Screen screen, uint8_t &count
 
   if (screen == Screen::Operations) {
     count = sizeof(OPERATIONS) / sizeof(OPERATIONS[0]);
-    if (_setting_mode != OperatingMode::Stationary) {
-      --count; // Local Server is the final item and only available in Stationary.
-    }
     return OPERATIONS;
   }
   if (screen == Screen::DisplayTouch) {
@@ -1052,8 +1034,13 @@ const UIManager::SettingId *UIManager::group_items(Screen screen, uint8_t &count
 }
 
 int UIManager::setting_measure_interval_seconds() const {
-  return _setting_mode == OperatingMode::Offline ? _setting_energy_saving_measure_interval_seconds
-                                                 : _setting_measure_interval_seconds;
+  return tracking_session_active(_tracking_state) ? _setting_measure_interval_seconds
+                                                  : _setting_energy_saving_measure_interval_seconds;
+}
+
+int UIManager::editing_measure_interval_seconds(SettingId id) const {
+  return id == SettingId::TrackingInterval ? _setting_measure_interval_seconds
+                                           : _setting_energy_saving_measure_interval_seconds;
 }
 
 uint8_t UIManager::setting_option_count(SettingId setting_id) const {
@@ -1066,16 +1053,21 @@ uint8_t UIManager::setting_option_count(SettingId setting_id) const {
     return PM_DISPLAY_COUNT;
   case SettingId::PinnedChart:
     return CHART_OPTION_COUNT;
+  case SettingId::TrackingInterval:
   case SettingId::MeasureInterval: {
-    uint8_t option_count = MEASURE_INTERVAL_COUNT - measure_interval_option_start(_setting_mode);
-    if (is_custom_measure_interval(setting_measure_interval_seconds()))
+    uint8_t option_count = MEASURE_INTERVAL_COUNT -
+                           measure_interval_option_start(setting_id == SettingId::MeasureInterval);
+    if (is_custom_measure_interval(editing_measure_interval_seconds(setting_id)))
       ++option_count;
     return option_count;
   }
   case SettingId::GpsMode:
     return GPS_MODE_COUNT;
-  case SettingId::Mode:
-    return MODE_COUNT;
+  case SettingId::Wifi:
+  case SettingId::LogMeasurements:
+    return 2;
+  case SettingId::TrackingDuration:
+    return TRACKING_DURATION_COUNT;
   case SettingId::AutoLock:
     return AUTO_LOCK_COUNT;
   case SettingId::BackLedBrightness:
@@ -1105,18 +1097,19 @@ uint8_t UIManager::setting_current_option(SettingId setting_id) const {
     return _setting_pm_display;
   case SettingId::PinnedChart:
     return static_cast<uint8_t>(_setting_pinned_chart);
+  case SettingId::TrackingInterval:
   case SettingId::MeasureInterval:
-    if (is_custom_measure_interval(setting_measure_interval_seconds()))
+    if (is_custom_measure_interval(editing_measure_interval_seconds(setting_id)))
       return 0;
-    return (uint8_t)(measure_interval_option_index(setting_measure_interval_seconds()) -
-                     measure_interval_option_start(_setting_mode));
+    return (uint8_t)(measure_interval_option_index(editing_measure_interval_seconds(setting_id)) -
+                     measure_interval_option_start(setting_id == SettingId::MeasureInterval));
   case SettingId::GpsMode:
     return _setting_gps_mode;
-  case SettingId::Mode:
-    for (uint8_t i = 0; i < MODE_COUNT; ++i) {
-      if (MODE_OPTIONS[i].mode == _setting_mode)
-        return i;
-    }
+  case SettingId::Wifi:
+    return _setting_wifi;
+  case SettingId::LogMeasurements:
+    return _setting_log_measurements;
+  case SettingId::TrackingDuration:
     return 0;
   case SettingId::AutoLock:
     return _setting_auto_lock;
@@ -1156,15 +1149,17 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
     if (option_index < CHART_OPTION_COUNT)
       _setting_pinned_chart = static_cast<Metric>(option_index);
     break;
+  case SettingId::TrackingInterval:
   case SettingId::MeasureInterval:
-    if (is_custom_measure_interval(setting_measure_interval_seconds())) {
+    if (is_custom_measure_interval(editing_measure_interval_seconds(_editing_setting_id))) {
       if (option_index == 0)
         break;
       --option_index;
     }
-    option_index += measure_interval_option_start(_setting_mode);
+    option_index +=
+        measure_interval_option_start(_editing_setting_id == SettingId::MeasureInterval);
     if (option_index < MEASURE_INTERVAL_COUNT) {
-      if (_setting_mode == OperatingMode::Offline)
+      if (_editing_setting_id == SettingId::MeasureInterval)
         _setting_energy_saving_measure_interval_seconds =
             MEASURE_INTERVAL_OPTIONS[option_index].seconds;
       else
@@ -1174,9 +1169,11 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
   case SettingId::GpsMode:
     _setting_gps_mode = option_index;
     break;
-  case SettingId::Mode:
-    if (option_index < MODE_COUNT)
-      _setting_mode = MODE_OPTIONS[option_index].mode;
+  case SettingId::Wifi:
+    _setting_wifi = option_index != 0;
+    break;
+  case SettingId::LogMeasurements:
+    _setting_log_measurements = option_index != 0;
     break;
   case SettingId::AutoLock:
     _setting_auto_lock = option_index;
@@ -1273,9 +1270,6 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
       go_home();
       break;
     case MENU_TRACKING:
-      if (_setting_mode != OperatingMode::Portable) {
-        break;
-      }
       if (tracking_session_active(_tracking_state)) {
         _screen = Screen::TrackingMenu;
         _tracking_menu_index = TRACKING_STATUS;
@@ -1283,9 +1277,6 @@ UIActionResult UIManager::dispatch_menu(InputSource source, InputType type) {
         go_home();
         result.action = UIAction::StartTracking;
       }
-      break;
-    case MENU_MODE:
-      open_settings_choice(SettingId::Mode);
       break;
     case MENU_SETTINGS:
       open_settings();
@@ -1406,14 +1397,10 @@ UIActionResult UIManager::dispatch_settings_choice(InputSource source, InputType
         apply_setting_choice(option_index);
         result.action = UIAction::PlayMelody;
         result.melody = static_cast<MelodySelect>(option_index + 1);
-      } else if (_editing_setting_id == SettingId::Mode) {
-        // Mode change has its own UIAction with the new mode.
-        apply_setting_choice(option_index);
-        // Exit to Home so the mode status icon updates in context.
-        // Stationary entry overrides this with its Info screen.
-        go_home();
-        result.action = UIAction::ChangeMode;
-        result.new_mode = _setting_mode;
+      } else if (_editing_setting_id == SettingId::TrackingDuration) {
+        result.action = UIAction::SetTrackingDuration;
+        result.duration_minutes = TRACKING_DURATION_MINUTES[option_index];
+        _screen = Screen::TrackingMenu;
       } else {
         apply_setting_choice(option_index);
         result.action = UIAction::SettingsChanged;
@@ -1625,7 +1612,7 @@ UIActionResult UIManager::dispatch_hardware_test(InputSource source, InputType t
       // Peripheral Test → start the guided flow (orchestrator drives hardware).
       open_peripheral_test();
       result.action = UIAction::RunPeripheralTest;
-    } else if (_hardware_test_index == HW_TEST_GPS && _setting_mode != OperatingMode::Offline) {
+    } else if (_hardware_test_index == HW_TEST_GPS) {
       // GPS Test → open the live screen (orchestrator starts receiver + TTFF).
       open_gps_test();
       result.action = UIAction::OpenGpsTest;
@@ -1720,10 +1707,11 @@ void UIManager::move_provisioning_confirm(int delta) {
 void UIManager::sync_tracking_state(TrackingState state) {
   _tracking_state = state;
   if (state == TrackingState::Idle &&
-      (_screen == Screen::TrackingMenu || _screen == Screen::TrackingStatus)) {
+      (_screen == Screen::TrackingMenu || _screen == Screen::TrackingStatus ||
+       (_screen == Screen::SettingsChoice && _editing_setting_id == SettingId::TrackingDuration))) {
     // A finished session has no Tracking parent menu to return to.
     _screen = Screen::MainMenu;
-    _menu_index = _setting_mode != OperatingMode::Portable ? MENU_MODE : MENU_TRACKING;
+    _menu_index = MENU_TRACKING;
   }
 }
 
@@ -1748,6 +1736,9 @@ UIActionResult UIManager::dispatch_tracking_menu(InputSource source, InputType /
       result.action = _tracking_state == TrackingState::Paused ? UIAction::ResumeTracking
                                                                : UIAction::PauseTracking;
       go_home();
+      break;
+    case TRACKING_DURATION:
+      open_settings_choice(SettingId::TrackingDuration);
       break;
     case TRACKING_STOP:
       result.action = UIAction::StopTracking;
@@ -1777,7 +1768,7 @@ UIActionResult UIManager::dispatch_tracking_status(InputSource source, InputType
   return {};
 }
 
-void UIManager::populate_tracking_rows(DisplayValues &v) const {
+void UIManager::populate_tracking_rows(DisplayValues &v, const BuildContext &ctx) const {
   v.row_count = TRACKING_MENU_TOTAL;
   copy_row(v, 0, "Exit", false);
   copy_row(v, TRACKING_BACK, "Back", false);
@@ -1785,6 +1776,13 @@ void UIManager::populate_tracking_rows(DisplayValues &v) const {
   copy_row(v, TRACKING_PAUSE_RESUME,
            _tracking_state == TrackingState::Paused ? "Resume Tracking" : "Pause Tracking", false);
   copy_row(v, TRACKING_STOP, "Stop Tracking", false);
+  char stop_label[24];
+  if (ctx.tracking_remaining_s == TRACKING_TIME_INVALID_S)
+    snprintf(stop_label, sizeof(stop_label), "Stop after: Off");
+  else
+    snprintf(stop_label, sizeof(stop_label), "Stop in: %lum",
+             (unsigned long)((ctx.tracking_remaining_s + 59) / 60));
+  copy_row(v, TRACKING_DURATION, stop_label, false);
   v.selected_row = _tracking_menu_index;
   v.show_separator_after_back = true;
 }
@@ -1875,17 +1873,11 @@ void UIManager::populate_tracking_status_rows(DisplayValues &v, const BuildConte
 }
 
 void UIManager::populate_menu_rows(DisplayValues &v) const {
-  const bool hide_tracking = _setting_mode != OperatingMode::Portable;
-  uint8_t row = 0;
-  copy_row(v, row++, "Exit Menu", false);
-  if (!hide_tracking) {
-    copy_row(v, row++, tracking_session_active(_tracking_state) ? "Tracking" : "Start Tracking",
-             false);
-  }
-  copy_row(v, row++, "Operating Mode", false);
-  copy_row(v, row++, "Settings", false);
-  v.row_count = row;
-  v.selected_row = hide_tracking && _menu_index > MENU_TRACKING ? _menu_index - 1 : _menu_index;
+  copy_row(v, 0, "Exit Menu", false);
+  copy_row(v, 1, tracking_session_active(_tracking_state) ? "Tracking" : "Start Tracking", false);
+  copy_row(v, 2, "Settings", false);
+  v.row_count = MAIN_MENU_TOTAL;
+  v.selected_row = _menu_index;
 }
 
 void UIManager::populate_settings_rows(DisplayValues &v) const {
@@ -1926,16 +1918,18 @@ void UIManager::populate_settings_group_rows(DisplayValues &v) const {
     case SettingId::PinnedChart:
       (void)snprintf(label, sizeof(label), "Pinned Chart");
       break;
-    case SettingId::MeasureInterval: {
-      const int option_index = measure_interval_option_index(setting_measure_interval_seconds());
-      if (option_index >= 0) {
-        (void)snprintf(label, sizeof(label), "Measure Int.: %s",
-                       MEASURE_INTERVAL_OPTIONS[option_index].label);
-      } else {
-        (void)snprintf(label, sizeof(label), "Measure Int.: %ds",
-                       setting_measure_interval_seconds());
-      }
-    } break;
+    case SettingId::MeasureInterval:
+    case SettingId::TrackingInterval:
+      (void)snprintf(label, sizeof(label), "%s: %ds",
+                     items[i] == SettingId::MeasureInterval ? "Normal int." : "Track int.",
+                     editing_measure_interval_seconds(items[i]));
+      break;
+    case SettingId::Wifi:
+      (void)snprintf(label, sizeof(label), "Wi-Fi: %s", _setting_wifi ? "On" : "Off");
+      break;
+    case SettingId::LogMeasurements:
+      (void)snprintf(label, sizeof(label), "Log Measurements");
+      break;
     case SettingId::Co2Calibration:
       (void)snprintf(label, sizeof(label), "CO2 Calibration");
       break;
@@ -1978,7 +1972,8 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   copy_row(v, 1, "Back", false);
   v.show_separator_after_back = true;
 
-  if (_editing_setting_id == SettingId::MeasureInterval) {
+  if (_editing_setting_id == SettingId::MeasureInterval ||
+      _editing_setting_id == SettingId::TrackingInterval) {
     populate_measure_interval_choice_rows(v);
     return;
   }
@@ -2002,12 +1997,13 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   case SettingId::GpsMode:
     options = GPS_MODE_OPTIONS;
     break;
-  case SettingId::Mode:
-    for (uint8_t i = 0; i < MODE_COUNT; ++i)
-      copy_row(v, (uint8_t)(2 + i), MODE_OPTIONS[i].label, false);
-    v.row_count = 2 + MODE_COUNT;
-    v.selected_row = _settings_choice_index;
-    return;
+  case SettingId::Wifi:
+  case SettingId::LogMeasurements:
+    options = BUZZER_OPTIONS;
+    break;
+  case SettingId::TrackingDuration:
+    options = TRACKING_DURATION_OPTIONS;
+    break;
   case SettingId::AutoLock:
     options = AUTO_LOCK_OPTIONS;
     break;
@@ -2046,16 +2042,19 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
 }
 
 void UIManager::populate_measure_interval_choice_rows(DisplayValues &v) const {
-  const bool has_custom = is_custom_measure_interval(setting_measure_interval_seconds());
-  const uint8_t option_count = setting_option_count(SettingId::MeasureInterval);
-  const uint8_t option_start = measure_interval_option_start(_setting_mode);
+  const bool has_custom =
+      is_custom_measure_interval(editing_measure_interval_seconds(_editing_setting_id));
+  const uint8_t option_count = setting_option_count(_editing_setting_id);
+  const uint8_t option_start =
+      measure_interval_option_start(_editing_setting_id == SettingId::MeasureInterval);
   uint8_t visible = 0;
 
   for (uint8_t i = 0; i < PAGE_SIZE && (_settings_choice_scroll_start + i) < option_count; ++i) {
     const uint8_t option_index = (uint8_t)(_settings_choice_scroll_start + i);
     if (has_custom && option_index == 0) {
       char label[48];
-      (void)snprintf(label, sizeof(label), "Custom (%ds)", setting_measure_interval_seconds());
+      (void)snprintf(label, sizeof(label), "Custom (%ds)",
+                     editing_measure_interval_seconds(_editing_setting_id));
       copy_row(v, (uint8_t)(2 + visible), label, false);
     } else {
       uint8_t fixed_index = option_index + option_start;

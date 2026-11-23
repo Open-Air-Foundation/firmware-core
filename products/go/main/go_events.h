@@ -63,7 +63,6 @@ enum class EventType : uint8_t {
   UserPauseTracking,
   UserResumeTracking,
   UserStopTracking, // no payload
-  UserChangeMode,   // payload: OperatingMode
   UserToggleGps,    // payload: bool
   SettingsChanged,  // no payload
   ClearData,        // no payload
@@ -121,7 +120,6 @@ struct Event {
     GpsData gps_data;                        // GpsFixUpdate (~68 bytes)
     InputEventData input;                    // InputPress (2 bytes)
     uint32_t shake_detected_ms;              // ShakeDetected
-    OperatingMode mode_change;               // UserChangeMode (1 byte)
     WakeEventData wake;                      // WakeFromSleep (1 byte)
     bool gps_enabled;                        // UserToggleGps (1 byte)
     bool ble_auth_ok;                        // BleAuthComplete (1 byte, link encrypted)

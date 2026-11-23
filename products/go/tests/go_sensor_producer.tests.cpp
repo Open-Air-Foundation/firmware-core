@@ -66,6 +66,7 @@ public:
   IMPLEMENT_MOCK0(init);
   IMPLEMENT_MOCK1(read);
   IMPLEMENT_MOCK0(run_conditioning);
+  IMPLEMENT_MOCK0(start_conditioning);
   IMPLEMENT_MOCK0(stop_measurement);
   IMPLEMENT_MOCK2(set_compensation);
 };
@@ -96,8 +97,16 @@ public:
 
 class SensorProducerTestAccess {
 public:
-  explicit SensorProducerTestAccess(SensorProducer &p) : _p(p) {}
+  explicit SensorProducerTestAccess(SensorProducer &p) : _p(p) {
+    _p.set_continuous_acquisition(true);
+    _p._continuous_applied = true;
+  }
 
+  void set_continuous(bool enabled) {
+    _p.set_continuous_acquisition(enabled);
+    _p._continuous_applied = enabled;
+    _p._sampler_enabled = false;
+  }
   void set_sampler_enabled(bool v) { _p._sampler_enabled = v; }
   bool sampler_enabled() const { return _p._sampler_enabled; }
 
@@ -1034,4 +1043,44 @@ TEST_CASE("SensorProducer run()", "[SensorProducer]") {
 
     CHECK_FALSE(no_tvoc_access.sampler_enabled());
   }
+}
+
+TEST_CASE("Idle acquisition conditions gas for raw readings and leaves unavailable fields invalid",
+          "[SensorProducer]") {
+  MockTVOCNOxSensor gas;
+  Sensors sensors{};
+  sensors.tvoc_nox = &gas;
+  SensorManager manager(sensors);
+  MockRTOS rtos;
+  RTOS::set_instance(&rtos);
+  ALLOW_CALL(rtos, get_time_ms_impl()).RETURN(0);
+  ALLOW_CALL(rtos, delay_ms_impl(trompeloeil::_));
+  Event captured{};
+  REQUIRE_CALL(rtos, queue_send_impl(trompeloeil::_, trompeloeil::_, trompeloeil::_))
+      .LR_SIDE_EFFECT(captured = *static_cast<const Event *>(_2))
+      .RETURN(true);
+  REQUIRE_CALL(gas, start_conditioning()).RETURN(true);
+  REQUIRE_CALL(gas, stop_measurement()).RETURN(true);
+  bool success = true;
+  SECTION("valid raw gas values") {}
+  SECTION("failed read produces invalid raw and index values") { success = false; }
+  unsigned reads = 0;
+  REQUIRE_CALL(gas, read(trompeloeil::_))
+      .TIMES(1, 2)
+      .SIDE_EFFECT(_1.tvoc_raw = 25000)
+      .SIDE_EFFECT(_1.nox_raw = 18000)
+      .LR_SIDE_EFFECT(++reads)
+      .LR_RETURN(success);
+  SensorProducer producer(manager, &event_queue_sentinel, {});
+  SensorProducerTestAccess access(producer);
+  access.set_continuous(false);
+  access.handle_measurement(SensorProducerTestAccess::encode_notify(1, SensorGroup::TvocNox));
+  CHECK(captured.type == EventType::SensorDataReady);
+  const auto &result = captured.sensor_data.measures.tvoc_nox;
+  CHECK(result.is_tvoc_raw_valid() == success);
+  CHECK(result.is_nox_raw_valid() == success);
+  CHECK(result.tvoc_index == result.tvoc_raw);
+  CHECK(result.nox_index == result.nox_raw);
+  CHECK(reads == (success ? 2 : 1));
+  RTOS::set_instance(nullptr);
 }

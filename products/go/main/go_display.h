@@ -107,6 +107,7 @@ struct FgLearningDashboardData {
 };
 
 struct DisplayValues {
+  bool storage_warning = false;
   // --- Sensor readings (channel A) ---
   int co2_ppm = MeasuresInvalid::CO2;
   float pm25_ugm3 = MeasuresInvalid::PM;

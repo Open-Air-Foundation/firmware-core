@@ -135,11 +135,11 @@ inline constexpr const char *BLE_VAL_TYPE_ERROR = "error";
 // Disconnect-notice values (value of BLE_KEY_DISC)
 // ---------------------------------------------------------------------------
 
-inline constexpr const char *BLE_VAL_DISC_OVERHEAT = "overheat";           // OT shutdown
-inline constexpr const char *BLE_VAL_DISC_LOW_BATT = "low_batt";           // EDV shutdown
-inline constexpr const char *BLE_VAL_DISC_USER = "user";                   // user long-press
-inline constexpr const char *BLE_VAL_DISC_OP_STATIONARY = "op_stationary"; // mode -> Stationary
-inline constexpr const char *BLE_VAL_DISC_OP_OFFLINE = "op_offline";       // mode -> Offline
+inline constexpr const char *BLE_VAL_DISC_OVERHEAT = "overheat"; // OT shutdown
+inline constexpr const char *BLE_VAL_DISC_LOW_BATT = "low_batt"; // EDV shutdown
+inline constexpr const char *BLE_VAL_DISC_USER = "user";         // user long-press
+inline constexpr const char *BLE_VAL_DISC_WIFI_SETUP = "wifi_setup";
+inline constexpr const char *BLE_VAL_DISC_LOCKED = "locked";
 
 // ---------------------------------------------------------------------------
 // Operation values (value of BLE_KEY_OP)

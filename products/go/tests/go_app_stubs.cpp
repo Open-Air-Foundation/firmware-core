@@ -693,7 +693,7 @@ RtcAppState PowerService::load_state() const { return test_spy::rtc_state; }
 
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*settings*/,
                                                        LockState /*lock_state*/,
-                                                       OperatingMode /*mode*/,
+                                                       TrackingState /*tracking*/,
                                                        uint32_t awake_ms) const {
   test_spy::last_sleep_awake_ms = awake_ms;
   return test_spy::sleep_decision_to_return;
@@ -768,7 +768,8 @@ BleService::BleService(RtosQueueHandle /*event_queue*/, StorageService &storage,
                        AgBleServer & /*ble_server*/)
     : _event_queue(nullptr), _storage(storage), _server(nullptr) {}
 
-bool BleService::init(const char * /*serial*/) {
+bool BleService::init(const char * /*serial*/, const char * /*model*/,
+                      const char * /*firmware_version*/) {
   test_spy::ble_init_called = true;
   return true;
 }
@@ -830,7 +831,6 @@ size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSetti
 }
 const char *BleService::charging_state_to_str(BmsChargingState /*s*/) { return "unknown"; }
 const char *BleService::gps_mode_to_str(GpsMode /*m*/) { return "tracking"; }
-const char *BleService::operating_mode_to_str(OperatingMode /*m*/) { return "offline"; }
 
 // ============================================================================
 // WifiService stubs
@@ -1090,9 +1090,9 @@ void Orchestrator::on_ble_pairing_request(uint32_t /*passkey*/) {}
 void Orchestrator::on_ble_auth_complete(bool /*success*/) {}
 void Orchestrator::lock() {}
 void Orchestrator::unlock() {}
-bool Orchestrator::start_tracking() { return true; }
-void Orchestrator::stop_tracking() {}
-void Orchestrator::change_mode(OperatingMode /*new_mode*/, bool /*persist*/) {}
+bool Orchestrator::start_tracking(uint16_t) { return true; }
+void Orchestrator::stop_tracking(TrackingStopReason) {}
+bool Orchestrator::set_wifi_enabled(bool /*enabled*/, bool /*persist*/) { return true; }
 void Orchestrator::enter_manufacturing_mode() {}
 void Orchestrator::apply_settings_change() {}
 bool Orchestrator::clear_data() { return true; }
@@ -1113,7 +1113,7 @@ BuildContext Orchestrator::build_context() const {
 }
 void Orchestrator::try_enter_sleep() {}
 void Orchestrator::prepare_for_sleep(uint32_t /*sleep_duration_ms*/) {}
-void Orchestrator::init_ble_if_portable() {}
+void Orchestrator::init_ble_if_available() {}
 bool Orchestrator::is_gps_active() const { return false; }
 void Orchestrator::deactivate_gps() {}
 RtcAppState Orchestrator::snapshot_state() const { return RtcAppState{}; }
@@ -1226,3 +1226,20 @@ void BuzzerService::pump_for_test(uint32_t /*now_ms*/) {}
 uint32_t play_synced(BuzzerService & /*buzzer*/, LedService & /*led*/, MelodySelect /*melody*/) {
   return 0;
 }
+
+// Measurement storage is isolated from orchestration in these fixtures.
+bool StorageService::has_recording_space() const { return true; }
+bool StorageService::storage_warning() const { return false; }
+void StorageService::set_log_boundary(MeasurementLogBoundary) { _log_sequence = 0; }
+bool StorageService::append_measurement(const MeasurementLogRecord &) { return true; }
+bool StorageService::sync_measurements() { return true; }
+bool StorageService::close_measurements() { return true; }
+bool StorageService::resume_measurements(uint32_t sequence) {
+  _log_sequence = sequence;
+  return true;
+}
+bool StorageService::clear_measurements() { return true; }
+void BleService::tick_history() {}
+void BleService::handle_measurement_list(uint32_t) {}
+void BleService::handle_measurement_start(uint32_t) {}
+void BleService::handle_measurement_delete(uint32_t) {}

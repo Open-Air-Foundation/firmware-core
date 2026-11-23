@@ -19,8 +19,22 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <algorithm>
+#include "rtos.h"
 #include <cstring>
+#include <map>
+#include <string>
 #include <vector>
+
+class BleTestClock : public RTOS {
+public:
+  uint64_t now = 0;
+  uint64_t get_time_ms_impl() override { return now; }
+  void delay_ms_impl(uint32_t ms) override { now += ms; }
+};
+static BleTestClock ble_clock;
+struct BleClockSetup {
+  BleClockSetup() { RTOS::set_instance(&ble_clock); }
+} ble_clock_setup;
 
 static constexpr uint64_t EXPECTED_ROUTE_POINT_WIRE_SIZE = 56;
 
@@ -159,12 +173,17 @@ struct SessionEntry {
 
 static std::vector<SessionEntry> sessions;
 static std::vector<RoutePoint> points;
+static std::vector<MeasurementLogRecord> log_records;
+static bool log_read_ok = true;
 static uint32_t total_capacity_kb = 0;
 static uint32_t used_kb = 0;
 static bool delete_route_returns = true;
 static uint32_t last_deleted_session_id = 0;
 
 static void reset() {
+  ble_clock.now = 0;
+  log_records.clear();
+  log_read_ok = true;
   sessions.clear();
   points.clear();
   total_capacity_kb = 0;
@@ -264,7 +283,11 @@ class BleServiceTestAccess {
 public:
   // --- State setters ---
   static void set_server(BleService &svc, AgBleServer *server) { svc._server = server; }
-  static void set_connected(BleService &svc, bool connected) { svc._connected.store(connected); }
+  static void set_connected(BleService &svc, bool connected) {
+    svc._connected.store(connected);
+    svc._server->set_auth_complete_callback(nullptr);
+    static_cast<MockBleServer *>(svc._server)->peer_authenticated = connected;
+  }
   static void set_measures_char(BleService &svc, AgBleCharacteristic *c) { svc._measures_char = c; }
   static void set_status_char(BleService &svc, AgBleCharacteristic *c) { svc._status_char = c; }
   static void set_config_char(BleService &svc, AgBleCharacteristic *c) { svc._config_char = c; }
@@ -321,9 +344,6 @@ public:
     return BleService::charging_state_to_str(state);
   }
   static const char *gps_mode_to_str(GpsMode mode) { return BleService::gps_mode_to_str(mode); }
-  static const char *operating_mode_to_str(OperatingMode mode) {
-    return BleService::operating_mode_to_str(mode);
-  }
   static uint16_t measures_properties() { return BleService::measures_properties(); }
   static uint16_t status_properties() { return BleService::status_properties(); }
   static uint16_t config_properties() { return BleService::config_properties(); }
@@ -833,7 +853,7 @@ TEST_CASE("BLE: encode_status retains existing fields and adds trk") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 10);
+  CHECK(entries.size() == 11);
 
   CHECK(find_entry(entries, "gps_fix")->uint_val == 3);
   CHECK(find_entry(entries, "gps_sat")->uint_val == 12);
@@ -880,7 +900,7 @@ TEST_CASE("BLE: encode_config produces 18 keys with compact device config") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 18);
+  CHECK(entries.size() == 21);
 
   CHECK(find_entry(entries, "meas_int") != nullptr);
   CHECK(find_entry(entries, "pm_int") == nullptr);
@@ -893,7 +913,7 @@ TEST_CASE("BLE: encode_config produces 18 keys with compact device config") {
   CHECK(find_entry(entries, "pchart")->uint_val == 1);
   CHECK(find_entry(entries, "gps_mode") != nullptr);
   CHECK(find_entry(entries, "auto_lock") != nullptr);
-  CHECK(find_entry(entries, "op_mode") != nullptr);
+  CHECK(find_entry(entries, "op_mode") == nullptr);
   CHECK(find_entry(entries, "bled") != nullptr);
   REQUIRE(find_entry(entries, "bledi") != nullptr);
   CHECK(find_entry(entries, "bledi")->text_val == "aqi");
@@ -916,7 +936,7 @@ TEST_CASE("BLE: encode_config values match settings") {
   s.use_fahrenheit = true;
   s.use_feet = true;
   s.gps_mode = GpsMode::AlwaysOn;
-  s.operating_mode = OperatingMode::Stationary;
+  s.wifi_enabled = true;
   s.buzzer_enabled = true;
   s.co2_abc_days = CO2_ABC_DAYS_DISABLED;
   s.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MIN;
@@ -934,7 +954,7 @@ TEST_CASE("BLE: encode_config values match settings") {
   CHECK(find_entry(entries, "temp_f")->bool_val == true);
   CHECK(find_entry(entries, "alt_ft")->bool_val == true);
   CHECK(find_entry(entries, "gps_mode")->text_val == "always");
-  CHECK(find_entry(entries, "op_mode")->text_val == "stationary");
+  CHECK(find_entry(entries, "wifi")->bool_val == true);
   CHECK(find_entry(entries, "buz")->bool_val == true);
   CHECK(find_entry(entries, "abc")->int_val == CO2_ABC_DAYS_DISABLED);
   CHECK(find_entry(entries, "tlo")->uint_val == LEARNING_OFFSET_HOURS_MIN);
@@ -1100,7 +1120,7 @@ TEST_CASE("BLE: notify_config sends altitude-unit-only changes") {
 
   const auto read_entries =
       decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 18);
+  CHECK(read_entries.size() == 21);
   CHECK(find_entry(read_entries, "alt_ft")->bool_val);
 
   const auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -1132,7 +1152,7 @@ TEST_CASE("BLE: notify_config sends delta and keeps READ as full snapshot") {
   REQUIRE(config_char.notify_count == 1);
 
   auto read_entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 18); // full snapshot, no "type"
+  CHECK(read_entries.size() == 21); // full snapshot, no "type"
   CHECK(find_entry(read_entries, "type") == nullptr);
 
   auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -1157,7 +1177,7 @@ TEST_CASE("BLE: max-size config snapshot encodes within the 512-byte ceiling") {
   s.measure_interval_seconds = 3600;
   s.auto_lock_seconds = TEST_MAX_AUTO_LOCK_SECONDS;
   s.gps_mode = GpsMode::OnWhenTracking;
-  s.operating_mode = OperatingMode::Stationary;
+  s.wifi_enabled = true;
   s.buzzer_enabled = true;
   s.co2_abc_days = CO2_ABC_DAYS_DISABLED;
   s.tvoc_learning_offset = LEARNING_OFFSET_HOURS_MAX;
@@ -1198,11 +1218,11 @@ TEST_CASE("BLE: status transition delta and cmd_result are within budget") {
   size_t len = BleServiceTestAccess::encode_status_transition(svc, buf, sizeof(buf), 0xFFFFFFFFu,
                                                               TrackingState::Recording);
   REQUIRE(len > 0);
-  CHECK(len == 29); // Largest session ID; trk adds five bytes to the legacy delta.
+  CHECK(len == 46); // Largest session ID; trk adds five bytes to the legacy delta.
   CHECK(len <= TEST_NOTIFY_BUDGET);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 3);
+  CHECK(entries.size() == 4);
   CHECK(find_entry(entries, "tracking") != nullptr);
   CHECK(find_entry(entries, "session") != nullptr);
   CHECK(find_entry(entries, "trk")->uint_val == 1);
@@ -2361,19 +2381,6 @@ TEST_CASE("BLE: gps_mode_to_str maps all values") {
   CHECK(std::string(BleServiceTestAccess::gps_mode_to_str(GpsMode::AlwaysOn)) == "always");
 }
 
-TEST_CASE("BLE: operating_mode_to_str maps all values") {
-  CHECK(std::string(BleServiceTestAccess::operating_mode_to_str(OperatingMode::Portable)) ==
-        "portable");
-  CHECK(std::string(BleServiceTestAccess::operating_mode_to_str(OperatingMode::Stationary)) ==
-        "stationary");
-  CHECK(std::string(BleServiceTestAccess::operating_mode_to_str(OperatingMode::Offline)) ==
-        "offline");
-}
-
-// ---------------------------------------------------------------------------
-// Notification flow
-// ---------------------------------------------------------------------------
-
 TEST_CASE("BLE: notify_measures sets value but skips notify when not connected") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
@@ -2444,8 +2451,8 @@ TEST_CASE("BLE: Status Read and tracking notifications report the enum alongside
     const auto read = decode_cbor_map(status_char.last_value.data(), status_char.last_value.size());
     const auto notify = decode_cbor_map(status_char.last_notified_value.data(),
                                         status_char.last_notified_value.size());
-    REQUIRE(read.size() == 10);
-    REQUIRE(notify.size() == 3);
+    REQUIRE(read.size() == 11);
+    REQUIRE(notify.size() == 4);
     for (const auto &entries : {read, notify}) {
       REQUIRE(find_entry(entries, "trk") != nullptr);
       REQUIRE(find_entry(entries, "tracking") != nullptr);
@@ -2474,13 +2481,13 @@ TEST_CASE("BLE: notify_tracking_status notifies 3-key delta while READ stays 10 
 
   // Stored value (READ) is the full 10-key snapshot.
   auto read_entries = decode_cbor_map(status_char.last_value.data(), status_char.last_value.size());
-  CHECK(read_entries.size() == 10);
+  CHECK(read_entries.size() == 11);
   CHECK(find_entry(read_entries, "type") == nullptr);
 
   // NOTIFY carries the {tracking, session, trk} transition delta.
   auto notify_entries = decode_cbor_map(status_char.last_notified_value.data(),
                                         status_char.last_notified_value.size());
-  CHECK(notify_entries.size() == 3);
+  CHECK(notify_entries.size() == 4);
   CHECK(find_entry(notify_entries, "tracking")->bool_val == true);
   CHECK(find_entry(notify_entries, "session")->uint_val == 10042);
   CHECK(find_entry(notify_entries, "trk")->uint_val == 1);
@@ -2518,7 +2525,7 @@ TEST_CASE("BLE: notify_charging_status notifies 3-key power delta while READ sta
 
   // Stored value (READ) is the full 10-key snapshot, no discriminator.
   auto read_entries = decode_cbor_map(status_char.last_value.data(), status_char.last_value.size());
-  CHECK(read_entries.size() == 10);
+  CHECK(read_entries.size() == 11);
   CHECK(find_entry(read_entries, "tracking")->bool_val == true);
   CHECK(find_entry(read_entries, "session")->uint_val == 10042);
   CHECK(find_entry(read_entries, "trk")->uint_val == 2);
@@ -2573,7 +2580,7 @@ TEST_CASE("BLE: notify_disconnect sends a 1-key {disc} delta without touching th
   BleServiceTestAccess::set_status_char(svc, &status_char);
   BleServiceTestAccess::set_connected(svc, true);
 
-  svc.notify_disconnect(BleDiscReason::OpStationary);
+  svc.notify_disconnect(BleDiscReason::WifiSetup);
 
   // NOTIFY-only: the stored READ value is never written.
   CHECK(status_char.set_value_count == 0);
@@ -2582,7 +2589,7 @@ TEST_CASE("BLE: notify_disconnect sends a 1-key {disc} delta without touching th
   auto entries = decode_cbor_map(status_char.last_notified_value.data(),
                                  status_char.last_notified_value.size());
   CHECK(entries.size() == 1);
-  CHECK(find_entry(entries, "disc")->text_val == "op_stationary");
+  CHECK(find_entry(entries, "disc")->text_val == "wifi_setup");
 }
 
 TEST_CASE("BLE: notify_disconnect skips notify when not connected") {
@@ -2609,7 +2616,7 @@ TEST_CASE("BLE: disc delta is within budget for every reason") {
   BleService svc(nullptr, storage, default_ble_server);
 
   for (auto reason : {BleDiscReason::Overheat, BleDiscReason::LowBatt, BleDiscReason::User,
-                      BleDiscReason::OpStationary, BleDiscReason::OpOffline}) {
+                      BleDiscReason::WifiSetup, BleDiscReason::Locked}) {
     uint8_t buf[256];
     size_t len = BleServiceTestAccess::encode_status_disc(svc, buf, sizeof(buf), reason);
     REQUIRE(len > 0);
@@ -2627,8 +2634,8 @@ TEST_CASE("BLE: encode_status_disc overflows on undersized buffer") {
   BleService svc(nullptr, storage, default_ble_server);
 
   uint8_t tiny[4];
-  size_t len = BleServiceTestAccess::encode_status_disc(svc, tiny, sizeof(tiny),
-                                                        BleDiscReason::OpStationary);
+  size_t len =
+      BleServiceTestAccess::encode_status_disc(svc, tiny, sizeof(tiny), BleDiscReason::WifiSetup);
   CHECK(len == 0);
 }
 
@@ -2776,6 +2783,7 @@ TEST_CASE("BLE: on_disconnect clears state and restarts advertising") {
   CHECK(svc.is_connected() == false);
   CHECK(svc.is_authenticated() == false);
   CHECK(BleServiceTestAccess::export_active(svc) == false);
+  svc.tick_history(); // owner task releases snapshot and cursor
   CHECK(BleServiceTestAccess::export_session_id(svc) == 0);
   CHECK(server.start_advertising_count == 1);
 }
@@ -2912,6 +2920,8 @@ TEST_CASE("BLE: handle_history_start sends error for non-existent session") {
   BleServiceTestAccess::set_connected(svc, true);
 
   svc.handle_history_start(99999);
+  for (unsigned tick = 0; tick < 100; ++tick)
+    svc.tick_history();
 
   REQUIRE(!history_char.last_value.empty());
   CHECK(history_char.last_value[0] == 0x00);
@@ -2933,6 +2943,8 @@ TEST_CASE("BLE: handle_history_start completes an empty session") {
   BleServiceTestAccess::set_connected(svc, true);
 
   svc.handle_history_start(10001);
+  for (unsigned tick = 0; tick < 100; ++tick)
+    svc.tick_history();
 
   REQUIRE(history_char.all_values.size() == 2);
 
@@ -2974,6 +2986,8 @@ TEST_CASE("BLE: handle_history_start streams points and sends done") {
   BleServiceTestAccess::set_connected(svc, true);
 
   svc.handle_history_start(10001);
+  for (unsigned tick = 0; tick < 100; ++tick)
+    svc.tick_history();
 
   // Should have sent multiple notifications:
   // 1. started (CBOR tag 0x00)
@@ -3009,6 +3023,8 @@ TEST_CASE("BLE: history export sends raw route points") {
   BleServiceTestAccess::set_connected(svc, true);
 
   svc.handle_history_start(10001);
+  for (unsigned tick = 0; tick < 100; ++tick)
+    svc.tick_history();
 
   const auto binary =
       std::find_if(history_char.all_values.begin(), history_char.all_values.end(),
@@ -3039,10 +3055,14 @@ TEST_CASE("BLE: history fill sends raw route points") {
   BleServiceTestAccess::set_connected(svc, true);
 
   svc.handle_history_start(10001);
+  for (unsigned tick = 0; tick < 100; ++tick)
+    svc.tick_history();
 
   history_char.all_values.clear();
   uint32_t index = 0;
   svc.handle_history_fill(&index, 1);
+  for (unsigned tick = 0; tick < 100; ++tick)
+    svc.tick_history();
 
   const auto binary =
       std::find_if(history_char.all_values.begin(), history_char.all_values.end(),
@@ -3064,6 +3084,8 @@ TEST_CASE("BLE: handle_history_fill sends error when no active download") {
 
   uint32_t indices[] = {0, 1};
   svc.handle_history_fill(indices, 2);
+  for (unsigned tick = 0; tick < 100; ++tick)
+    svc.tick_history();
 
   REQUIRE(!history_char.last_value.empty());
   CHECK(history_char.last_value[0] == 0x00);
@@ -3086,11 +3108,16 @@ TEST_CASE("BLE: handle_history_fill retransmits requested points") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
-  BleServiceTestAccess::set_export_active(svc, true);
-  BleServiceTestAccess::set_export_session_id(svc, 10001);
+  svc.handle_history_start(10001);
+  for (unsigned tick = 0; tick < 4; ++tick)
+    svc.tick_history();
+  history_char.all_values.clear();
+  history_char.notify_count = 0;
 
   uint32_t indices[] = {0, 2};
   svc.handle_history_fill(indices, 2);
+  for (unsigned tick = 0; tick < 100; ++tick)
+    svc.tick_history();
 
   // Should have sent: 2 binary data + 1 done
   REQUIRE(history_char.notify_count >= 3);
@@ -3323,4 +3350,207 @@ TEST_CASE("BLE: compute_ble_adv_name uses the serial tail") {
   CHECK(std::string(name) == "AirGradient Go 0000");
   compute_ble_adv_name(nullptr, name, sizeof(name));
   CHECK(std::string(name) == "AirGradient Go 0000");
+}
+
+bool StorageService::read_measurement(uint32_t id, uint32_t index,
+                                      MeasurementLogRecord &out) const {
+  if (id != 7 || !storage_spy::log_read_ok || index >= storage_spy::log_records.size())
+    return false;
+  out = storage_spy::log_records[index];
+  return true;
+}
+bool StorageService::protect_measurement_log(uint32_t id, MeasurementLogInfo &out) {
+  if (id != 7 || _protected_log != 0)
+    return false;
+  _protected_log = id;
+  out.sequence = id;
+  out.count = storage_spy::log_records.size();
+  return true;
+}
+bool StorageService::next_measurement_log(uint32_t, MeasurementLogInfo &) const { return false; }
+bool StorageService::delete_measurement_log(uint32_t id) { return id == 7 && _protected_log != id; }
+
+TEST_CASE("BLE: tracking duration accepts whole minutes and validates command context") {
+  for (const char *command : {"start_tracking", "tracking_duration", "stop_tracking"}) {
+    for (int minutes : {-1, 0, 1, 1440, 1441}) {
+      CAPTURE(command, minutes);
+      uint8_t buf[128];
+      CborEncoder encoder, map;
+      cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+      cbor_encoder_create_map(&encoder, &map, 3);
+      cbor_encode_text_stringz(&map, "op");
+      cbor_encode_text_stringz(&map, "cmd");
+      cbor_encode_text_stringz(&map, "cmd");
+      cbor_encode_text_stringz(&map, command);
+      cbor_encode_text_stringz(&map, "duration_min");
+      cbor_encode_int(&map, minutes);
+      cbor_encoder_close_container(&encoder, &map);
+      GoSettings settings{};
+      const auto result = BleService::decode_config_write(
+          buf, cbor_encoder_get_buffer_size(&encoder, buf), settings);
+      const bool valid = minutes >= 0 && minutes <= 1440 &&
+                         (strcmp(command, "tracking_duration") == 0 ||
+                          (strcmp(command, "start_tracking") == 0 && minutes != 0));
+      CHECK(result.has_invalid_config_values == !valid);
+      if (valid)
+        CHECK(result.duration_minutes == minutes);
+    }
+  }
+}
+
+TEST_CASE("BLE: lock prevents reconnect advertising after an admitted transfer disconnects") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  MockBleServer server;
+  BleService svc(nullptr, storage, server);
+  BleServiceTestAccess::set_connected(svc, true);
+  svc.set_connectable(false);
+  BleServiceTestAccess::on_disconnect(svc, 1, 0);
+  CHECK_FALSE(svc.is_connected());
+  CHECK(server.start_advertising_count == 0);
+}
+
+TEST_CASE("BLE: measurement export has a fixed snapshot and releases protection at termination") {
+  storage_spy::reset();
+  MeasurementLogRecord record{};
+  record.timestamp = 1737000000;
+  record.sensors.pm_a.pm_25 = 12.0f;
+  storage_spy::log_records = {record, record};
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  MockBleServer server;
+  BleService svc(nullptr, storage, server);
+  MockBleCharacteristic history;
+  BleServiceTestAccess::set_history_char(svc, &history);
+  BleServiceTestAccess::set_connected(svc, true);
+  svc.handle_measurement_start(7);
+  REQUIRE(svc.export_active());
+  auto started = decode_cbor_map(history.last_value.data() + 1, history.last_value.size() - 1);
+  REQUIRE(find_entry(started, "kind") != nullptr);
+  CHECK(find_entry(started, "kind")->text_val == "measurements");
+  CHECK(find_entry(started, "version")->uint_val == 1);
+  CHECK(find_entry(started, "total")->uint_val == 2);
+  CHECK(find_entry(started, "pt_size")->uint_val == 39);
+  storage_spy::log_records.push_back(record); // new write is outside exported snapshot
+  svc.tick_history();
+  REQUIRE(history.last_value.size() == 42); // 3-byte header + 39-byte record
+  CHECK(history.last_value[0] == 1);
+  int64_t timestamp = 0;
+  memcpy(&timestamp, history.last_value.data() + 3, sizeof(timestamp));
+  CHECK(timestamp == record.timestamp);
+  svc.tick_history();
+  svc.tick_history();
+  REQUIRE(svc.export_active()); // fill-recovery window retains protection
+  CHECK_FALSE(storage.delete_measurement_log(7));
+  uint32_t index = 1;
+  svc.handle_history_fill(&index, 1);
+  svc.tick_history();
+  CHECK(history.last_value[0] == 1);
+  CHECK(history.last_value[1] == 1);
+  svc.tick_history();
+  SECTION("explicit end") { svc.handle_history_end(); }
+  SECTION("disconnect") {
+    BleServiceTestAccess::on_disconnect(svc, 1, 0);
+    svc.tick_history();
+  }
+  SECTION("idle timeout") {
+    ble_clock.now += 60000;
+    svc.tick_history();
+  }
+  SECTION("read failure during fill") {
+    storage_spy::log_read_ok = false;
+    svc.handle_history_fill(&index, 1);
+    svc.tick_history();
+  }
+  CHECK_FALSE(svc.export_active());
+  CHECK(storage.delete_measurement_log(7));
+}
+
+namespace {
+class RegistrationGattService : public AgBleGattService {
+public:
+  struct Characteristic : MockBleCharacteristic {
+    uint16_t properties = 0;
+    bool value_result = true;
+    bool set_value(const uint8_t *data, size_t len) override {
+      return value_result && MockBleCharacteristic::set_value(data, len);
+    }
+  };
+  std::map<std::string, Characteristic> characteristics;
+  std::string fail_characteristic;
+  bool start_result = true;
+  bool value_result = true;
+  bool started = false;
+
+  AgBleCharacteristic *add_characteristic(const char *uuid, uint16_t properties) override {
+    if (fail_characteristic == uuid)
+      return nullptr;
+    auto &ch = characteristics[uuid];
+    ch.properties = properties;
+    ch.value_result = value_result;
+    return &ch;
+  }
+  bool start() override {
+    started = start_result;
+    return started;
+  }
+};
+
+class RegistrationBleServer : public MockBleServer {
+public:
+  RegistrationGattService data, dis;
+  std::vector<std::string> services;
+  bool fail_dis = false;
+  AgBleGattService *add_service(const char *uuid) override {
+    services.emplace_back(uuid);
+    if (std::string(uuid) == "180A")
+      return fail_dis ? nullptr : &dis;
+    return &data;
+  }
+};
+} // namespace
+
+TEST_CASE("BLE: normal registration includes Device Information without provisioning") {
+  RegistrationBleServer server;
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, server);
+  REQUIRE(svc.init_stack_and_register("0123456789ab", "P-1PSG", "2.0.0-test"));
+  REQUIRE(server.services ==
+          std::vector<std::string>{"d1c0c0a0-6b48-4b2a-9b1d-59f9f2b0a1e1", "180A"});
+  CHECK(server.data.started);
+  CHECK(server.data.characteristics.size() == 4);
+  REQUIRE(server.dis.started);
+  REQUIRE(server.dis.characteristics.size() == 4);
+  const std::map<std::string, std::string> expected = {{"2A24", "P-1PSG"},
+                                                       {"2A25", "0123456789ab"},
+                                                       {"2A26", "2.0.0-test"},
+                                                       {"2A29", "AirGradient"}};
+  for (const auto &[uuid, value] : expected) {
+    const auto &ch = server.dis.characteristics.at(uuid);
+    CHECK(std::string(ch.last_value.begin(), ch.last_value.end()) == value);
+    CHECK(ch.properties == (AgBleProperty::READ | AgBleProperty::READ_ENC));
+  }
+  CHECK(server.start_advertising_count == 0);
+  REQUIRE(svc.start_advertising());
+  CHECK(server.start_advertising_count == 1);
+  svc.deinit();
+}
+
+TEST_CASE("BLE: Device Information registration failure aborts stack initialization") {
+  const int failure = GENERATE(0, 1, 2, 3, 4, 5, 6);
+  RegistrationBleServer server;
+  if (failure == 0)
+    server.fail_dis = true;
+  if (failure >= 1 && failure <= 4) {
+    const char *uuids[] = {"2A24", "2A25", "2A26", "2A29"};
+    server.dis.fail_characteristic = uuids[failure - 1];
+  }
+  if (failure == 5)
+    server.dis.start_result = false;
+  if (failure == 6)
+    server.dis.value_result = false;
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, server);
+  CHECK_FALSE(svc.init("0123456789ab", "P-1PSG", "2.0.0-test"));
+  CHECK_FALSE(svc.is_initialized());
+  CHECK(server.deinit_count == 1);
+  CHECK(server.start_advertising_count == 0);
 }

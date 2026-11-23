@@ -30,7 +30,8 @@ private:
 
   /// Try BMS initialization twice to recover transient communication failures.
   bool init_bms_with_retry();
-  bool prepare_gps_for_sleep(RtcAppState &state, bool probe_receiver = false);
+  bool prepare_gps_for_sleep(RtcAppState &state, bool probe_receiver = false,
+                             bool *retry_needed = nullptr);
 
   // --- Testable fast-path core ---
 
@@ -43,6 +44,8 @@ private:
     uint32_t sleep_duration_ms;    ///< Valid when outcome == Sleep
     bool sensors_warm;             ///< RTC persistence before sleep
     uint64_t gps_wake_deadline_ms; ///< Updated by either inactive GPS sleep request
+    uint64_t next_measurement_ms = 0;
+    uint32_t measurement_log_sequence = 0;
   };
 
   FastPathResult execute_fast_path(const RtcAppState &state, const volatile bool &button_flag,

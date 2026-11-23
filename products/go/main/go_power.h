@@ -329,20 +329,20 @@ public:
   /// Uses Config::deep_sleep_threshold_ms from construction.
   ///
   /// Rules:
-  ///   - Not Offline mode  -> {None, 0}  (only Offline sleeps)
+  ///   - Tracking, Wi-Fi or Always On GPS -> {None, 0}
   ///   - Unlocked          -> {None, 0}  (never sleep while user is active)
   ///   - sleep_ms >= deep_sleep_threshold_ms -> {Deep, sleep_ms}
   ///   - sleep_ms <  deep_sleep_threshold_ms -> {None, 0}  (stay awake; avoid
   ///     deep sleep overhead exceeding the benefit for short intervals)
   ///
-  /// sleep_ms = min(enabled intervals) - awake_ms, clamped to 0.
+  /// sleep_ms = normal measurement interval - awake_ms, clamped to 0.
   ///
-  /// @param settings   Current settings (sensor and display intervals).
+  /// @param settings   Current feature settings and measurement intervals.
   /// @param lock_state Current lock state.
-  /// @param mode       Current operating mode.
+  /// @param tracking   Recording and Paused sessions both stay awake.
   /// @param awake_ms   Milliseconds the device has been awake this cycle.
-  SleepDecision decide_sleep(const GoSettings &settings, LockState lock_state, OperatingMode mode,
-                             uint32_t awake_ms) const;
+  SleepDecision decide_sleep(const GoSettings &settings, LockState lock_state,
+                             TrackingState tracking, uint32_t awake_ms) const;
 
   /// Return true when the given sleep duration is short enough that keeping
   /// the PM sensor measuring (GPIO held) across deep sleep is beneficial.
@@ -351,7 +351,7 @@ public:
   bool should_hold_pm_sensor(uint32_t sleep_duration_ms) const;
 
   /// Return true when the measurement interval is long enough to justify
-  /// sleeping the PM sensor between measurements (Portable mode).
+  /// sleeping the PM sensor between measurements during continuous acquisition.
   ///
   /// The threshold is `Config::pm_sleep_threshold_ms` (default 20 s), which
   /// accounts for ~10 s warmup plus a minimum sleep time.

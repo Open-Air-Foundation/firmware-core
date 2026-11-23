@@ -2,8 +2,8 @@
  * AirGradient Go — BLE Service implementation
  *
  * GATT setup, CBOR encoding/decoding, NimBLE callbacks, and binary
- * history streaming. GATT registration is excluded under TEST_HOST; advertising,
- * encoding and event handlers use the abstract BLE server interface.
+ * history streaming. Registration, advertising, encoding and event handlers
+ * use the abstract BLE server interface.
  *
  * AirGradient
  * https://airgradient.com
@@ -19,9 +19,6 @@
 #include "go_storage.h"
 #include "go_type_helpers.hpp"
 
-#ifndef TEST_HOST
-#include "sdkconfig.h"
-#endif
 #include "rtos.h"
 
 #include <cbor.h>
@@ -47,6 +44,13 @@ static constexpr const char *MEASURES_CHAR_UUID = "d1c0c0a1-6b48-4b2a-9b1d-59f9f
 static constexpr const char *STATUS_CHAR_UUID = "d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1";
 static constexpr const char *CONFIG_CHAR_UUID = "d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1";
 static constexpr const char *HISTORY_CHAR_UUID = "d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1";
+
+static constexpr const char *DIS_SERVICE_UUID = "180A";
+static constexpr const char *DIS_MODEL_UUID = "2A24";
+static constexpr const char *DIS_SERIAL_UUID = "2A25";
+static constexpr const char *DIS_FIRMWARE_UUID = "2A26";
+static constexpr const char *DIS_MANUFACTURER_UUID = "2A29";
+static constexpr const char *DIS_MANUFACTURER = "AirGradient";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -516,16 +520,15 @@ BleService::BleService(RtosQueueHandle event_queue, StorageService &storage,
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-#ifndef TEST_HOST
-
-bool BleService::init(const char *serial) {
-  if (!init_stack_and_register(serial)) {
+bool BleService::init(const char *serial, const char *model, const char *firmware_version) {
+  if (!init_stack_and_register(serial, model, firmware_version)) {
     return false;
   }
   return start_advertising();
 }
 
-bool BleService::init_stack_and_register(const char *serial) {
+bool BleService::init_stack_and_register(const char *serial, const char *model,
+                                         const char *firmware_version) {
   if (_initialized) {
     AG_LOGW(TAG, "already initialized");
     return true;
@@ -603,6 +606,39 @@ bool BleService::init_stack_and_register(const char *serial) {
     return false;
   }
 
+  // Device Information is independent of the provisioning transport.
+  auto *dis = _server->add_service(DIS_SERVICE_UUID);
+  if (dis == nullptr) {
+    AG_LOGE(TAG, "add Device Information service failed");
+    _server->deinit();
+    return false;
+  }
+  const struct {
+    const char *uuid;
+    const char *value;
+  } identity[] = {
+      {DIS_MODEL_UUID, model},
+      {DIS_SERIAL_UUID, serial},
+      {DIS_FIRMWARE_UUID, firmware_version},
+      {DIS_MANUFACTURER_UUID, DIS_MANUFACTURER},
+  };
+  constexpr uint16_t properties = AgBleProperty::READ | AgBleProperty::READ_ENC;
+  for (const auto &field : identity) {
+    auto *ch = dis->add_characteristic(field.uuid, properties);
+    const char *value = field.value != nullptr ? field.value : "";
+    if (ch == nullptr ||
+        !ch->set_value(reinterpret_cast<const uint8_t *>(value), std::strlen(value))) {
+      AG_LOGE(TAG, "Device Information characteristic %s failed", field.uuid);
+      _server->deinit();
+      return false;
+    }
+  }
+  if (!dis->start()) {
+    AG_LOGE(TAG, "Device Information service start failed");
+    _server->deinit();
+    return false;
+  }
+
   // --- Callbacks ---
   _server->set_connect_callback([this](uint16_t conn_handle) { on_connect(conn_handle); });
   _server->set_disconnect_callback(
@@ -621,8 +657,6 @@ bool BleService::init_stack_and_register(const char *serial) {
   AG_LOGI(TAG, "stack init + GATT registered (advertising deferred)");
   return true;
 }
-
-#endif // TEST_HOST
 
 bool BleService::start_advertising() {
   if (_initialized) {
@@ -660,13 +694,13 @@ bool BleService::start_advertising() {
 }
 
 void BleService::deinit() {
+  release_export();
   if (!_initialized) {
     return;
   }
 
   _connected.store(false);
   _export_active = false;
-  _export_session_id = 0;
 
   // _server stays bound — it is borrowed from the board for the service
   // lifetime.  Clearing characteristic pointers prevents stale pointer
@@ -738,10 +772,10 @@ void BleService::on_disconnect(uint16_t conn_handle, int reason) {
 
   // Clean up active history export
   _export_active = false;
-  _export_session_id = 0;
 
-  // Restart advertising — borrowed server is always bound.
-  _server->start_advertising();
+  // An admitted transfer may finish after lock, but a new connection must wait for unlock.
+  if (_connectable.load())
+    _server->start_advertising();
 
   Event evt{};
   evt.type = EventType::BleDisconnected;
@@ -1108,188 +1142,39 @@ void BleService::handle_history_list() {
 // ---------------------------------------------------------------------------
 
 void BleService::handle_history_start(uint32_t session_id) {
-  if (_history_char == nullptr) {
-    return;
-  }
-
-  // End any active download first
-  if (_export_active) {
-    _export_active = false;
-  }
-
-  // Point count cannot distinguish an empty session from a missing one.
+  release_export();
   if (!_storage.route_file_exists(session_id)) {
-    // Send error: session not found
-    uint8_t buf[CBOR_BUF_SIZE];
-    CborEncoder encoder;
-    cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
-    CborEncoder map;
-    cbor_encoder_create_map(&encoder, &map, 2);
-    cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
-    cbor_encode_text_stringz(&map, BLE_VAL_TYPE_ERROR);
-    cbor_encode_text_stringz(&map, BLE_KEY_ERR);
-    cbor_encode_text_stringz(&map, BLE_VAL_ERR_SESSION_NOT_FOUND);
-    cbor_encoder_close_container(&encoder, &map);
-    size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
-    send_history_cbor(buf, len);
+    notify_history_error(BLE_VAL_ERR_SESSION_NOT_FOUND);
     return;
   }
+  begin_export(session_id, _storage.get_session_point_count(session_id), false);
+}
 
-  uint32_t total_points = _storage.get_session_point_count(session_id);
-
-  _export_session_id = session_id;
-  _export_active = true;
-
-  // Send "started" CBOR response
-  {
-    uint8_t buf[CBOR_BUF_SIZE];
-    CborEncoder encoder;
-    cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
-    CborEncoder map;
-    cbor_encoder_create_map(&encoder, &map, 4);
-
-    cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
-    cbor_encode_text_stringz(&map, BLE_VAL_TYPE_STARTED);
-
-    cbor_encode_text_stringz(&map, BLE_KEY_SESSION);
-    cbor_encode_uint(&map, session_id);
-
-    cbor_encode_text_stringz(&map, BLE_KEY_TOTAL);
-    cbor_encode_uint(&map, total_points);
-
-    cbor_encode_text_stringz(&map, BLE_KEY_PT_SIZE);
-    cbor_encode_uint(&map, ROUTE_POINT_WIRE_SIZE);
-
-    cbor_encoder_close_container(&encoder, &map);
-    size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
-    send_history_cbor(buf, len);
+void BleService::handle_history_fill(const uint32_t *indices, size_t count) {
+  if (!export_active()) {
+    notify_history_error(BLE_VAL_ERR_NO_ACTIVE_DOWNLOAD);
+    return;
   }
-
-  // Stream all points as binary notifications
-  uint32_t sent = 0;
-  RoutePoint batch[ROUTE_READ_BATCH];
-
-  for (uint32_t offset = 0; offset < total_points && _connected.load(); /* incremented below */) {
-    uint16_t to_read = static_cast<uint16_t>(
-        std::min(static_cast<uint32_t>(ROUTE_READ_BATCH), total_points - offset));
-    uint16_t actually_read = _storage.read_route_points(session_id, offset, batch, to_read);
-
-    if (actually_read == 0) {
-      // Flash read error — abort stream
-      AG_LOGE(TAG, "flash read error at offset %" PRIu32, offset);
-      uint8_t buf[CBOR_BUF_SIZE];
-      CborEncoder encoder;
-      cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
-      CborEncoder map;
-      cbor_encoder_create_map(&encoder, &map, 2);
-      cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
-      cbor_encode_text_stringz(&map, BLE_VAL_TYPE_ERROR);
-      cbor_encode_text_stringz(&map, BLE_KEY_ERR);
-      cbor_encode_text_stringz(&map, BLE_VAL_ERR_FLASH_ERROR);
-      cbor_encoder_close_container(&encoder, &map);
-      size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
-      send_history_cbor(buf, len);
-      _export_active = false;
+  if (_export_streaming || count > BleHistoryDecodeResult::MAX_FILL_POINTS) {
+    notify_history_error(BLE_VAL_ERR_BUSY);
+    return;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    if (indices[i] >= _export_total) {
+      notify_history_error("invalid_index");
       return;
     }
-
-    // Convert the raw route points to wire format and send. Correction policy
-    // belongs to the BLE client; route storage remains the raw source of truth.
-    uint8_t wire_buf[ROUTE_READ_BATCH * ROUTE_POINT_WIRE_SIZE];
-    for (uint16_t i = 0; i < actually_read; i++) {
-      route_point_to_wire(batch[i], &wire_buf[i * ROUTE_POINT_WIRE_SIZE]);
-    }
-
-    send_history_binary(static_cast<uint16_t>(offset), wire_buf,
-                        actually_read * ROUTE_POINT_WIRE_SIZE);
-
-    offset += actually_read;
-    sent += actually_read;
   }
-
-  // Send "done" CBOR response
-  {
-    uint8_t buf[CBOR_BUF_SIZE];
-    CborEncoder encoder;
-    cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
-    CborEncoder map;
-    cbor_encoder_create_map(&encoder, &map, 2);
-    cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
-    cbor_encode_text_stringz(&map, BLE_VAL_TYPE_DONE);
-    cbor_encode_text_stringz(&map, BLE_KEY_SENT);
-    cbor_encode_uint(&map, sent);
-    cbor_encoder_close_container(&encoder, &map);
-    size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
-    send_history_cbor(buf, len);
-  }
+  std::copy(indices, indices + count, _fill_indices);
+  _fill_count = count;
+  _fill_offset = 0;
+  _pass_sent = 0;
+  _export_streaming = true;
+  _export_activity_ms = RTOS::get_time_ms();
 }
-
-// ---------------------------------------------------------------------------
-// History: fill missing points
-// ---------------------------------------------------------------------------
-
-void BleService::handle_history_fill(const uint32_t *point_indices, size_t count) {
-  if (_history_char == nullptr) {
-    return;
-  }
-
-  if (!_export_active) {
-    // Send error: no active download
-    uint8_t buf[CBOR_BUF_SIZE];
-    CborEncoder encoder;
-    cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
-    CborEncoder map;
-    cbor_encoder_create_map(&encoder, &map, 2);
-    cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
-    cbor_encode_text_stringz(&map, BLE_VAL_TYPE_ERROR);
-    cbor_encode_text_stringz(&map, BLE_KEY_ERR);
-    cbor_encode_text_stringz(&map, BLE_VAL_ERR_NO_ACTIVE_DOWNLOAD);
-    cbor_encoder_close_container(&encoder, &map);
-    size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
-    send_history_cbor(buf, len);
-    return;
-  }
-
-  uint32_t sent = 0;
-
-  for (size_t i = 0; i < count && _connected.load(); i++) {
-    RoutePoint point;
-    uint16_t actually_read =
-        _storage.read_route_points(_export_session_id, point_indices[i], &point, 1);
-
-    if (actually_read == 0) {
-      AG_LOGW(TAG, "fill: could not read point %" PRIu32, point_indices[i]);
-      continue;
-    }
-
-    uint8_t wire_buf[ROUTE_POINT_WIRE_SIZE];
-    route_point_to_wire(point, wire_buf);
-    send_history_binary(static_cast<uint16_t>(point_indices[i]), wire_buf, ROUTE_POINT_WIRE_SIZE);
-    sent++;
-  }
-
-  // Send "done" CBOR response
-  uint8_t buf[CBOR_BUF_SIZE];
-  CborEncoder encoder;
-  cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
-  CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 2);
-  cbor_encode_text_stringz(&map, BLE_KEY_TYPE);
-  cbor_encode_text_stringz(&map, BLE_VAL_TYPE_DONE);
-  cbor_encode_text_stringz(&map, BLE_KEY_SENT);
-  cbor_encode_uint(&map, sent);
-  cbor_encoder_close_container(&encoder, &map);
-  size_t len = cbor_encoder_get_buffer_size(&encoder, buf);
-  send_history_cbor(buf, len);
-}
-
-// ---------------------------------------------------------------------------
-// History: end download
-// ---------------------------------------------------------------------------
 
 void BleService::handle_history_end() {
-  _export_active = false;
-  _export_session_id = 0;
+  release_export();
 
   if (_history_char == nullptr) {
     return;
@@ -1319,9 +1204,8 @@ void BleService::handle_history_delete(uint32_t session_id) {
   }
 
   // End any active export for this session
-  if (_export_active && _export_session_id == session_id) {
-    _export_active = false;
-    _export_session_id = 0;
+  if (!_export_measurements && _export_active && _export_session_id == session_id) {
+    release_export();
   }
 
   // Delete the route file
@@ -1386,7 +1270,10 @@ bool BleService::send_history_cbor(const uint8_t *cbor_data, size_t cbor_len) {
   _history_char->set_value(tagged, total);
 
   // Retry with backpressure
+  const uint32_t started = RTOS::get_time_ms();
   while (!_history_char->notify()) {
+    if (static_cast<uint32_t>(RTOS::get_time_ms()) - started >= 20)
+      return false;
     if (!_connected.load()) {
       return false;
     }
@@ -1417,14 +1304,7 @@ bool BleService::send_history_binary(uint16_t first_point_index, const uint8_t *
 
   _history_char->set_value(packet, total);
 
-  // Retry with backpressure
-  while (!_history_char->notify()) {
-    if (!_connected.load()) {
-      return false;
-    }
-    RTOS::delay_ms(NOTIFY_RETRY_DELAY_MS);
-  }
-  return true;
+  return _history_char->notify();
 }
 
 // ---------------------------------------------------------------------------
@@ -1655,7 +1535,7 @@ size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnaps
   // All 10 keys are always present. Firmware version is intentionally not
   // exposed here; it lives only in DIS Firmware Revision (0x2A26).
   CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 10);
+  cbor_encoder_create_map(&encoder, &map, 11);
 
   cbor_encode_text_stringz(&map, BLE_KEY_GPS_FIX);
   cbor_encode_uint(&map, static_cast<uint64_t>(gps.fix.fix_type));
@@ -1691,6 +1571,12 @@ size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnaps
   cbor_encode_text_stringz(&map, BLE_KEY_USED_KB);
   cbor_encode_uint(&map, _storage.used_kb());
 
+  cbor_encode_text_stringz(&map, "stop_reason");
+  const char *reason = _stop_reason == TrackingStopReason::StorageFull ? "storage_full"
+                       : _stop_reason == TrackingStopReason::Duration  ? "duration"
+                       : _stop_reason == TrackingStopReason::User      ? "user"
+                                                                       : "none";
+  cbor_encode_text_stringz(&map, reason);
   cbor_encoder_close_container(&encoder, &map);
 
   if (cbor_encoder_get_extra_bytes_needed(&encoder) != 0) {
@@ -1708,7 +1594,7 @@ size_t BleService::encode_status_transition(uint8_t *buf, size_t buf_size, uint3
   // Tracking delta: retain the legacy fields and add the explicit state.
   // No "type" — the Status characteristic carries only status notifications.
   CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 3);
+  cbor_encoder_create_map(&encoder, &map, 4);
 
   cbor_encode_text_stringz(&map, BLE_KEY_TRACKING);
   cbor_encode_boolean(&map, tracking_session_active(tracking_state));
@@ -1719,6 +1605,12 @@ size_t BleService::encode_status_transition(uint8_t *buf, size_t buf_size, uint3
   cbor_encode_text_stringz(&map, BLE_KEY_TRACKING_STATE);
   cbor_encode_uint(&map, static_cast<uint8_t>(tracking_state));
 
+  cbor_encode_text_stringz(&map, "stop_reason");
+  const char *reason = _stop_reason == TrackingStopReason::StorageFull ? "storage_full"
+                       : _stop_reason == TrackingStopReason::Duration  ? "duration"
+                       : _stop_reason == TrackingStopReason::User      ? "user"
+                                                                       : "none";
+  cbor_encode_text_stringz(&map, reason);
   cbor_encoder_close_container(&encoder, &map);
 
   if (cbor_encoder_get_extra_bytes_needed(&encoder) != 0) {
@@ -1784,7 +1676,7 @@ size_t BleService::encode_status_disc(uint8_t *buf, size_t buf_size, BleDiscReas
 // A single table drives both the full snapshot (READ) and the delta (NOTIFY).
 // Adding a config field is one row plus its two small helpers below. The
 // enum-to-wire string mappers are file-scope here so the free encode helpers
-// can reach them; BleService::gps_mode_to_str()/operating_mode_to_str() (kept
+// can reach them; BleService::gps_mode_to_str() (kept
 // for tests) delegate to these.
 
 static const char *gps_mode_to_wire(GpsMode mode) {
@@ -1797,19 +1689,6 @@ static const char *gps_mode_to_wire(GpsMode mode) {
     return BLE_VAL_GPS_ALWAYS;
   default:
     return BLE_VAL_GPS_TRACKING;
-  }
-}
-
-static const char *operating_mode_to_wire(OperatingMode mode) {
-  switch (mode) {
-  case OperatingMode::Portable:
-    return BLE_VAL_MODE_PORTABLE;
-  case OperatingMode::Stationary:
-    return BLE_VAL_MODE_STATIONARY;
-  case OperatingMode::Offline:
-    return BLE_VAL_MODE_OFFLINE;
-  default:
-    return BLE_VAL_MODE_OFFLINE;
   }
 }
 
@@ -1839,9 +1718,7 @@ static void enc_gps_mode(CborEncoder &m, const GoSettings &s) {
 static void enc_auto_lock(CborEncoder &m, const GoSettings &s) {
   cbor_encode_uint(&m, static_cast<uint64_t>(s.auto_lock_seconds));
 }
-static void enc_op_mode(CborEncoder &m, const GoSettings &s) {
-  cbor_encode_text_stringz(&m, operating_mode_to_wire(s.operating_mode));
-}
+
 static void enc_bled(CborEncoder &m, const GoSettings &s) {
   cbor_encode_uint(&m, static_cast<uint64_t>(s.back_led_brightness));
 }
@@ -1897,9 +1774,7 @@ static bool dif_gps_mode(const GoSettings &a, const GoSettings &b) {
 static bool dif_auto_lock(const GoSettings &a, const GoSettings &b) {
   return a.auto_lock_seconds != b.auto_lock_seconds;
 }
-static bool dif_op_mode(const GoSettings &a, const GoSettings &b) {
-  return a.operating_mode != b.operating_mode;
-}
+
 static bool dif_bled(const GoSettings &a, const GoSettings &b) {
   return a.back_led_brightness != b.back_led_brightness;
 }
@@ -1945,7 +1820,22 @@ static const ConfigField CONFIG_FIELDS[] = {
     {BLE_KEY_PINNED_CHART, enc_pinned_chart, dif_pinned_chart},
     {BLE_KEY_GPS_MODE, enc_gps_mode, dif_gps_mode},
     {BLE_KEY_AUTO_LOCK, enc_auto_lock, dif_auto_lock},
-    {BLE_KEY_OP_MODE, enc_op_mode, dif_op_mode},
+    {"log_v", [](CborEncoder &m, const GoSettings &) { cbor_encode_uint(&m, 1); },
+     [](const GoSettings &, const GoSettings &) { return false; }},
+    {"wifi", [](CborEncoder &m, const GoSettings &s) { cbor_encode_boolean(&m, s.wifi_enabled); },
+     [](const GoSettings &a, const GoSettings &b) { return a.wifi_enabled != b.wifi_enabled; }},
+    {"log_m",
+     [](CborEncoder &m, const GoSettings &s) { cbor_encode_boolean(&m, s.log_measurements); },
+     [](const GoSettings &a, const GoSettings &b) {
+       return a.log_measurements != b.log_measurements;
+     }},
+    {"normal_int",
+     [](CborEncoder &m, const GoSettings &s) {
+       cbor_encode_uint(&m, s.energy_saving_measure_interval_seconds);
+     },
+     [](const GoSettings &a, const GoSettings &b) {
+       return a.energy_saving_measure_interval_seconds != b.energy_saving_measure_interval_seconds;
+     }},
     {BLE_KEY_BACK_LED, enc_bled, dif_bled},
     {BLE_KEY_BACK_LED_INDICATOR, enc_bledi, dif_bledi},
     {BLE_KEY_TOUCH_LED, enc_tled, dif_tled},
@@ -2055,19 +1945,15 @@ const char *BleService::disc_reason_to_str(BleDiscReason reason) {
     return BLE_VAL_DISC_LOW_BATT;
   case BleDiscReason::User:
     return BLE_VAL_DISC_USER;
-  case BleDiscReason::OpStationary:
-    return BLE_VAL_DISC_OP_STATIONARY;
-  case BleDiscReason::OpOffline:
-    return BLE_VAL_DISC_OP_OFFLINE;
+  case BleDiscReason::WifiSetup:
+    return BLE_VAL_DISC_WIFI_SETUP;
+  case BleDiscReason::Locked:
+    return BLE_VAL_DISC_LOCKED;
   }
   return BLE_VAL_DISC_USER;
 }
 
 const char *BleService::gps_mode_to_str(GpsMode mode) { return gps_mode_to_wire(mode); }
-
-const char *BleService::operating_mode_to_str(OperatingMode mode) {
-  return operating_mode_to_wire(mode);
-}
 
 // ---------------------------------------------------------------------------
 // CBOR decode helpers (called by orchestrator)
@@ -2088,17 +1974,6 @@ static bool str_to_gps_mode(const char *s, GpsMode &mode) {
     return true;
   }
   return false;
-}
-
-/// Reverse mapping: text string -> OperatingMode.
-static OperatingMode str_to_operating_mode(const char *s) {
-  if (strcmp(s, BLE_VAL_MODE_PORTABLE) == 0) {
-    return OperatingMode::Portable;
-  }
-  if (strcmp(s, BLE_VAL_MODE_STATIONARY) == 0) {
-    return OperatingMode::Stationary;
-  }
-  return OperatingMode::Offline; // "offline" or unrecognized
 }
 
 /// Reverse mapping: CBOR "cmd" string -> BleCommand enum.
@@ -2124,6 +1999,8 @@ static BleCommand str_to_ble_command(const char *s) {
   if (strcmp(s, BLE_VAL_CMD_RESUME_TRACKING) == 0) {
     return BleCommand::ResumeTracking;
   }
+  if (strcmp(s, "tracking_duration") == 0)
+    return BleCommand::SetTrackingDuration;
   if (strcmp(s, BLE_VAL_CMD_SET_AIDING) == 0) {
     return BleCommand::SetAiding;
   }
@@ -2147,6 +2024,8 @@ static const char *ble_command_to_str(BleCommand cmd) {
     return BLE_VAL_CMD_PAUSE_TRACKING;
   case BleCommand::ResumeTracking:
     return BLE_VAL_CMD_RESUME_TRACKING;
+  case BleCommand::SetTrackingDuration:
+    return "tracking_duration";
   case BleCommand::SetAiding:
     return BLE_VAL_CMD_SET_AIDING;
   case BleCommand::Set:
@@ -2442,14 +2321,43 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     } else if (key_is(BLE_KEY_OP_MODE)) {
       cbor_value_advance(&it);
-      result.recognized_config_key_count++;
-      char text[16] = {};
-      if (cbor_value_is_text_string(&it)) {
-        size_t slen = sizeof(text) - 1;
-        cbor_value_copy_text_string(&it, text, &slen, nullptr);
-        text[slen] = '\0';
-        settings.operating_mode = str_to_operating_mode(text);
-      }
+      result.has_invalid_config_values = true; // Removed setting; never change features implicitly.
+      handled = true;
+    } else if (key_is("wifi") || key_is("log_m")) {
+      const bool wifi = key_is("wifi");
+      cbor_value_advance(&it);
+      ++result.recognized_config_key_count;
+      bool value = false;
+      if (cbor_value_is_boolean(&it) && cbor_value_get_boolean(&it, &value) == CborNoError) {
+        if (wifi)
+          settings.wifi_enabled = value;
+        else
+          settings.log_measurements = value;
+      } else
+        result.has_invalid_config_values = true;
+      handled = true;
+    } else if (key_is("normal_int")) {
+      cbor_value_advance(&it);
+      ++result.recognized_config_key_count;
+      uint64_t value = 0;
+      if (cbor_value_is_unsigned_integer(&it) &&
+          cbor_value_get_uint64(&it, &value) == CborNoError &&
+          value >= ENERGY_SAVING_MEASURE_INTERVAL_SECONDS_MIN &&
+          value <= MEASURE_INTERVAL_SECONDS_MAX)
+        settings.energy_saving_measure_interval_seconds = static_cast<int>(value);
+      else
+        result.has_invalid_config_values = true;
+      handled = true;
+    } else if (key_is("duration_min")) {
+      cbor_value_advance(&it);
+      uint64_t value = 0;
+      if (result.duration_present || !cbor_value_is_unsigned_integer(&it) ||
+          cbor_value_get_uint64(&it, &value) != CborNoError ||
+          value > TRACKING_DURATION_MAX_MINUTES)
+        result.has_invalid_config_values = true;
+      else
+        result.duration_minutes = static_cast<uint16_t>(value);
+      result.duration_present = true;
       handled = true;
     }
     // --- Aiding command payload fields ---
@@ -2553,6 +2461,12 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
     result.has_unknown_keys = true;
   }
 
+  if (result.duration_present &&
+      (result.op != BleConfigOp::Command ||
+       (result.cmd != BleCommand::StartTracking && result.cmd != BleCommand::SetTrackingDuration) ||
+       (result.cmd == BleCommand::StartTracking && result.duration_minutes == 0))) {
+    result.has_invalid_config_values = true;
+  }
   return result;
 }
 
@@ -2602,6 +2516,21 @@ BleHistoryDecodeResult BleService::decode_history_write(const uint8_t *buf, size
         cbor_value_copy_text_string(&it, op_str, &slen, nullptr);
         op_str[slen] = '\0';
       }
+      handled = true;
+    } else if (key_is("kind")) {
+      cbor_value_advance(&it);
+      bool match = false;
+      if (cbor_value_text_string_equals(&it, "measurements", &match) != CborNoError || !match)
+        return {};
+      result.measurement_log = true;
+      handled = true;
+    } else if (key_is("after")) {
+      cbor_value_advance(&it);
+      uint64_t value = 0;
+      if (!cbor_value_is_unsigned_integer(&it) ||
+          cbor_value_get_uint64(&it, &value) != CborNoError || value > UINT32_MAX)
+        return {};
+      result.after = value;
       handled = true;
     } else if (key_is(BLE_KEY_SESSION)) {
       cbor_value_advance(&it);
@@ -2659,4 +2588,185 @@ BleHistoryDecodeResult BleService::decode_history_write(const uint8_t *buf, size
   }
 
   return result;
+}
+
+void BleService::release_export() {
+  _export_active = false;
+  _export_streaming = false;
+  _export_session_id = 0;
+  _fill_count = _fill_offset = 0;
+  _storage.release_measurement_log();
+}
+
+void BleService::begin_export(uint32_t id, uint32_t count, bool measurements) {
+  if (_history_char == nullptr || !is_authenticated() || count > UINT16_MAX) {
+    release_export();
+    notify_history_error("unsupported_export");
+    return;
+  }
+  _export_session_id = id;
+  _export_total = count;
+  _export_offset = 0;
+  _fill_count = _fill_offset = 0;
+  _pass_sent = 0;
+  _export_measurements = measurements;
+  _export_active = true;
+  _export_streaming = true;
+  _export_activity_ms = RTOS::get_time_ms();
+  uint8_t buf[CBOR_BUF_SIZE];
+  CborEncoder encoder, map;
+  cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+  cbor_encoder_create_map(&encoder, &map, measurements ? 6 : 4);
+  cbor_encode_text_stringz(&map, "type");
+  cbor_encode_text_stringz(&map, "started");
+  cbor_encode_text_stringz(&map, "session");
+  cbor_encode_uint(&map, id);
+  cbor_encode_text_stringz(&map, "total");
+  cbor_encode_uint(&map, count);
+  cbor_encode_text_stringz(&map, "pt_size");
+  cbor_encode_uint(&map, measurements ? 39 : ROUTE_POINT_WIRE_SIZE);
+  if (measurements) {
+    cbor_encode_text_stringz(&map, "kind");
+    cbor_encode_text_stringz(&map, "measurements");
+    cbor_encode_text_stringz(&map, "version");
+    cbor_encode_uint(&map, 1);
+  }
+  cbor_encoder_close_container(&encoder, &map);
+  if (!send_history_cbor(buf, cbor_encoder_get_buffer_size(&encoder, buf)))
+    release_export();
+}
+
+void BleService::tick_history() {
+  if (!export_active() || !_connected.load()) {
+    release_export();
+    return;
+  }
+  const uint32_t now = RTOS::get_time_ms();
+  if (now - _export_activity_ms >= EXPORT_IDLE_MS) {
+    release_export();
+    return;
+  }
+  if (!_export_streaming)
+    return;
+  const bool filling = _fill_count != 0;
+  const bool done = filling ? _fill_offset >= _fill_count : _export_offset >= _export_total;
+  if (done) {
+    uint8_t buf[64];
+    CborEncoder encoder, map;
+    cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+    cbor_encoder_create_map(&encoder, &map, 2);
+    cbor_encode_text_stringz(&map, "type");
+    cbor_encode_text_stringz(&map, "done");
+    cbor_encode_text_stringz(&map, "sent");
+    cbor_encode_uint(&map, _pass_sent);
+    cbor_encoder_close_container(&encoder, &map);
+    if (send_history_cbor(buf, cbor_encoder_get_buffer_size(&encoder, buf))) {
+      _export_streaming = false;
+      _fill_count = _fill_offset = 0;
+      _export_activity_ms = now;
+    }
+    return;
+  }
+  const uint32_t index = filling ? _fill_indices[_fill_offset] : _export_offset;
+  uint8_t wire[ROUTE_POINT_WIRE_SIZE];
+  size_t length = ROUTE_POINT_WIRE_SIZE;
+  if (_export_measurements) {
+    MeasurementLogRecord record{};
+    if (!_storage.read_measurement(_export_session_id, index, record)) {
+      notify_history_error(BLE_VAL_ERR_FLASH_ERROR);
+      release_export();
+      return;
+    }
+    RoutePoint point{};
+    point.sensors = record.sensors;
+    point.battery_percentage = record.battery_percentage;
+    uint8_t route[ROUTE_POINT_WIRE_SIZE];
+    route_point_to_wire(point, route);
+    // Version 1: LE int64 UTC (0 unknown), followed by the route sensor payload.
+    // The first 25 bytes of RoutePointWire are timestamp and GPS, all omitted.
+    memcpy(wire, &record.timestamp, 8);
+    memcpy(wire + 8, route + 25, ROUTE_POINT_WIRE_SIZE - 25);
+    length = 39;
+  } else {
+    RoutePoint point{};
+    if (_storage.read_route_points(_export_session_id, index, &point, 1) != 1) {
+      notify_history_error(BLE_VAL_ERR_FLASH_ERROR);
+      release_export();
+      return;
+    }
+    route_point_to_wire(point, wire);
+  }
+  if (send_history_binary(static_cast<uint16_t>(index), wire, length)) {
+    if (filling)
+      ++_fill_offset;
+    else
+      ++_export_offset;
+    ++_pass_sent;
+    _export_activity_ms = now;
+  }
+}
+
+void BleService::handle_measurement_start(uint32_t sequence) {
+  release_export();
+  MeasurementLogInfo snapshot{};
+  if (!_storage.protect_measurement_log(sequence, snapshot)) {
+    notify_history_error(BLE_VAL_ERR_FLASH_ERROR);
+    return;
+  }
+  begin_export(sequence, snapshot.count, true);
+}
+
+void BleService::handle_measurement_list(uint32_t after) {
+  MeasurementLogInfo info{};
+  const bool found = _storage.next_measurement_log(after, info);
+  uint8_t buf[CBOR_BUF_SIZE];
+  CborEncoder encoder, map, list, entry;
+  cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+  cbor_encoder_create_map(&encoder, &map, 4);
+  cbor_encode_text_stringz(&map, "type");
+  cbor_encode_text_stringz(&map, "list");
+  cbor_encode_text_stringz(&map, "kind");
+  cbor_encode_text_stringz(&map, "measurements");
+  cbor_encode_text_stringz(&map, "next");
+  cbor_encode_uint(&map, found ? info.sequence : 0);
+  cbor_encode_text_stringz(&map, "logs");
+  cbor_encoder_create_array(&map, &list, found ? 1 : 0);
+  if (found) {
+    cbor_encoder_create_map(&list, &entry, 6);
+    cbor_encode_text_stringz(&entry, "session");
+    cbor_encode_uint(&entry, info.sequence);
+    cbor_encode_text_stringz(&entry, "count");
+    cbor_encode_uint(&entry, info.count);
+    cbor_encode_text_stringz(&entry, "boundary");
+    cbor_encode_uint(&entry, static_cast<uint32_t>(info.boundary));
+    cbor_encode_text_stringz(&entry, "first_ts");
+    cbor_encode_int(&entry, info.first_timestamp);
+    cbor_encode_text_stringz(&entry, "last_ts");
+    cbor_encode_int(&entry, info.last_timestamp);
+    cbor_encode_text_stringz(&entry, "version");
+    cbor_encode_uint(&entry, 1);
+    cbor_encoder_close_container(&list, &entry);
+  }
+  cbor_encoder_close_container(&map, &list);
+  cbor_encoder_close_container(&encoder, &map);
+  send_history_cbor(buf, cbor_encoder_get_buffer_size(&encoder, buf));
+}
+
+void BleService::handle_measurement_delete(uint32_t sequence) {
+  if (_export_measurements && export_active() && sequence == _export_session_id)
+    release_export();
+  if (!_storage.delete_measurement_log(sequence)) {
+    notify_history_error("delete_failed");
+    return;
+  }
+  uint8_t buf[64];
+  CborEncoder encoder, map;
+  cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+  cbor_encoder_create_map(&encoder, &map, 2);
+  cbor_encode_text_stringz(&map, "type");
+  cbor_encode_text_stringz(&map, "deleted");
+  cbor_encode_text_stringz(&map, "session");
+  cbor_encode_uint(&map, sequence);
+  cbor_encoder_close_container(&encoder, &map);
+  send_history_cbor(buf, cbor_encoder_get_buffer_size(&encoder, buf));
 }

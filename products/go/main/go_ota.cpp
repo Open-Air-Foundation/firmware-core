@@ -58,6 +58,8 @@ OtaStatus OtaService::run_wifi_check(const std::function<void()> &on_download_st
 void OtaService::teardown_ble() { _ble_ota.teardown(); }
 
 void OtaService::_on_ble_progress(const OtaProgress &progress) {
+  if (_service_tick)
+    _service_tick();
   // Feed the external watchdog on non-terminal ticks (START detection is the
   // orchestrator's is_ble_active() poll, not here).
   const bool terminal = progress.state == OtaState::Done || progress.state == OtaState::Failed ||
@@ -68,6 +70,8 @@ void OtaService::_on_ble_progress(const OtaProgress &progress) {
 }
 
 void OtaService::_on_wifi_progress(const OtaProgress &progress) {
+  if (_service_tick)
+    _service_tick();
   const bool terminal = progress.state == OtaState::Done || progress.state == OtaState::Failed ||
                         progress.state == OtaState::Skipped;
   if (!terminal) {

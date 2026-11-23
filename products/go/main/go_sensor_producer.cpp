@@ -166,8 +166,9 @@ void SensorProducer::run() {
   // algorithm configuration succeeds. The sampler converts the indefinite
   // task_notify_wait into a timeout-driven loop that feeds the Sensirion
   // algorithm at a fixed cadence independent of the measurement interval.
+  _continuous_applied = _continuous_requested.load();
   _sampler_enabled =
-      _manager.has_tvoc_nox_sensor() &&
+      _continuous_applied && _manager.has_tvoc_nox_sensor() &&
       _manager.configure_tvoc_nox_index(SAMPLER_TICK_MS, _config.tvoc_learning_offset,
                                         _config.nox_learning_offset);
 
@@ -179,7 +180,7 @@ void SensorProducer::run() {
 
   while (_running) {
     uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
-    uint32_t timeout = UINT32_MAX;
+    uint32_t timeout = SAMPLER_TICK_MS; // Apply policy changes without overwriting requests.
     if (_sampler_enabled) {
       timeout = (next_tick_ms > now) ? (next_tick_ms - now) : 0;
     }
@@ -196,6 +197,22 @@ void SensorProducer::run() {
       break;
     }
 
+    const bool continuous = _continuous_requested.load();
+    if (continuous != _continuous_applied) {
+      _continuous_applied = continuous;
+      _sampler_enabled = false;
+      _last_tvoc_nox = {};
+      if (continuous) {
+        _manager.warmup();
+        _sampler_enabled =
+            _manager.has_tvoc_nox_sensor() &&
+            _manager.configure_tvoc_nox_index(SAMPLER_TICK_MS, _config.tvoc_learning_offset,
+                                              _config.nox_learning_offset);
+        next_tick_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + SAMPLER_TICK_MS;
+      } else {
+        _manager.stop_tvoc_nox_measurement();
+      }
+    }
     if (notified) {
       if (notify_value == NOTIFY_CALIBRATION) {
         handle_calibration();
@@ -326,12 +343,29 @@ void SensorProducer::handle_measurement(uint32_t notify_value) {
   // notifications never read SGP41 or advance the algorithm at an
   // irregular cadence — only the sampler tick does that.
   SensorGroup measurement_groups = requested_groups;
-  if (_sampler_enabled) {
+  if (_sampler_enabled || !_continuous_applied) {
     measurement_groups = static_cast<SensorGroup>(static_cast<uint8_t>(requested_groups) &
                                                   ~static_cast<uint8_t>(SensorGroup::TvocNox));
   }
 
   Measures measures = _manager.start_measures(static_cast<int>(iterations), measurement_groups);
+  if (!_continuous_applied && has_group(requested_groups, SensorGroup::TvocNox)) {
+    constexpr uint32_t GAS_CONDITIONING_MS = 9900;
+    constexpr uint32_t GAS_RAW_SAMPLE_INTERVAL_MS = 500;
+    TVOCNOxData raw{};
+    if (_manager.start_tvoc_nox_conditioning()) {
+      RTOS::delay_ms(GAS_CONDITIONING_MS);
+      TVOCNOxData discard{};
+      if (_manager.read_tvoc_nox_raw(discard)) {
+        RTOS::delay_ms(GAS_RAW_SAMPLE_INTERVAL_MS);
+        (void)_manager.read_tvoc_nox_raw(raw);
+      }
+      _manager.stop_tvoc_nox_measurement();
+    }
+    raw.tvoc_index = raw.tvoc_raw;
+    raw.nox_index = raw.nox_raw;
+    measures.tvoc_nox = raw;
+  }
 
   if (has_group(measurement_groups, SensorGroup::PM)) {
     const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());

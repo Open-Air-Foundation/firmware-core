@@ -33,7 +33,7 @@ enum class UIAction : uint8_t {
   StopTracking,
   PauseTracking,
   ResumeTracking,
-  ChangeMode,      ///< Accompanied by UIActionResult::new_mode.
+  SetTrackingDuration,
   SettingsChanged, ///< UI Manager updated internal settings state.
   ClearData,
   CalibrateCo2,
@@ -89,7 +89,7 @@ enum class ProvisioningUiState : uint8_t {
 
 struct UIActionResult {
   UIAction action = UIAction::None;
-  OperatingMode new_mode = OperatingMode::Offline;
+  uint16_t duration_minutes = 0;
   uint8_t tag_index = 0;
   const char *tag_label = nullptr; ///< Points to static tag label string.
   MelodySelect melody = MelodySelect::Off;
@@ -165,6 +165,8 @@ struct BuildContext {
 
   // Current-session values, computed by the orchestrator only for Tracking Status.
   TrackingStatusSnapshot tracking_status{};
+  uint32_t tracking_remaining_s = TRACKING_TIME_INVALID_S;
+  bool storage_warning = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -324,8 +326,11 @@ private:
     PmDisplay,
     PinnedChart,
     MeasureInterval,
+    TrackingInterval,
+    Wifi,
+    LogMeasurements,
+    TrackingDuration,
     GpsMode,
-    Mode,
     AutoLock,
     BackLedBrightness,
     BackLedIndicator,
@@ -389,7 +394,8 @@ private:
   int _setting_energy_saving_measure_interval_seconds =
       ENERGY_SAVING_MEASURE_INTERVAL_SECONDS_DEFAULT;
   uint8_t _setting_gps_mode = 1; // 1="On When Tracking"
-  OperatingMode _setting_mode = OperatingMode::Portable;
+  bool _setting_wifi = false;
+  bool _setting_log_measurements = false;
   uint8_t _setting_auto_lock = 0;           // 0="Off"
   uint8_t _setting_back_led_brightness = 0; // 0="Off"
   uint8_t _setting_back_led_indicator = 0;  // 0="AQI"
@@ -498,7 +504,7 @@ private:
 
   // --- Row population ---
   void populate_menu_rows(DisplayValues &v) const;
-  void populate_tracking_rows(DisplayValues &v) const;
+  void populate_tracking_rows(DisplayValues &v, const BuildContext &ctx) const;
   void populate_tracking_status_rows(DisplayValues &v, const BuildContext &ctx) const;
   void populate_settings_rows(DisplayValues &v) const;
   void populate_settings_group_rows(DisplayValues &v) const;
@@ -521,6 +527,7 @@ private:
   // --- Settings choice helpers ---
   const SettingId *group_items(Screen screen, uint8_t &count) const;
   int setting_measure_interval_seconds() const;
+  int editing_measure_interval_seconds(SettingId id) const;
   uint8_t setting_option_count(SettingId setting_id) const;
   uint8_t setting_current_option(SettingId setting_id) const;
   void apply_setting_choice(uint8_t option_index);

@@ -36,7 +36,7 @@ TEST_CASE("tracking timing defaults are unknown and layout is compact", "[go][tr
   STATIC_REQUIRE(sizeof(TrackingTiming) == 16);
   STATIC_REQUIRE(std::is_trivially_copyable_v<TrackingTiming>);
   STATIC_REQUIRE(std::is_standard_layout_v<TrackingTiming>);
-  STATIC_REQUIRE(sizeof(RtcAppState) == 40);
+  STATIC_REQUIRE(sizeof(RtcAppState) == 56);
   STATIC_REQUIRE(std::is_trivially_copyable_v<RtcAppState>);
   check_same_timing(RtcAppState{}.tracking_timing, TrackingTiming{});
 

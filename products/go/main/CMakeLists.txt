@@ -20,6 +20,7 @@ idf_component_register(
          "serial_command/serial_command.cpp"
          "serial_command/serial_command_usb.cpp"
          "go_storage.cpp"
+         "go_measurement_log.cpp"
          "go_ui.cpp"
          "go_ulp.cpp"
          "go_text_wrap.cpp"

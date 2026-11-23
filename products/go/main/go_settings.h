@@ -10,7 +10,7 @@
 
 struct GoSettings {
   // --- Measurement intervals ---
-  // Portable and Stationary share the normal preference; Offline keeps its own.
+  // Keep the existing NVS interval keys for upgrades: mi is tracking, es_mi is normal.
   int measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
   int energy_saving_measure_interval_seconds = ENERGY_SAVING_MEASURE_INTERVAL_SECONDS_DEFAULT;
 
@@ -24,7 +24,8 @@ struct GoSettings {
   GpsMode gps_mode = GpsMode::OnWhenTracking;
 
   // --- Device behavior ---
-  OperatingMode operating_mode = OperatingMode::Portable;
+  bool wifi_enabled = false;
+  bool log_measurements = false;
   int auto_lock_seconds = 10; // 0 = auto-lock disabled
 
   // --- LED settings ---
@@ -51,13 +52,15 @@ struct GoSettings {
   // --- Measurement corrections ---
   MeasurementCorrections corrections{};
 
-  int active_measure_interval_seconds() const;
+  int active_measure_interval_seconds(TrackingState tracking = TrackingState::Idle) const;
   bool equals(const GoSettings &other) const;
 };
 
 GoSettings load_go_settings(ConfigStore &store);
-// Select corrections for the current mode without changing saved calibration.
-MeasurementCorrections effective_measurement_corrections(const GoSettings &settings);
+// Select corrections for the current acquisition policy without changing saved calibration.
+MeasurementCorrections
+effective_measurement_corrections(const GoSettings &settings,
+                                  TrackingState tracking = TrackingState::Idle);
 bool is_go_settings_valid(const GoSettings &settings);
 bool save_go_settings(ConfigStore &store, const GoSettings &settings);
 void print_settings(const GoSettings &settings);

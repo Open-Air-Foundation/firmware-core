@@ -8,9 +8,10 @@ static constexpr const char *TAG = "Settings";
 
 static constexpr const char *KEY_PENDING_TRACKING_START = "trk_start";
 
-MeasurementCorrections effective_measurement_corrections(const GoSettings &settings) {
+MeasurementCorrections effective_measurement_corrections(const GoSettings &settings,
+                                                         TrackingState tracking) {
   MeasurementCorrections corrections = settings.corrections;
-  if (settings.operating_mode == OperatingMode::Offline) {
+  if (!settings.wifi_enabled && tracking == TrackingState::Idle) {
     corrections.temperature.algorithm = LinearCorrectionAlgorithm::None;
     corrections.humidity.algorithm = LinearCorrectionAlgorithm::None;
   }
@@ -32,7 +33,8 @@ namespace {
 constexpr const char *KEY_MEASURE_INTERVAL_SECONDS = "mi";
 constexpr const char *KEY_ENERGY_SAVING_MEASURE_INTERVAL_SECONDS = "es_mi";
 constexpr const char *KEY_GPS_MODE = "gpm";
-constexpr const char *KEY_OPERATING_MODE = "opm";
+constexpr const char *KEY_WIFI_ENABLED = "wifi";
+constexpr const char *KEY_LOG_MEASUREMENTS = "log_m";
 constexpr const char *KEY_USE_FAHRENHEIT = "uf";
 constexpr const char *KEY_USE_FEET = "auf";
 constexpr const char *KEY_PM_USE_USAQI = "pmu";
@@ -80,8 +82,6 @@ bool is_fg_learning_stage_valid(int value) {
 }
 
 bool is_byte_valid(int value) { return value >= 0 && value <= 255; }
-
-bool is_operating_mode_valid(int value) { return value >= 0 && value <= 2; }
 
 bool is_configuration_control_valid(int value) {
   return value >= static_cast<int>(ConfigurationControl::Cloud) &&
@@ -223,11 +223,13 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.gps_mode = static_cast<GpsMode>(gps_mode);
   }
 
-  int operating_mode = 0;
-  if (store.get_int(KEY_OPERATING_MODE, operating_mode) == ConfigStoreResult::OK &&
-      is_operating_mode_valid(operating_mode)) {
-    settings.operating_mode = static_cast<OperatingMode>(operating_mode);
-  }
+  // Deliberately ignore the old opm key: every upgraded device starts Wi-Fi off.
+  bool enabled = false;
+  if (store.get_bool(KEY_WIFI_ENABLED, enabled) == ConfigStoreResult::OK)
+    settings.wifi_enabled = enabled;
+  enabled = false;
+  if (store.get_bool(KEY_LOG_MEASUREMENTS, enabled) == ConfigStoreResult::OK)
+    settings.log_measurements = enabled;
 
   bool use_fahrenheit = false;
   if (store.get_bool(KEY_USE_FAHRENHEIT, use_fahrenheit) == ConfigStoreResult::OK) {
@@ -337,9 +339,9 @@ GoSettings load_go_settings(ConfigStore &store) {
   return settings;
 }
 
-int GoSettings::active_measure_interval_seconds() const {
-  return operating_mode == OperatingMode::Offline ? energy_saving_measure_interval_seconds
-                                                  : measure_interval_seconds;
+int GoSettings::active_measure_interval_seconds(TrackingState tracking) const {
+  return tracking == TrackingState::Idle ? energy_saving_measure_interval_seconds
+                                         : measure_interval_seconds;
 }
 
 bool GoSettings::equals(const GoSettings &other) const {
@@ -347,7 +349,8 @@ bool GoSettings::equals(const GoSettings &other) const {
          energy_saving_measure_interval_seconds == other.energy_saving_measure_interval_seconds &&
          use_fahrenheit == other.use_fahrenheit && use_feet == other.use_feet &&
          pm_use_usaqi == other.pm_use_usaqi && pinned_chart == other.pinned_chart &&
-         gps_mode == other.gps_mode && operating_mode == other.operating_mode &&
+         gps_mode == other.gps_mode && wifi_enabled == other.wifi_enabled &&
+         log_measurements == other.log_measurements &&
          auto_lock_seconds == other.auto_lock_seconds &&
          back_led_brightness == other.back_led_brightness &&
          back_led_indicator == other.back_led_indicator &&
@@ -381,10 +384,6 @@ bool is_go_settings_valid(const GoSettings &settings) {
   }
 
   if (!is_gps_mode_valid(static_cast<int>(settings.gps_mode))) {
-    return false;
-  }
-
-  if (!is_operating_mode_valid(static_cast<int>(settings.operating_mode))) {
     return false;
   }
 
@@ -442,8 +441,8 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
     return false;
   }
 
-  if (store.set_int(KEY_OPERATING_MODE, static_cast<int>(settings.operating_mode)) !=
-      ConfigStoreResult::OK) {
+  if (store.set_bool(KEY_WIFI_ENABLED, settings.wifi_enabled) != ConfigStoreResult::OK ||
+      store.set_bool(KEY_LOG_MEASUREMENTS, settings.log_measurements) != ConfigStoreResult::OK) {
     return false;
   }
 
@@ -622,13 +621,13 @@ bool clear_factory_settings(ConfigStore &store) {
 void print_settings(const GoSettings &settings) {
   AG_LOGI(TAG,
           "** settings | meas_int=%d | energy_saving_meas_int=%d | gps_mode=%d "
-          "op_mode=%d | auto_lock=%d | pinned_chart=%d | fahrenheit=%s feet=%s usaqi=%s | "
+          "wifi=%d | auto_lock=%d | pinned_chart=%d | fahrenheit=%s feet=%s usaqi=%s | "
           "led: back=%d indicator=%d touch=%d | buzzer=%s | "
           "local_server=%s disable_cloud=%s config_control=%d co2_abc_days=%d "
           "tvoc_learning_offset=%d nox_learning_offset=%d static_ip=%s "
           "onboarding_done=%s **",
           settings.measure_interval_seconds, settings.energy_saving_measure_interval_seconds,
-          settings.gps_mode, settings.operating_mode, settings.auto_lock_seconds,
+          settings.gps_mode, settings.wifi_enabled, settings.auto_lock_seconds,
           static_cast<int>(settings.pinned_chart), settings.use_fahrenheit ? "true" : "false",
           settings.use_feet ? "true" : "false", settings.pm_use_usaqi ? "true" : "false",
           static_cast<int>(settings.back_led_brightness),

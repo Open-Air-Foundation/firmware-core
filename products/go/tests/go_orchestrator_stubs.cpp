@@ -40,7 +40,12 @@
 // ============================================================================
 
 namespace test_spy {
+bool recording_space = true;
+unsigned measurement_log_appends = 0;
+MeasurementLogBoundary log_boundary = MeasurementLogBoundary::ColdBoot;
+
 std::function<void()> during_melody;
+std::function<void()> during_ota;
 uint32_t buzzer_refresh_ack_count = 0;
 uint32_t buzzer_play_count = 0;
 uint32_t retained_time_read_count = 0;
@@ -283,6 +288,10 @@ bool recover_pm_sensor_called = false;
 uint32_t recover_pm_sensor_count = 0;
 
 void reset() {
+  during_ota = nullptr;
+  recording_space = true;
+  measurement_log_appends = 0;
+  log_boundary = MeasurementLogBoundary::ColdBoot;
   during_melody = nullptr;
   buzzer_refresh_ack_count = 0;
   buzzer_play_count = 0;
@@ -821,7 +830,7 @@ RtcAppState PowerService::load_state() const { return test_spy::state_to_load; }
 
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*settings*/,
                                                        LockState /*lock_state*/,
-                                                       OperatingMode /*mode*/,
+                                                       TrackingState /*tracking*/,
                                                        uint32_t /*awake_ms*/) const {
   return {test_spy::sleep_type_to_return, 10000};
 }
@@ -909,13 +918,15 @@ BleService::BleService(RtosQueueHandle /*event_queue*/, StorageService &storage,
                        AgBleServer & /*ble_server*/)
     : _event_queue(nullptr), _storage(storage), _server(nullptr) {}
 
-bool BleService::init(const char * /*serial*/) {
+bool BleService::init(const char * /*serial*/, const char * /*model*/,
+                      const char * /*firmware_version*/) {
   test_spy::ble_init_called = true;
   test_spy::ble_initialized = true;
   return true;
 }
 
-bool BleService::init_stack_and_register(const char * /*serial*/) {
+bool BleService::init_stack_and_register(const char * /*serial*/, const char * /*model*/,
+                                         const char * /*firmware_version*/) {
   test_spy::ble_init_called = true;
   return true;
 }
@@ -1071,7 +1082,6 @@ size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSetti
 }
 const char *BleService::charging_state_to_str(BmsChargingState /*s*/) { return "unknown"; }
 const char *BleService::gps_mode_to_str(GpsMode /*m*/) { return "tracking"; }
-const char *BleService::operating_mode_to_str(OperatingMode /*m*/) { return "offline"; }
 
 // ============================================================================
 // ULP stubs (go_ulp.h — LP Core not available on host)
@@ -1349,6 +1359,10 @@ bool OtaService::is_ble_active() const { return test_spy::ota_is_ble_active; }
 
 OtaStatus OtaService::run_ble() {
   ++test_spy::ota_run_ble_count;
+  if (test_spy::during_ota)
+    test_spy::during_ota();
+  if (_service_tick)
+    _service_tick();
   return test_spy::ota_run_ble_result;
 }
 
@@ -1502,3 +1516,26 @@ uint32_t play_synced(BuzzerService & /*buzzer*/, LedService & /*led*/, MelodySel
   }
   return 0;
 }
+
+// Measurement storage is isolated from orchestration in these fixtures.
+bool StorageService::has_recording_space() const { return test_spy::recording_space; }
+bool StorageService::storage_warning() const { return !test_spy::recording_space; }
+void StorageService::set_log_boundary(MeasurementLogBoundary reason) {
+  _log_sequence = 0;
+  test_spy::log_boundary = reason;
+}
+bool StorageService::append_measurement(const MeasurementLogRecord &) {
+  ++test_spy::measurement_log_appends;
+  return true;
+}
+bool StorageService::sync_measurements() { return true; }
+bool StorageService::close_measurements() { return true; }
+bool StorageService::resume_measurements(uint32_t sequence) {
+  _log_sequence = sequence;
+  return true;
+}
+bool StorageService::clear_measurements() { return true; }
+void BleService::tick_history() {}
+void BleService::handle_measurement_list(uint32_t) {}
+void BleService::handle_measurement_start(uint32_t) {}
+void BleService::handle_measurement_delete(uint32_t) {}

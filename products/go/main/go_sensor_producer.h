@@ -55,6 +55,7 @@ public:
   /// Start the sensor task.  Call once during initialization.
   /// @return true if the task was created successfully.
   bool start();
+  void set_continuous_acquisition(bool enabled) { _continuous_requested.store(enabled); }
 
   /// Stop the sensor task and leave the PM sensor in the requested state.
   /// Always turn off the gas heater after the task stops; start() reconditions it.
@@ -140,6 +141,8 @@ private:
 
   // A flag that indicate TVOC and NOx sampling enabled or not
   bool _sampler_enabled = false;
+  std::atomic<bool> _continuous_requested{false};
+  bool _continuous_applied = false;
 
   /// PM preparation after startup shares the task loop with the gas sampler.
   bool _pm_warmup_active = false;

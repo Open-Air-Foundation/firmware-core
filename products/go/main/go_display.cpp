@@ -1678,6 +1678,13 @@ void DisplayService::_draw_status_bar(const DisplayValues &v) {
     cursor += 10 + ICON_GAP;
   }
 
+  if (v.storage_warning && v.screen == Screen::Home) {
+    constexpr int WARNING_WIDTH = 8;
+    u8g2_DrawFrame(&_u8g2, cursor, STATUS_BASELINE_Y - 8, WARNING_WIDTH, 9);
+    u8g2_DrawVLine(&_u8g2, cursor + 3, STATUS_BASELINE_Y - 6, 3);
+    u8g2_DrawPixel(&_u8g2, cursor + 3, STATUS_BASELINE_Y - 1);
+  }
+
   // 3. Tracking dot (right-pinned; shifts left when plug icon is present)
   if (tracking_session_active(v.tracking_state)) {
     const bool plug_visible = v.is_plugged_in && !v.is_battery_charging;

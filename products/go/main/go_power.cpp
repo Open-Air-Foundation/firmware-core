@@ -629,10 +629,11 @@ RtcAppState PowerService::load_state() const {
 // ---------------------------------------------------------------------------
 
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &settings,
-                                                       LockState lock_state, OperatingMode mode,
+                                                       LockState lock_state, TrackingState tracking,
                                                        uint32_t awake_ms) const {
-  // Only Offline mode enters sleep; Portable and Stationary stay awake.
-  if (mode != OperatingMode::Offline) {
+  // Active sessions, networking, and continuous GPS require the CPU.
+  if (tracking != TrackingState::Idle || settings.wifi_enabled ||
+      settings.gps_mode == GpsMode::AlwaysOn) {
     return {SleepType::None, 0};
   }
 

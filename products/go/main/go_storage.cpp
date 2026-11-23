@@ -623,6 +623,10 @@ bool StorageService::clear_routes() {
 }
 
 uint32_t StorageService::total_capacity_kb() const {
+#ifdef TEST_HOST
+  if (_test_seam && _test_seam->capacity_kb)
+    return _test_seam->capacity_kb;
+#endif
   if (!_nand.is_mounted()) {
     return 0;
   }
@@ -651,6 +655,10 @@ uint32_t StorageService::total_capacity_kb() const {
 }
 
 uint32_t StorageService::used_kb() const {
+#ifdef TEST_HOST
+  if (_test_seam && _test_seam->capacity_kb)
+    return _test_seam->used_kb;
+#endif
   if (!_nand.is_mounted()) {
     return 0;
   }

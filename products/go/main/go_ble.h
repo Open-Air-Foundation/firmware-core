@@ -3,7 +3,7 @@
  *
  * BLE peripheral service exposing sensor measurements, device status,
  * configuration, and stored route data to a connected phone app over a
- * single custom GATT service.  Active only in Portable operating mode.
+ * custom GATT service, alongside standard Device Information.
  *
  * AirGradient
  * https://airgradient.com
@@ -84,20 +84,21 @@ enum class BleCommand : uint8_t {
   StopTracking,   ///< "stop_tracking"  — end route logging
   PauseTracking,  ///< "pause_tracking" — retain session, stop route writes
   ResumeTracking, ///< "resume_tracking" — continue the retained session
-  SetAiding,      ///< "set_aiding" — inject A-GNSS aiding data
-  Set,            ///< Synthetic — used for config-set error notifications
-  Unknown,        ///< Unrecognised command string
+  SetTrackingDuration,
+  SetAiding, ///< "set_aiding" — inject A-GNSS aiding data
+  Set,       ///< Synthetic — used for config-set error notifications
+  Unknown,   ///< Unrecognised command string
 };
 
 /// Reason the device is about to drop the BLE link, carried by the NOTIFY-only
 /// Status `disc` delta so the client can treat the imminent disconnect as
 /// expected rather than an error.
 enum class BleDiscReason : uint8_t {
-  Overheat,     ///< Over-temperature safety shutdown
-  LowBatt,      ///< Over-discharge safety shutdown
-  User,         ///< User-initiated (long-press) shutdown
-  OpStationary, ///< Operating mode changing to Stationary
-  OpOffline,    ///< Operating mode changing to Offline
+  Overheat, ///< Over-temperature safety shutdown
+  LowBatt,  ///< Over-discharge safety shutdown
+  User,     ///< User-initiated (long-press) shutdown
+  Locked,
+  WifiSetup,
 };
 
 /// Result of decoding a Config characteristic write.
@@ -108,7 +109,9 @@ struct BleConfigDecodeResult {
   bool has_invalid_config_values = false; ///< True if a recognized config value was malformed
   uint32_t requested_fields = 0; ///< GoConfigField bits present; excludes BLE-only settings
   size_t recognized_config_key_count = 0; ///< Count of recognized config-key occurrences in a "set"
-  GpsAidingData aiding;                   ///< Valid when cmd == SetAiding
+  uint16_t duration_minutes = 0;
+  bool duration_present = false;
+  GpsAidingData aiding; ///< Valid when cmd == SetAiding
 };
 
 /// Operation type for a History characteristic write.
@@ -124,7 +127,9 @@ enum class BleHistoryOp : uint8_t {
 /// Result of decoding a History characteristic write.
 struct BleHistoryDecodeResult {
   BleHistoryOp op = BleHistoryOp::Invalid;
-  uint32_t session_id = 0; ///< Valid when op == Start or Delete
+  uint32_t session_id = 0; ///< Route session or measurement-log sequence.
+  bool measurement_log = false;
+  uint32_t after = 0;
 
   static constexpr size_t MAX_FILL_POINTS = 50;
   uint32_t point_indices[MAX_FILL_POINTS] = {};
@@ -148,13 +153,13 @@ public:
   /// Convenience wrapper: init_stack_and_register() + start_advertising().
   /// serial: 12-char lowercase hex device serial; the BLE name uses its last
   ///         four chars (e.g. "AirGradient Go ef0e"). Returns false on failure.
-  bool init(const char *serial);
+  bool init(const char *serial, const char *model, const char *firmware_version);
 
   /// Phase 1: init the stack, set security, register the AGo data service +
-  /// chars and connection callbacks; store the advertised name. Does NOT
-  /// advertise, so extra GATT services (prov + DIS) can be slotted in before
+  /// chars, Device Information and connection callbacks; store the advertised name.
+  /// Does NOT advertise, so the OTA service can be registered before
   /// start_advertising(). Returns false on failure.
-  bool init_stack_and_register(const char *serial);
+  bool init_stack_and_register(const char *serial, const char *model, const char *firmware_version);
 
   /// Phase 3: set the name, service UUID and interval, then start advertising.
   /// Marks the service initialized. Returns false if advertising fails.
@@ -274,8 +279,15 @@ public:
   // --- State queries ---
 
   bool is_initialized() const;
+  void set_tracking_stop_reason(TrackingStopReason reason) { _stop_reason = reason; }
+  bool export_active() const { return _export_active.load(); }
+  void tick_history();
+  void handle_measurement_list(uint32_t after);
+  void handle_measurement_start(uint32_t sequence);
+  void handle_measurement_delete(uint32_t sequence);
   /// True while a GAP link exists (not necessarily usable).
   bool is_connected() const;
+  void set_connectable(bool allowed) { _connectable.store(allowed); }
   /// True while the active link is authenticated (MITM-paired) — the
   /// usable-link signal that drives the BLE icon. Reads the stack's live
   /// security state so it cannot get stuck after a bonded reconnect.
@@ -323,6 +335,7 @@ private:
   char _adv_name[BLE_ADV_NAME_BUF_SIZE] = {};
 
   std::atomic<bool> _connected{false};
+  std::atomic<bool> _connectable{true};
 
   // Optional disconnect fan-out (OTA abort).  Invoked first in
   // on_disconnect(), synchronously on the NimBLE host task.  Nullable.
@@ -345,7 +358,20 @@ private:
   // --- History export state ---
 
   uint32_t _export_session_id = 0;
-  bool _export_active = false;
+  std::atomic<bool> _export_active{false};
+  TrackingStopReason _stop_reason = TrackingStopReason::None;
+  bool _export_measurements = false;
+  bool _export_streaming = false;
+  uint32_t _export_total = 0;
+  uint32_t _export_offset = 0;
+  uint32_t _export_activity_ms = 0;
+  uint32_t _fill_indices[BleHistoryDecodeResult::MAX_FILL_POINTS]{};
+  size_t _fill_count = 0;
+  size_t _fill_offset = 0;
+  uint32_t _pass_sent = 0;
+  static constexpr uint32_t EXPORT_IDLE_MS = 60000;
+  void begin_export(uint32_t id, uint32_t count, bool measurements);
+  void release_export();
 
   // --- Internal helpers ---
 
@@ -396,9 +422,6 @@ private:
 
   /// Map GpsMode to CBOR text value.
   static const char *gps_mode_to_str(GpsMode mode);
-
-  /// Map OperatingMode to CBOR text value.
-  static const char *operating_mode_to_str(OperatingMode mode);
 
   /// Characteristic properties for the Measurements characteristic.
   static uint16_t measures_properties();

@@ -129,7 +129,7 @@ private:
   std::size_t _write_attempt_count = 0;
 };
 
-static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 34;
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 35;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -142,7 +142,7 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   REQUIRE(s.measure_interval_seconds == 10);
   REQUIRE(s.energy_saving_measure_interval_seconds == 300);
   REQUIRE(s.gps_mode == GpsMode::OnWhenTracking);
-  REQUIRE(s.operating_mode == OperatingMode::Portable);
+  REQUIRE(s.wifi_enabled == false);
   REQUIRE(s.use_fahrenheit == false);
   REQUIRE(s.use_feet == false);
   REQUIRE(s.pm_use_usaqi == false);
@@ -170,15 +170,16 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
 
 TEST_CASE("energy saving interval migrates independently of the normal interval",
           "[settings][interval]") {
-  for (auto mode : {OperatingMode::Portable, OperatingMode::Stationary, OperatingMode::Offline}) {
+  for (int mode : {0, 1, 2}) {
     FakeConfigStore store;
     REQUIRE(store.set_int("mi", 17) == ConfigStoreResult::OK);
     REQUIRE(store.set_int("opm", static_cast<int>(mode)) == ConfigStoreResult::OK);
     auto settings = load_go_settings(store);
     CHECK(settings.measure_interval_seconds == 17);
     CHECK(settings.energy_saving_measure_interval_seconds == 300);
-    CHECK(settings.active_measure_interval_seconds() ==
-          (mode == OperatingMode::Offline ? 300 : 17));
+    CHECK(settings.active_measure_interval_seconds() == 300);
+    CHECK_FALSE(settings.wifi_enabled);
+    CHECK(settings.active_measure_interval_seconds(TrackingState::Recording) == 17);
     REQUIRE(save_go_settings(store, settings));
     CHECK(load_go_settings(store).equals(settings));
   }
@@ -192,13 +193,13 @@ TEST_CASE("energy saving interval preserves valid seconds across mode changes",
     GoSettings settings;
     settings.measure_interval_seconds = 17;
     settings.energy_saving_measure_interval_seconds = interval;
-    for (auto mode : {OperatingMode::Offline, OperatingMode::Portable, OperatingMode::Stationary}) {
-      settings.operating_mode = mode;
+    for (auto mode : {false, false, true}) {
+      settings.wifi_enabled = mode;
       REQUIRE(save_go_settings(store, settings));
       auto loaded = load_go_settings(store);
       CHECK(loaded.equals(settings));
-      CHECK(loaded.active_measure_interval_seconds() ==
-            (mode == OperatingMode::Offline ? interval : 17));
+      CHECK(loaded.active_measure_interval_seconds() == interval);
+      CHECK(loaded.active_measure_interval_seconds(TrackingState::Paused) == 17);
     }
     auto changed = settings;
     changed.energy_saving_measure_interval_seconds = interval == 300 ? 900 : 300;
@@ -265,7 +266,7 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   GoSettings original;
   original.measure_interval_seconds = 60;
   original.gps_mode = GpsMode::AlwaysOn;
-  original.operating_mode = OperatingMode::Offline;
+  original.wifi_enabled = false;
   original.use_fahrenheit = true;
   original.use_feet = true;
   original.pm_use_usaqi = true;
@@ -282,7 +283,7 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
 
   REQUIRE(loaded.measure_interval_seconds == original.measure_interval_seconds);
   REQUIRE(loaded.gps_mode == original.gps_mode);
-  REQUIRE(loaded.operating_mode == original.operating_mode);
+  REQUIRE(loaded.wifi_enabled == original.wifi_enabled);
   REQUIRE(loaded.use_fahrenheit == original.use_fahrenheit);
   REQUIRE(loaded.use_feet == original.use_feet);
   REQUIRE(loaded.pm_use_usaqi == original.pm_use_usaqi);
@@ -695,26 +696,26 @@ TEST_CASE("round-trip preserves each GpsMode value", "[settings]") {
   }
 }
 
-TEST_CASE("round-trip preserves each OperatingMode value", "[settings]") {
+TEST_CASE("round-trip preserves each bool value", "[settings]") {
   FakeConfigStore store;
   GoSettings s;
 
   SECTION("Portable") {
-    s.operating_mode = OperatingMode::Portable;
+    s.wifi_enabled = false;
     REQUIRE(save_go_settings(store, s));
-    REQUIRE(load_go_settings(store).operating_mode == OperatingMode::Portable);
+    REQUIRE(load_go_settings(store).wifi_enabled == false);
   }
 
   SECTION("Stationary") {
-    s.operating_mode = OperatingMode::Stationary;
+    s.wifi_enabled = true;
     REQUIRE(save_go_settings(store, s));
-    REQUIRE(load_go_settings(store).operating_mode == OperatingMode::Stationary);
+    REQUIRE(load_go_settings(store).wifi_enabled == true);
   }
 
   SECTION("Offline") {
-    s.operating_mode = OperatingMode::Offline;
+    s.wifi_enabled = false;
     REQUIRE(save_go_settings(store, s));
-    REQUIRE(load_go_settings(store).operating_mode == OperatingMode::Offline);
+    REQUIRE(load_go_settings(store).wifi_enabled == false);
   }
 }
 
@@ -739,14 +740,6 @@ TEST_CASE("save rejects invalid gps_mode", "[settings][validation]") {
 
   // Force an out-of-range enum value
   s.gps_mode = static_cast<GpsMode>(3);
-  REQUIRE_FALSE(save_go_settings(store, s));
-}
-
-TEST_CASE("save rejects invalid operating_mode", "[settings][validation]") {
-  FakeConfigStore store;
-  GoSettings s;
-
-  s.operating_mode = static_cast<OperatingMode>(3);
   REQUIRE_FALSE(save_go_settings(store, s));
 }
 
@@ -823,7 +816,7 @@ TEST_CASE("load ignores invalid stored values", "[settings][validation]") {
   // All should fall back to defaults
   REQUIRE(loaded.measure_interval_seconds == 10);
   REQUIRE(loaded.gps_mode == GpsMode::OnWhenTracking);
-  REQUIRE(loaded.operating_mode == OperatingMode::Portable);
+  REQUIRE(loaded.wifi_enabled == false);
   REQUIRE(loaded.auto_lock_seconds == 10);
 }
 

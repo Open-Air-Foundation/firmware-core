@@ -80,6 +80,7 @@ public:
   /// Abort any in-flight transfer and clear the OTA GATT registration.
   /// Idempotent.  Never deinit()s the server.  Portable-only.
   void teardown_ble();
+  void set_service_tick(std::function<void()> tick) { _service_tick = std::move(tick); }
 
 private:
   /// Named BLE progress handler.  Feeds the external watchdog on every
@@ -100,5 +101,6 @@ private:
   // Per-call commit notification, stored for the duration of run_wifi_check()
   // so the named _on_wifi_progress() member can invoke it.
   std::function<void()> _on_download_started;
+  std::function<void()> _service_tick;
   bool _wifi_download_painted = false; ///< one-shot guard; reset per run_wifi_check()
 };
