@@ -3146,7 +3146,7 @@ TEST_CASE("pause/resume: keep session, GPS and live data; record results only wh
   fix.position = {47.376, 8.541};
   fix.fix = {GpsFixType::Fix3D, 8, 1.0f};
   A::on_gps_fix(orch, fix);
-  REQUIRE(A::build_context(orch).gps_fix);
+  REQUIRE(A::build_context(orch).connectivity.gps_fix);
   test_spy::reset();
 
   REQUIRE(A::pause_tracking(orch));
@@ -4679,7 +4679,7 @@ TEST_CASE("on_gps_fix: NoFix data clears cached fix when GPS is active", "[Orche
 
   // build_context must reflect gps_fix == false.
   BuildContext ctx = A::build_context(orch);
-  REQUIRE_FALSE(ctx.gps_fix);
+  REQUIRE_FALSE(ctx.connectivity.gps_fix);
 }
 
 // ============================================================================
@@ -5396,24 +5396,68 @@ TEST_CASE("apply_settings_change: leaves GPS service cadence alone", "[Orchestra
   REQUIRE(test_spy::gps_posting_interval_ms == 0);
 }
 
-TEST_CASE("apply_settings_change: persists altitude unit", "[Orchestrator][settings]") {
+TEST_CASE("apply_settings_change: display preferences follow persistence result",
+          "[Orchestrator][settings]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
 
   GoSettings updated = f.settings;
+  updated.use_fahrenheit = true;
   updated.use_feet = true;
+  updated.pm_use_usaqi = true;
   f.ui_manager.sync_settings(updated);
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  const bool save_ok = GENERATE(false, true);
+  REQUIRE_CALL(f.mock_config, commit())
+      .RETURN(save_ok ? ConfigStoreResult::OK : ConfigStoreResult::ERROR);
 
   A::apply_settings_change(orch);
 
-  CHECK(A::settings(orch).use_feet);
-  CHECK(A::build_context(orch).use_feet);
+  CHECK(A::settings(orch).use_fahrenheit == save_ok);
+  CHECK(A::settings(orch).use_feet == save_ok);
+  CHECK(A::settings(orch).pm_use_usaqi == save_ok);
+  const auto values = f.ui_manager.build_values(A::build_context(orch));
+  CHECK(values.use_fahrenheit == save_ok);
+  CHECK(values.use_feet == save_ok);
+  CHECK(values.pm_use_usaqi == save_ok);
+}
+
+TEST_CASE("settings activation: display preferences are synchronized before stopping tracking",
+          "[Orchestrator][settings][display]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  REQUIRE(A::start_tracking(orch));
+
+  GoSettings candidate = f.settings;
+  candidate.operating_mode = OperatingMode::Offline;
+  candidate.use_fahrenheit = true;
+  candidate.use_feet = true;
+  candidate.pm_use_usaqi = true;
+
+  // Stopping tracking renders before mode teardown. Observe the UI inputs at
+  // the clock boundary used by display submission, without re-entering services.
+  Measures sensors{};
+  const BuildContext ctx{.sensor_data = sensors};
+  unsigned observations = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl())
+      .LR_SIDE_EFFECT({
+        if (A::mode(orch) == OperatingMode::Offline) {
+          ++observations;
+          const auto values = f.ui_manager.build_values(ctx);
+          CHECK(values.use_fahrenheit);
+          CHECK(values.use_feet);
+          CHECK(values.pm_use_usaqi);
+        }
+      })
+      .RETURN(0);
+
+  REQUIRE(A::activate_settings_candidate(orch, candidate, false));
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  CHECK(observations > 0);
 }
 
 TEST_CASE("apply_settings_change: unrelated update preserves custom measurement interval",
@@ -5576,7 +5620,7 @@ TEST_CASE("BLE config set: applies altitude display unit", "[Orchestrator][setti
   A::dispatch(orch, evt);
 
   CHECK(A::settings(orch).use_feet);
-  CHECK(A::build_context(orch).use_feet);
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).use_feet);
   CHECK(test_spy::ble_notify_config_called);
 
   GoSettings ui_settings{};
@@ -5994,6 +6038,7 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   f.settings.use_feet = true;
   f.settings.pm_use_usaqi = true;
   auto orch = f.make_orchestrator();
+  f.ui_manager.sync_settings(f.settings); // This test skips init().
 
   // Feed sensor data
   MeasuresAGo data{};
@@ -6006,10 +6051,11 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   REQUIRE(ctx.sensor_data.co2.co2 == 800);
   REQUIRE(ctx.sensor_data.temp_hum_a.temperature == 23.5f);
   REQUIRE(ctx.locked == true); // still locked by default
-  REQUIRE(ctx.gps_enabled == true);
-  REQUIRE(ctx.use_fahrenheit == true);
-  REQUIRE(ctx.use_feet == true);
-  REQUIRE(ctx.pm_use_usaqi == true);
+  REQUIRE(ctx.connectivity.gps_enabled == true);
+  const auto values = f.ui_manager.build_values(ctx);
+  REQUIRE(values.use_fahrenheit);
+  REQUIRE(values.use_feet);
+  REQUIRE(values.pm_use_usaqi);
 }
 
 TEST_CASE("build_context: battery percentage 0xFF when invalid", "[Orchestrator][display]") {
@@ -6018,7 +6064,7 @@ TEST_CASE("build_context: battery percentage 0xFF when invalid", "[Orchestrator]
 
   // Default PowerSnapshot has battery_percentage = -1.0f (invalid)
   BuildContext ctx = A::build_context(orch);
-  REQUIRE(ctx.battery_pct == 0xFF);
+  REQUIRE(ctx.battery.pct == 0xFF);
 }
 
 TEST_CASE("build_context: display_off is always false", "[Orchestrator][display]") {
@@ -6844,7 +6890,7 @@ TEST_CASE("build_context: ble_enabled true in Portable mode", "[Orchestrator][bl
 
   auto ctx = A::build_context(orch);
 
-  CHECK(ctx.ble_enabled);
+  CHECK(ctx.connectivity.ble_enabled);
 }
 
 TEST_CASE("build_context: ble_enabled false in Offline mode", "[Orchestrator][ble]") {
@@ -6854,7 +6900,7 @@ TEST_CASE("build_context: ble_enabled false in Offline mode", "[Orchestrator][bl
 
   auto ctx = A::build_context(orch);
 
-  CHECK_FALSE(ctx.ble_enabled);
+  CHECK_FALSE(ctx.connectivity.ble_enabled);
 }
 
 TEST_CASE("build_context: ble_connected reflects authenticated link state", "[Orchestrator][ble]") {
@@ -6866,10 +6912,10 @@ TEST_CASE("build_context: ble_connected reflects authenticated link state", "[Or
   // link; a GAP link alone is not enough.
   test_spy::ble_connected = true;
   test_spy::ble_authenticated = false;
-  CHECK_FALSE(A::build_context(orch).ble_connected);
+  CHECK_FALSE(A::build_context(orch).connectivity.ble_connected);
 
   test_spy::ble_authenticated = true;
-  CHECK(A::build_context(orch).ble_connected);
+  CHECK(A::build_context(orch).connectivity.ble_connected);
 }
 
 // ============================================================================
@@ -8912,7 +8958,7 @@ TEST_CASE("AlwaysOff clears an existing fix and keeps GPS inactive when tracking
   fix.position = {47.376, 8.541};
   fix.fix = {GpsFixType::Fix3D, 8, 1.0f};
   A::on_gps_fix(orch, fix);
-  REQUIRE(A::build_context(orch).gps_fix);
+  REQUIRE(A::build_context(orch).connectivity.gps_fix);
 
   ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
@@ -8970,7 +9016,7 @@ TEST_CASE("OnWhenTracking clears an existing fix and stays inactive while idle",
   fix.position = {47.376, 8.541};
   fix.fix = {GpsFixType::Fix3D, 8, 1.0f};
   A::on_gps_fix(orch, fix);
-  REQUIRE(A::build_context(orch).gps_fix);
+  REQUIRE(A::build_context(orch).connectivity.gps_fix);
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -9190,7 +9236,7 @@ TEST_CASE("stop_tracking: OnWhenTracking clears stale GPS fix from build_context
 
   // Verify build_context shows GPS fix
   BuildContext ctx_before = A::build_context(orch);
-  REQUIRE(ctx_before.gps_fix == true);
+  REQUIRE(ctx_before.connectivity.gps_fix == true);
 
   // Stop tracking — GPS becomes inactive, stale fix must be cleared
   A::stop_tracking(orch);
@@ -9202,8 +9248,8 @@ TEST_CASE("stop_tracking: OnWhenTracking clears stale GPS fix from build_context
 
   // build_context must reflect cleared GPS state
   BuildContext ctx_after = A::build_context(orch);
-  CHECK_FALSE(ctx_after.gps_fix);
-  CHECK_FALSE(ctx_after.gps_enabled);
+  CHECK_FALSE(ctx_after.connectivity.gps_fix);
+  CHECK_FALSE(ctx_after.connectivity.gps_enabled);
 }
 
 // ============================================================================
@@ -9981,24 +10027,24 @@ TEST_CASE("BuildContext: wifi icon shown in Stationary, glyph tracks is_online",
     A::set_mode(orch, OperatingMode::Portable);
     test_spy::wifi_is_online = true;
     const auto ctx = A::build_context(orch);
-    CHECK_FALSE(ctx.wifi_enabled);
-    CHECK_FALSE(ctx.wifi_connected);
+    CHECK_FALSE(ctx.connectivity.wifi_enabled);
+    CHECK_FALSE(ctx.connectivity.wifi_connected);
   }
 
   SECTION("Stationary + offline -> icon shown, disconnected") {
     A::set_mode(orch, OperatingMode::Stationary);
     test_spy::wifi_is_online = false;
     const auto ctx = A::build_context(orch);
-    CHECK(ctx.wifi_enabled);
-    CHECK_FALSE(ctx.wifi_connected);
+    CHECK(ctx.connectivity.wifi_enabled);
+    CHECK_FALSE(ctx.connectivity.wifi_connected);
   }
 
   SECTION("Stationary + online -> icon shown, connected") {
     A::set_mode(orch, OperatingMode::Stationary);
     test_spy::wifi_is_online = true;
     const auto ctx = A::build_context(orch);
-    CHECK(ctx.wifi_enabled);
-    CHECK(ctx.wifi_connected);
+    CHECK(ctx.connectivity.wifi_enabled);
+    CHECK(ctx.connectivity.wifi_connected);
   }
 }
 
@@ -11303,7 +11349,7 @@ TEST_CASE("local altitude activation persists syncs redraws publishes and conver
   }
 
   CHECK(A::settings(orch).use_feet);
-  CHECK(A::build_context(orch).use_feet);
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).use_feet);
   CHECK(*f.local_api.get_config().altitude_unit == "ft");
   CHECK(DisplayService::spy_update_count == 1);
   GoSettings ui_settings{};
@@ -12569,10 +12615,10 @@ TEST_CASE("Energy Saving mode changes recalculate current readings and charts",
     CHECK(ctx.sensor_data.temp_hum_a.temperature == expected_temp);
     CHECK(ctx.sensor_data.temp_hum_a.humidity == expected_hum);
     CHECK(ctx.sensor_data.pm_a.pm_25 == 21.0f);
-    REQUIRE(ctx.cache_count == 1);
-    CHECK(ctx.cache[0].temp_hum_a.temperature == expected_temp);
-    CHECK(ctx.cache[0].temp_hum_a.humidity == expected_hum);
-    CHECK(ctx.cache[0].pm_a.pm_25 == 21.0f);
+    REQUIRE(ctx.history.count == 1);
+    CHECK(ctx.history.samples[0].temp_hum_a.temperature == expected_temp);
+    CHECK(ctx.history.samples[0].temp_hum_a.humidity == expected_hum);
+    CHECK(ctx.history.samples[0].pm_a.pm_25 == 21.0f);
     CHECK_FALSE(test_spy::cache_measurement_called);
     CHECK(A::raw_measures(orch).temp_hum_a.temperature == 25.0f);
     CHECK(A::raw_measures(orch).temp_hum_a.humidity == 60.0f);

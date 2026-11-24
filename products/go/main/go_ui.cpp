@@ -325,23 +325,23 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   v.altitude_m = ctx.sensor_data.pressure.altitude;
 
   // --- Battery ---
-  v.battery_pct = ctx.battery_pct;
-  v.is_battery_charging = ctx.is_battery_charging;
-  v.is_plugged_in = ctx.is_plugged_in;
+  v.battery_pct = ctx.battery.pct;
+  v.is_battery_charging = ctx.battery.is_charging;
+  v.is_plugged_in = ctx.battery.is_plugged_in;
 
   // --- Status flags ---
   v.locked = ctx.locked;
-  v.ble_enabled = ctx.ble_enabled;
-  v.ble_connected = ctx.ble_connected;
-  v.wifi_enabled = ctx.wifi_enabled;
-  v.wifi_connected = ctx.wifi_connected;
-  v.gps_enabled = ctx.gps_enabled;
-  v.gps_fix = ctx.gps_fix;
+  v.ble_enabled = ctx.connectivity.ble_enabled;
+  v.ble_connected = ctx.connectivity.ble_connected;
+  v.wifi_enabled = ctx.connectivity.wifi_enabled;
+  v.wifi_connected = ctx.connectivity.wifi_connected;
+  v.gps_enabled = ctx.connectivity.gps_enabled;
+  v.gps_fix = ctx.connectivity.gps_fix;
   v.tracking_state = ctx.tracking_state;
   v.display_off = ctx.display_off;
-  v.use_fahrenheit = ctx.use_fahrenheit;
-  v.use_feet = ctx.use_feet;
-  v.pm_use_usaqi = ctx.pm_use_usaqi;
+  v.use_fahrenheit = (_setting_units == 1);
+  v.use_feet = (_setting_altitude_unit == 1);
+  v.pm_use_usaqi = (_setting_pm_display == 1);
 
   // --- Screen navigation ---
   v.screen = _screen;
@@ -354,17 +354,18 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   // --- Populate rows based on current screen ---
   switch (_screen) {
   case Screen::Home:
-    populate_chart(v, ctx.cache, ctx.cache_count);
+    populate_chart(v, ctx.history);
     break;
   case Screen::MainMenu:
     populate_menu_rows(v);
-    populate_chart(v, ctx.cache, ctx.cache_count);
+    populate_chart(v, ctx.history);
     break;
   case Screen::TrackingMenu:
     populate_tracking_rows(v);
     break;
   case Screen::TrackingStatus:
-    populate_tracking_status_rows(v, ctx);
+    populate_tracking_status_rows(v, ctx.tracking_status, ctx.tracking_state,
+                                  ctx.connectivity.gps_enabled, ctx.gps_data);
     break;
   case Screen::Settings:
     populate_settings_rows(v);
@@ -414,10 +415,10 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     populate_peripheral_test_rows(v);
     break;
   case Screen::GpsTest:
-    populate_gps_test_rows(v, ctx);
+    populate_gps_test_rows(v, ctx.gps_data, ctx.gps_test);
     break;
   case Screen::AccelTest:
-    populate_accel_test_rows(v, ctx);
+    populate_accel_test_rows(v, ctx.accel_test);
     break;
   // FG learning screens are built by FgLearningRunner, not UIManager.
   case Screen::FgLearnCharging:
@@ -1789,23 +1790,26 @@ void UIManager::populate_tracking_rows(DisplayValues &v) const {
   v.show_separator_after_back = true;
 }
 
-void UIManager::populate_tracking_status_rows(DisplayValues &v, const BuildContext &ctx) const {
+void UIManager::populate_tracking_status_rows(DisplayValues &v,
+                                              const TrackingStatusSnapshot &status,
+                                              TrackingState tracking_state, bool gps_enabled,
+                                              const GpsData *gps_data) const {
   static_assert(TRACKING_STATUS_TOTAL <= MAX_LIST_ROWS);
   v.row_count = TRACKING_STATUS_TOTAL;
   v.selected_row = _tracking_status_index;
   v.show_separator_after_back = true;
   copy_row(v, 0, "Exit", false);
   copy_row(v, TRACKING_BACK, "Back", false);
-  const GpsData *gps = ctx.gps_enabled ? ctx.gps_data : nullptr;
+  const GpsData *gps = gps_enabled ? gps_data : nullptr;
   const bool recognized_fix = gps != nullptr && (gps->fix.fix_type == GpsFixType::Fix2D ||
                                                  gps->fix.fix_type == GpsFixType::Fix3D);
   char text[TRACKING_STATUS_LABEL_CAPACITY];
   if (_tracking_status_view == TrackingStatusView::Session) {
     copy_row(v, TRACKING_STATUS_SWITCH, "GPS details > (1/2)", false);
     const char *state = "--";
-    if (ctx.tracking_state == TrackingState::Recording)
+    if (tracking_state == TrackingState::Recording)
       state = "Recording";
-    else if (ctx.tracking_state == TrackingState::Paused)
+    else if (tracking_state == TrackingState::Paused)
       state = "Paused";
     (void)snprintf(text, sizeof(text), "State: %s", state);
     copy_row(v, 3, text, true);
@@ -1816,24 +1820,24 @@ void UIManager::populate_tracking_status_rows(DisplayValues &v, const BuildConte
                      gps->timestamp.minute, gps->timestamp.second);
       copy_row(v, 4, text, true);
     }
-    copy_tracking_duration(v, 5, "Active", ctx.tracking_status.recording_s);
-    copy_tracking_duration(v, 6, "Elapsed", ctx.tracking_status.elapsed_s);
+    copy_tracking_duration(v, 5, "Active", status.recording_s);
+    copy_tracking_duration(v, 6, "Elapsed", status.elapsed_s);
     copy_row(v, 7, "Points: --", true);
-    if (ctx.tracking_status.point_count_known) {
+    if (status.point_count_known) {
       (void)snprintf(text, sizeof(text), "Points: %lu",
-                     static_cast<unsigned long>(ctx.tracking_status.point_count));
+                     static_cast<unsigned long>(status.point_count));
       copy_row(v, 7, text, true);
     }
-    if (ctx.tracking_status.point_count_known && ctx.tracking_status.point_count == 0) {
+    if (status.point_count_known && status.point_count == 0) {
       copy_row(v, 8, "Last: No points yet", true);
     } else {
-      copy_tracking_duration(v, 8, "Last", ctx.tracking_status.last_record_age_s);
+      copy_tracking_duration(v, 8, "Last", status.last_record_age_s);
     }
     return;
   }
 
   copy_row(v, TRACKING_STATUS_SWITCH, "Session > (2/2)", false);
-  copy_row(v, 3, ctx.gps_enabled ? "GPS: On" : "GPS: Off", true);
+  copy_row(v, 3, gps_enabled ? "GPS: On" : "GPS: Off", true);
   const char *fix = "--";
   if (gps != nullptr) {
     switch (gps->fix.fix_type) {
@@ -2219,17 +2223,17 @@ void UIManager::populate_peripheral_test_rows(DisplayValues &v) const {
   }
 }
 
-void UIManager::populate_gps_test_rows(DisplayValues &v, const BuildContext &ctx) const {
+void UIManager::populate_gps_test_rows(DisplayValues &v, const GpsData *gps,
+                                       const GpsTestTiming &timing) const {
   copy_row(v, 0, "GPS Test - tap to exit", true); // non-selectable header
 
   char buf[48];
-  const GpsData *gps = ctx.gps_data;
 
   // TTFF mm:ss — running until the first fix latches, then frozen. A trailing
   // "..." marks the still-counting state.
-  const unsigned mm = static_cast<unsigned>(ctx.gps_ttff_secs / 60);
-  const unsigned ss = static_cast<unsigned>(ctx.gps_ttff_secs % 60);
-  (void)snprintf(buf, sizeof(buf), "TTFF: %02u:%02u%s", mm, ss, ctx.gps_ttff_fixed ? "" : " ...");
+  const unsigned mm = static_cast<unsigned>(timing.ttff_secs / 60);
+  const unsigned ss = static_cast<unsigned>(timing.ttff_secs % 60);
+  (void)snprintf(buf, sizeof(buf), "TTFF: %02u:%02u%s", mm, ss, timing.ttff_fixed ? "" : " ...");
   copy_row(v, 1, buf, false);
 
   const char *fix_str = "NoFix";
@@ -2289,23 +2293,23 @@ void UIManager::populate_gps_test_rows(DisplayValues &v, const BuildContext &ctx
   v.selected_row = 0; // header disabled; any tap exits
 }
 
-void UIManager::populate_accel_test_rows(DisplayValues &v, const BuildContext &ctx) const {
+void UIManager::populate_accel_test_rows(DisplayValues &v, const AccelTestSnapshot &accel) const {
   copy_row(v, 0, "Accel Test - tap to exit", true); // non-selectable header
 
   char buf[48];
 
-  (void)snprintf(buf, sizeof(buf), "WHO_AM_I: 0x%02X (%s)", ctx.accel_who_am_i,
-                 ctx.accel_id_ok ? "OK" : "BAD");
+  (void)snprintf(buf, sizeof(buf), "WHO_AM_I: 0x%02X (%s)", accel.who_am_i,
+                 accel.id_ok ? "OK" : "BAD");
   copy_row(v, 1, buf, false);
 
-  if (ctx.accel_read_ok) {
-    (void)snprintf(buf, sizeof(buf), "X: %d mg", ctx.accel_x_mg);
+  if (accel.read_ok) {
+    (void)snprintf(buf, sizeof(buf), "X: %d mg", accel.x_mg);
     copy_row(v, 2, buf, false);
-    (void)snprintf(buf, sizeof(buf), "Y: %d mg", ctx.accel_y_mg);
+    (void)snprintf(buf, sizeof(buf), "Y: %d mg", accel.y_mg);
     copy_row(v, 3, buf, false);
-    (void)snprintf(buf, sizeof(buf), "Z: %d mg", ctx.accel_z_mg);
+    (void)snprintf(buf, sizeof(buf), "Z: %d mg", accel.z_mg);
     copy_row(v, 4, buf, false);
-    (void)snprintf(buf, sizeof(buf), "|a|: %u mg", ctx.accel_magnitude_mg);
+    (void)snprintf(buf, sizeof(buf), "|a|: %u mg", accel.magnitude_mg);
     copy_row(v, 5, buf, false);
   } else {
     copy_row(v, 2, "X: --", false);
@@ -2314,7 +2318,7 @@ void UIManager::populate_accel_test_rows(DisplayValues &v, const BuildContext &c
     copy_row(v, 5, "|a|: --", false);
   }
 
-  (void)snprintf(buf, sizeof(buf), "Result: %s", ctx.accel_pass ? "PASS" : "FAIL");
+  (void)snprintf(buf, sizeof(buf), "Result: %s", accel.pass ? "PASS" : "FAIL");
   copy_row(v, 6, buf, false);
 
   v.row_count = 7;
@@ -2325,7 +2329,6 @@ void UIManager::populate_accel_test_rows(DisplayValues &v, const BuildContext &c
 // Chart extraction
 // ---------------------------------------------------------------------------
 
-void UIManager::populate_chart(DisplayValues &v, const MeasuresAGo *cache,
-                               uint8_t cache_count) const {
-  populate_display_chart(v, cache, cache_count, _chart_buf);
+void UIManager::populate_chart(DisplayValues &v, const ChartHistoryView &history) const {
+  populate_display_chart(v, history.samples, history.count, _chart_buf);
 }

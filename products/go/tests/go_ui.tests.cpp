@@ -49,23 +49,8 @@ static BuildContext make_default_ctx() {
   static Measures empty_measures{};
   return BuildContext{
       .sensor_data = empty_measures,
-      .battery_pct = 0xFF,
-      .is_battery_charging = false,
+      .connectivity = {.gps_enabled = true},
       .locked = false,
-      .ble_enabled = false,
-      .ble_connected = false,
-      .wifi_enabled = false,
-      .wifi_connected = false,
-      .gps_enabled = true,
-      .gps_fix = false,
-      .tracking_state = TrackingState::Idle,
-      .display_off = false,
-      .use_fahrenheit = false,
-      .use_feet = false,
-      .pm_use_usaqi = false,
-      .cache = nullptr,
-      .cache_count = 0,
-      .now_ms = 0,
   };
 }
 
@@ -965,7 +950,6 @@ TEST_CASE("UIManager: Tracking Status preserves view and cursor across snapshots
         ctx.tracking_state = state;
         ui.sync_tracking_state(state);
         ctx.tracking_status = {12, 23, 4, 8, true};
-        ctx.now_ms += 10000;
         ui.set_screen(Screen::TrackingStatus); // Reasserting the same screen is not entry.
         const auto values = ui.build_values(ctx);
         CHECK(ui.current_screen() == Screen::TrackingStatus);
@@ -1046,10 +1030,8 @@ TEST_CASE("UIManager: Tracking Status GPS gates cached data and validates each f
   gps.fix = {GpsFixType::Fix3D, 0, 1.25f};
   gps.timestamp = {2026, 10, 6, 23, 59, 59, true};
   ctx.gps_data = &gps;
-  ctx.gps_fix = false; // Status uses the actual data, not the status-bar flag.
+  ctx.connectivity.gps_fix = false; // Status uses the actual data, not the status-bar flag.
   go_to_tracking_status(ui, ctx);
-  CHECK(std::string(ui.build_values(ctx).rows[4].text) == "UTC: 23:59:59");
-  ctx.now_ms = UINT32_MAX;
   CHECK(std::string(ui.build_values(ctx).rows[4].text) == "UTC: 23:59:59");
   open_row(ui, "GPS details", ctx);
   check_rows(ui,
@@ -1061,7 +1043,7 @@ TEST_CASE("UIManager: Tracking Status GPS gates cached data and validates each f
     for (GpsFixType fix : {GpsFixType::NoFix, static_cast<GpsFixType>(1),
                            static_cast<GpsFixType>(255), GpsFixType::Fix2D, GpsFixType::Fix3D}) {
       gps.fix.fix_type = fix;
-      ctx.gps_fix = true; // Cannot bypass the recognized-fix predicate.
+      ctx.connectivity.gps_fix = true; // Cannot bypass the recognized-fix predicate.
       const bool recognized = fix == GpsFixType::Fix2D || fix == GpsFixType::Fix3D;
       const auto values = ui.build_values(ctx);
       CHECK(std::string(values.rows[7].text) == (recognized ? "Lat: -90.00000" : "Lat: --"));
@@ -1079,7 +1061,7 @@ TEST_CASE("UIManager: Tracking Status GPS gates cached data and validates each f
   }
   SECTION("GPS off hides all cached data; null data has placeholders") {
     for (bool enabled : {false, true}) {
-      ctx.gps_enabled = enabled;
+      ctx.connectivity.gps_enabled = enabled;
       ctx.gps_data = enabled ? nullptr : &gps;
       const auto values = ui.build_values(ctx);
       CHECK(std::string(values.rows[3].text) == (enabled ? "GPS: On" : "GPS: Off"));
@@ -1182,6 +1164,7 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
     CHECK(std::string(v.rows[v.selected_row].text) == "Temperature Unit: F");
+    CHECK(v.use_fahrenheit);
   }
 
   SECTION("changing altitude unit returns SettingsChanged") {
@@ -1207,6 +1190,7 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
 
     v = ui.build_values(ctx);
     CHECK(std::string(v.rows[v.selected_row].text) == "Altitude Unit: ft");
+    CHECK(v.use_feet);
   }
 
   SECTION("changing mode returns ChangeMode with new mode") {
@@ -1492,7 +1476,6 @@ TEST_CASE("UIManager: snackbar lifecycle", "[UIManager][snackbar]") {
     ui.mark_snackbar_submitted(1000);
 
     auto ctx = make_default_ctx();
-    ctx.now_ms = 1000;
     DisplayValues v = ui.build_values(ctx);
     REQUIRE(v.snackbar_text != nullptr);
     CHECK(std::string(v.snackbar_text) == "Hello");
@@ -1500,7 +1483,6 @@ TEST_CASE("UIManager: snackbar lifecycle", "[UIManager][snackbar]") {
     // After 3000ms (SNACKBAR_DURATION_MS), should expire.
     ui.clear_expired_snackbar(1000 + 3001);
 
-    ctx.now_ms = 1000 + 3001;
     v = ui.build_values(ctx);
     CHECK(v.snackbar_text == nullptr);
   }
@@ -1543,7 +1525,7 @@ TEST_CASE("UIManager: snackbar lifecycle", "[UIManager][snackbar]") {
   SECTION("opening Main Menu dismisses Unlocked before expiry") {
     const auto ctx = make_default_ctx();
     ui.show_snackbar("Unlocked");
-    ui.mark_snackbar_submitted(ctx.now_ms);
+    ui.mark_snackbar_submitted(0);
     REQUIRE(ui.build_values(ctx).snackbar_text != nullptr);
 
     press(ui, InputSource::TouchEnter);
@@ -1558,13 +1540,13 @@ TEST_CASE("UIManager: snackbar lifecycle", "[UIManager][snackbar]") {
     const auto ctx = make_default_ctx();
     ui.show_snackbar("Unlocked");
     ui.show_snackbar("Tag saved");
-    ui.mark_snackbar_submitted(ctx.now_ms);
+    ui.mark_snackbar_submitted(0);
 
     press(ui, InputSource::TouchEnter);
     REQUIRE(ui.current_screen() == Screen::MainMenu);
     REQUIRE(ui.build_values(ctx).snackbar_text != nullptr);
     CHECK(std::string(ui.build_values(ctx).snackbar_text) == "Tag saved");
-    ui.clear_expired_snackbar(ctx.now_ms + SNACKBAR_DURATION_MS);
+    ui.clear_expired_snackbar(SNACKBAR_DURATION_MS);
     CHECK(ui.build_values(ctx).snackbar_text == nullptr);
   }
 
@@ -1758,12 +1740,61 @@ TEST_CASE("UIManager: every Auto Lock choice maps to its duration",
   }
 }
 
-TEST_CASE("UIManager: build_values passes altitude unit through", "[UIManager][settings]") {
+TEST_CASE("UIManager: build_values uses synchronized display preferences",
+          "[UIManager][settings]") {
   UIManager ui(DEFAULT_UI_CONFIG);
-  auto ctx = make_default_ctx();
-  ctx.use_feet = true;
+  const auto ctx = make_default_ctx();
+  GoSettings settings{};
+  settings.use_fahrenheit = GENERATE(false, true);
+  settings.use_feet = GENERATE(false, true);
+  settings.pm_use_usaqi = GENERATE(false, true);
 
-  CHECK(ui.build_values(ctx).use_feet);
+  // Reuse the same context across setting changes in both directions.
+  for (int iteration = 0; iteration < 2; ++iteration) {
+    ui.sync_settings(settings);
+    const auto values = ui.build_values(ctx);
+    CHECK(values.use_fahrenheit == settings.use_fahrenheit);
+    CHECK(values.use_feet == settings.use_feet);
+    CHECK(values.pm_use_usaqi == settings.pm_use_usaqi);
+    settings.use_fahrenheit = !settings.use_fahrenheit;
+    settings.use_feet = !settings.use_feet;
+    settings.pm_use_usaqi = !settings.pm_use_usaqi;
+  }
+}
+
+TEST_CASE("UIManager: minimal build context renders unavailable inputs safely",
+          "[UIManager][build]") {
+  UIManager ui(DEFAULT_UI_CONFIG);
+  Measures sensors{};
+  const BuildContext ctx{.sensor_data = sensors};
+  const auto home = ui.build_values(ctx);
+  CHECK(home.co2_ppm == MeasuresInvalid::CO2);
+  CHECK(home.battery_pct == 0xFF);
+  CHECK_FALSE(home.is_battery_charging);
+  CHECK_FALSE(home.is_plugged_in);
+  CHECK(home.locked);
+  CHECK_FALSE(home.display_off);
+  CHECK_FALSE(home.ble_enabled);
+  CHECK_FALSE(home.ble_connected);
+  CHECK_FALSE(home.wifi_enabled);
+  CHECK_FALSE(home.wifi_connected);
+  CHECK_FALSE(home.gps_enabled);
+  CHECK_FALSE(home.gps_fix);
+  CHECK(home.tracking_state == TrackingState::Idle);
+  CHECK(home.chart_count == 0);
+
+  ui.set_screen(Screen::GpsTest);
+  const auto gps = ui.build_values(ctx);
+  CHECK(std::string(gps.rows[1].text) == "TTFF: 00:00 ...");
+  CHECK(std::string(gps.rows[2].text) == "Fix: NoFix");
+  CHECK(std::string(gps.rows[5].text) == "Lat: --");
+  CHECK(std::string(gps.rows[7].text) == "UTC: No time");
+
+  ui.set_screen(Screen::AccelTest);
+  const auto accel = ui.build_values(ctx);
+  CHECK(std::string(accel.rows[1].text) == "WHO_AM_I: 0x00 (BAD)");
+  CHECK(std::string(accel.rows[2].text) == "X: --");
+  CHECK(std::string(accel.rows[6].text) == "Result: FAIL");
 }
 
 // ============================================================================
@@ -1783,8 +1814,8 @@ TEST_CASE("UIManager: chart extraction from MeasuresAGo cache", "[UIManager][cha
     cache[1].pm_a.pm_25 = 20.0f;
 
     auto ctx = make_default_ctx();
-    ctx.cache = cache;
-    ctx.cache_count = 2;
+    ctx.history.samples = cache;
+    ctx.history.count = 2;
 
     DisplayValues v = ui.build_values(ctx);
 
@@ -1802,8 +1833,8 @@ TEST_CASE("UIManager: chart extraction from MeasuresAGo cache", "[UIManager][cha
     cache[2].pm_a.pm_25 = 20.0f;
 
     auto ctx = make_default_ctx();
-    ctx.cache = cache;
-    ctx.cache_count = 3;
+    ctx.history.samples = cache;
+    ctx.history.count = 3;
 
     DisplayValues v = ui.build_values(ctx);
 
@@ -1822,8 +1853,8 @@ TEST_CASE("UIManager: chart extraction from MeasuresAGo cache", "[UIManager][cha
     cache[2].pm_a.pm_25 = 20.0f;
 
     auto ctx = make_default_ctx();
-    ctx.cache = cache;
-    ctx.cache_count = 3;
+    ctx.history.samples = cache;
+    ctx.history.count = 3;
 
     DisplayValues v = ui.build_values(ctx);
 
@@ -2197,8 +2228,8 @@ TEST_CASE("UIManager: GPS Test screen", "[UIManager][hwtest][gps]") {
 
     auto ctx = make_default_ctx();
     ctx.gps_data = &gps;
-    ctx.gps_ttff_secs = 83; // 01:23
-    ctx.gps_ttff_fixed = false;
+    ctx.gps_test.ttff_secs = 83; // 01:23
+    ctx.gps_test.ttff_fixed = false;
 
     DisplayValues v = ui.build_values(ctx);
     CHECK(std::string(v.rows[0].text) == "GPS Test - tap to exit");
@@ -2215,8 +2246,8 @@ TEST_CASE("UIManager: GPS Test screen", "[UIManager][hwtest][gps]") {
 
     auto ctx = make_default_ctx();
     ctx.gps_data = &gps;
-    ctx.gps_ttff_secs = 5;
-    ctx.gps_ttff_fixed = true;
+    ctx.gps_test.ttff_secs = 5;
+    ctx.gps_test.ttff_fixed = true;
 
     DisplayValues v = ui.build_values(ctx);
     CHECK(std::string(v.rows[1].text) == "TTFF: 00:05");
@@ -2254,14 +2285,14 @@ TEST_CASE("UIManager: Accel Test screen", "[UIManager][hwtest][accel]") {
   SECTION("renders WHO_AM_I, X/Y/Z, magnitude, and a PASS result") {
     open_accel();
     auto ctx = make_default_ctx();
-    ctx.accel_who_am_i = 0x33;
-    ctx.accel_id_ok = true;
-    ctx.accel_read_ok = true;
-    ctx.accel_x_mg = 10;
-    ctx.accel_y_mg = -20;
-    ctx.accel_z_mg = 1000;
-    ctx.accel_magnitude_mg = 1000;
-    ctx.accel_pass = true;
+    ctx.accel_test.who_am_i = 0x33;
+    ctx.accel_test.id_ok = true;
+    ctx.accel_test.read_ok = true;
+    ctx.accel_test.x_mg = 10;
+    ctx.accel_test.y_mg = -20;
+    ctx.accel_test.z_mg = 1000;
+    ctx.accel_test.magnitude_mg = 1000;
+    ctx.accel_test.pass = true;
 
     DisplayValues v = ui.build_values(ctx);
     CHECK(std::string(v.rows[0].text) == "Accel Test - tap to exit");
@@ -2276,10 +2307,10 @@ TEST_CASE("UIManager: Accel Test screen", "[UIManager][hwtest][accel]") {
   SECTION("bad identity / unreadable sensor shows BAD, dashes, and FAIL") {
     open_accel();
     auto ctx = make_default_ctx();
-    ctx.accel_who_am_i = 0x00;
-    ctx.accel_id_ok = false;
-    ctx.accel_read_ok = false;
-    ctx.accel_pass = false;
+    ctx.accel_test.who_am_i = 0x00;
+    ctx.accel_test.id_ok = false;
+    ctx.accel_test.read_ok = false;
+    ctx.accel_test.pass = false;
 
     DisplayValues v = ui.build_values(ctx);
     CHECK(std::string(v.rows[1].text) == "WHO_AM_I: 0x00 (BAD)");
@@ -2473,14 +2504,14 @@ TEST_CASE("UIManager: build_values passes Wi-Fi enabled/connected through", "[UI
   UIManager ui(DEFAULT_UI_CONFIG);
   BuildContext ctx = make_default_ctx();
 
-  ctx.wifi_enabled = true;
-  ctx.wifi_connected = true;
+  ctx.connectivity.wifi_enabled = true;
+  ctx.connectivity.wifi_connected = true;
   DisplayValues v = ui.build_values(ctx);
   CHECK(v.wifi_enabled);
   CHECK(v.wifi_connected);
 
   // Disconnected: icon still shown, but distinct glyph state.
-  ctx.wifi_connected = false;
+  ctx.connectivity.wifi_connected = false;
   v = ui.build_values(ctx);
   CHECK(v.wifi_enabled);
   CHECK_FALSE(v.wifi_connected);
@@ -2506,8 +2537,7 @@ TEST_CASE("UIManager: snackbar is suppressed on all session screens",
 
   // Home — snackbar visible.
   auto ctx = make_default_ctx();
-  ctx.now_ms = 100;
-  ui.mark_snackbar_submitted(ctx.now_ms);
+  ui.mark_snackbar_submitted(100);
   REQUIRE(ui.build_values(ctx).snackbar_text != nullptr);
 
   ui.show_info("Preparing stationary mode...");
@@ -2781,8 +2811,8 @@ TEST_CASE("UIManager: interval boundary controls the compact home layout", "[UIM
   cache[0].pm_a.pm_25 = 10.0f;
   cache[1].pm_a.pm_25 = 20.0f;
   BuildContext ctx{.sensor_data = sensors};
-  ctx.cache = cache;
-  ctx.cache_count = 2;
+  ctx.history.samples = cache;
+  ctx.history.count = 2;
   ctx.locked = true;
 
   for (int interval : {1, 60, 299, 300, 301}) {
@@ -2816,8 +2846,8 @@ TEST_CASE("UIManager: compact browsing and locking reset to the default PM chart
   cache[0].co2.co2 = 500;
   cache[1].co2.co2 = 800;
   auto ctx = make_default_ctx();
-  ctx.cache = cache;
-  ctx.cache_count = 2;
+  ctx.history.samples = cache;
+  ctx.history.count = 2;
 
   auto v = ui.build_values(ctx);
   CHECK(v.active_metric == Metric::None);
@@ -2892,8 +2922,8 @@ TEST_CASE("UIManager: default PM chart handles empty and invalid history", "[UIM
   MeasuresAGo cache[4]{};
   cache[1].pm_a.pm_25 = std::numeric_limits<float>::quiet_NaN();
   cache[2].pm_a.pm_25 = std::numeric_limits<float>::infinity();
-  ctx.cache = cache;
-  ctx.cache_count = 4;
+  ctx.history.samples = cache;
+  ctx.history.count = 4;
   v = ui.build_values(ctx);
   CHECK(v.chart_samples == nullptr);
   CHECK(v.chart_count == 0);
@@ -3056,8 +3086,8 @@ TEST_CASE("UIManager: every chart extracts its own valid history", "[UIManager][
   settings.measure_interval_seconds = 300;
   ui.sync_settings(settings);
   auto ctx = make_default_ctx();
-  ctx.cache = cache;
-  ctx.cache_count = 3;
+  ctx.history.samples = cache;
+  ctx.history.count = 3;
   for (int i = 0; i < 8; ++i) {
     press(ui, InputSource::TouchDown);
     auto v = ui.build_values(ctx);
