@@ -143,11 +143,11 @@ static void copy_row(DisplayValues &v, uint8_t index, const char *text, bool dis
   if (index >= MAX_LIST_ROWS)
     return;
   if (text != nullptr) {
-    (void)snprintf(v.rows[index].text, sizeof(v.rows[index].text), "%s", text);
+    (void)snprintf(v.list.rows[index].text, sizeof(v.list.rows[index].text), "%s", text);
   } else {
-    v.rows[index].text[0] = '\0';
+    v.list.rows[index].text[0] = '\0';
   }
-  v.rows[index].disabled = disabled;
+  v.list.rows[index].disabled = disabled;
 }
 
 /// Circular modulo that handles negative values.
@@ -315,56 +315,48 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   DisplayValues v{};
 
   // --- Sensor readings (channel A) ---
-  v.co2_ppm = ctx.sensor_data.co2.co2;
-  v.pm25_ugm3 = ctx.sensor_data.pm_a.pm_25;
-  v.temperature_c = ctx.sensor_data.temp_hum_a.temperature;
-  v.humidity_pct = ctx.sensor_data.temp_hum_a.humidity;
-  v.tvoc_index = ctx.sensor_data.tvoc_nox.tvoc_index;
-  v.nox_index = ctx.sensor_data.tvoc_nox.nox_index;
-  v.pressure_hpa = ctx.sensor_data.pressure.pressure;
-  v.altitude_m = ctx.sensor_data.pressure.altitude;
+  v.home.readings.co2_ppm = ctx.sensor_data.co2.co2;
+  v.home.readings.pm25_ugm3 = ctx.sensor_data.pm_a.pm_25;
+  v.home.readings.temperature_c = ctx.sensor_data.temp_hum_a.temperature;
+  v.home.readings.humidity_pct = ctx.sensor_data.temp_hum_a.humidity;
+  v.home.readings.tvoc_index = ctx.sensor_data.tvoc_nox.tvoc_index;
+  v.home.readings.nox_index = ctx.sensor_data.tvoc_nox.nox_index;
+  v.home.readings.pressure_hpa = ctx.sensor_data.pressure.pressure;
+  v.home.readings.altitude_m = ctx.sensor_data.pressure.altitude;
 
-  // --- Battery ---
-  v.battery_pct = ctx.battery_pct;
-  v.is_battery_charging = ctx.is_battery_charging;
-  v.is_plugged_in = ctx.is_plugged_in;
-
-  // --- Status flags ---
-  v.locked = ctx.locked;
-  v.ble_enabled = ctx.ble_enabled;
-  v.ble_connected = ctx.ble_connected;
-  v.wifi_enabled = ctx.wifi_enabled;
-  v.wifi_connected = ctx.wifi_connected;
-  v.gps_enabled = ctx.gps_enabled;
-  v.gps_fix = ctx.gps_fix;
-  v.tracking_state = ctx.tracking_state;
-  v.display_off = ctx.display_off;
-  v.use_fahrenheit = ctx.use_fahrenheit;
-  v.use_feet = ctx.use_feet;
-  v.pm_use_usaqi = ctx.pm_use_usaqi;
+  // --- Header ---
+  v.header.battery = ctx.battery;
+  v.header.connectivity = ctx.connectivity;
+  v.header.locked = ctx.locked;
+  v.header.tracking_state = ctx.tracking_state;
+  v.home.display_off = ctx.display_off;
+  v.preferences.use_fahrenheit = (_setting_units == 1);
+  v.preferences.use_feet = (_setting_altitude_unit == 1);
+  v.preferences.pm_use_usaqi = (_setting_pm_display == 1);
 
   // --- Screen navigation ---
   v.screen = _screen;
-  v.active_metric = _active_metric;
-  v.show_temp_hum = display_temp_hum_for_interval(setting_measure_interval_seconds());
-  v.pinned_chart = _setting_pinned_chart;
+  v.home.active_metric = _active_metric;
+  v.home.show_temp_hum = display_temp_hum_for_interval(setting_measure_interval_seconds());
+  v.home.pinned_chart = _setting_pinned_chart;
   if (ctx.locked)
-    v.active_metric = Metric::None;
+    v.home.active_metric = Metric::None;
 
   // --- Populate rows based on current screen ---
   switch (_screen) {
   case Screen::Home:
-    populate_chart(v, ctx.cache, ctx.cache_count);
+    populate_chart(v, ctx.history);
     break;
   case Screen::MainMenu:
     populate_menu_rows(v);
-    populate_chart(v, ctx.cache, ctx.cache_count);
+    populate_chart(v, ctx.history);
     break;
   case Screen::TrackingMenu:
     populate_tracking_rows(v);
     break;
   case Screen::TrackingStatus:
-    populate_tracking_status_rows(v, ctx);
+    populate_tracking_status_rows(v, ctx.tracking_status, ctx.tracking_state,
+                                  ctx.connectivity.gps_enabled, ctx.gps_data);
     break;
   case Screen::Settings:
     populate_settings_rows(v);
@@ -414,10 +406,10 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     populate_peripheral_test_rows(v);
     break;
   case Screen::GpsTest:
-    populate_gps_test_rows(v, ctx);
+    populate_gps_test_rows(v, ctx.gps_data, ctx.gps_test);
     break;
   case Screen::AccelTest:
-    populate_accel_test_rows(v, ctx);
+    populate_accel_test_rows(v, ctx.accel_test);
     break;
   // FG learning screens are built by FgLearningRunner, not UIManager.
   case Screen::FgLearnCharging:
@@ -433,16 +425,13 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
   // Provisioning-screen status surfaces here so the renderer can show
   // it on Screen::Provisioning. Home conveys network state purely via
   // the status-bar Wi-Fi icon (spec: no persistent Home status line).
-  v.provisioning_transport = static_cast<uint8_t>(_provisioning_transport);
-  v.provisioning_status = provisioning_status_text();
-  v.provisioning_connected_ip = _provisioning_connected_ip;
-  v.provisioning_confirm_kind = _provisioning_confirm_kind;
-  v.provisioning_confirm_index = _provisioning_confirm_index;
+  v.provisioning.transport = static_cast<uint8_t>(_provisioning_transport);
+  v.provisioning.status = provisioning_status_text();
 
   // Captive-portal SSID/password for Provisioning instruction lines.
   // SSID is null when no serial was configured -> renderer placeholder.
-  v.provisioning_ap_ssid = (_ap_ssid_buf[0] != '\0') ? _ap_ssid_buf : nullptr;
-  v.provisioning_ap_password = _config.ap_password;
+  v.provisioning.ap_ssid = (_ap_ssid_buf[0] != '\0') ? _ap_ssid_buf : nullptr;
+  v.provisioning.ap_password = _config.ap_password;
 
   // Only publish the QR pointer on the Provisioning screen to avoid
   // pinning stale state in frames built for other screens.
@@ -1778,34 +1767,37 @@ UIActionResult UIManager::dispatch_tracking_status(InputSource source, InputType
 }
 
 void UIManager::populate_tracking_rows(DisplayValues &v) const {
-  v.row_count = TRACKING_MENU_TOTAL;
+  v.list.row_count = TRACKING_MENU_TOTAL;
   copy_row(v, 0, "Exit", false);
   copy_row(v, TRACKING_BACK, "Back", false);
   copy_row(v, TRACKING_STATUS, "Status", false);
   copy_row(v, TRACKING_PAUSE_RESUME,
            _tracking_state == TrackingState::Paused ? "Resume Tracking" : "Pause Tracking", false);
   copy_row(v, TRACKING_STOP, "Stop Tracking", false);
-  v.selected_row = _tracking_menu_index;
-  v.show_separator_after_back = true;
+  v.list.selected_row = _tracking_menu_index;
+  v.list.show_separator_after_back = true;
 }
 
-void UIManager::populate_tracking_status_rows(DisplayValues &v, const BuildContext &ctx) const {
+void UIManager::populate_tracking_status_rows(DisplayValues &v,
+                                              const TrackingStatusSnapshot &status,
+                                              TrackingState tracking_state, bool gps_enabled,
+                                              const GpsData *gps_data) const {
   static_assert(TRACKING_STATUS_TOTAL <= MAX_LIST_ROWS);
-  v.row_count = TRACKING_STATUS_TOTAL;
-  v.selected_row = _tracking_status_index;
-  v.show_separator_after_back = true;
+  v.list.row_count = TRACKING_STATUS_TOTAL;
+  v.list.selected_row = _tracking_status_index;
+  v.list.show_separator_after_back = true;
   copy_row(v, 0, "Exit", false);
   copy_row(v, TRACKING_BACK, "Back", false);
-  const GpsData *gps = ctx.gps_enabled ? ctx.gps_data : nullptr;
+  const GpsData *gps = gps_enabled ? gps_data : nullptr;
   const bool recognized_fix = gps != nullptr && (gps->fix.fix_type == GpsFixType::Fix2D ||
                                                  gps->fix.fix_type == GpsFixType::Fix3D);
   char text[TRACKING_STATUS_LABEL_CAPACITY];
   if (_tracking_status_view == TrackingStatusView::Session) {
     copy_row(v, TRACKING_STATUS_SWITCH, "GPS details > (1/2)", false);
     const char *state = "--";
-    if (ctx.tracking_state == TrackingState::Recording)
+    if (tracking_state == TrackingState::Recording)
       state = "Recording";
-    else if (ctx.tracking_state == TrackingState::Paused)
+    else if (tracking_state == TrackingState::Paused)
       state = "Paused";
     (void)snprintf(text, sizeof(text), "State: %s", state);
     copy_row(v, 3, text, true);
@@ -1816,24 +1808,24 @@ void UIManager::populate_tracking_status_rows(DisplayValues &v, const BuildConte
                      gps->timestamp.minute, gps->timestamp.second);
       copy_row(v, 4, text, true);
     }
-    copy_tracking_duration(v, 5, "Active", ctx.tracking_status.recording_s);
-    copy_tracking_duration(v, 6, "Elapsed", ctx.tracking_status.elapsed_s);
+    copy_tracking_duration(v, 5, "Active", status.recording_s);
+    copy_tracking_duration(v, 6, "Elapsed", status.elapsed_s);
     copy_row(v, 7, "Points: --", true);
-    if (ctx.tracking_status.point_count_known) {
+    if (status.point_count_known) {
       (void)snprintf(text, sizeof(text), "Points: %lu",
-                     static_cast<unsigned long>(ctx.tracking_status.point_count));
+                     static_cast<unsigned long>(status.point_count));
       copy_row(v, 7, text, true);
     }
-    if (ctx.tracking_status.point_count_known && ctx.tracking_status.point_count == 0) {
+    if (status.point_count_known && status.point_count == 0) {
       copy_row(v, 8, "Last: No points yet", true);
     } else {
-      copy_tracking_duration(v, 8, "Last", ctx.tracking_status.last_record_age_s);
+      copy_tracking_duration(v, 8, "Last", status.last_record_age_s);
     }
     return;
   }
 
   copy_row(v, TRACKING_STATUS_SWITCH, "Session > (2/2)", false);
-  copy_row(v, 3, ctx.gps_enabled ? "GPS: On" : "GPS: Off", true);
+  copy_row(v, 3, gps_enabled ? "GPS: On" : "GPS: Off", true);
   const char *fix = "--";
   if (gps != nullptr) {
     switch (gps->fix.fix_type) {
@@ -1884,8 +1876,9 @@ void UIManager::populate_menu_rows(DisplayValues &v) const {
   }
   copy_row(v, row++, "Operating Mode", false);
   copy_row(v, row++, "Settings", false);
-  v.row_count = row;
-  v.selected_row = hide_tracking && _menu_index > MENU_TRACKING ? _menu_index - 1 : _menu_index;
+  v.list.row_count = row;
+  v.list.selected_row =
+      hide_tracking && _menu_index > MENU_TRACKING ? _menu_index - 1 : _menu_index;
 }
 
 void UIManager::populate_settings_rows(DisplayValues &v) const {
@@ -1897,15 +1890,15 @@ void UIManager::populate_settings_rows(DisplayValues &v) const {
   copy_row(v, SETTINGS_CLEAR_DATA, "Clear Data", false);
   copy_row(v, SETTINGS_SETUP_GUIDE, "Setup Guide", false);
   copy_row(v, SETTINGS_ABOUT, "About Device", false);
-  v.row_count = SETTINGS_TOTAL;
-  v.selected_row = _settings_index;
-  v.show_separator_after_back = true;
+  v.list.row_count = SETTINGS_TOTAL;
+  v.list.selected_row = _settings_index;
+  v.list.show_separator_after_back = true;
 }
 
 void UIManager::populate_settings_group_rows(DisplayValues &v) const {
   copy_row(v, 0, "Exit", false);
   copy_row(v, 1, "Back", false);
-  v.show_separator_after_back = true;
+  v.list.show_separator_after_back = true;
 
   uint8_t count = 0;
   const SettingId *items = group_items(_screen, count);
@@ -1969,14 +1962,14 @@ void UIManager::populate_settings_group_rows(DisplayValues &v) const {
     }
     copy_row(v, (uint8_t)(2 + i), label, false);
   }
-  v.row_count = (uint8_t)(2 + count);
-  v.selected_row = _group_index;
+  v.list.row_count = (uint8_t)(2 + count);
+  v.list.selected_row = _group_index;
 }
 
 void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   copy_row(v, 0, "Exit", false);
   copy_row(v, 1, "Back", false);
-  v.show_separator_after_back = true;
+  v.list.show_separator_after_back = true;
 
   if (_editing_setting_id == SettingId::MeasureInterval) {
     populate_measure_interval_choice_rows(v);
@@ -2005,8 +1998,8 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   case SettingId::Mode:
     for (uint8_t i = 0; i < MODE_COUNT; ++i)
       copy_row(v, (uint8_t)(2 + i), MODE_OPTIONS[i].label, false);
-    v.row_count = 2 + MODE_COUNT;
-    v.selected_row = _settings_choice_index;
+    v.list.row_count = 2 + MODE_COUNT;
+    v.list.selected_row = _settings_choice_index;
     return;
   case SettingId::AutoLock:
     options = AUTO_LOCK_OPTIONS;
@@ -2041,8 +2034,8 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
     }
   }
 
-  v.row_count = (uint8_t)(2 + visible);
-  v.selected_row = display_row(_settings_choice_index, _settings_choice_scroll_start);
+  v.list.row_count = (uint8_t)(2 + visible);
+  v.list.selected_row = display_row(_settings_choice_index, _settings_choice_scroll_start);
 }
 
 void UIManager::populate_measure_interval_choice_rows(DisplayValues &v) const {
@@ -2066,21 +2059,21 @@ void UIManager::populate_measure_interval_choice_rows(DisplayValues &v) const {
     ++visible;
   }
 
-  v.row_count = (uint8_t)(2 + visible);
-  v.selected_row = display_row(_settings_choice_index, _settings_choice_scroll_start);
+  v.list.row_count = (uint8_t)(2 + visible);
+  v.list.selected_row = display_row(_settings_choice_index, _settings_choice_scroll_start);
 }
 
 void UIManager::populate_about_rows(DisplayValues &v) const {
   copy_row(v, 0, "Exit", false);
   copy_row(v, 1, "Back", false);
-  v.row_count = 2;
-  v.selected_row = _about_index;
-  v.show_separator_after_back = true;
+  v.list.row_count = 2;
+  v.list.selected_row = _about_index;
+  v.list.show_separator_after_back = true;
 
-  v.about_title = "AirGradient Go";
-  v.about_firmware = _about_firmware;
-  v.about_serial = _about_serial;
-  v.about_hardware = "Open Source Hardware";
+  v.about.title = "AirGradient Go";
+  v.about.firmware = _about_firmware;
+  v.about.serial = _about_serial;
+  v.about.hardware = "Open Source Hardware";
 }
 
 void UIManager::populate_confirm_rows(DisplayValues &v) const {
@@ -2099,15 +2092,15 @@ void UIManager::populate_confirm_rows(DisplayValues &v) const {
 
   copy_row(v, 3, "No", false);
   copy_row(v, 4, "Yes", false);
-  v.row_count = 5;
-  v.selected_row = _confirm_index;
-  v.show_separator_after_back = true;
+  v.list.row_count = 5;
+  v.list.selected_row = _confirm_index;
+  v.list.show_separator_after_back = true;
 }
 
 void UIManager::populate_tag_list_rows(DisplayValues &v) const {
   copy_row(v, 0, "Exit", false);
   copy_row(v, 1, "Back", false);
-  v.show_separator_after_back = true;
+  v.list.show_separator_after_back = true;
 
   // Compute page-based scroll
   uint8_t scroll = page_scroll(_tag_list_index);
@@ -2118,8 +2111,8 @@ void UIManager::populate_tag_list_rows(DisplayValues &v) const {
     ++visible;
   }
 
-  v.row_count = (uint8_t)(2 + visible);
-  v.selected_row = display_row(_tag_list_index, scroll);
+  v.list.row_count = (uint8_t)(2 + visible);
+  v.list.selected_row = display_row(_tag_list_index, scroll);
 }
 
 void UIManager::populate_provisioning_rows(DisplayValues &v) const {
@@ -2128,13 +2121,13 @@ void UIManager::populate_provisioning_rows(DisplayValues &v) const {
   const bool ble_active = _provisioning_transport == ProvisioningTransport::BleOnly;
   copy_row(v, 0, ble_active ? "Use portal" : "Use app", false);
   copy_row(v, 1, "Cancel setup", false);
-  v.row_count = 2;
-  v.selected_row = _provisioning_row_index;
+  v.list.row_count = 2;
+  v.list.selected_row = _provisioning_row_index;
 }
 
 void UIManager::populate_provisioning_confirm_rows(DisplayValues &v) const {
   // The renderer (DisplayService::_draw_provisioning_confirm) reads the
-  // question from v.rows[0].text and draws the No/Yes buttons itself.
+  // question from v.list.rows[0].text and draws the No/Yes buttons itself.
   // Question text depends on kind + active transport (see spec).
   const char *question = "Confirm?";
   if (_provisioning_confirm_kind == 0) {
@@ -2146,31 +2139,31 @@ void UIManager::populate_provisioning_confirm_rows(DisplayValues &v) const {
     question = "Cancel setup?";
   }
   copy_row(v, 0, question, true); // non-selectable; renderer uses text only
-  v.row_count = 1;
-  v.selected_row = _provisioning_confirm_index; // mirror for any future reuse
+  v.list.row_count = 1;
+  v.list.selected_row = _provisioning_confirm_index; // No/Yes button selection
 }
 
 void UIManager::populate_getting_started_rows(DisplayValues &v) const {
   v.getting_started_from_boot = _getting_started_from_boot;
   // Single action row; label depends on entry source.
   copy_row(v, 0, _getting_started_from_boot ? "Hold menu to start" : "Back", false);
-  v.row_count = 1;
-  v.selected_row = 0;
+  v.list.row_count = 1;
+  v.list.selected_row = 0;
 }
 
 void UIManager::populate_hardware_test_rows(DisplayValues &v) const {
   copy_row(v, 0, "Exit", false);
   copy_row(v, 1, "Back", false);
-  v.show_separator_after_back = true;
+  v.list.show_separator_after_back = true;
   copy_row(v, HW_TEST_PERIPHERAL, "Peripheral Test", false);
   copy_row(v, HW_TEST_GPS, "GPS Test", false);
   copy_row(v, HW_TEST_ACCEL, "Accelerometer Test", false);
   if (_config.capabilities.supports(BoardFeature::BatteryCalibration)) {
     copy_row(v, HW_TEST_FG_LEARNING, "Battery Calibration", false);
   }
-  v.row_count = hardware_test_row_count();
-  copy_row(v, v.row_count - 1, "Play Melody", false);
-  v.selected_row = _hardware_test_index;
+  v.list.row_count = hardware_test_row_count();
+  copy_row(v, v.list.row_count - 1, "Play Melody", false);
+  v.list.selected_row = _hardware_test_index;
 }
 
 void UIManager::populate_peripheral_test_rows(DisplayValues &v) const {
@@ -2180,15 +2173,15 @@ void UIManager::populate_peripheral_test_rows(DisplayValues &v) const {
     copy_row(v, 0, prompt, true); // non-selectable header
     copy_row(v, 1, "Pass", false);
     copy_row(v, 2, "Fail", false);
-    v.row_count = 3;
-    v.selected_row = (uint8_t)(1 + (_peripheral_index != 0 ? 1 : 0));
+    v.list.row_count = 3;
+    v.list.selected_row = (uint8_t)(1 + (_peripheral_index != 0 ? 1 : 0));
     break;
   }
   case PeripheralTestView::Kind::Testing:
     copy_row(v, 0, "Testing sensors...", true);
     copy_row(v, 1, "Please wait", true);
-    v.row_count = 2;
-    v.selected_row = 0; // disabled rows never highlight
+    v.list.row_count = 2;
+    v.list.selected_row = 0; // disabled rows never highlight
     break;
   case PeripheralTestView::Kind::Summary: {
     const auto &pv = _peripheral_view;
@@ -2212,24 +2205,24 @@ void UIManager::populate_peripheral_test_rows(DisplayValues &v) const {
     row(next_row++, "PM", pv.pm);
     row(next_row++, "TVOC/NOx", pv.tvoc_nox);
     row(next_row++, "Pressure", pv.pressure);
-    v.row_count = next_row;
-    v.selected_row = 0; // header disabled; any tap exits
+    v.list.row_count = next_row;
+    v.list.selected_row = 0; // header disabled; any tap exits
     break;
   }
   }
 }
 
-void UIManager::populate_gps_test_rows(DisplayValues &v, const BuildContext &ctx) const {
+void UIManager::populate_gps_test_rows(DisplayValues &v, const GpsData *gps,
+                                       const GpsTestTiming &timing) const {
   copy_row(v, 0, "GPS Test - tap to exit", true); // non-selectable header
 
   char buf[48];
-  const GpsData *gps = ctx.gps_data;
 
   // TTFF mm:ss — running until the first fix latches, then frozen. A trailing
   // "..." marks the still-counting state.
-  const unsigned mm = static_cast<unsigned>(ctx.gps_ttff_secs / 60);
-  const unsigned ss = static_cast<unsigned>(ctx.gps_ttff_secs % 60);
-  (void)snprintf(buf, sizeof(buf), "TTFF: %02u:%02u%s", mm, ss, ctx.gps_ttff_fixed ? "" : " ...");
+  const unsigned mm = static_cast<unsigned>(timing.ttff_secs / 60);
+  const unsigned ss = static_cast<unsigned>(timing.ttff_secs % 60);
+  (void)snprintf(buf, sizeof(buf), "TTFF: %02u:%02u%s", mm, ss, timing.ttff_fixed ? "" : " ...");
   copy_row(v, 1, buf, false);
 
   const char *fix_str = "NoFix";
@@ -2285,27 +2278,27 @@ void UIManager::populate_gps_test_rows(DisplayValues &v, const BuildContext &ctx
   }
   copy_row(v, 7, buf, false);
 
-  v.row_count = 8;
-  v.selected_row = 0; // header disabled; any tap exits
+  v.list.row_count = 8;
+  v.list.selected_row = 0; // header disabled; any tap exits
 }
 
-void UIManager::populate_accel_test_rows(DisplayValues &v, const BuildContext &ctx) const {
+void UIManager::populate_accel_test_rows(DisplayValues &v, const AccelTestSnapshot &accel) const {
   copy_row(v, 0, "Accel Test - tap to exit", true); // non-selectable header
 
   char buf[48];
 
-  (void)snprintf(buf, sizeof(buf), "WHO_AM_I: 0x%02X (%s)", ctx.accel_who_am_i,
-                 ctx.accel_id_ok ? "OK" : "BAD");
+  (void)snprintf(buf, sizeof(buf), "WHO_AM_I: 0x%02X (%s)", accel.who_am_i,
+                 accel.id_ok ? "OK" : "BAD");
   copy_row(v, 1, buf, false);
 
-  if (ctx.accel_read_ok) {
-    (void)snprintf(buf, sizeof(buf), "X: %d mg", ctx.accel_x_mg);
+  if (accel.read_ok) {
+    (void)snprintf(buf, sizeof(buf), "X: %d mg", accel.x_mg);
     copy_row(v, 2, buf, false);
-    (void)snprintf(buf, sizeof(buf), "Y: %d mg", ctx.accel_y_mg);
+    (void)snprintf(buf, sizeof(buf), "Y: %d mg", accel.y_mg);
     copy_row(v, 3, buf, false);
-    (void)snprintf(buf, sizeof(buf), "Z: %d mg", ctx.accel_z_mg);
+    (void)snprintf(buf, sizeof(buf), "Z: %d mg", accel.z_mg);
     copy_row(v, 4, buf, false);
-    (void)snprintf(buf, sizeof(buf), "|a|: %u mg", ctx.accel_magnitude_mg);
+    (void)snprintf(buf, sizeof(buf), "|a|: %u mg", accel.magnitude_mg);
     copy_row(v, 5, buf, false);
   } else {
     copy_row(v, 2, "X: --", false);
@@ -2314,18 +2307,18 @@ void UIManager::populate_accel_test_rows(DisplayValues &v, const BuildContext &c
     copy_row(v, 5, "|a|: --", false);
   }
 
-  (void)snprintf(buf, sizeof(buf), "Result: %s", ctx.accel_pass ? "PASS" : "FAIL");
+  (void)snprintf(buf, sizeof(buf), "Result: %s", accel.pass ? "PASS" : "FAIL");
   copy_row(v, 6, buf, false);
 
-  v.row_count = 7;
-  v.selected_row = 0; // header disabled; any tap exits
+  v.list.row_count = 7;
+  v.list.selected_row = 0; // header disabled; any tap exits
 }
 
 // ---------------------------------------------------------------------------
 // Chart extraction
 // ---------------------------------------------------------------------------
 
-void UIManager::populate_chart(DisplayValues &v, const MeasuresAGo *cache,
-                               uint8_t cache_count) const {
-  populate_display_chart(v, cache, cache_count, _chart_buf);
+void UIManager::populate_chart(DisplayValues &v, const ChartHistoryView &history) const {
+  populate_display_chart(v.home.chart, v.chart_metric(), history.samples, history.count,
+                         _chart_buf);
 }

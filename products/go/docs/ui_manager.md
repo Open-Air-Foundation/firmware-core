@@ -36,9 +36,10 @@ passes unlocked input to `handle_input()`, and executes the returned action.
 For rendering, it clears expired messages, builds values, and submits the frame.
 An accepted frame containing a pending snackbar starts that message's timer.
 
-`BuildContext` passes all external state (sensors, battery, status flags,
-settings-derived flags, measurement cache). The UI Manager reads from it
-but never stores references to services.
+`BuildContext` supplies external readings, runtime status, history, and diagnostic
+data. Display preferences come from UIManager's synchronized settings; see
+[Frame Inputs and Settings](#frame-inputs-and-settings). UIManager never stores
+references to services.
 
 `sync_tracking_state()` owns tracking state and dismisses ended-session menus.
 The orchestrator synchronizes at boot and before rendering; input uses that
@@ -77,11 +78,31 @@ submit display work themselves.
 | Show feedback | `show_snackbar()` copies text. Mark transient messages submitted only after frame acceptance; see [snackbar lifecycle](#snackbar-lifecycle) for expiry and persistent-message priority. |
 | Leave a session | `reset_to_home()` clears the transient metric selection; saved pinned-chart preference remains intact. |
 
-`DisplayValues` contains borrowed text, chart, and QR pointers as well as copied
-scalars. Build and render it before changing the owning UI buffers or releasing
-the caller's chart buffer; it is not an independently owned frame object.
 See [`go_ui.h`](../main/go_ui.h) for complete entrypoints and
-[Display Service](display_service.md#framebuffer-ownership) for frame submission.
+[DisplayValues ownership](display_service.md#displayvalues) for the lifetime of
+borrowed text, chart, and QR data returned by `build_values()`.
+
+### Frame Inputs and Settings
+
+[`BuildContext`](../main/go_ui.h) requires a reference to corrected sensor
+readings. It groups battery and connectivity status, chart history, GPS-test
+timing, accelerometer diagnostics, and current-session tracking status. The
+cached GPS reading is shared by Tracking Status and GPS Test. Sensor, history,
+and GPS inputs are borrowed for the duration of `build_values()`; optional
+inputs default to unavailable data or empty history. Battery and connectivity
+use the same small value types as the display header.
+
+`build_values()` derives temperature units, altitude units, and PM display format
+from UIManager's synchronized settings, alongside the pinned chart and active
+measurement interval. The context supplies live state such as locking and GPS
+availability. Snackbar timing is supplied explicitly to the submission and
+expiry methods described in [Snackbar Lifecycle](#snackbar-lifecycle).
+
+The orchestrator synchronizes settings after boot loading and during successful
+settings activation, before runtime effects can render intermediate frames.
+Failed UI saves restore the previous active settings; see
+[Settings Activation](orchestrator.md#apply_settings_change) for ordering and
+rollback behavior.
 
 ## UIAction Events
 
@@ -489,10 +510,12 @@ clear.
 ## Chart Data
 
 `build_values()` uses `populate_display_chart()` to extract the visible metric
-from corrected cache copies in `BuildContext`. The shared helper also serves
-timer wake, validates each field, skips nonfinite samples, and supports pressure
-and negative altitude. The caller owns the 16-sample buffer. Empty history has
-no sample pointer and no plotted line.
+from corrected cache copies in `BuildContext::history`. The shared helper also
+serves timer wake, validates each field, skips nonfinite samples, and supports
+pressure and negative altitude. It fills `home.chart` using a 16-sample output
+buffer: UIManager owns the interactive buffer; the boot path owns the timer-wake
+buffer. Empty history has no sample pointer and no plotted line. Both follow the
+[frame borrowing contract](display_service.md#displayvalues).
 
 ### Pinned Charts
 
@@ -527,8 +550,10 @@ See [Home Charts](display_service.md#home-charts) for the visible layout.
 ## Verification
 
 [`go_ui.tests.cpp`](../tests/go_ui.tests.cpp) covers navigation, settings
-round-trips, board capabilities, provisioning state, snackbar timing, and chart
-selection. [`go_app.tests.cpp`](../tests/go_app.tests.cpp) covers the corresponding
-timer-wake chart behavior. The orchestrator tests cover action execution
-and display admission. See the [host-test workflow](../../../tests/README.md).
+round-trips, display preferences, unavailable frame inputs, board capabilities,
+provisioning questions and selection, snackbar timing, and chart selection.
+[`go_app.tests.cpp`](../tests/go_app.tests.cpp) covers boot-frame restoration and
+timer-wake charts. [Orchestrator tests](../tests/go_orchestrator.tests.cpp) cover
+action execution, settings rollback and synchronization before intermediate
+renders, and display admission. See the [host-test workflow](../../../tests/README.md).
 These tests exercise state and frame data, not e-paper appearance or QR scanning.

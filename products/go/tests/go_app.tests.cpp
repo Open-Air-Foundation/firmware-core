@@ -1329,17 +1329,17 @@ TEST_CASE("build_fast_path_display: valid sensors -> values populated") {
 
   DisplayValues v = build_fast_path_display(m, bms, settings);
 
-  CHECK(v.co2_ppm == 600);
-  CHECK(v.pm25_ugm3 == 15.0f);
-  CHECK(v.temperature_c == 25.0f);
-  CHECK(v.humidity_pct == 60.0f);
-  CHECK(v.battery_pct == 75);
-  CHECK(v.locked == true);
-  CHECK(v.tracking_state == TrackingState::Idle);
-  CHECK_FALSE(v.gps_fix);
-  CHECK(v.use_fahrenheit == true);
-  CHECK(v.use_feet == true);
-  CHECK(v.pm_use_usaqi == true);
+  CHECK(v.home.readings.co2_ppm == 600);
+  CHECK(v.home.readings.pm25_ugm3 == 15.0f);
+  CHECK(v.home.readings.temperature_c == 25.0f);
+  CHECK(v.home.readings.humidity_pct == 60.0f);
+  CHECK(v.header.battery.pct == 75);
+  CHECK(v.header.locked == true);
+  CHECK(v.header.tracking_state == TrackingState::Idle);
+  CHECK_FALSE(v.header.connectivity.gps_fix);
+  CHECK(v.preferences.use_fahrenheit == true);
+  CHECK(v.preferences.use_feet == true);
+  CHECK(v.preferences.pm_use_usaqi == true);
 }
 
 TEST_CASE("build_fast_path_display: invalid sensors -> sentinels preserved") {
@@ -1360,20 +1360,20 @@ TEST_CASE("build_fast_path_display: invalid sensors -> sentinels preserved") {
   DisplayValues v = build_fast_path_display(m, bms, settings);
 
   // Invalid sensor data should NOT overwrite DisplayValues defaults
-  CHECK(v.co2_ppm == MeasuresInvalid::CO2);
-  CHECK(v.pm25_ugm3 == MeasuresInvalid::PM);
-  CHECK(v.temperature_c == MeasuresInvalid::TEMPERATURE);
-  CHECK(v.humidity_pct == MeasuresInvalid::HUMIDITY);
-  CHECK(v.tvoc_index == MeasuresInvalid::TVOC);
-  CHECK(v.nox_index == MeasuresInvalid::NOX);
-  CHECK(v.pressure_hpa == MeasuresInvalid::PRESSURE);
-  CHECK(v.altitude_m == MeasuresInvalid::ALTITUDE);
-  CHECK(v.battery_pct == 0xFF); // no battery data
-  CHECK(v.gps_fix == false);
-  CHECK(v.tracking_state == TrackingState::Idle);
-  CHECK(v.use_fahrenheit == false);
-  CHECK(v.use_feet == false);
-  CHECK(v.pm_use_usaqi == false);
+  CHECK(v.home.readings.co2_ppm == MeasuresInvalid::CO2);
+  CHECK(v.home.readings.pm25_ugm3 == MeasuresInvalid::PM);
+  CHECK(v.home.readings.temperature_c == MeasuresInvalid::TEMPERATURE);
+  CHECK(v.home.readings.humidity_pct == MeasuresInvalid::HUMIDITY);
+  CHECK(v.home.readings.tvoc_index == MeasuresInvalid::TVOC);
+  CHECK(v.home.readings.nox_index == MeasuresInvalid::NOX);
+  CHECK(v.home.readings.pressure_hpa == MeasuresInvalid::PRESSURE);
+  CHECK(v.home.readings.altitude_m == MeasuresInvalid::ALTITUDE);
+  CHECK(v.header.battery.pct == 0xFF); // no battery data
+  CHECK(v.header.connectivity.gps_fix == false);
+  CHECK(v.header.tracking_state == TrackingState::Idle);
+  CHECK(v.preferences.use_fahrenheit == false);
+  CHECK(v.preferences.use_feet == false);
+  CHECK(v.preferences.pm_use_usaqi == false);
 }
 
 TEST_CASE("build_fast_path_display: corrections follow operating mode") {
@@ -1392,9 +1392,9 @@ TEST_CASE("build_fast_path_display: corrections follow operating mode") {
 
     SECTION("valid readings") {
       const auto values = build_fast_path_display(m, PowerSnapshot{}, settings);
-      CHECK(values.pm25_ugm3 == 21.0f);
-      CHECK(values.temperature_c == (mode == OperatingMode::Offline ? 20.0f : 29.0f));
-      CHECK(values.humidity_pct == (mode == OperatingMode::Offline ? 50.0f : 30.0f));
+      CHECK(values.home.readings.pm25_ugm3 == 21.0f);
+      CHECK(values.home.readings.temperature_c == (mode == OperatingMode::Offline ? 20.0f : 29.0f));
+      CHECK(values.home.readings.humidity_pct == (mode == OperatingMode::Offline ? 50.0f : 30.0f));
       CHECK(m.pm_a.pm_25 == 10.0f);
       CHECK(m.temp_hum_a.temperature == 20.0f);
       CHECK(m.temp_hum_a.humidity == 50.0f);
@@ -1402,14 +1402,14 @@ TEST_CASE("build_fast_path_display: corrections follow operating mode") {
     SECTION("invalid temperature preserves valid humidity") {
       m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
       const auto values = build_fast_path_display(m, PowerSnapshot{}, settings);
-      CHECK(values.temperature_c == MeasuresInvalid::TEMPERATURE);
-      CHECK(values.humidity_pct == (mode == OperatingMode::Offline ? 50.0f : 30.0f));
+      CHECK(values.home.readings.temperature_c == MeasuresInvalid::TEMPERATURE);
+      CHECK(values.home.readings.humidity_pct == (mode == OperatingMode::Offline ? 50.0f : 30.0f));
     }
     SECTION("invalid humidity preserves valid temperature") {
       m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
       const auto values = build_fast_path_display(m, PowerSnapshot{}, settings);
-      CHECK(values.temperature_c == (mode == OperatingMode::Offline ? 20.0f : 29.0f));
-      CHECK(values.humidity_pct == MeasuresInvalid::HUMIDITY);
+      CHECK(values.home.readings.temperature_c == (mode == OperatingMode::Offline ? 20.0f : 29.0f));
+      CHECK(values.home.readings.humidity_pct == MeasuresInvalid::HUMIDITY);
     }
     CHECK(measurement_corrections_equal(settings.corrections, saved));
   }
@@ -1425,14 +1425,46 @@ TEST_CASE("build_wake_values: snapshot valid -> values seeded") {
   snap.pm25_ugm3 = 10.0f;
   snap.temperature_c = 21.0f;
   snap.humidity_pct = 50.0f;
+  snap.tvoc_index = 120;
+  snap.nox_index = 30;
+  snap.pressure_hpa = 1015.0f;
+  snap.altitude_m = -42.0f;
+  snap.battery_pct = 75;
+  snap.is_battery_charging = true;
+  snap.gps_enabled = true;
+  snap.gps_fix = true;
+  snap.tracking_state = TrackingState::Paused;
+  snap.ble_enabled = true;
+  snap.use_fahrenheit = true;
   snap.use_feet = true;
+  snap.pm_use_usaqi = true;
+  snap.show_temp_hum = false;
+  snap.pinned_chart = Metric::Pressure;
 
   DisplayValues v = build_wake_values(snap, true);
 
-  CHECK(v.co2_ppm == 500);
-  CHECK(v.pm25_ugm3 == 10.0f);
-  CHECK(v.use_feet);
-  CHECK(v.locked == false);
+  CHECK(v.home.readings.co2_ppm == 500);
+  CHECK(v.home.readings.pm25_ugm3 == 10.0f);
+  CHECK(v.home.readings.temperature_c == 21.0f);
+  CHECK(v.home.readings.humidity_pct == 50.0f);
+  CHECK(v.home.readings.tvoc_index == 120);
+  CHECK(v.home.readings.nox_index == 30);
+  CHECK(v.home.readings.pressure_hpa == 1015.0f);
+  CHECK(v.home.readings.altitude_m == -42.0f);
+  CHECK(v.header.battery.pct == 75);
+  CHECK(v.header.battery.is_charging);
+  CHECK(v.header.connectivity.gps_enabled);
+  CHECK(v.header.connectivity.gps_fix);
+  CHECK(v.header.connectivity.ble_enabled);
+  CHECK(v.header.tracking_state == TrackingState::Paused);
+  CHECK(v.preferences.use_fahrenheit);
+  CHECK(v.preferences.use_feet);
+  CHECK(v.preferences.pm_use_usaqi);
+  CHECK_FALSE(v.home.show_temp_hum);
+  CHECK(v.chart_metric() == Metric::Pressure);
+  CHECK(v.home.chart.samples == nullptr); // RTC has no chart buffer.
+  CHECK(v.home.chart.count == 0);
+  CHECK(v.header.locked == false);
   CHECK(v.snackbar_text != nullptr);
 }
 
@@ -1441,10 +1473,23 @@ TEST_CASE("build_wake_values: snapshot invalid -> defaults, unlocked") {
 
   DisplayValues v = build_wake_values(snap, false);
 
-  CHECK(v.locked == false);
+  CHECK(v.header.locked == false);
   CHECK(v.screen == Screen::Home);
-  CHECK_FALSE(v.use_feet);
+  CHECK_FALSE(v.preferences.use_feet);
   CHECK(v.snackbar_text != nullptr);
+  CHECK(v.home.readings.co2_ppm == MeasuresInvalid::CO2);
+  CHECK(v.header.battery.pct == 0xFF);
+  CHECK_FALSE(v.header.battery.is_charging);
+  CHECK_FALSE(v.header.battery.is_plugged_in);
+  CHECK(v.header.connectivity.gps_enabled); // Preserve the early display default.
+  CHECK_FALSE(v.header.connectivity.gps_fix);
+  CHECK_FALSE(v.header.connectivity.ble_enabled);
+  CHECK(v.header.tracking_state == TrackingState::Idle);
+  CHECK(v.home.show_temp_hum);
+  CHECK(v.chart_metric() == Metric::Pm25);
+  CHECK(v.home.chart.samples == nullptr);
+  CHECK(v.home.chart.count == 0);
+  CHECK(v.list.row_count == 0);
 }
 
 // ============================================================================
@@ -1457,11 +1502,11 @@ TEST_CASE("build_boot_splash_values: shows Booting on Screen::Info, locked") {
   CHECK(v.screen == Screen::Info);
   REQUIRE(v.info_text != nullptr);
   CHECK(std::string(v.info_text) == BOOT_SPLASH_TEXT);
-  CHECK(v.locked == true);
-  CHECK(v.display_off == false);
+  CHECK(v.header.locked == true);
+  CHECK(v.home.display_off == false);
   // Sensor sentinels stay untouched — Info does not render them.
-  CHECK(v.co2_ppm == MeasuresInvalid::CO2);
-  CHECK(v.pm25_ugm3 == MeasuresInvalid::PM);
+  CHECK(v.home.readings.co2_ppm == MeasuresInvalid::CO2);
+  CHECK(v.home.readings.pm25_ugm3 == MeasuresInvalid::PM);
 }
 
 // ============================================================================
@@ -1753,8 +1798,8 @@ TEST_CASE("fast path: gas finishes before other sampling and PM stops before sto
   CHECK(test_spy::last_cached_measurement.tvoc_nox.tvoc_index == 21000);
   CHECK(test_spy::last_cached_measurement.tvoc_nox.nox_index == 22000);
   const auto display = build_fast_path_display(result.measures, {}, board.settings);
-  CHECK(display.tvoc_index == 21000);
-  CHECK(display.nox_index == 22000);
+  CHECK(display.home.readings.tvoc_index == 21000);
+  CHECK(display.home.readings.nox_index == 22000);
   CHECK_FALSE(result.sensors_warm);
   CHECK(test_spy::light_sleep_count == 1);
   CHECK(test_spy::fast_path_timer_only);
@@ -1982,8 +2027,8 @@ TEST_CASE("execute_fast_path: Energy Saving ignores retained tracking and route 
     test_spy::append_route_point_result = false;
   }
   DisplayService::spy_on_init = [](const DisplayValues &values) {
-    CHECK(values.tracking_state == TrackingState::Idle);
-    CHECK_FALSE(values.gps_fix);
+    CHECK(values.header.tracking_state == TrackingState::Idle);
+    CHECK_FALSE(values.header.connectivity.gps_fix);
   };
   volatile bool button = false;
 
@@ -2851,11 +2896,11 @@ TEST_CASE("build_fast_path_display: interval threshold preserves readings and co
     CAPTURE(interval);
     settings.measure_interval_seconds = interval;
     const auto v = build_fast_path_display(m, {}, settings);
-    CHECK(v.show_temp_hum == (interval >= 300));
-    CHECK(v.active_metric == Metric::None);
+    CHECK(v.home.show_temp_hum == (interval >= 300));
+    CHECK(v.home.active_metric == Metric::None);
     CHECK(v.chart_metric() == Metric::Pm25);
-    CHECK(v.temperature_c == 25.0f);
-    CHECK(v.humidity_pct == 60.0f);
+    CHECK(v.home.readings.temperature_c == 25.0f);
+    CHECK(v.home.readings.humidity_pct == 60.0f);
   }
 }
 
@@ -2867,7 +2912,7 @@ TEST_CASE("build_fast_path_display: Energy Saving uses its interval for thermal 
   for (int interval : {300, 900, 3600}) {
     settings.energy_saving_measure_interval_seconds = interval;
     const auto v = build_fast_path_display({}, {}, settings);
-    CHECK(v.show_temp_hum);
+    CHECK(v.home.show_temp_hum);
     CHECK(v.chart_metric() == Metric::Temp);
   }
 }
@@ -2878,12 +2923,12 @@ TEST_CASE("build_wake_values: compact layout survives early button-wake paint") 
   snapshot.temperature_c = 25.0f;
   snapshot.humidity_pct = 60.0f;
   const auto v = build_wake_values(snapshot, true);
-  CHECK_FALSE(v.show_temp_hum);
-  CHECK_FALSE(v.locked);
-  CHECK(v.active_metric == Metric::None);
+  CHECK_FALSE(v.home.show_temp_hum);
+  CHECK_FALSE(v.header.locked);
+  CHECK(v.home.active_metric == Metric::None);
   CHECK(v.chart_metric() == Metric::Pm25);
-  CHECK(v.temperature_c == 25.0f);
-  CHECK(v.humidity_pct == 60.0f);
+  CHECK(v.home.readings.temperature_c == 25.0f);
+  CHECK(v.home.readings.humidity_pct == 60.0f);
 }
 
 TEST_CASE("fast path: compact display charts corrected PM history without changing stored data") {
@@ -2899,18 +2944,18 @@ TEST_CASE("fast path: compact display charts corrected PM history without changi
   test_spy::measures_to_return.pm_a.pm_25 = 10.0f;
   test_spy::measures_to_return.temp_hum_a = {25.0f, 60.0f};
   DisplayService::spy_on_init = [](const DisplayValues &v) {
-    CHECK_FALSE(v.show_temp_hum);
-    CHECK(v.locked);
-    CHECK(v.active_metric == Metric::None);
+    CHECK_FALSE(v.home.show_temp_hum);
+    CHECK(v.header.locked);
+    CHECK(v.home.active_metric == Metric::None);
     CHECK(v.chart_metric() == Metric::Pm25);
-    REQUIRE(v.chart_count == 2);
-    REQUIRE(v.chart_samples != nullptr);
-    CHECK(v.chart_samples[0] == 11.0f);
-    CHECK(v.chart_samples[1] == 21.0f);
-    CHECK(v.chart_min == 11.0f);
-    CHECK(v.chart_max == 21.0f);
-    CHECK(v.temperature_c == 25.0f);
-    CHECK(v.humidity_pct == 60.0f);
+    REQUIRE(v.home.chart.count == 2);
+    REQUIRE(v.home.chart.samples != nullptr);
+    CHECK(v.home.chart.samples[0] == 11.0f);
+    CHECK(v.home.chart.samples[1] == 21.0f);
+    CHECK(v.home.chart.min == 11.0f);
+    CHECK(v.home.chart.max == 21.0f);
+    CHECK(v.home.readings.temperature_c == 25.0f);
+    CHECK(v.home.readings.humidity_pct == 60.0f);
   };
   GoApp app(board);
   GoAppTestAccess access(app);
@@ -2946,18 +2991,18 @@ TEST_CASE("fast path: pinned chart is honored at every interval", "[chart]") {
                        : metric == Metric::Pressure ? 1013.0f
                                                     : -42.0f;
       DisplayService::spy_on_init = [](const DisplayValues &v) {
-        CHECK(v.pinned_chart == expected_metric);
+        CHECK(v.home.pinned_chart == expected_metric);
         CHECK(v.chart_metric() == expected_metric);
         CHECK_FALSE(v.browsing_chart());
         if (expected_metric == Metric::None) {
-          CHECK(v.chart_count == 0);
-          CHECK(v.chart_samples == nullptr);
+          CHECK(v.home.chart.count == 0);
+          CHECK(v.home.chart.samples == nullptr);
         } else {
-          REQUIRE(v.chart_samples != nullptr);
-          REQUIRE(v.chart_count == 1);
-          CHECK(v.chart_samples[0] == expected_value);
-          CHECK(v.chart_min == expected_value);
-          CHECK(v.chart_max == expected_value);
+          REQUIRE(v.home.chart.samples != nullptr);
+          REQUIRE(v.home.chart.count == 1);
+          CHECK(v.home.chart.samples[0] == expected_value);
+          CHECK(v.home.chart.min == expected_value);
+          CHECK(v.home.chart.max == expected_value);
         }
       };
       GoApp app(board);
@@ -2978,7 +3023,7 @@ TEST_CASE("wake display retains pinned chart and suppresses hidden thermal readi
       snapshot.pinned_chart = metric;
       snapshot.show_temp_hum = show_temp_hum;
       const auto v = build_wake_values(snapshot, true);
-      CHECK(v.pinned_chart == metric);
+      CHECK(v.home.pinned_chart == metric);
       CHECK_FALSE(v.browsing_chart());
       const bool hidden = !show_temp_hum && (metric == Metric::Temp || metric == Metric::Humidity);
       CHECK(v.chart_metric() == (hidden ? Metric::None : metric));
@@ -3001,13 +3046,13 @@ TEST_CASE("fast path: Energy Saving charts raw temperature and humidity", "[corr
     test_spy::cached_measurements = {previous, MeasuresAGo{}};
     test_spy::measures_to_return.temp_hum_a = {25.0f, 60.0f};
     DisplayService::spy_on_init = [](const DisplayValues &v) {
-      REQUIRE(v.chart_count == 2);
-      REQUIRE(v.chart_samples != nullptr);
+      REQUIRE(v.home.chart.count == 2);
+      REQUIRE(v.home.chart.samples != nullptr);
       const bool temperature = v.chart_metric() == Metric::Temp;
-      CHECK(v.chart_samples[0] == (temperature ? 20.0f : 50.0f));
-      CHECK(v.chart_samples[1] == (temperature ? 25.0f : 60.0f));
-      CHECK(v.temperature_c == 25.0f);
-      CHECK(v.humidity_pct == 60.0f);
+      CHECK(v.home.chart.samples[0] == (temperature ? 20.0f : 50.0f));
+      CHECK(v.home.chart.samples[1] == (temperature ? 25.0f : 60.0f));
+      CHECK(v.home.readings.temperature_c == 25.0f);
+      CHECK(v.home.readings.humidity_pct == 60.0f);
     };
     GoApp app(board);
     GoAppTestAccess access(app);

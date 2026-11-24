@@ -2214,6 +2214,10 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
                                                 OperatingMode previous_mode, bool persisted) {
   const bool mode_changing = previous_mode != _settings.operating_mode;
 
+  // Rendering reads UI-owned display preferences, including the intermediate
+  // frame submitted by stop_tracking() during a mode change.
+  _svc.ui_manager.sync_settings(_settings);
+
   if (!previous_settings.onboarding_done && _settings.onboarding_done && !_manufacturing_mode) {
     _svc.serial_command.stop_receiving();
   }
@@ -2287,7 +2291,6 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
                                                            _settings.nox_learning_offset);
   }
 
-  _svc.ui_manager.sync_settings(_settings);
   if (!mode_changing && _svc.ble_service.is_connected()) {
     _svc.ble_service.notify_config(previous_settings, _settings);
   }
@@ -3486,38 +3489,49 @@ BuildContext Orchestrator::build_context() const {
 
   return BuildContext{
       .sensor_data = _display_measures,
-      .battery_pct = battery_pct,
-      .is_battery_charging = is_charging,
-      .is_plugged_in =
-          bms_power_source_has_external_input(_latest_power.charger_status.power_source),
+      .battery =
+          {
+              .pct = battery_pct,
+              .is_charging = is_charging,
+              .is_plugged_in =
+                  bms_power_source_has_external_input(_latest_power.charger_status.power_source),
+          },
+      .connectivity =
+          {
+              .ble_enabled = (_mode == OperatingMode::Portable),
+              // "connected" icon = usable (encrypted) link, not merely GAP-linked.
+              .ble_connected = _svc.ble_service.is_authenticated(),
+              // Icon shown for the whole Stationary session; glyph reflects link state.
+              .wifi_enabled = (_mode == OperatingMode::Stationary),
+              .wifi_connected = (_mode == OperatingMode::Stationary) && _svc.wifi.is_online(),
+              .gps_enabled = is_gps_active(),
+              .gps_fix = is_fix_valid(_latest_gps.fix),
+          },
       .locked = (_lock_state == LockState::Locked),
-      .ble_enabled = (_mode == OperatingMode::Portable),
-      // "connected" icon = usable (encrypted) link, not merely GAP-linked.
-      .ble_connected = _svc.ble_service.is_authenticated(),
-      // Icon shown for the whole Stationary session; glyph reflects link state.
-      .wifi_enabled = (_mode == OperatingMode::Stationary),
-      .wifi_connected = (_mode == OperatingMode::Stationary) && _svc.wifi.is_online(),
-      .gps_enabled = is_gps_active(),
-      .gps_fix = is_fix_valid(_latest_gps.fix),
       .tracking_state = _tracking_state,
       .display_off = false,
-      .use_fahrenheit = _settings.use_fahrenheit,
-      .use_feet = _settings.use_feet,
-      .pm_use_usaqi = _settings.pm_use_usaqi,
-      .cache = _cache_buf,
-      .cache_count = static_cast<uint8_t>(cache_count),
-      .now_ms = now_ms,
+      .history =
+          {
+              .samples = _cache_buf,
+              .count = static_cast<uint8_t>(cache_count),
+          },
       .gps_data = &_latest_gps,
-      .gps_ttff_secs = gps_ttff_secs,
-      .gps_ttff_fixed = gps_ttff_fixed,
-      .accel_who_am_i = _accel_who_am_i,
-      .accel_id_ok = _accel_id_ok,
-      .accel_x_mg = _accel_reading.x_mg,
-      .accel_y_mg = _accel_reading.y_mg,
-      .accel_z_mg = _accel_reading.z_mg,
-      .accel_magnitude_mg = _accel_magnitude_mg,
-      .accel_read_ok = _accel_read_ok,
-      .accel_pass = _accel_pass,
+      .gps_test =
+          {
+              .ttff_secs = gps_ttff_secs,
+              .ttff_fixed = gps_ttff_fixed,
+          },
+      .accel_test =
+          {
+              .who_am_i = _accel_who_am_i,
+              .id_ok = _accel_id_ok,
+              .x_mg = _accel_reading.x_mg,
+              .y_mg = _accel_reading.y_mg,
+              .z_mg = _accel_reading.z_mg,
+              .magnitude_mg = _accel_magnitude_mg,
+              .read_ok = _accel_read_ok,
+              .pass = _accel_pass,
+          },
       .tracking_status = tracking_status,
   };
 }

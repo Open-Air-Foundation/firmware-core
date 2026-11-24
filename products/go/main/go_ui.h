@@ -107,61 +107,50 @@ struct TrackingStatusSnapshot {
   bool point_count_known = false;
 };
 
-struct BuildContext {
-  const Measures &sensor_data;
+struct ChartHistoryView {
+  /// Corrected samples borrowed from the orchestrator for this build.
+  const MeasuresAGo *samples = nullptr;
+  uint8_t count = 0;
+};
 
-  // Battery
-  uint8_t battery_pct; // 0xFF = no data
-  bool is_battery_charging;
-  bool is_plugged_in;
-
-  // Status flags
-  bool locked;
-  bool ble_enabled;
-  bool ble_connected;
-  bool wifi_enabled;
-  bool wifi_connected;
-  bool gps_enabled;
-  bool gps_fix;
-  TrackingState tracking_state;
-
-  // Settings-derived flags
-  bool display_off;
-  bool use_fahrenheit;
-  bool use_feet;
-  bool pm_use_usaqi;
-
-  // Temporary measurement cache (for chart rendering)
-  const MeasuresAGo *cache;
-  uint8_t cache_count;
-
-  // Current timestamp for snackbar expiry
-  uint32_t now_ms;
-
-  // --- Cached GPS data (TrackingStatus and GpsTest) ---
-  /// Latest parsed fix to render (borrowed; orchestrator owns). Null = none.
-  const GpsData *gps_data = nullptr;
-  // GPS test timing (Screen::GpsTest only).
+struct GpsTestTiming {
   /// Seconds since GPS test entry, frozen once the first valid fix latches.
-  uint32_t gps_ttff_secs = 0;
+  uint32_t ttff_secs = 0;
   /// True once the first valid fix has latched the TTFF value.
-  bool gps_ttff_fixed = false;
+  bool ttff_fixed = false;
+};
 
-  // --- Accelerometer test screen (Screen::AccelTest only) ---
+struct AccelTestSnapshot {
   /// Raw WHO_AM_I byte read from the device (0 when absent / read failed).
-  uint8_t accel_who_am_i = 0;
-  /// True when accel_who_am_i matches the device's expected identity.
-  bool accel_id_ok = false;
-  /// Latest 3-axis sample in milli-g (meaningful only when accel_read_ok).
-  int16_t accel_x_mg = 0;
-  int16_t accel_y_mg = 0;
-  int16_t accel_z_mg = 0;
+  uint8_t who_am_i = 0;
+  /// True when who_am_i matches the device's expected identity.
+  bool id_ok = false;
+  /// Latest 3-axis sample in milli-g (meaningful only when read_ok).
+  int16_t x_mg = 0;
+  int16_t y_mg = 0;
+  int16_t z_mg = 0;
   /// Vector magnitude in milli-g, for display (orchestrator-computed).
-  uint16_t accel_magnitude_mg = 0;
+  uint16_t magnitude_mg = 0;
   /// True when the last accelerometer read() succeeded.
-  bool accel_read_ok = false;
+  bool read_ok = false;
   /// Overall PASS: identity matched, read ok, and magnitude within tolerance.
-  bool accel_pass = false;
+  bool pass = false;
+};
+
+struct BuildContext {
+  /// Corrected readings borrowed from the caller for this build.
+  const Measures &sensor_data;
+  BatteryStatus battery{};
+  ConnectivityStatus connectivity{};
+  bool locked = true;
+  TrackingState tracking_state = TrackingState::Idle;
+  bool display_off = false;
+  ChartHistoryView history{};
+
+  /// Latest parsed fix for TrackingStatus and GpsTest. Borrowed; null = none.
+  const GpsData *gps_data = nullptr;
+  GpsTestTiming gps_test{};
+  AccelTestSnapshot accel_test{};
 
   // Current-session values, computed by the orchestrator only for Tracking Status.
   TrackingStatusSnapshot tracking_status{};
@@ -499,7 +488,9 @@ private:
   // --- Row population ---
   void populate_menu_rows(DisplayValues &v) const;
   void populate_tracking_rows(DisplayValues &v) const;
-  void populate_tracking_status_rows(DisplayValues &v, const BuildContext &ctx) const;
+  void populate_tracking_status_rows(DisplayValues &v, const TrackingStatusSnapshot &status,
+                                     TrackingState tracking_state, bool gps_enabled,
+                                     const GpsData *gps_data) const;
   void populate_settings_rows(DisplayValues &v) const;
   void populate_settings_group_rows(DisplayValues &v) const;
   void populate_settings_choice_rows(DisplayValues &v) const;
@@ -512,11 +503,12 @@ private:
   void populate_getting_started_rows(DisplayValues &v) const;
   void populate_hardware_test_rows(DisplayValues &v) const;
   void populate_peripheral_test_rows(DisplayValues &v) const;
-  void populate_gps_test_rows(DisplayValues &v, const BuildContext &ctx) const;
-  void populate_accel_test_rows(DisplayValues &v, const BuildContext &ctx) const;
+  void populate_gps_test_rows(DisplayValues &v, const GpsData *gps,
+                              const GpsTestTiming &timing) const;
+  void populate_accel_test_rows(DisplayValues &v, const AccelTestSnapshot &accel) const;
 
   // --- Chart extraction ---
-  void populate_chart(DisplayValues &v, const MeasuresAGo *cache, uint8_t cache_count) const;
+  void populate_chart(DisplayValues &v, const ChartHistoryView &history) const;
 
   // --- Settings choice helpers ---
   const SettingId *group_items(Screen screen, uint8_t &count) const;

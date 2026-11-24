@@ -595,6 +595,12 @@ On validation or persistence failure, the UI is resynchronized from the unchange
 active settings. BLE, local HTTP, and cloud updates use the same activation
 boundary after their source-specific checks.
 
+On activation, `apply_settings_runtime_delta()` synchronizes UIManager before
+runtime effects can submit intermediate frames, including `stop_tracking()` when
+leaving Portable mode. Rendering therefore uses the accepted display preferences
+throughout the transition. See
+[Frame Inputs and Settings](ui_manager.md#frame-inputs-and-settings).
+
 A Local Server change in Stationary updates Wi-Fi power saving and calls
 `activate_local_endpoint()`. Enable starts HTTP and mDNS when connected; Disable
 revokes API access, discards queued requests, cancels activation retries, and
@@ -1004,16 +1010,18 @@ for the component-facing contract and edge cases.
 
 Builds and submits a UI frame, returning whether the display accepted it.
 Tracking Status lifecycle stays with its timer handlers. Frame preparation uses
-a `BuildContext` and `DisplayValues` snapshot:
+a `BuildContext` and `DisplayValues` frame description:
 
-1. Clear expired snackbar
-2. `build_context()` — convert cached `MeasuresAGo` to `Measures`, read
-   chart cache, extract battery info, status flags, and `is_plugged_in`
-   (derived from `bms_power_source_has_external_input()`). The Wi-Fi icon
-   is shown for the whole Stationary session (`wifi_enabled`); its glyph
-   reflects link state via `wifi_connected = wifi.is_online()`. Temperature,
-   altitude, and PM presentation flags come from the active `GoSettings`
-3. `UIManager::build_values(ctx)` — produce `DisplayValues`
+1. Synchronize tracking state and clear any expired snackbar
+2. `build_context()` — convert corrected `MeasuresAGo` to `Measures`, read and
+   correct chart history, and collect battery, connectivity, and diagnostic
+   inputs. `battery.is_plugged_in` comes from
+   `bms_power_source_has_external_input()`. `connectivity.wifi_enabled` is true
+   throughout Stationary mode; `connectivity.wifi_connected` reflects
+   `wifi.is_online()` in that mode
+3. `UIManager::build_values(ctx)` — combine those inputs with navigation and
+   synchronized display settings to produce `DisplayValues`; see
+   [Frame Inputs and Settings](ui_manager.md#frame-inputs-and-settings)
 4. `DisplayService::update(values, wait)` — submit, optionally waiting for the
    previous refresh
 5. On acceptance, clear pending feedback and start any new transient snackbar's

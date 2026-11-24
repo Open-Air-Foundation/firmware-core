@@ -550,7 +550,8 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     for (uint16_t i = 0; i < count; ++i) {
       cache[i] = apply_measurement_corrections(cache[i], corrections);
     }
-    populate_display_chart(values, cache, static_cast<uint8_t>(count), chart_samples);
+    populate_display_chart(values.home.chart, values.chart_metric(), cache,
+                           static_cast<uint8_t>(count), chart_samples);
   }
   if (power_snapshot.ship_mode_request == ShipModeRequest::OverTemperature ||
       power_snapshot.ship_mode_request == ShipModeRequest::UnderTemperature) {
@@ -1146,45 +1147,46 @@ DisplayValues build_fast_path_display(const MeasuresAGo &measures, const PowerSn
   DisplayValues v{};
 
   if (corrected.co2.is_valid()) {
-    v.co2_ppm = corrected.co2.co2;
+    v.home.readings.co2_ppm = corrected.co2.co2;
   }
   if (corrected.pm_a.is_pm_25_valid()) {
-    v.pm25_ugm3 = corrected.pm_a.pm_25;
+    v.home.readings.pm25_ugm3 = corrected.pm_a.pm_25;
   }
   if (corrected.temp_hum_a.is_temp_valid()) {
-    v.temperature_c = corrected.temp_hum_a.temperature;
+    v.home.readings.temperature_c = corrected.temp_hum_a.temperature;
   }
   if (corrected.temp_hum_a.is_hum_valid()) {
-    v.humidity_pct = corrected.temp_hum_a.humidity;
+    v.home.readings.humidity_pct = corrected.temp_hum_a.humidity;
   }
   if (corrected.tvoc_nox.is_tvoc_index_valid()) {
-    v.tvoc_index = corrected.tvoc_nox.tvoc_index;
+    v.home.readings.tvoc_index = corrected.tvoc_nox.tvoc_index;
   }
   if (corrected.tvoc_nox.is_nox_index_valid()) {
-    v.nox_index = corrected.tvoc_nox.nox_index;
+    v.home.readings.nox_index = corrected.tvoc_nox.nox_index;
   }
   if (corrected.pressure.is_pressure_valid()) {
-    v.pressure_hpa = corrected.pressure.pressure;
+    v.home.readings.pressure_hpa = corrected.pressure.pressure;
   }
   if (corrected.pressure.is_altitude_valid()) {
-    v.altitude_m = corrected.pressure.altitude;
+    v.home.readings.altitude_m = corrected.pressure.altitude;
   }
 
   if (bms.battery_percentage >= 0.0f) {
-    v.battery_pct = static_cast<uint8_t>(bms.battery_percentage);
+    v.header.battery.pct = static_cast<uint8_t>(bms.battery_percentage);
   }
-  v.is_battery_charging = is_bms_charging(bms.charging_status);
-  v.is_plugged_in = bms_power_source_has_external_input(bms.charger_status.power_source);
+  v.header.battery.is_charging = is_bms_charging(bms.charging_status);
+  v.header.battery.is_plugged_in =
+      bms_power_source_has_external_input(bms.charger_status.power_source);
 
-  v.locked = true;
+  v.header.locked = true;
   v.screen = Screen::Home;
 
-  v.use_fahrenheit = settings.use_fahrenheit;
-  v.use_feet = settings.use_feet;
-  v.pm_use_usaqi = settings.pm_use_usaqi;
-  v.pinned_chart = settings.pinned_chart;
-  v.show_temp_hum = display_temp_hum_for_interval(settings.active_measure_interval_seconds());
-  v.display_off = false;
+  v.preferences.use_fahrenheit = settings.use_fahrenheit;
+  v.preferences.use_feet = settings.use_feet;
+  v.preferences.pm_use_usaqi = settings.pm_use_usaqi;
+  v.home.pinned_chart = settings.pinned_chart;
+  v.home.show_temp_hum = display_temp_hum_for_interval(settings.active_measure_interval_seconds());
+  v.home.display_off = false;
 
   return v;
 }
@@ -1193,8 +1195,8 @@ DisplayValues build_boot_splash_values() {
   DisplayValues v{};
   v.screen = Screen::Info;
   v.info_text = BOOT_SPLASH_TEXT;
-  v.locked = true; // Info hides the status bar; kept for semantic correctness.
-  v.display_off = false;
+  v.header.locked = true; // Info hides the status bar; kept for semantic correctness.
+  v.home.display_off = false;
   return v;
 }
 
@@ -1202,30 +1204,30 @@ DisplayValues build_wake_values(const RtcDisplaySnapshot &snapshot, bool snapsho
   DisplayValues v{};
 
   if (snapshot_valid) {
-    v.co2_ppm = snapshot.co2_ppm;
-    v.pm25_ugm3 = snapshot.pm25_ugm3;
-    v.temperature_c = snapshot.temperature_c;
-    v.humidity_pct = snapshot.humidity_pct;
-    v.tvoc_index = snapshot.tvoc_index;
-    v.nox_index = snapshot.nox_index;
-    v.pressure_hpa = snapshot.pressure_hpa;
-    v.altitude_m = snapshot.altitude_m;
-    v.battery_pct = snapshot.battery_pct;
-    v.is_battery_charging = snapshot.is_battery_charging;
-    v.gps_enabled = snapshot.gps_enabled;
-    v.gps_fix = snapshot.gps_fix;
-    v.tracking_state = snapshot.tracking_state;
-    v.ble_enabled = snapshot.ble_enabled;
-    v.use_fahrenheit = snapshot.use_fahrenheit;
-    v.use_feet = snapshot.use_feet;
-    v.pm_use_usaqi = snapshot.pm_use_usaqi;
-    v.show_temp_hum = snapshot.show_temp_hum;
-    v.pinned_chart = snapshot.pinned_chart;
+    v.home.readings.co2_ppm = snapshot.co2_ppm;
+    v.home.readings.pm25_ugm3 = snapshot.pm25_ugm3;
+    v.home.readings.temperature_c = snapshot.temperature_c;
+    v.home.readings.humidity_pct = snapshot.humidity_pct;
+    v.home.readings.tvoc_index = snapshot.tvoc_index;
+    v.home.readings.nox_index = snapshot.nox_index;
+    v.home.readings.pressure_hpa = snapshot.pressure_hpa;
+    v.home.readings.altitude_m = snapshot.altitude_m;
+    v.header.battery.pct = snapshot.battery_pct;
+    v.header.battery.is_charging = snapshot.is_battery_charging;
+    v.header.connectivity.gps_enabled = snapshot.gps_enabled;
+    v.header.connectivity.gps_fix = snapshot.gps_fix;
+    v.header.tracking_state = snapshot.tracking_state;
+    v.header.connectivity.ble_enabled = snapshot.ble_enabled;
+    v.preferences.use_fahrenheit = snapshot.use_fahrenheit;
+    v.preferences.use_feet = snapshot.use_feet;
+    v.preferences.pm_use_usaqi = snapshot.pm_use_usaqi;
+    v.home.show_temp_hum = snapshot.show_temp_hum;
+    v.home.pinned_chart = snapshot.pinned_chart;
   }
 
   v.screen = Screen::Home;
-  v.locked = false;
-  v.display_off = false;
+  v.header.locked = false;
+  v.home.display_off = false;
   v.snackbar_text = "Unlocked";
 
   return v;

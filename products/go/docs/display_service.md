@@ -164,34 +164,57 @@ See [Setup Session Refresh Policy](#setup-session-refresh-policy) below.
 
 ### DisplayValues
 
-Flat snapshot of everything needed to render one frame. Built by the UI Manager
-on every update; the Display Service diffs against the previous snapshot
-internally to select the refresh tier (Full/Fast/Partial).
+[`DisplayValues`](../main/go_display.h) describes one frame using inline groups
+for the header, display preferences, Home content, lists, About information,
+and provisioning. Home and list content coexist because MainMenu draws an
+overlay on the Home dashboard. UIManager builds interactive frames; boot paths
+and the factory learning runner build their frames directly.
 
-Key points:
+The structure and its inline arrays require no heap allocation. Sensor readings
+remain in their measurement units until the renderer applies display
+preferences. Unavailable readings retain field-specific `MeasuresInvalid`
+sentinels; unknown battery percentage is `0xFF`. The header shares
+`BatteryStatus` and `ConnectivityStatus` with the UI's
+[frame inputs](ui_manager.md#frame-inputs-and-settings).
 
-- TVOC/NOx are `int` (SGP41 algorithm index output, not raw resistance)
-- Sensor readings come from channel A (`pm_a`, `temp_hum_a`)
-- `ListRow::text` is `char[48]` (owned by struct, not a pointer)
-- `is_plugged_in` (`bool`): true when the charger reports external USB input; drives the plug icon in the status bar
-- `wifi_enabled` (`bool`): show the Wi-Fi status-bar icon (true for the whole Stationary session)
-- `wifi_connected` (`bool`): selects the connected vs disconnected Wi-Fi glyph (`WifiService::is_online()`)
-- Invalid sentinels from `MeasuresInvalid`; `0xFF` for battery
-- `use_feet` (`bool`): convert the pressure-derived meter value to whole feet
-  only while formatting the Home altitude cell
-- `ble_passkey` (`uint32_t`): 6-digit passkey for PairingPasskey screen
-- `info_text` (`const char *`): caller-owned ASCII string for `Screen::Info`; null or empty renders a blank canvas
-- `provisioning_status` (`const char *`): transport-aware status text for `Screen::Provisioning`; auto-wrapped to at most 2 lines so long strings (`Connected! 192.168.x.y`, `Connect failed - try again`) stay inside the canvas
-- `provisioning_transport` (`uint8_t`): `ProvisioningTransport` value driving transport-specific labels and captions
-- `provisioning_connected_ip` (`uint32_t`): network-byte-order IPv4 (low byte = first octet) matching `WifiGotIpCallback`, `WifiStaticIpConfig`, and `format_ipv4_be`. Non-zero overrides the status line with the formatted `Connected!` text via `UIManager::provisioning_status_text()`
-- `provisioning_confirm_kind` (`uint8_t`): `0` switch transport, `1` cancel setup
-- `provisioning_confirm_index` (`uint8_t`): `0` No (default), `1` Yes
-- `provisioning_ap_ssid` (`const char *`): captive-portal AP SSID (`airgradient-<MAC>`) rendered as the Wi-Fi instruction line
-- `provisioning_ap_password` (`const char *`): captive-portal AP password rendered as the Wi-Fi instruction line (sourced from `UIManager::Config::ap_password`, matches `WifiService::Config::ap_password`)
-- `qr` (`const AirgradientProvisioning::QrCode *`): borrowed pointer to the QR matrix shown on the session screens that render one — the Provisioning page (UIManager re-encodes on session entry and transport switch: BleOnly → companion-app URL, WifiOnly → `WIFI:` join descriptor) and the Getting Started page (usage-guide URL, captioned `Scan for guide`). Those screens are mutually exclusive, so one pointer serves both. Null or empty matrix skips the QR area
-- `getting_started_from_boot` (`bool`): renders one bold `Hold menu to start` line centered inside the first-boot guide's highlighted action, retaining `Or just use it right now` above it. No hold duration is displayed; Settings → Setup Guide keeps its single-line `Back` action
+List rows own their text. Other strings, chart samples, and QR data are borrowed:
+keep their storage valid and unchanged until `init()`, `update()`, or
+`update_sync()` returns. Submit a UI-built frame before another build or UI
+mutation overwrites its backing buffers. Software rendering runs in the caller;
+the worker consumes the resulting pixels, so borrowed data need not survive the
+later SPI refresh. See [Framebuffer Ownership](#framebuffer-ownership).
+
+UIManager owns provisioning decisions and formats their presentation. The
+renderer receives a status string and confirmation question, with `list.selected_row`
+selecting No (0) or Yes (1). `ProvisioningContent::ap_ssid` and `ap_password`
+are the temporary captive-portal access-point credentials displayed for manual
+phone connection. UIManager encodes the matching Wi-Fi QR separately; the
+shared `qr` pointer also serves Getting Started. See
+[Provisioning Page Layout](ui_manager.md#provisioning-page-layout) for the
+transport-specific content and [the header](../main/go_display.h) for all fields.
 
 ## Architecture
+
+### Refresh Comparison State
+
+DisplayService retains only the previous screen and `DisplayHeader` in its
+private `DisplayRefreshState`. Those values determine screen transitions and
+header changes; menu text, chart samples, provisioning data, and borrowed
+pointers are consumed during rendering and are not retained for comparison.
+This keeps the persistent comparison state small without changing which refresh
+tier is selected.
+
+`init()` captures the initial metadata before rendering. An accepted `update()`
+records it before notifying the worker; a rejected update leaves it unchanged.
+`update_sync()` records it after the SPI attempt, except when bus acquisition
+fails and returns early. This metadata does not establish that the panel was
+successfully painted. `DisplayRefreshPolicy` separately records successful
+refresh completion for the [counter and cooldown](#anti-ghosting-counter).
+
+This state belongs to the current DisplayService instance. The
+[RTC snapshot](#rtc-display-snapshot) independently supplies readings and display
+preferences for the early button-wake frame. The boot path builds that frame,
+which `init()` renders before starting the deferred worker.
 
 ### Framebuffer Ownership
 
@@ -373,16 +396,16 @@ Session screens skip `_draw_status_bar()` and `_draw_snackbar()`:
   transport-specific QR code (drawn from `v.qr` —
   encoded by UIManager: companion-app URL for BLE, Wi-Fi `WIFI:` join
   descriptor for the captive-portal AP), caption, instructions
-  (SSID + password from `v.provisioning_ap_ssid` /
-  `v.provisioning_ap_password` in Wi-Fi), status line (auto-wrapped to
+  (SSID + password from `provisioning.ap_ssid` /
+  `provisioning.ap_password` in Wi-Fi), status line (auto-wrapped to
   at most 2 lines via the same word-wrap helper), helper text, and
-  two action rows. Labels switch on `provisioning_transport`. Module
+  two action rows. Labels switch on `provisioning.transport`. Module
   pixel size and quiet zone are product-local; the QR matrix data
   comes from `airgradient-provisioning`.
 - `_draw_provisioning_confirm()` renders the question text from
-  `v.rows[0].text` (provided by `UIManager::populate_provisioning_confirm_rows()`)
+  `list.rows[0].text` (provided by `UIManager::populate_provisioning_confirm_rows()`)
   and two filled / framed buttons (`No` index 0, `Yes` index 1)
-  driven by `provisioning_confirm_index`.
+  driven by `list.selected_row`.
 
 ### Display Update Suppression
 
@@ -510,12 +533,11 @@ until the normal update supplies them.
 
 ### Status Bar — Wi-Fi Icon
 
-The Wi-Fi icon is shown for the whole Stationary session (`wifi_enabled`
-= Stationary mode), so a dropped link stays visible instead of vanishing.
-`wifi_connected` (`WifiService::is_online()`) selects the glyph: connected
-(57419) when online, disconnected (57879) otherwise. In Portable mode the
-icon is hidden. `_is_header_changed()` includes `wifi_connected` so the
-connect/disconnect transition triggers a status-bar redraw.
+The Wi-Fi icon uses `header.connectivity`. Its `wifi_enabled` flag is true for
+the whole Stationary session, so a dropped link stays visible. `wifi_connected`
+(`WifiService::is_online()`) selects the glyph: connected (57419) when online,
+disconnected (57879) otherwise. In Portable mode the icon is hidden. Header
+comparison includes both flags so connection changes update the status bar.
 
 ### Status Bar — Battery and Plug Icons
 
@@ -528,8 +550,8 @@ states:
 | Charging | Charging bolt glyph (57914) |
 | Plugged, not charging | Plug glyph (57410) + battery level glyph |
 
-The plug icon appears left of the battery glyph when
-`is_plugged_in && !is_battery_charging`. The bolt may remain at 100% while
+The plug icon appears left of the battery glyph when `header.battery` reports
+`is_plugged_in && !is_charging`. The bolt may remain at 100% while
 the charger finishes its taper; percentage alone does not select the plug icon.
 
 Recording shows a dot; Paused shows two bars in the same position; Idle shows
@@ -537,7 +559,7 @@ neither. When the plug icon is visible, either tracking indicator shifts left
 to avoid overlapping it. The tracking enum is retained in the RTC snapshot so
 the pause indicator survives deep sleep.
 
-`_is_header_changed()` includes `is_plugged_in` so plug/unplug
+`_is_header_changed()` includes `battery.is_plugged_in` so plug/unplug
 transitions trigger a status bar redraw.
 
 ### Value Formatting
@@ -550,7 +572,7 @@ transitions trigger a status bar redraw.
 | Humidity | Integer percent |
 | TVOC/NOx | No unit suffix; index values while continuously measuring, raw values on the energy-saving fast path |
 | Pressure | Integer hPa; >9999: "9999+ hPa" |
-| Altitude | Integer meters by default; `use_feet` converts with `m × 3.28084` and renders the full rounded value with `ft`; meters >9999 render `9999+ m` |
+| Altitude | Integer meters by default; `preferences.use_feet` converts with `m × 3.28084` and renders the full rounded value with `ft`; meters >9999 render `9999+ m` |
 | Invalid | "-" for any metric |
 
 ## Edge Cases / Errors
@@ -568,7 +590,7 @@ transitions trigger a status bar redraw.
 
 Host tests cover [refresh policy](../tests/go_display_refresh.tests.cpp),
 [geometry](../tests/go_display_geometry.tests.cpp),
-[timer-wake charts](../tests/go_app.tests.cpp), and
+[boot frame restoration and timer-wake charts](../tests/go_app.tests.cpp), and
 [text wrapping](../tests/go_text_wrap.tests.cpp). The
 [UI tests](../tests/go_ui.tests.cpp) verify frame values and navigation; the
 [host-test workflow](../../../tests/README.md) describes execution.
