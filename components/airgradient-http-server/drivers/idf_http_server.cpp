@@ -14,6 +14,7 @@
 #include <esp_http_server.h>
 #include <esp_log.h>
 
+#include "device_model.h"
 #include "hal/http_request.h"
 #include "hal/http_response.h"
 #include "idf_http_request.h"
@@ -22,7 +23,11 @@
 namespace {
 
 static constexpr const char *TAG = "IdfHttpServer";
+#if defined(CONFIG_AG_DEVICE_MODEL_GO)
+static constexpr size_t HTTP_SERVER_TASK_STACK_SIZE_BYTES = 4096;
+#else
 static constexpr size_t HTTP_SERVER_TASK_STACK_SIZE_BYTES = 6144;
+#endif
 
 httpd_method_t to_httpd_method(HttpMethod m) {
   switch (m) {
