@@ -106,8 +106,37 @@ struct FgLearningDashboardData {
   const char *fail_reason = nullptr;   ///< static string; shown on Failed/Complete, nullptr if none
 };
 
-struct DisplayValues {
-  // --- Sensor readings (channel A) ---
+struct BatteryStatus {
+  uint8_t pct = 0xFF; // 0xFF = no data
+  bool is_charging = false;
+  bool is_plugged_in = false;
+};
+
+struct ConnectivityStatus {
+  bool ble_enabled = false;
+  bool ble_connected = false;
+  bool wifi_enabled = false;
+  bool wifi_connected = false;
+  bool gps_enabled = false;
+  bool gps_fix = false;
+};
+
+struct DisplayHeader {
+  BatteryStatus battery{};
+  // Preserve the display's startup default; BuildContext supplies runtime state.
+  ConnectivityStatus connectivity{.gps_enabled = true};
+  bool locked = true;
+  TrackingState tracking_state = TrackingState::Idle;
+};
+
+struct DisplayPreferences {
+  bool use_fahrenheit = false;
+  bool use_feet = false;
+  bool pm_use_usaqi = false;
+};
+
+struct DisplayReadings {
+  // Corrected sensor readings (channel A), before display-unit conversion.
   int co2_ppm = MeasuresInvalid::CO2;
   float pm25_ugm3 = MeasuresInvalid::PM;
   float temperature_c = MeasuresInvalid::TEMPERATURE;
@@ -116,118 +145,94 @@ struct DisplayValues {
   int nox_index = MeasuresInvalid::NOX;
   float pressure_hpa = MeasuresInvalid::PRESSURE;
   float altitude_m = MeasuresInvalid::ALTITUDE;
+};
 
-  // --- Battery ---
-  uint8_t battery_pct = 0xFF; // 0xFF = no data
-  bool is_battery_charging = false;
-  bool is_plugged_in = false;
+struct DisplayChartData {
+  /// Borrowed samples; the caller owns the buffer through display submission.
+  const float *samples = nullptr;
+  uint8_t count = 0;
+  float min = 0.0f;
+  float max = 0.0f;
+};
 
-  // --- Status flags ---
-  bool locked = true;
-  bool ble_enabled = false;
-  bool ble_connected = false;
-  bool wifi_enabled = false;   // show the Wi-Fi icon (Stationary mode)
-  bool wifi_connected = false; // connected vs disconnected glyph
-  bool gps_enabled = true;
-  bool gps_fix = false;
-  TrackingState tracking_state = TrackingState::Idle;
+struct HomeContent {
+  DisplayReadings readings{};
   bool display_off = false;
-  bool use_fahrenheit = false;
-  bool use_feet = false;
-  bool pm_use_usaqi = false;
-
-  // --- Screen navigation ---
-  Screen screen = Screen::Home;
   Metric active_metric = Metric::None;
   bool show_temp_hum = true;
-
   Metric pinned_chart = Metric::Pm25;
+  DisplayChartData chart{};
+};
+
+struct ListContent {
+  // Row text is owned by the frame, unlike the borrowed text below.
+  ListRow rows[MAX_LIST_ROWS] = {};
+  uint8_t row_count = 0;
+  /// Row selection, or No/Yes button index (0/1) on ProvisioningConfirm.
+  uint8_t selected_row = 0;
+  bool show_separator_after_back = false;
+};
+
+struct AboutContent {
+  // Borrowed identity strings, owned by UIManager or static storage.
+  const char *title = nullptr;
+  const char *firmware = nullptr;
+  const char *serial = nullptr;
+  const char *hardware = nullptr;
+};
+
+struct ProvisioningContent {
+  /// Borrowed, already-formatted status/instructions from UIManager.
+  const char *status = nullptr;
+  uint8_t transport = 0; ///< ProvisioningTransport value
+  /// Borrowed captive-portal credentials. Null -> renderer placeholder.
+  const char *ap_ssid = nullptr;
+  const char *ap_password = nullptr;
+};
+
+/// Values needed to render a frame. Borrowed pointers must remain valid and
+/// unchanged until init/update/update_sync returns. Submit before rebuilding
+/// UI-owned backing buffers; the display worker consumes the rendered pixels.
+struct DisplayValues {
+  Screen screen = Screen::Home;
+  DisplayHeader header{};
+  DisplayPreferences preferences{};
+  HomeContent home{};
+  ListContent list{};
+  AboutContent about{};
+  ProvisioningContent provisioning{};
+
+  /// Borrowed snackbar text; null/empty hides the message.
+  const char *snackbar_text = nullptr;
+  /// Borrowed ASCII text for Info; newlines are honored, null/empty is blank.
+  const char *info_text = nullptr;
+  /// Borrowed QR for Provisioning / GettingStarted. Null/empty skips the area.
+  const AirgradientProvisioning::QrCode *qr = nullptr;
+
+  uint32_t ble_passkey = 0; ///< 6-digit passkey for PairingPasskey
+  bool getting_started_from_boot = false;
+  bool show_fg_dashboard = false;
+  FgLearningDashboardData fg_dashboard{};
 
   bool metric_available(Metric metric) const {
     return is_chart_metric_valid(static_cast<int>(metric)) &&
-           (show_temp_hum || (metric != Metric::Temp && metric != Metric::Humidity));
+           (home.show_temp_hum || (metric != Metric::Temp && metric != Metric::Humidity));
   }
 
   bool browsing_chart() const {
-    return !locked && active_metric != Metric::None && metric_available(active_metric);
+    return !header.locked && home.active_metric != Metric::None &&
+           metric_available(home.active_metric);
   }
 
   Metric chart_metric() const {
-    const Metric metric = browsing_chart() ? active_metric : pinned_chart;
+    const Metric metric = browsing_chart() ? home.active_metric : home.pinned_chart;
     return metric_available(metric) ? metric : Metric::None;
   }
 
   bool show_pinned_chart_hint() const {
     // At longer intervals, pressure and altitude occupy the unused chart row.
-    return !show_temp_hum && pinned_chart == Metric::None && !browsing_chart();
+    return !home.show_temp_hum && home.pinned_chart == Metric::None && !browsing_chart();
   }
-
-  // --- List/menu content ---
-  ListRow rows[MAX_LIST_ROWS] = {};
-  uint8_t row_count = 0;
-  uint8_t selected_row = 0;
-  bool show_separator_after_back = false;
-
-  // --- About screen ---
-  const char *about_title = nullptr;
-  const char *about_firmware = nullptr;
-  const char *about_serial = nullptr;
-  const char *about_hardware = nullptr;
-
-  // --- Chart data ---
-  const float *chart_samples = nullptr;
-  uint8_t chart_count = 0;
-  float chart_min = 0.0f;
-  float chart_max = 0.0f;
-
-  // --- Snackbar ---
-  const char *snackbar_text = nullptr;
-
-  // --- BLE pairing ---
-  uint32_t ble_passkey = 0; ///< 6-digit passkey for PairingPasskey screen
-
-  // --- Stationary networking (Provisioning screen only — Home conveys
-  // network state purely through the status-bar Wi-Fi icon per spec) ---
-  const char *provisioning_status = nullptr; ///< Transport-specific instructions
-  uint8_t provisioning_transport = 0;        ///< ProvisioningTransport value
-
-  /// Connected-state IP for the Provisioning success message.  Network
-  /// byte order (low byte = first octet) to match WifiGotIpCallback /
-  /// WifiStaticIpConfig / format_ipv4_be.  Non-zero overrides the
-  /// status-line text with "Connected! a.b.c.d".
-  uint32_t provisioning_connected_ip = 0;
-
-  /// 0 = switch transport, 1 = cancel setup (drives ProvisioningConfirm question).
-  uint8_t provisioning_confirm_kind = 0;
-
-  /// 0 = No (default), 1 = Yes (drives ProvisioningConfirm button highlight).
-  uint8_t provisioning_confirm_index = 0;
-
-  /// WifiOnly captive-portal AP SSID for Provisioning instruction L1.
-  /// Borrowed pointer (UIManager owns).  Null -> placeholder.
-  const char *provisioning_ap_ssid = nullptr;
-
-  /// WifiOnly captive-portal AP password for Provisioning instruction L2.
-  /// Borrowed pointer.  Null -> placeholder.
-  const char *provisioning_ap_password = nullptr;
-
-  /// QR for the Provisioning / Getting Started pages (mutually exclusive).
-  /// Borrowed; UIManager re-encodes on entry. Null/empty skips the QR area.
-  const AirgradientProvisioning::QrCode *qr = nullptr;
-
-  /// First-boot guide shows a single bold Menu-hold instruction.
-  bool getting_started_from_boot = false;
-
-  // --- Fuel-gauge learning dashboard (factory path) ---
-  bool show_fg_dashboard = false;
-  FgLearningDashboardData fg_dashboard{};
-
-  // --- Info screen (generic single-text page) ---
-  /// Active source string for Screen::Info.  Plain ASCII.  Newlines are
-  /// honored as hard breaks; longer runs auto-wrap.  Pointer must remain
-  /// valid through the next DisplayValues snapshot.  Null/empty renders a
-  /// blank canvas.
-  const char *info_text = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -371,22 +376,24 @@ private:
 
   // Render methods
   void _render_frame(const DisplayValues &v);
-  bool _is_header_changed(const DisplayValues &a, const DisplayValues &b) const;
+  bool _is_header_changed(const DisplayHeader &a, const DisplayHeader &b) const;
 
-  void _draw_status_bar(const DisplayValues &v);
+  void _draw_status_bar(const DisplayHeader &header);
   void _draw_home(const DisplayValues &v);
-  void _draw_menu_overlay(const DisplayValues &v);
+  void _draw_menu_overlay(const ListContent &list);
   void _draw_full_screen_list(const DisplayValues &v);
-  void _draw_snackbar(const DisplayValues &v);
+  void _draw_snackbar(const char *text);
   void _draw_shutdown(Screen s);
-  void _draw_pairing_passkey(const DisplayValues &v);
-  void _draw_chart(const DisplayValues &v);
+  void _draw_pairing_passkey(uint32_t passkey);
+  void _draw_chart(const DisplayChartData &chart);
   void _draw_chart_details(const DisplayValues &v);
-  void _draw_info(const DisplayValues &v);
-  void _draw_provisioning(const DisplayValues &v);
-  void _draw_provisioning_confirm(const DisplayValues &v);
-  void _draw_getting_started(const DisplayValues &v);
-  void _draw_fg_learning_dashboard(const DisplayValues &v);
+  void _draw_info(const char *text);
+  void _draw_provisioning(const ProvisioningContent &provisioning, const ListContent &list,
+                          const AirgradientProvisioning::QrCode *qr);
+  void _draw_provisioning_confirm(const ListContent &list);
+  void _draw_getting_started(const ListContent &list, const AirgradientProvisioning::QrCode *qr,
+                             bool from_boot);
+  void _draw_fg_learning_dashboard(Screen screen, const FgLearningDashboardData &d);
 
   // Worker
   static void _worker_entry(void *arg);
@@ -438,7 +445,7 @@ public:
     spy_worker_busy = false;
     spy_last_screen = values.screen;
     spy_last_update_has_snackbar = values.snackbar_text != nullptr;
-    spy_last_update_locked = values.locked;
+    spy_last_update_locked = values.header.locked;
     return true;
   }
 

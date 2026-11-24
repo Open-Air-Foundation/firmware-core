@@ -74,8 +74,8 @@ static void select_row(UIManager &ui, const std::string &prefix,
                        const BuildContext &ctx = make_default_ctx()) {
   for (uint8_t step = 0; step < MAX_LIST_ROWS; ++step) {
     const auto values = ui.build_values(ctx);
-    REQUIRE(values.selected_row < values.row_count);
-    if (std::string(values.rows[values.selected_row].text).rfind(prefix, 0) == 0)
+    REQUIRE(values.list.selected_row < values.list.row_count);
+    if (std::string(values.list.rows[values.list.selected_row].text).rfind(prefix, 0) == 0)
       return;
     press(ui, InputSource::TouchDown);
   }
@@ -114,10 +114,10 @@ static void open_measure_interval_choice(UIManager &ui) {
 static void check_rows(UIManager &ui, std::initializer_list<const char *> expected,
                        const BuildContext &ctx = make_default_ctx()) {
   const auto values = ui.build_values(ctx);
-  REQUIRE(values.row_count == expected.size());
+  REQUIRE(values.list.row_count == expected.size());
   uint8_t row = 0;
   for (const char *text : expected)
-    CHECK(std::string(values.rows[row++].text) == text);
+    CHECK(std::string(values.list.rows[row++].text) == text);
 }
 
 TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
@@ -127,17 +127,17 @@ TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
   open_row(ui, "Operating Mode");
   check_rows(ui, {"Exit", "Back", "Portable", "Stationary", "Energy Saving"});
   double_press(ui);
-  CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
+  CHECK(ui.build_values(make_default_ctx()).list.selected_row == 2);
   open_row(ui, "Settings");
   check_rows(ui, {"Exit", "Back", "Operations", "Display & Touch", "Hardware Test", "Clear Data",
                   "Setup Guide", "About Device"});
   open_row(ui, "Operations");
   auto values = ui.build_values(make_default_ctx());
-  REQUIRE(values.row_count == 6);
-  CHECK(std::string(values.rows[2].text).rfind("Measure Int.: ", 0) == 0);
-  CHECK(std::string(values.rows[3].text) == "CO2 Calibration");
-  CHECK(std::string(values.rows[4].text) == "GPS: When tracking");
-  CHECK(std::string(values.rows[5].text) == "Buzzer: Off");
+  REQUIRE(values.list.row_count == 6);
+  CHECK(std::string(values.list.rows[2].text).rfind("Measure Int.: ", 0) == 0);
+  CHECK(std::string(values.list.rows[3].text) == "CO2 Calibration");
+  CHECK(std::string(values.list.rows[4].text) == "GPS: When tracking");
+  CHECK(std::string(values.list.rows[5].text) == "Buzzer: Off");
   double_press(ui);
   open_row(ui, "Display & Touch");
   check_rows(ui, {"Exit", "Back", "Pinned Chart", "Temperature Unit: C", "Altitude Unit: m",
@@ -162,17 +162,17 @@ TEST_CASE("UIManager: V2 hides Touch LED without breaking Display & Touch naviga
   select_row(ui, "LED Brightness");
   press(ui, InputSource::TouchDown);
   auto values = ui.build_values(make_default_ctx());
-  CHECK(std::string(values.rows[values.selected_row].text) == "Exit");
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Exit");
   press(ui, InputSource::TouchUp);
   values = ui.build_values(make_default_ctx());
-  CHECK(std::string(values.rows[values.selected_row].text) == "LED Brightness");
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "LED Brightness");
 
   press(ui, InputSource::TouchEnter);
   REQUIRE(ui.current_screen() == Screen::SettingsChoice);
   CHECK(open_row(ui, "Dim").action == UIAction::SettingsChanged);
   REQUIRE(ui.current_screen() == Screen::DisplayTouch);
   values = ui.build_values(make_default_ctx());
-  CHECK(std::string(values.rows[values.selected_row].text) == "LED Brightness");
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "LED Brightness");
 
   GoSettings settings{};
   ui.apply_to_settings(settings);
@@ -196,7 +196,7 @@ TEST_CASE("UIManager: mode choices preserve identities across every transition",
       press(ui, InputSource::TouchEnter);
       open_row(ui, "Operating Mode");
       const auto values = ui.build_values(make_default_ctx());
-      CHECK(std::string(values.rows[values.selected_row].text) == labels[from]);
+      CHECK(std::string(values.list.rows[values.list.selected_row].text) == labels[from]);
       const auto result = open_row(ui, labels[to]);
       CHECK(result.action == UIAction::ChangeMode);
       CHECK(result.new_mode == modes[to]);
@@ -223,16 +223,16 @@ TEST_CASE("UIManager: Energy Saving interval menu edits only its own preference"
       ui.sync_settings(settings);
       go_to_measure_interval(ui);
       auto values = ui.build_values(make_default_ctx());
-      CHECK(std::string(values.rows[values.selected_row].text) ==
+      CHECK(std::string(values.list.rows[values.list.selected_row].text) ==
             std::string("Measure Int.: ") + labels[from]);
       press(ui, InputSource::TouchEnter);
       check_rows(ui, {"Exit", "Back", "5m", "15m", "1h"});
-      CHECK(ui.build_values(make_default_ctx()).selected_row == from + 2);
+      CHECK(ui.build_values(make_default_ctx()).list.selected_row == from + 2);
       CHECK(open_row(ui, labels[to]).action == UIAction::SettingsChanged);
       ui.apply_to_settings(settings);
       CHECK(settings.measure_interval_seconds == 17);
       CHECK(settings.energy_saving_measure_interval_seconds == intervals[to]);
-      CHECK(ui.build_values(make_default_ctx()).show_temp_hum);
+      CHECK(ui.build_values(make_default_ctx()).home.show_temp_hum);
 
       // Returning to normal mode restores the exact custom preference.
       settings.operating_mode = OperatingMode::Portable;
@@ -240,7 +240,7 @@ TEST_CASE("UIManager: Energy Saving interval menu edits only its own preference"
       ui.reset_to_home();
       open_measure_interval_choice(ui);
       values = ui.build_values(make_default_ctx());
-      CHECK(std::string(values.rows[values.selected_row].text) == "Custom (17s)");
+      CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Custom (17s)");
       CHECK(open_row(ui, "30s").action == UIAction::SettingsChanged);
       ui.apply_to_settings(settings);
       CHECK(settings.measure_interval_seconds == 30);
@@ -260,11 +260,11 @@ TEST_CASE("UIManager: open interval menu resynchronizes across modes",
   settings.operating_mode = OperatingMode::Offline;
   ui.sync_settings(settings);
   check_rows(ui, {"Exit", "Back", "5m", "15m", "1h"});
-  CHECK(ui.build_values(make_default_ctx()).selected_row == 3);
+  CHECK(ui.build_values(make_default_ctx()).list.selected_row == 3);
   settings.operating_mode = OperatingMode::Stationary;
   ui.sync_settings(settings);
   auto values = ui.build_values(make_default_ctx());
-  CHECK(std::string(values.rows[values.selected_row].text) == "1h");
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "1h");
 }
 
 TEST_CASE("UIManager: group choice returns and exit gestures", "[UIManager][nav][redesign]") {
@@ -294,10 +294,11 @@ TEST_CASE("UIManager: group choice returns and exit gestures", "[UIManager][nav]
       CHECK(result.action == UIAction::SettingsChanged);
       CHECK(ui.current_screen() == choice.parent);
       const auto values = ui.build_values(make_default_ctx());
-      CHECK(std::string(values.rows[values.selected_row].text).rfind(choice.setting, 0) == 0);
+      CHECK(std::string(values.list.rows[values.list.selected_row].text).rfind(choice.setting, 0) ==
+            0);
       press(ui, InputSource::TouchEnter);
       const auto selected = ui.build_values(make_default_ctx());
-      CHECK(std::string(selected.rows[selected.selected_row].text) == choice.option);
+      CHECK(std::string(selected.list.rows[selected.list.selected_row].text) == choice.option);
       CHECK(open_row(ui, "Back").action == UIAction::None);
       CHECK(ui.current_screen() == choice.parent);
       CHECK(long_press(ui).action == UIAction::None);
@@ -319,7 +320,7 @@ TEST_CASE("UIManager: Play Melody belongs to Hardware Test", "[UIManager][hwtest
           (std::string(melody) == "Chime" ? MelodySelect::Chime : MelodySelect::Tetris));
     REQUIRE(ui.current_screen() == Screen::HardwareTest);
     const auto values = ui.build_values(make_default_ctx());
-    CHECK(std::string(values.rows[values.selected_row].text) == "Play Melody");
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Play Melody");
     press(ui, InputSource::TouchEnter);
     CHECK(double_press(ui).action == UIAction::None);
     CHECK(ui.current_screen() == Screen::HardwareTest);
@@ -343,8 +344,8 @@ TEST_CASE("UIManager: group summaries fit the current list font",
     ui.sync_settings(settings);
     go_to_group(ui, group);
     const auto values = ui.build_values(make_default_ctx());
-    for (uint8_t row = 0; row < values.row_count; ++row)
-      CHECK(std::string(values.rows[row].text).size() <= MAX_VISIBLE_LABEL_CHARS);
+    for (uint8_t row = 0; row < values.list.row_count; ++row)
+      CHECK(std::string(values.list.rows[row].text).size() <= MAX_VISIBLE_LABEL_CHARS);
   }
 }
 
@@ -379,10 +380,10 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
     go_to_group(ui, "About Device");
     CHECK(ui.current_screen() == Screen::About);
     const auto values = ui.build_values(make_default_ctx());
-    CHECK(std::string(values.about_title) == "AirGradient Go");
-    CHECK(std::string(values.about_firmware) == "Firmware 0.1.0");
-    CHECK(std::string(values.about_serial) == "Serial AABBCCDDEEFF");
-    CHECK(std::string(values.about_hardware) == "Open Source Hardware");
+    CHECK(std::string(values.about.title) == "AirGradient Go");
+    CHECK(std::string(values.about.firmware) == "Firmware 0.1.0");
+    CHECK(std::string(values.about.serial) == "Serial AABBCCDDEEFF");
+    CHECK(std::string(values.about.hardware) == "Open Source Hardware");
   }
 
   SECTION("Back from Settings goes to MainMenu") {
@@ -390,7 +391,7 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
     open_row(ui, "Back");
     CHECK(ui.current_screen() == Screen::MainMenu);
     const auto values = ui.build_values(make_default_ctx());
-    CHECK(std::string(values.rows[values.selected_row].text) == "Settings");
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Settings");
   }
 
   SECTION("Exit from Settings goes to Home") {
@@ -404,7 +405,7 @@ TEST_CASE("UIManager: basic navigation", "[UIManager][nav]") {
     press(ui, InputSource::TouchEnter);
     CHECK(ui.current_screen() == Screen::Settings);
     const auto values = ui.build_values(make_default_ctx());
-    CHECK(std::string(values.rows[values.selected_row].text) == "About Device");
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) == "About Device");
   }
 }
 
@@ -424,8 +425,8 @@ TEST_CASE("UIManager: Getting Started via Settings -> Setup Guide", "[UIManager]
     // Settings entry: action row reads "Back" and the setup QR is published.
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    REQUIRE(v.row_count == 1);
-    CHECK(std::string(v.rows[0].text) == "Back");
+    REQUIRE(v.list.row_count == 1);
+    CHECK(std::string(v.list.rows[0].text) == "Back");
     CHECK_FALSE(v.getting_started_from_boot);
     REQUIRE(v.qr != nullptr);
     CHECK(v.qr->size() > 0);
@@ -435,8 +436,8 @@ TEST_CASE("UIManager: Getting Started via Settings -> Setup Guide", "[UIManager]
     CHECK(result.action == UIAction::None);
     CHECK(ui.current_screen() == Screen::Settings);
     v = ui.build_values(ctx);
-    REQUIRE(v.selected_row < v.row_count);
-    CHECK(std::string(v.rows[v.selected_row].text) == "Setup Guide");
+    REQUIRE(v.list.selected_row < v.list.row_count);
+    CHECK(std::string(v.list.rows[v.list.selected_row].text) == "Setup Guide");
   }
 }
 
@@ -449,8 +450,8 @@ TEST_CASE("UIManager: Getting Started boot entry emits AckOnboarding", "[UIManag
   // Boot entry: action row names the hold gesture.
   auto ctx = make_default_ctx();
   DisplayValues v = ui.build_values(ctx);
-  REQUIRE(v.row_count == 1);
-  CHECK(std::string(v.rows[0].text) == "Hold menu to start");
+  REQUIRE(v.list.row_count == 1);
+  CHECK(std::string(v.list.rows[0].text) == "Hold menu to start");
   CHECK(v.getting_started_from_boot);
   REQUIRE(v.qr != nullptr);
 
@@ -494,26 +495,26 @@ TEST_CASE("UIManager: grouped menus wrap and return to their parent",
         open_row(ui, item.group);
       REQUIRE(ui.current_screen() == item.screen);
       auto values = ui.build_values(make_default_ctx());
-      REQUIRE(values.row_count == item.count);
-      CHECK(values.selected_row == 2);
-      CHECK(std::string(values.rows[values.selected_row].text).rfind(item.first, 0) == 0);
+      REQUIRE(values.list.row_count == item.count);
+      CHECK(values.list.selected_row == 2);
+      CHECK(std::string(values.list.rows[values.list.selected_row].text).rfind(item.first, 0) == 0);
       CHECK(ui.is_on_menu_screen());
       press(ui, InputSource::TouchUp); // First content row -> Back
       press(ui, InputSource::TouchUp); // Back -> Exit
       press(ui, InputSource::TouchUp); // Exit -> last item
       values = ui.build_values(make_default_ctx());
-      CHECK(std::string(values.rows[values.selected_row].text) == item.last);
+      CHECK(std::string(values.list.rows[values.list.selected_row].text) == item.last);
       press(ui, InputSource::TouchDown); // last -> Exit
-      CHECK(ui.build_values(make_default_ctx()).selected_row == 0);
+      CHECK(ui.build_values(make_default_ctx()).list.selected_row == 0);
       press(ui, InputSource::TouchDown); // Exit -> Back
       CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
       CHECK(ui.current_screen() == (item.group ? Screen::Settings : Screen::MainMenu));
       values = ui.build_values(make_default_ctx());
-      CHECK(std::string(values.rows[values.selected_row].text) ==
+      CHECK(std::string(values.list.rows[values.list.selected_row].text) ==
             (item.group ? item.group : "Settings"));
       press(ui, InputSource::TouchEnter); // Reopening resets to the first content row.
       CHECK(ui.current_screen() == item.screen);
-      CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
+      CHECK(ui.build_values(make_default_ctx()).list.selected_row == 2);
     }
   }
 }
@@ -537,7 +538,7 @@ TEST_CASE("UIManager: TagList wrap-around navigation", "[UIManager][nav][taglist
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(v.selected_row == 0); // Exit row
+    CHECK(v.list.selected_row == 0); // Exit row
   }
 
   SECTION("Up past Exit wraps to last tag") {
@@ -548,7 +549,7 @@ TEST_CASE("UIManager: TagList wrap-around navigation", "[UIManager][nav][taglist
     press(ui, InputSource::TouchDown); // 11→0
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(v.selected_row == 0); // Exit row
+    CHECK(v.list.selected_row == 0); // Exit row
   }
 }
 
@@ -566,7 +567,7 @@ TEST_CASE("UIManager: metric cycling on Home", "[UIManager][metric]") {
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
 
-    CHECK(v.active_metric == Metric::None);
+    CHECK(v.home.active_metric == Metric::None);
   }
 
   SECTION("TouchDown cycles forward through metrics") {
@@ -574,7 +575,7 @@ TEST_CASE("UIManager: metric cycling on Home", "[UIManager][metric]") {
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(v.active_metric == Metric::Pm25);
+    CHECK(v.home.active_metric == Metric::Pm25);
   }
 
   SECTION("TouchUp from None wraps to Altitude") {
@@ -582,14 +583,14 @@ TEST_CASE("UIManager: metric cycling on Home", "[UIManager][metric]") {
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(v.active_metric == Metric::Altitude);
+    CHECK(v.home.active_metric == Metric::Altitude);
   }
 
   SECTION("full forward cycle includes all eight measurements") {
     auto check_metric = [&](Metric expected) {
       auto ctx = make_default_ctx();
       DisplayValues v = ui.build_values(ctx);
-      CHECK(v.active_metric == expected);
+      CHECK(v.home.active_metric == expected);
     };
 
     check_metric(Metric::None);
@@ -658,11 +659,11 @@ TEST_CASE("UIManager: Stationary and Energy Saving hide tracking and keep menu a
   SECTION("navigation skips tracking in both directions and wraps") {
     for (uint8_t expected : {1, 2, 0}) {
       press(ui, InputSource::TouchDown);
-      CHECK(ui.build_values(make_default_ctx()).selected_row == expected);
+      CHECK(ui.build_values(make_default_ctx()).list.selected_row == expected);
     }
     for (uint8_t expected : {2, 1, 0}) {
       press(ui, InputSource::TouchUp);
-      CHECK(ui.build_values(make_default_ctx()).selected_row == expected);
+      CHECK(ui.build_values(make_default_ctx()).list.selected_row == expected);
     }
     press(ui, InputSource::TouchEnter);
     CHECK(ui.current_screen() == Screen::Home);
@@ -672,11 +673,11 @@ TEST_CASE("UIManager: Stationary and Energy Saving hide tracking and keep menu a
     CHECK(open_row(ui, "Operating Mode").action == UIAction::None);
     CHECK(ui.current_screen() == Screen::SettingsChoice);
     double_press(ui);
-    CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
+    CHECK(ui.build_values(make_default_ctx()).list.selected_row == 1);
     CHECK(open_row(ui, "Settings").action == UIAction::None);
     CHECK(ui.current_screen() == Screen::Settings);
     double_press(ui);
-    CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
+    CHECK(ui.build_values(make_default_ctx()).list.selected_row == 2);
   }
 
   SECTION("mode synchronization moves selection off a newly hidden tracking row") {
@@ -685,7 +686,7 @@ TEST_CASE("UIManager: Stationary and Energy Saving hide tracking and keep menu a
     select_row(ui, "Start Tracking");
     settings.operating_mode = mode;
     ui.sync_settings(settings);
-    CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
+    CHECK(ui.build_values(make_default_ctx()).list.selected_row == 1);
     press(ui, InputSource::TouchEnter);
     CHECK(ui.current_screen() == Screen::SettingsChoice);
   }
@@ -707,22 +708,22 @@ TEST_CASE("UIManager: tracking submenu preserves four main rows and pause naviga
   press(ui, InputSource::TouchEnter);
   press(ui, InputSource::TouchDown);
   auto main = ui.build_values(ctx);
-  CHECK(main.row_count == 4);
-  CHECK(std::string(main.rows[1].text) == "Tracking");
+  CHECK(main.list.row_count == 4);
+  CHECK(std::string(main.list.rows[1].text) == "Tracking");
   press(ui, InputSource::TouchEnter);
   REQUIRE(ui.current_screen() == Screen::TrackingMenu);
   CHECK(ui.is_on_menu_screen());
   auto menu = ui.build_values(ctx);
-  CHECK(menu.row_count == 5);
-  CHECK(menu.selected_row == 2);
-  CHECK(std::string(menu.rows[menu.selected_row].text) == "Status");
+  CHECK(menu.list.row_count == 5);
+  CHECK(menu.list.selected_row == 2);
+  CHECK(std::string(menu.list.rows[menu.list.selected_row].text) == "Status");
   check_rows(ui, {"Exit", "Back", "Status", "Pause Tracking", "Stop Tracking"}, ctx);
   CHECK(open_row(ui, "Back", ctx).action == UIAction::None);
   CHECK(ui.current_screen() == Screen::MainMenu);
-  CHECK(ui.build_values(ctx).selected_row == 1);
+  CHECK(ui.build_values(ctx).list.selected_row == 1);
   press(ui, InputSource::TouchEnter); // Reopen with Status selected.
-  CHECK(ui.build_values(ctx).selected_row == 2);
-  CHECK(std::string(menu.rows[3].text) == "Pause Tracking");
+  CHECK(ui.build_values(ctx).list.selected_row == 2);
+  CHECK(std::string(menu.list.rows[3].text) == "Pause Tracking");
   press(ui, InputSource::TouchDown);
   CHECK(press(ui, InputSource::TouchEnter).action == UIAction::PauseTracking);
   CHECK(ui.current_screen() == Screen::Home);
@@ -733,9 +734,9 @@ TEST_CASE("UIManager: tracking submenu preserves four main rows and pause naviga
   press(ui, InputSource::TouchDown);
   press(ui, InputSource::TouchEnter);
   menu = ui.build_values(ctx);
-  CHECK(menu.selected_row == 2);
-  CHECK(std::string(menu.rows[3].text) == "Resume Tracking");
-  CHECK(menu.tracking_state == TrackingState::Paused);
+  CHECK(menu.list.selected_row == 2);
+  CHECK(std::string(menu.list.rows[3].text) == "Resume Tracking");
+  CHECK(menu.header.tracking_state == TrackingState::Paused);
 
   SECTION("Resume returns to Home") {
     press(ui, InputSource::TouchDown);
@@ -745,7 +746,7 @@ TEST_CASE("UIManager: tracking submenu preserves four main rows and pause naviga
   SECTION("Back restores Tracking selection") {
     CHECK(open_row(ui, "Back", ctx).action == UIAction::None);
     CHECK(ui.current_screen() == Screen::MainMenu);
-    CHECK(ui.build_values(ctx).selected_row == 1);
+    CHECK(ui.build_values(ctx).list.selected_row == 1);
   }
   SECTION("remote Stop closes the obsolete submenu") {
     ui.sync_tracking_state(TrackingState::Idle);
@@ -759,20 +760,20 @@ static void go_to_tracking_status(UIManager &ui, const BuildContext &ctx) {
   press(ui, InputSource::TouchEnter);
   CHECK(open_row(ui, "Tracking", ctx).action == UIAction::None);
   REQUIRE(ui.current_screen() == Screen::TrackingMenu);
-  CHECK(ui.build_values(ctx).selected_row == 2);
+  CHECK(ui.build_values(ctx).list.selected_row == 2);
   CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
   REQUIRE(ui.current_screen() == Screen::TrackingStatus);
 }
 
 static void check_tracking_status_layout(const DisplayValues &values) {
-  REQUIRE(values.row_count == 9);
-  CHECK(values.selected_row < 3);
-  CHECK(values.show_separator_after_back);
-  for (uint8_t row = 0; row < values.row_count; ++row) {
-    const std::string text(values.rows[row].text);
+  REQUIRE(values.list.row_count == 9);
+  CHECK(values.list.selected_row < 3);
+  CHECK(values.list.show_separator_after_back);
+  for (uint8_t row = 0; row < values.list.row_count; ++row) {
+    const std::string text(values.list.rows[row].text);
     INFO("row " << static_cast<int>(row) << ": " << text);
     CHECK(text.size() <= 19);
-    CHECK(values.rows[row].disabled == (row >= 3));
+    CHECK(values.list.rows[row].disabled == (row >= 3));
     for (unsigned char ch : text)
       CHECK((ch >= 32 && ch <= 126));
   }
@@ -787,7 +788,7 @@ TEST_CASE("UIManager: Tracking Status navigation and entry reset",
   CHECK(ui.is_on_menu_screen());
   CHECK_FALSE(ui.is_focus_screen());
   CHECK_FALSE(ui.is_hardware_test_screen());
-  CHECK(ui.build_values(ctx).selected_row == 1);
+  CHECK(ui.build_values(ctx).list.selected_row == 1);
   check_rows(ui,
              {"Exit", "Back", "GPS details > (1/2)", "State: Recording", "UTC: --", "Active --",
               "Elapsed --", "Points: --", "Last --"},
@@ -797,16 +798,16 @@ TEST_CASE("UIManager: Tracking Status navigation and entry reset",
     for (int view = 0; view < 2; ++view) {
       for (uint8_t expected : {0, 2, 1, 0}) {
         CHECK(press(ui, InputSource::TouchUp).action == UIAction::None);
-        CHECK(ui.build_values(ctx).selected_row == expected);
+        CHECK(ui.build_values(ctx).list.selected_row == expected);
       }
       for (uint8_t expected : {1, 2, 0, 1, 2}) {
         CHECK(press(ui, InputSource::TouchDown).action == UIAction::None);
-        CHECK(ui.build_values(ctx).selected_row == expected);
+        CHECK(ui.build_values(ctx).list.selected_row == expected);
       }
       CHECK(press(ui, InputSource::TouchEnter).action == UIAction::None);
       auto values = ui.build_values(ctx);
-      CHECK(values.selected_row == 2);
-      CHECK(std::string(values.rows[2].text) ==
+      CHECK(values.list.selected_row == 2);
+      CHECK(std::string(values.list.rows[2].text) ==
             (view == 0 ? "Session > (2/2)" : "GPS details > (1/2)"));
       check_tracking_status_layout(values);
       press(ui, InputSource::TouchUp); // Back for next cycle.
@@ -820,11 +821,11 @@ TEST_CASE("UIManager: Tracking Status navigation and entry reset",
       else
         CHECK(open_row(ui, "Back", ctx).action == UIAction::None);
       REQUIRE(ui.current_screen() == Screen::TrackingMenu);
-      CHECK(ui.build_values(ctx).selected_row == 2);
+      CHECK(ui.build_values(ctx).list.selected_row == 2);
       press(ui, InputSource::TouchEnter);
       const auto values = ui.build_values(ctx);
-      CHECK(values.selected_row == 1);
-      CHECK(std::string(values.rows[2].text) == "GPS details > (1/2)");
+      CHECK(values.list.selected_row == 1);
+      CHECK(std::string(values.list.rows[2].text) == "GPS details > (1/2)");
     }
   }
   SECTION("Exit and long Menu return Home from either view") {
@@ -846,31 +847,31 @@ TEST_CASE("UIManager: Tracking Status navigation and entry reset",
     open_row(ui, "GPS details", ctx);
     ui.reset_to_home();
     CHECK(ui.current_screen() == Screen::Home);
-    CHECK(ui.build_values(ctx).active_metric == Metric::None);
+    CHECK(ui.build_values(ctx).home.active_metric == Metric::None);
     ui.open_tracking_status();
-    CHECK(ui.build_values(ctx).selected_row == 1);
-    CHECK(std::string(ui.build_values(ctx).rows[2].text) == "GPS details > (1/2)");
+    CHECK(ui.build_values(ctx).list.selected_row == 1);
+    CHECK(std::string(ui.build_values(ctx).list.rows[2].text) == "GPS details > (1/2)");
   }
   SECTION("plain screen assignment preserves view and cursor until explicit entry") {
     open_row(ui, "GPS details", ctx);
     ui.set_screen(Screen::Home);
     ui.set_screen(Screen::TrackingStatus);
     const auto preserved = ui.build_values(ctx);
-    CHECK(preserved.selected_row == 2);
-    CHECK(std::string(preserved.rows[2].text) == "Session > (2/2)");
+    CHECK(preserved.list.selected_row == 2);
+    CHECK(std::string(preserved.list.rows[2].text) == "Session > (2/2)");
 
     // Explicit entry resets even if the screen is already Tracking Status.
     ui.open_tracking_status();
     const auto reset = ui.build_values(ctx);
-    CHECK(reset.selected_row == 1);
-    CHECK(std::string(reset.rows[2].text) == "GPS details > (1/2)");
+    CHECK(reset.list.selected_row == 1);
+    CHECK(std::string(reset.list.rows[2].text) == "GPS details > (1/2)");
   }
   SECTION("non-navigation inputs preserve the screen") {
     for (InputSource source : {InputSource::TouchUp, InputSource::TouchDown}) {
       for (InputType type : {InputType::DoublePress, InputType::LongPress}) {
         CHECK(ui.handle_input(source, type).action == UIAction::None);
         CHECK(ui.current_screen() == Screen::TrackingStatus);
-        CHECK(ui.build_values(ctx).selected_row == 1);
+        CHECK(ui.build_values(ctx).list.selected_row == 1);
       }
     }
     ui.show_snackbar("Status message");
@@ -884,7 +885,7 @@ TEST_CASE("UIManager: Tracking Status navigation and entry reset",
     ctx.tracking_state = TrackingState::Idle;
     ui.sync_tracking_state(ctx.tracking_state);
     CHECK(ui.current_screen() == Screen::MainMenu);
-    CHECK(ui.build_values(ctx).selected_row == 1);
+    CHECK(ui.build_values(ctx).list.selected_row == 1);
   }
 }
 
@@ -929,8 +930,8 @@ TEST_CASE("UIManager: Idle sync alone dismisses either tracking screen",
     ui.sync_tracking_state(TrackingState::Idle);
     REQUIRE(ui.current_screen() == Screen::MainMenu);
     const auto values = ui.build_values(make_default_ctx());
-    CHECK(values.selected_row == 1);
-    CHECK(std::string(values.rows[1].text) == "Start Tracking");
+    CHECK(values.list.selected_row == 1);
+    CHECK(std::string(values.list.rows[1].text) == "Start Tracking");
   }
 }
 
@@ -944,7 +945,7 @@ TEST_CASE("UIManager: Tracking Status preserves view and cursor across snapshots
       go_to_tracking_status(ui, ctx);
       if (gps_view)
         open_row(ui, "GPS details", ctx);
-      while (ui.build_values(ctx).selected_row != row)
+      while (ui.build_values(ctx).list.selected_row != row)
         press(ui, InputSource::TouchDown);
       for (TrackingState state : {TrackingState::Paused, TrackingState::Recording}) {
         ctx.tracking_state = state;
@@ -953,21 +954,21 @@ TEST_CASE("UIManager: Tracking Status preserves view and cursor across snapshots
         ui.set_screen(Screen::TrackingStatus); // Reasserting the same screen is not entry.
         const auto values = ui.build_values(ctx);
         CHECK(ui.current_screen() == Screen::TrackingStatus);
-        CHECK(values.selected_row == row);
-        CHECK(std::string(values.rows[2].text) ==
+        CHECK(values.list.selected_row == row);
+        CHECK(std::string(values.list.rows[2].text) ==
               (gps_view ? "Session > (2/2)" : "GPS details > (1/2)"));
         if (!gps_view) {
-          CHECK(std::string(values.rows[3].text) ==
+          CHECK(std::string(values.list.rows[3].text) ==
                 (state == TrackingState::Paused ? "State: Paused" : "State: Recording"));
-          CHECK(std::string(values.rows[5].text) == "Active 00:00:12");
+          CHECK(std::string(values.list.rows[5].text) == "Active 00:00:12");
         }
       }
       ui.sync_tracking_state(TrackingState::Idle);
       ctx.tracking_state = TrackingState::Idle;
       REQUIRE(ui.current_screen() == Screen::MainMenu);
       const auto values = ui.build_values(ctx);
-      CHECK(values.selected_row == 1);
-      CHECK(std::string(values.rows[1].text) == "Start Tracking");
+      CHECK(values.list.selected_row == 1);
+      CHECK(std::string(values.list.rows[1].text) == "Start Tracking");
     }
   }
 }
@@ -999,25 +1000,25 @@ TEST_CASE("UIManager: Tracking Status duration and point extremes",
     ctx.tracking_status.elapsed_s = item.seconds;
     ctx.tracking_status.last_record_age_s = item.seconds;
     auto values = ui.build_values(ctx);
-    CHECK(std::string(values.rows[5].text) == std::string("Active ") + item.text);
-    CHECK(std::string(values.rows[6].text) == std::string("Elapsed ") + item.text);
-    CHECK(std::string(values.rows[7].text) == "Points: 4294967295");
-    CHECK(std::string(values.rows[8].text) == std::string("Last ") + item.text);
+    CHECK(std::string(values.list.rows[5].text) == std::string("Active ") + item.text);
+    CHECK(std::string(values.list.rows[6].text) == std::string("Elapsed ") + item.text);
+    CHECK(std::string(values.list.rows[7].text) == "Points: 4294967295");
+    CHECK(std::string(values.list.rows[8].text) == std::string("Last ") + item.text);
     check_tracking_status_layout(values);
   }
   ctx.tracking_status.point_count = 0;
   ctx.tracking_status.last_record_age_s = 42; // Known zero wins over any cached age.
-  CHECK(std::string(ui.build_values(ctx).rows[7].text) == "Points: 0");
-  CHECK(std::string(ui.build_values(ctx).rows[8].text) == "Last: No points yet");
+  CHECK(std::string(ui.build_values(ctx).list.rows[7].text) == "Points: 0");
+  CHECK(std::string(ui.build_values(ctx).list.rows[8].text) == "Last: No points yet");
   check_tracking_status_layout(ui.build_values(ctx));
   ctx.tracking_status.point_count_known = false;
   ctx.tracking_status.last_record_age_s = TRACKING_TIME_INVALID_S;
-  CHECK(std::string(ui.build_values(ctx).rows[7].text) == "Points: --");
-  CHECK(std::string(ui.build_values(ctx).rows[8].text) == "Last --");
+  CHECK(std::string(ui.build_values(ctx).list.rows[7].text) == "Points: --");
+  CHECK(std::string(ui.build_values(ctx).list.rows[8].text) == "Last --");
   ctx.tracking_status.last_record_age_s = 1;
-  CHECK(std::string(ui.build_values(ctx).rows[8].text) == "Last 00:00:01");
+  CHECK(std::string(ui.build_values(ctx).list.rows[8].text) == "Last 00:00:01");
   ctx.tracking_status.point_count = UINT32_MAX;
-  CHECK(std::string(ui.build_values(ctx).rows[7].text) == "Points: --");
+  CHECK(std::string(ui.build_values(ctx).list.rows[7].text) == "Points: --");
 }
 
 TEST_CASE("UIManager: Tracking Status GPS gates cached data and validates each field",
@@ -1032,7 +1033,7 @@ TEST_CASE("UIManager: Tracking Status GPS gates cached data and validates each f
   ctx.gps_data = &gps;
   ctx.connectivity.gps_fix = false; // Status uses the actual data, not the status-bar flag.
   go_to_tracking_status(ui, ctx);
-  CHECK(std::string(ui.build_values(ctx).rows[4].text) == "UTC: 23:59:59");
+  CHECK(std::string(ui.build_values(ctx).list.rows[4].text) == "UTC: 23:59:59");
   open_row(ui, "GPS details", ctx);
   check_rows(ui,
              {"Exit", "Back", "Session > (2/2)", "GPS: On", "Fix: 3D", "Sats: 0", "HDOP: 1.2",
@@ -1046,15 +1047,15 @@ TEST_CASE("UIManager: Tracking Status GPS gates cached data and validates each f
       ctx.connectivity.gps_fix = true; // Cannot bypass the recognized-fix predicate.
       const bool recognized = fix == GpsFixType::Fix2D || fix == GpsFixType::Fix3D;
       const auto values = ui.build_values(ctx);
-      CHECK(std::string(values.rows[7].text) == (recognized ? "Lat: -90.00000" : "Lat: --"));
-      CHECK(std::string(values.rows[8].text) == (recognized ? "Lon: -180.00000" : "Lon: --"));
+      CHECK(std::string(values.list.rows[7].text) == (recognized ? "Lat: -90.00000" : "Lat: --"));
+      CHECK(std::string(values.list.rows[8].text) == (recognized ? "Lon: -180.00000" : "Lon: --"));
       const char *fix_text = fix == GpsFixType::NoFix   ? "Fix: NoFix"
                              : fix == GpsFixType::Fix2D ? "Fix: 2D"
                              : fix == GpsFixType::Fix3D ? "Fix: 3D"
                                                         : "Fix: --";
-      CHECK(std::string(values.rows[4].text) == fix_text);
+      CHECK(std::string(values.list.rows[4].text) == fix_text);
       open_row(ui, "Session", ctx);
-      CHECK(std::string(ui.build_values(ctx).rows[4].text) ==
+      CHECK(std::string(ui.build_values(ctx).list.rows[4].text) ==
             (recognized ? "UTC: 23:59:59" : "UTC: --"));
       open_row(ui, "GPS details", ctx);
     }
@@ -1064,14 +1065,14 @@ TEST_CASE("UIManager: Tracking Status GPS gates cached data and validates each f
       ctx.connectivity.gps_enabled = enabled;
       ctx.gps_data = enabled ? nullptr : &gps;
       const auto values = ui.build_values(ctx);
-      CHECK(std::string(values.rows[3].text) == (enabled ? "GPS: On" : "GPS: Off"));
-      CHECK(std::string(values.rows[4].text) == "Fix: --");
-      CHECK(std::string(values.rows[5].text) == "Sats: --");
-      CHECK(std::string(values.rows[6].text) == "HDOP: --");
-      CHECK(std::string(values.rows[7].text) == "Lat: --");
-      CHECK(std::string(values.rows[8].text) == "Lon: --");
+      CHECK(std::string(values.list.rows[3].text) == (enabled ? "GPS: On" : "GPS: Off"));
+      CHECK(std::string(values.list.rows[4].text) == "Fix: --");
+      CHECK(std::string(values.list.rows[5].text) == "Sats: --");
+      CHECK(std::string(values.list.rows[6].text) == "HDOP: --");
+      CHECK(std::string(values.list.rows[7].text) == "Lat: --");
+      CHECK(std::string(values.list.rows[8].text) == "Lon: --");
       open_row(ui, "Session", ctx);
-      CHECK(std::string(ui.build_values(ctx).rows[4].text) == "UTC: --");
+      CHECK(std::string(ui.build_values(ctx).list.rows[4].text) == "UTC: --");
       open_row(ui, "GPS details", ctx);
     }
   }
@@ -1081,12 +1082,12 @@ TEST_CASE("UIManager: Tracking Status GPS gates cached data and validates each f
           std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}) {
       gps.position = {invalid, 180.0};
       auto values = ui.build_values(ctx);
-      CHECK(std::string(values.rows[7].text) == "Lat: --");
-      CHECK(std::string(values.rows[8].text) == "Lon: 180.00000");
+      CHECK(std::string(values.list.rows[7].text) == "Lat: --");
+      CHECK(std::string(values.list.rows[8].text) == "Lon: 180.00000");
       gps.position = {90.0, invalid * 2};
       values = ui.build_values(ctx);
-      CHECK(std::string(values.rows[7].text) == "Lat: 90.00000");
-      CHECK(std::string(values.rows[8].text) == "Lon: --");
+      CHECK(std::string(values.list.rows[7].text) == "Lat: 90.00000");
+      CHECK(std::string(values.list.rows[8].text) == "Lon: --");
       check_tracking_status_layout(values);
     }
   }
@@ -1095,7 +1096,7 @@ TEST_CASE("UIManager: Tracking Status GPS gates cached data and validates each f
     for (int count : {-1, std::numeric_limits<int>::min(), 0, std::numeric_limits<int>::max()}) {
       gps.fix.satellite_count = count;
       const auto values = ui.build_values(ctx);
-      CHECK(std::string(values.rows[5].text) ==
+      CHECK(std::string(values.list.rows[5].text) ==
             (count < 0 ? "Sats: --" : "Sats: " + std::to_string(count)));
       check_tracking_status_layout(values);
     }
@@ -1103,7 +1104,7 @@ TEST_CASE("UIManager: Tracking Status GPS gates cached data and validates each f
          {-1.0f, 0.0f, std::numeric_limits<float>::quiet_NaN(),
           std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity()}) {
       gps.fix.hdop = hdop;
-      CHECK(std::string(ui.build_values(ctx).rows[6].text) == "HDOP: --");
+      CHECK(std::string(ui.build_values(ctx).list.rows[6].text) == "HDOP: --");
     }
     struct HdopCase {
       float value;
@@ -1115,22 +1116,22 @@ TEST_CASE("UIManager: Tracking Status GPS gates cached data and validates each f
                               {std::numeric_limits<float>::max(), "HDOP: 3.4e+38"}};
     for (const auto &item : cases) {
       gps.fix.hdop = item.value;
-      CHECK(std::string(ui.build_values(ctx).rows[6].text) == item.text);
+      CHECK(std::string(ui.build_values(ctx).list.rows[6].text) == item.text);
       check_tracking_status_layout(ui.build_values(ctx));
     }
   }
   SECTION("UTC validates the flag and every time field without date or clock fallback") {
     open_row(ui, "Session", ctx);
     gps.timestamp.valid = false;
-    CHECK(std::string(ui.build_values(ctx).rows[4].text) == "UTC: --");
+    CHECK(std::string(ui.build_values(ctx).list.rows[4].text) == "UTC: --");
     gps.timestamp = {0, 0, 0, 0, 0, 0, true};
-    CHECK(std::string(ui.build_values(ctx).rows[4].text) == "UTC: 00:00:00");
+    CHECK(std::string(ui.build_values(ctx).list.rows[4].text) == "UTC: 00:00:00");
     for (int GpsTimestamp::*field :
          {&GpsTimestamp::hour, &GpsTimestamp::minute, &GpsTimestamp::second}) {
       for (int invalid : {-1, field == &GpsTimestamp::hour ? 24 : 60,
                           std::numeric_limits<int>::max(), std::numeric_limits<int>::min()}) {
         gps.timestamp.*field = invalid;
-        CHECK(std::string(ui.build_values(ctx).rows[4].text) == "UTC: --");
+        CHECK(std::string(ui.build_values(ctx).list.rows[4].text) == "UTC: --");
         check_tracking_status_layout(ui.build_values(ctx));
       }
       gps.timestamp.*field = 0;
@@ -1163,8 +1164,8 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[v.selected_row].text) == "Temperature Unit: F");
-    CHECK(v.use_fahrenheit);
+    CHECK(std::string(v.list.rows[v.list.selected_row].text) == "Temperature Unit: F");
+    CHECK(v.preferences.use_fahrenheit);
   }
 
   SECTION("changing altitude unit returns SettingsChanged") {
@@ -1173,10 +1174,10 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    REQUIRE(v.row_count == 4);
-    CHECK(v.selected_row == 2);
-    CHECK(std::string(v.rows[2].text) == "m");
-    CHECK(std::string(v.rows[3].text) == "ft");
+    REQUIRE(v.list.row_count == 4);
+    CHECK(v.list.selected_row == 2);
+    CHECK(std::string(v.list.rows[2].text) == "m");
+    CHECK(std::string(v.list.rows[3].text) == "ft");
 
     press(ui, InputSource::TouchDown); // m→ft
     const auto result = press(ui, InputSource::TouchEnter);
@@ -1189,8 +1190,8 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
     CHECK(settings.use_feet);
 
     v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[v.selected_row].text) == "Altitude Unit: ft");
-    CHECK(v.use_feet);
+    CHECK(std::string(v.list.rows[v.list.selected_row].text) == "Altitude Unit: ft");
+    CHECK(v.preferences.use_feet);
   }
 
   SECTION("changing mode returns ChangeMode with new mode") {
@@ -1218,8 +1219,8 @@ TEST_CASE("UIManager: cancelling an unconfirmed choice preserves its value and s
 
     const auto selected_text = [&] {
       const auto values = ui.build_values(make_default_ctx());
-      REQUIRE(values.selected_row < values.row_count);
-      return std::string(values.rows[values.selected_row].text);
+      REQUIRE(values.list.selected_row < values.list.row_count);
+      return std::string(values.list.rows[values.list.selected_row].text);
     };
     REQUIRE(selected_text() == (enabled ? "On" : "Off"));
     const auto direction = enabled ? InputSource::TouchUp : InputSource::TouchDown;
@@ -1257,21 +1258,21 @@ TEST_CASE("UIManager: custom measurement interval presentation",
   go_to_measure_interval(ui);
   auto ctx = make_default_ctx();
   DisplayValues values = ui.build_values(ctx);
-  CHECK(std::string(values.rows[values.selected_row].text) == "Measure Int.: 17s");
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Measure Int.: 17s");
 
   press(ui, InputSource::TouchEnter);
   values = ui.build_values(ctx);
 
-  REQUIRE(values.row_count == 10);
-  CHECK(values.selected_row == 2);
-  CHECK(std::string(values.rows[2].text) == "Custom (17s)");
-  CHECK(std::string(values.rows[3].text) == "3s");
-  CHECK(std::string(values.rows[4].text) == "10s");
-  CHECK(std::string(values.rows[5].text) == "30s");
-  CHECK(std::string(values.rows[6].text) == "60s");
-  CHECK(std::string(values.rows[7].text) == "5m");
-  CHECK(std::string(values.rows[8].text) == "15m");
-  CHECK(std::string(values.rows[9].text) == "1h");
+  REQUIRE(values.list.row_count == 10);
+  CHECK(values.list.selected_row == 2);
+  CHECK(std::string(values.list.rows[2].text) == "Custom (17s)");
+  CHECK(std::string(values.list.rows[3].text) == "3s");
+  CHECK(std::string(values.list.rows[4].text) == "10s");
+  CHECK(std::string(values.list.rows[5].text) == "30s");
+  CHECK(std::string(values.list.rows[6].text) == "60s");
+  CHECK(std::string(values.list.rows[7].text) == "5m");
+  CHECK(std::string(values.list.rows[8].text) == "15m");
+  CHECK(std::string(values.list.rows[9].text) == "1h");
 
   const auto result = press(ui, InputSource::TouchEnter);
   REQUIRE(result.action == UIAction::SettingsChanged);
@@ -1325,13 +1326,13 @@ TEST_CASE("UIManager: fixed choice replaces custom measurement interval",
 
   auto ctx = make_default_ctx();
   DisplayValues values = ui.build_values(ctx);
-  CHECK(std::string(values.rows[values.selected_row].text) == "Measure Int.: 30s");
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Measure Int.: 30s");
 
   press(ui, InputSource::TouchEnter);
   values = ui.build_values(ctx);
-  REQUIRE(values.row_count == 9);
-  CHECK(values.selected_row == 4);
-  CHECK(std::string(values.rows[values.selected_row].text) == "30s");
+  REQUIRE(values.list.row_count == 9);
+  CHECK(values.list.selected_row == 4);
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "30s");
 }
 
 TEST_CASE("UIManager: fixed measurement intervals keep existing choices",
@@ -1355,9 +1356,9 @@ TEST_CASE("UIManager: fixed measurement intervals keep existing choices",
     open_measure_interval_choice(ui);
 
     const DisplayValues values = ui.build_values(make_default_ctx());
-    REQUIRE(values.row_count == 9);
-    CHECK(values.selected_row == test_case.selected_row);
-    CHECK(std::string(values.rows[values.selected_row].text) == test_case.label);
+    REQUIRE(values.list.row_count == 9);
+    CHECK(values.list.selected_row == test_case.selected_row);
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) == test_case.label);
 
     GoSettings output{};
     ui.apply_to_settings(output);
@@ -1376,16 +1377,16 @@ TEST_CASE("UIManager: open interval choice resynchronizes fixed and custom value
   settings.measure_interval_seconds = 30;
   ui.sync_settings(settings);
   DisplayValues values = ui.build_values(make_default_ctx());
-  REQUIRE(values.row_count == 9);
-  CHECK(values.selected_row == 4);
-  CHECK(std::string(values.rows[values.selected_row].text) == "30s");
+  REQUIRE(values.list.row_count == 9);
+  CHECK(values.list.selected_row == 4);
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "30s");
 
   settings.measure_interval_seconds = 19;
   ui.sync_settings(settings);
   values = ui.build_values(make_default_ctx());
-  REQUIRE(values.row_count == 10);
-  CHECK(values.selected_row == 2);
-  CHECK(std::string(values.rows[values.selected_row].text) == "Custom (19s)");
+  REQUIRE(values.list.row_count == 10);
+  CHECK(values.list.selected_row == 2);
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Custom (19s)");
 }
 
 // ============================================================================
@@ -1402,7 +1403,7 @@ TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
     CHECK(ui.current_screen() == Screen::SettingsChoice);
 
     check_rows(ui, {"Exit", "Back", "Off", "Dim", "Mid", "Bright"});
-    CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
+    CHECK(ui.build_values(make_default_ctx()).list.selected_row == 2);
 
     // Default brightness is Off, cursor at option 0 → logical 2.
     // Navigate down to Bright (option 3, logical 5).
@@ -1419,9 +1420,9 @@ TEST_CASE("UIManager: LED settings choice", "[UIManager][settings][led]") {
 
     REQUIRE(ui.current_screen() == Screen::DisplayTouch);
     const auto values = ui.build_values(make_default_ctx());
-    CHECK(std::string(values.rows[values.selected_row].text) == "LED Brightness");
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) == "LED Brightness");
     open_row(ui, "LED Brightness");
-    CHECK(ui.build_values(make_default_ctx()).selected_row == 5);
+    CHECK(ui.build_values(make_default_ctx()).list.selected_row == 5);
   }
 
   SECTION("Touch LED opens SettingsChoice and applies Dim") {
@@ -1717,11 +1718,11 @@ TEST_CASE("UIManager: every Auto Lock choice maps to its duration",
         go_to_group(ui, "Display & Touch");
         select_row(ui, "Auto Lock:");
         auto values = ui.build_values(make_default_ctx());
-        CHECK(std::string(values.rows[values.selected_row].text) == initial.summary);
+        CHECK(std::string(values.list.rows[values.list.selected_row].text) == initial.summary);
         press(ui, InputSource::TouchEnter);
         check_rows(ui, {"Exit", "Back", "Off", "10 Seconds", "30 Seconds", "60 Seconds"});
         values = ui.build_values(make_default_ctx());
-        CHECK(std::string(values.rows[values.selected_row].text) == initial.label);
+        CHECK(std::string(values.list.rows[values.list.selected_row].text) == initial.label);
 
         const auto result = open_row(ui, selected.label);
         CHECK(result.action == UIAction::SettingsChanged);
@@ -1729,12 +1730,12 @@ TEST_CASE("UIManager: every Auto Lock choice maps to its duration",
         ui.apply_to_settings(output);
         CHECK(output.auto_lock_seconds == selected.seconds);
         values = ui.build_values(make_default_ctx());
-        CHECK(std::string(values.rows[values.selected_row].text) == selected.summary);
+        CHECK(std::string(values.list.rows[values.list.selected_row].text) == selected.summary);
 
         press(ui, InputSource::TouchEnter);
         REQUIRE(ui.current_screen() == Screen::SettingsChoice);
         values = ui.build_values(make_default_ctx());
-        CHECK(std::string(values.rows[values.selected_row].text) == selected.label);
+        CHECK(std::string(values.list.rows[values.list.selected_row].text) == selected.label);
       }
     }
   }
@@ -1753,9 +1754,9 @@ TEST_CASE("UIManager: build_values uses synchronized display preferences",
   for (int iteration = 0; iteration < 2; ++iteration) {
     ui.sync_settings(settings);
     const auto values = ui.build_values(ctx);
-    CHECK(values.use_fahrenheit == settings.use_fahrenheit);
-    CHECK(values.use_feet == settings.use_feet);
-    CHECK(values.pm_use_usaqi == settings.pm_use_usaqi);
+    CHECK(values.preferences.use_fahrenheit == settings.use_fahrenheit);
+    CHECK(values.preferences.use_feet == settings.use_feet);
+    CHECK(values.preferences.pm_use_usaqi == settings.pm_use_usaqi);
     settings.use_fahrenheit = !settings.use_fahrenheit;
     settings.use_feet = !settings.use_feet;
     settings.pm_use_usaqi = !settings.pm_use_usaqi;
@@ -1768,33 +1769,33 @@ TEST_CASE("UIManager: minimal build context renders unavailable inputs safely",
   Measures sensors{};
   const BuildContext ctx{.sensor_data = sensors};
   const auto home = ui.build_values(ctx);
-  CHECK(home.co2_ppm == MeasuresInvalid::CO2);
-  CHECK(home.battery_pct == 0xFF);
-  CHECK_FALSE(home.is_battery_charging);
-  CHECK_FALSE(home.is_plugged_in);
-  CHECK(home.locked);
-  CHECK_FALSE(home.display_off);
-  CHECK_FALSE(home.ble_enabled);
-  CHECK_FALSE(home.ble_connected);
-  CHECK_FALSE(home.wifi_enabled);
-  CHECK_FALSE(home.wifi_connected);
-  CHECK_FALSE(home.gps_enabled);
-  CHECK_FALSE(home.gps_fix);
-  CHECK(home.tracking_state == TrackingState::Idle);
-  CHECK(home.chart_count == 0);
+  CHECK(home.home.readings.co2_ppm == MeasuresInvalid::CO2);
+  CHECK(home.header.battery.pct == 0xFF);
+  CHECK_FALSE(home.header.battery.is_charging);
+  CHECK_FALSE(home.header.battery.is_plugged_in);
+  CHECK(home.header.locked);
+  CHECK_FALSE(home.home.display_off);
+  CHECK_FALSE(home.header.connectivity.ble_enabled);
+  CHECK_FALSE(home.header.connectivity.ble_connected);
+  CHECK_FALSE(home.header.connectivity.wifi_enabled);
+  CHECK_FALSE(home.header.connectivity.wifi_connected);
+  CHECK_FALSE(home.header.connectivity.gps_enabled);
+  CHECK_FALSE(home.header.connectivity.gps_fix);
+  CHECK(home.header.tracking_state == TrackingState::Idle);
+  CHECK(home.home.chart.count == 0);
 
   ui.set_screen(Screen::GpsTest);
   const auto gps = ui.build_values(ctx);
-  CHECK(std::string(gps.rows[1].text) == "TTFF: 00:00 ...");
-  CHECK(std::string(gps.rows[2].text) == "Fix: NoFix");
-  CHECK(std::string(gps.rows[5].text) == "Lat: --");
-  CHECK(std::string(gps.rows[7].text) == "UTC: No time");
+  CHECK(std::string(gps.list.rows[1].text) == "TTFF: 00:00 ...");
+  CHECK(std::string(gps.list.rows[2].text) == "Fix: NoFix");
+  CHECK(std::string(gps.list.rows[5].text) == "Lat: --");
+  CHECK(std::string(gps.list.rows[7].text) == "UTC: No time");
 
   ui.set_screen(Screen::AccelTest);
   const auto accel = ui.build_values(ctx);
-  CHECK(std::string(accel.rows[1].text) == "WHO_AM_I: 0x00 (BAD)");
-  CHECK(std::string(accel.rows[2].text) == "X: --");
-  CHECK(std::string(accel.rows[6].text) == "Result: FAIL");
+  CHECK(std::string(accel.list.rows[1].text) == "WHO_AM_I: 0x00 (BAD)");
+  CHECK(std::string(accel.list.rows[2].text) == "X: --");
+  CHECK(std::string(accel.list.rows[6].text) == "Result: FAIL");
 }
 
 // ============================================================================
@@ -1819,8 +1820,8 @@ TEST_CASE("UIManager: chart extraction from MeasuresAGo cache", "[UIManager][cha
 
     DisplayValues v = ui.build_values(ctx);
 
-    CHECK(v.chart_samples == nullptr);
-    CHECK(v.chart_count == 0);
+    CHECK(v.home.chart.samples == nullptr);
+    CHECK(v.home.chart.count == 0);
   }
 
   SECTION("PM2.5 metric selected — chart populated") {
@@ -1838,10 +1839,10 @@ TEST_CASE("UIManager: chart extraction from MeasuresAGo cache", "[UIManager][cha
 
     DisplayValues v = ui.build_values(ctx);
 
-    CHECK(v.chart_count == 3);
-    REQUIRE(v.chart_samples != nullptr);
-    CHECK(v.chart_min == Catch::Approx(10.0f));
-    CHECK(v.chart_max == Catch::Approx(30.0f));
+    CHECK(v.home.chart.count == 3);
+    REQUIRE(v.home.chart.samples != nullptr);
+    CHECK(v.home.chart.min == Catch::Approx(10.0f));
+    CHECK(v.home.chart.max == Catch::Approx(30.0f));
   }
 
   SECTION("invalid cache entries are skipped") {
@@ -1858,9 +1859,9 @@ TEST_CASE("UIManager: chart extraction from MeasuresAGo cache", "[UIManager][cha
 
     DisplayValues v = ui.build_values(ctx);
 
-    CHECK(v.chart_count == 2); // only 2 valid
-    CHECK(v.chart_min == Catch::Approx(10.0f));
-    CHECK(v.chart_max == Catch::Approx(20.0f));
+    CHECK(v.home.chart.count == 2); // only 2 valid
+    CHECK(v.home.chart.min == Catch::Approx(10.0f));
+    CHECK(v.home.chart.max == Catch::Approx(20.0f));
   }
 }
 
@@ -1893,8 +1894,8 @@ TEST_CASE("UIManager: clear data confirm dialog", "[UIManager][confirm]") {
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[2].text) == "Clear Data?");
-    CHECK(v.rows[2].disabled == true);
+    CHECK(std::string(v.list.rows[2].text) == "Clear Data?");
+    CHECK(v.list.rows[2].disabled == true);
   }
 
   SECTION("cancel returns to Clear Data without emitting an action") {
@@ -1904,7 +1905,7 @@ TEST_CASE("UIManager: clear data confirm dialog", "[UIManager][confirm]") {
       CHECK(open_row(ui, cancel).action == UIAction::None);
       CHECK(ui.current_screen() == Screen::Settings);
       const auto values = ui.build_values(make_default_ctx());
-      CHECK(std::string(values.rows[values.selected_row].text) == "Clear Data");
+      CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Clear Data");
     }
   }
 }
@@ -1947,7 +1948,7 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
 
     CHECK(ui.current_screen() == Screen::Operations);
     const auto values = ui.build_values(make_default_ctx());
-    CHECK(std::string(values.rows[values.selected_row].text) == "CO2 Calibration");
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) == "CO2 Calibration");
   }
 
   SECTION("Back in confirm returns to Operations on CO2 row") {
@@ -1959,7 +1960,7 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
 
     CHECK(ui.current_screen() == Screen::Operations);
     const auto values = ui.build_values(make_default_ctx());
-    CHECK(std::string(values.rows[values.selected_row].text) == "CO2 Calibration");
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) == "CO2 Calibration");
   }
 
   SECTION("confirm shows Calibrate CO2? question") {
@@ -1967,8 +1968,8 @@ TEST_CASE("UIManager: CO2 calibration confirm dialog", "[UIManager][confirm][co2
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[2].text) == "Calibrate CO2?");
-    CHECK(v.rows[2].disabled == true);
+    CHECK(std::string(v.list.rows[2].text) == "Calibrate CO2?");
+    CHECK(v.list.rows[2].disabled == true);
   }
 }
 
@@ -1987,14 +1988,14 @@ TEST_CASE("UIManager: Hardware Test submenu navigation", "[UIManager][hwtest]") 
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[0].text) == "Exit");
-    CHECK(std::string(v.rows[1].text) == "Back");
-    CHECK(std::string(v.rows[2].text) == "Peripheral Test");
-    CHECK(std::string(v.rows[3].text) == "GPS Test");
-    CHECK(std::string(v.rows[4].text) == "Accelerometer Test");
-    CHECK(std::string(v.rows[5].text) == "Battery Calibration");
-    CHECK(std::string(v.rows[6].text) == "Play Melody");
-    CHECK(v.row_count == 7);
+    CHECK(std::string(v.list.rows[0].text) == "Exit");
+    CHECK(std::string(v.list.rows[1].text) == "Back");
+    CHECK(std::string(v.list.rows[2].text) == "Peripheral Test");
+    CHECK(std::string(v.list.rows[3].text) == "GPS Test");
+    CHECK(std::string(v.list.rows[4].text) == "Accelerometer Test");
+    CHECK(std::string(v.list.rows[5].text) == "Battery Calibration");
+    CHECK(std::string(v.list.rows[6].text) == "Play Melody");
+    CHECK(v.list.row_count == 7);
   }
 
   SECTION("Back returns to Settings on the Hardware Test row") {
@@ -2004,7 +2005,7 @@ TEST_CASE("UIManager: Hardware Test submenu navigation", "[UIManager][hwtest]") 
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[v.selected_row].text) == "Hardware Test");
+    CHECK(std::string(v.list.rows[v.list.selected_row].text) == "Hardware Test");
   }
 
   SECTION("double-press backs out of the submenu to Settings") {
@@ -2028,10 +2029,10 @@ TEST_CASE("UIManager: V2 hides Battery Calibration without breaking Hardware Tes
     select_row(ui, "Play Melody");
     press(ui, InputSource::TouchDown);
     auto values = ui.build_values(make_default_ctx());
-    CHECK(std::string(values.rows[values.selected_row].text) == "Exit");
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Exit");
     press(ui, InputSource::TouchUp);
     values = ui.build_values(make_default_ctx());
-    CHECK(std::string(values.rows[values.selected_row].text) == "Play Melody");
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Play Melody");
   }
 
   SECTION("the former calibration row opens Play Melody and returns to its selection") {
@@ -2043,7 +2044,7 @@ TEST_CASE("UIManager: V2 hides Battery Calibration without breaking Hardware Tes
     CHECK(open_row(ui, "Chime").action == UIAction::PlayMelody);
     REQUIRE(ui.current_screen() == Screen::HardwareTest);
     const auto values = ui.build_values(make_default_ctx());
-    CHECK(std::string(values.rows[values.selected_row].text) == "Play Melody");
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Play Melody");
   }
 }
 
@@ -2070,8 +2071,8 @@ TEST_CASE("UIManager: hardware menu items follow independent board capabilities"
       const auto values = ui.build_values(make_default_ctx());
       bool touch_led_found = false;
       bool battery_calibration_found = false;
-      for (uint8_t row = 0; row < values.row_count; ++row) {
-        const std::string text = values.rows[row].text;
+      for (uint8_t row = 0; row < values.list.row_count; ++row) {
+        const std::string text = values.list.rows[row].text;
         touch_led_found |= text.rfind("Touch LED:", 0) == 0;
         battery_calibration_found |= text == "Battery Calibration";
       }
@@ -2098,8 +2099,8 @@ TEST_CASE("UIManager: FG Learning arm confirm dialog", "[UIManager][hwtest][fg]"
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[2].text) == "Start Battery Calibration?");
-    CHECK(v.rows[2].disabled == true);
+    CHECK(std::string(v.list.rows[2].text) == "Start Battery Calibration?");
+    CHECK(v.list.rows[2].disabled == true);
   }
 
   SECTION("Yes emits ArmFgLearning") {
@@ -2121,7 +2122,7 @@ TEST_CASE("UIManager: FG Learning arm confirm dialog", "[UIManager][hwtest][fg]"
     CHECK(ui.current_screen() == Screen::HardwareTest);
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[v.selected_row].text) == "Battery Calibration");
+    CHECK(std::string(v.list.rows[v.list.selected_row].text) == "Battery Calibration");
   }
 
   SECTION("Back returns to the Hardware Test submenu") {
@@ -2144,7 +2145,8 @@ TEST_CASE("UIManager: Peripheral Test flow", "[UIManager][hwtest][peripheral]") 
     auto result = open_peripheral();
     CHECK(result.action == UIAction::RunPeripheralTest);
     CHECK(ui.current_screen() == Screen::PeripheralTest);
-    CHECK(std::string(ui.build_values(make_default_ctx()).rows[0].text) == "Back LED cycling?");
+    CHECK(std::string(ui.build_values(make_default_ctx()).list.rows[0].text) ==
+          "Back LED cycling?");
   }
 
   SECTION("actuator step emits Pass then Fail") {
@@ -2181,11 +2183,11 @@ TEST_CASE("UIManager: Peripheral Test flow", "[UIManager][hwtest][peripheral]") 
 
     auto ctx = make_default_ctx();
     DisplayValues dv = ui.build_values(ctx);
-    REQUIRE(dv.row_count == 9);
-    CHECK(std::string(dv.rows[1].text) == "Back LED: FAIL");
-    CHECK(std::string(dv.rows[0].text) == "PASS - tap to exit");
-    CHECK(std::string(dv.rows[5].text) == "CO2: PASS");
-    CHECK(std::string(dv.rows[6].text) == "PM: FAIL");
+    REQUIRE(dv.list.row_count == 9);
+    CHECK(std::string(dv.list.rows[1].text) == "Back LED: FAIL");
+    CHECK(std::string(dv.list.rows[0].text) == "PASS - tap to exit");
+    CHECK(std::string(dv.list.rows[5].text) == "CO2: PASS");
+    CHECK(std::string(dv.list.rows[6].text) == "PM: FAIL");
 
     auto r = press(ui, InputSource::TouchEnter);
     CHECK(r.action == UIAction::PeripheralTestExit);
@@ -2232,12 +2234,12 @@ TEST_CASE("UIManager: GPS Test screen", "[UIManager][hwtest][gps]") {
     ctx.gps_test.ttff_fixed = false;
 
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[0].text) == "GPS Test - tap to exit");
-    CHECK(std::string(v.rows[1].text) == "TTFF: 01:23 ...");
-    CHECK(std::string(v.rows[2].text) == "Fix: 3D");
-    CHECK(std::string(v.rows[3].text) == "Sats: 9");
-    CHECK(std::string(v.rows[4].text) == "HDOP: 1.2");
-    CHECK(std::string(v.rows[7].text) == "UTC: 08:05:03");
+    CHECK(std::string(v.list.rows[0].text) == "GPS Test - tap to exit");
+    CHECK(std::string(v.list.rows[1].text) == "TTFF: 01:23 ...");
+    CHECK(std::string(v.list.rows[2].text) == "Fix: 3D");
+    CHECK(std::string(v.list.rows[3].text) == "Sats: 9");
+    CHECK(std::string(v.list.rows[4].text) == "HDOP: 1.2");
+    CHECK(std::string(v.list.rows[7].text) == "UTC: 08:05:03");
   }
 
   SECTION("frozen TTFF drops the trailing marker; no-fix fields show dashes") {
@@ -2250,11 +2252,11 @@ TEST_CASE("UIManager: GPS Test screen", "[UIManager][hwtest][gps]") {
     ctx.gps_test.ttff_fixed = true;
 
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[1].text) == "TTFF: 00:05");
-    CHECK(std::string(v.rows[2].text) == "Fix: NoFix");
-    CHECK(std::string(v.rows[3].text) == "Sats: --");
-    CHECK(std::string(v.rows[5].text) == "Lat: --");
-    CHECK(std::string(v.rows[7].text) == "UTC: No time");
+    CHECK(std::string(v.list.rows[1].text) == "TTFF: 00:05");
+    CHECK(std::string(v.list.rows[2].text) == "Fix: NoFix");
+    CHECK(std::string(v.list.rows[3].text) == "Sats: --");
+    CHECK(std::string(v.list.rows[5].text) == "Lat: --");
+    CHECK(std::string(v.list.rows[7].text) == "UTC: No time");
   }
 
   SECTION("any tap exits to the Hardware Test submenu on the GPS row") {
@@ -2264,7 +2266,7 @@ TEST_CASE("UIManager: GPS Test screen", "[UIManager][hwtest][gps]") {
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[v.selected_row].text) == "GPS Test");
+    CHECK(std::string(v.list.rows[v.list.selected_row].text) == "GPS Test");
   }
 }
 
@@ -2295,13 +2297,13 @@ TEST_CASE("UIManager: Accel Test screen", "[UIManager][hwtest][accel]") {
     ctx.accel_test.pass = true;
 
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[0].text) == "Accel Test - tap to exit");
-    CHECK(std::string(v.rows[1].text) == "WHO_AM_I: 0x33 (OK)");
-    CHECK(std::string(v.rows[2].text) == "X: 10 mg");
-    CHECK(std::string(v.rows[3].text) == "Y: -20 mg");
-    CHECK(std::string(v.rows[4].text) == "Z: 1000 mg");
-    CHECK(std::string(v.rows[5].text) == "|a|: 1000 mg");
-    CHECK(std::string(v.rows[6].text) == "Result: PASS");
+    CHECK(std::string(v.list.rows[0].text) == "Accel Test - tap to exit");
+    CHECK(std::string(v.list.rows[1].text) == "WHO_AM_I: 0x33 (OK)");
+    CHECK(std::string(v.list.rows[2].text) == "X: 10 mg");
+    CHECK(std::string(v.list.rows[3].text) == "Y: -20 mg");
+    CHECK(std::string(v.list.rows[4].text) == "Z: 1000 mg");
+    CHECK(std::string(v.list.rows[5].text) == "|a|: 1000 mg");
+    CHECK(std::string(v.list.rows[6].text) == "Result: PASS");
   }
 
   SECTION("bad identity / unreadable sensor shows BAD, dashes, and FAIL") {
@@ -2313,10 +2315,10 @@ TEST_CASE("UIManager: Accel Test screen", "[UIManager][hwtest][accel]") {
     ctx.accel_test.pass = false;
 
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[1].text) == "WHO_AM_I: 0x00 (BAD)");
-    CHECK(std::string(v.rows[2].text) == "X: --");
-    CHECK(std::string(v.rows[5].text) == "|a|: --");
-    CHECK(std::string(v.rows[6].text) == "Result: FAIL");
+    CHECK(std::string(v.list.rows[1].text) == "WHO_AM_I: 0x00 (BAD)");
+    CHECK(std::string(v.list.rows[2].text) == "X: --");
+    CHECK(std::string(v.list.rows[5].text) == "|a|: --");
+    CHECK(std::string(v.list.rows[6].text) == "Result: FAIL");
   }
 
   SECTION("any tap exits to the Hardware Test submenu on the Accel row") {
@@ -2326,7 +2328,7 @@ TEST_CASE("UIManager: Accel Test screen", "[UIManager][hwtest][accel]") {
 
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(std::string(v.rows[v.selected_row].text) == "Accelerometer Test");
+    CHECK(std::string(v.list.rows[v.list.selected_row].text) == "Accelerometer Test");
   }
 }
 
@@ -2375,7 +2377,7 @@ TEST_CASE("UIManager: reset_to_home", "[UIManager][reset]") {
 
   auto ctx = make_default_ctx();
   DisplayValues v = ui.build_values(ctx);
-  CHECK(v.active_metric == Metric::None);
+  CHECK(v.home.active_metric == Metric::None);
 }
 
 // ============================================================================
@@ -2439,7 +2441,7 @@ TEST_CASE("UIManager: TouchEnter gestures (back / exit to home)", "[UIManager][i
     CHECK(ui.current_screen() == Screen::MainMenu);
     auto ctx = make_default_ctx();
     DisplayValues v = ui.build_values(ctx);
-    CHECK(v.selected_row == 3); // cursor restored to "Settings"
+    CHECK(v.list.selected_row == 3); // cursor restored to "Settings"
   }
 
   SECTION("Double-press from SettingsChoice goes back to its group") {
@@ -2448,7 +2450,7 @@ TEST_CASE("UIManager: TouchEnter gestures (back / exit to home)", "[UIManager][i
     double_press(ui);
     CHECK(ui.current_screen() == Screen::DisplayTouch);
     const auto values = ui.build_values(make_default_ctx());
-    CHECK(std::string(values.rows[values.selected_row].text) == "Temperature Unit: C");
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Temperature Unit: C");
   }
 
   SECTION("Double-press from About goes back to Settings on About") {
@@ -2456,7 +2458,7 @@ TEST_CASE("UIManager: TouchEnter gestures (back / exit to home)", "[UIManager][i
     double_press(ui);
     CHECK(ui.current_screen() == Screen::Settings);
     const auto values = ui.build_values(make_default_ctx());
-    CHECK(std::string(values.rows[values.selected_row].text) == "About Device");
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) == "About Device");
   }
 
   SECTION("Long-press from a deep screen exits straight to Home") {
@@ -2507,14 +2509,14 @@ TEST_CASE("UIManager: build_values passes Wi-Fi enabled/connected through", "[UI
   ctx.connectivity.wifi_enabled = true;
   ctx.connectivity.wifi_connected = true;
   DisplayValues v = ui.build_values(ctx);
-  CHECK(v.wifi_enabled);
-  CHECK(v.wifi_connected);
+  CHECK(v.header.connectivity.wifi_enabled);
+  CHECK(v.header.connectivity.wifi_connected);
 
   // Disconnected: icon still shown, but distinct glyph state.
   ctx.connectivity.wifi_connected = false;
   v = ui.build_values(ctx);
-  CHECK(v.wifi_enabled);
-  CHECK_FALSE(v.wifi_connected);
+  CHECK(v.header.connectivity.wifi_enabled);
+  CHECK_FALSE(v.header.connectivity.wifi_connected);
 }
 
 TEST_CASE("UIManager: Screen::Info ignores all touch input", "[UIManager][info]") {
@@ -2558,6 +2560,9 @@ TEST_CASE("UIManager: open_provisioning resets per-session state", "[UIManager][
   UIManager ui(DEFAULT_UI_CONFIG);
 
   // Dirty state from a "previous session" — should not leak after open.
+  ui.open_provisioning(ProvisioningTransport::BleOnly);
+  ui.open_provisioning_confirm(1);           // Cancel setup.
+  press(ui, InputSource::TouchDown);         // Yes.
   ui.set_provisioning_connected(0x0104a8c0); // 192.168.4.1
   ui.set_provisioning_ui_state(ProvisioningUiState::Connecting);
 
@@ -2565,14 +2570,18 @@ TEST_CASE("UIManager: open_provisioning resets per-session state", "[UIManager][
 
   DisplayValues v = ui.build_values(make_default_ctx());
   CHECK(ui.current_screen() == Screen::Provisioning);
-  CHECK(v.provisioning_connected_ip == 0);
-  CHECK(v.provisioning_transport == static_cast<uint8_t>(ProvisioningTransport::WifiOnly));
-  CHECK(v.provisioning_confirm_index == 0);
-  CHECK(v.provisioning_confirm_kind == 0);
-  REQUIRE(v.provisioning_status != nullptr);
-  CHECK(std::string(v.provisioning_status) == "Waiting for setup...");
-  CHECK(v.selected_row == 0);
-  CHECK(v.row_count == 2);
+  CHECK(v.provisioning.transport == static_cast<uint8_t>(ProvisioningTransport::WifiOnly));
+  REQUIRE(v.provisioning.status != nullptr);
+  CHECK(std::string(v.provisioning.status) == "Waiting for setup...");
+  CHECK(v.list.selected_row == 0);
+  CHECK(v.list.row_count == 2);
+
+  press(ui, InputSource::TouchEnter); // Reopened session starts on switch transport.
+  v = ui.build_values(make_default_ctx());
+  REQUIRE(v.screen == Screen::ProvisioningConfirm);
+  REQUIRE(v.list.row_count == 1);
+  CHECK(std::string(v.list.rows[0].text) == "Switch to app setup?");
+  CHECK(v.list.selected_row == 0); // No, even though the previous session selected Yes.
 }
 
 TEST_CASE("UIManager: provisioning rows are two action rows with transport-aware labels",
@@ -2581,14 +2590,14 @@ TEST_CASE("UIManager: provisioning rows are two action rows with transport-aware
 
   ui.open_provisioning(ProvisioningTransport::BleOnly);
   DisplayValues v = ui.build_values(make_default_ctx());
-  REQUIRE(v.row_count == 2);
-  CHECK(std::string(v.rows[0].text) == "Use portal");
-  CHECK(std::string(v.rows[1].text) == "Cancel setup");
+  REQUIRE(v.list.row_count == 2);
+  CHECK(std::string(v.list.rows[0].text) == "Use portal");
+  CHECK(std::string(v.list.rows[1].text) == "Cancel setup");
 
   ui.open_provisioning(ProvisioningTransport::WifiOnly);
   v = ui.build_values(make_default_ctx());
-  CHECK(std::string(v.rows[0].text) == "Use app");
-  CHECK(std::string(v.rows[1].text) == "Cancel setup");
+  CHECK(std::string(v.list.rows[0].text) == "Use app");
+  CHECK(std::string(v.list.rows[1].text) == "Cancel setup");
 }
 
 TEST_CASE("UIManager: provisioning TouchUp/Down toggles between two rows",
@@ -2596,13 +2605,13 @@ TEST_CASE("UIManager: provisioning TouchUp/Down toggles between two rows",
   UIManager ui(DEFAULT_UI_CONFIG);
   ui.open_provisioning(ProvisioningTransport::BleOnly);
 
-  CHECK(ui.build_values(make_default_ctx()).selected_row == 0);
+  CHECK(ui.build_values(make_default_ctx()).list.selected_row == 0);
   press(ui, InputSource::TouchDown);
-  CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
+  CHECK(ui.build_values(make_default_ctx()).list.selected_row == 1);
   press(ui, InputSource::TouchDown);
-  CHECK(ui.build_values(make_default_ctx()).selected_row == 0);
+  CHECK(ui.build_values(make_default_ctx()).list.selected_row == 0);
   press(ui, InputSource::TouchUp);
-  CHECK(ui.build_values(make_default_ctx()).selected_row == 1);
+  CHECK(ui.build_values(make_default_ctx()).list.selected_row == 1);
 }
 
 TEST_CASE("UIManager: provisioning TouchEnter opens ProvisioningConfirm with the row kind",
@@ -2615,8 +2624,8 @@ TEST_CASE("UIManager: provisioning TouchEnter opens ProvisioningConfirm with the
   CHECK(result.action == UIAction::None);
   CHECK(ui.current_screen() == Screen::ProvisioningConfirm);
   DisplayValues v = ui.build_values(make_default_ctx());
-  CHECK(v.provisioning_confirm_kind == 0);
-  CHECK(v.provisioning_confirm_index == 0); // No default
+  CHECK(std::string(v.list.rows[0].text) == "Switch to Wi-Fi setup?");
+  CHECK(v.list.selected_row == 0); // No default
 
   // Back to Provisioning via No.
   press(ui, InputSource::TouchEnter);
@@ -2626,7 +2635,7 @@ TEST_CASE("UIManager: provisioning TouchEnter opens ProvisioningConfirm with the
   press(ui, InputSource::TouchDown); // cursor 0 -> 1
   press(ui, InputSource::TouchEnter);
   CHECK(ui.current_screen() == Screen::ProvisioningConfirm);
-  CHECK(ui.build_values(make_default_ctx()).provisioning_confirm_kind == 1);
+  CHECK(std::string(ui.build_values(make_default_ctx()).list.rows[0].text) == "Cancel setup?");
 }
 
 TEST_CASE("UIManager: ProvisioningConfirm question is transport- and kind-aware",
@@ -2636,17 +2645,17 @@ TEST_CASE("UIManager: ProvisioningConfirm question is transport- and kind-aware"
   ui.open_provisioning(ProvisioningTransport::BleOnly);
   ui.open_provisioning_confirm(0); // switch transport
   DisplayValues v = ui.build_values(make_default_ctx());
-  REQUIRE(v.row_count >= 1);
-  CHECK(std::string(v.rows[0].text) == "Switch to Wi-Fi setup?");
+  REQUIRE(v.list.row_count >= 1);
+  CHECK(std::string(v.list.rows[0].text) == "Switch to Wi-Fi setup?");
 
   ui.open_provisioning(ProvisioningTransport::WifiOnly);
   ui.open_provisioning_confirm(0);
   v = ui.build_values(make_default_ctx());
-  CHECK(std::string(v.rows[0].text) == "Switch to app setup?");
+  CHECK(std::string(v.list.rows[0].text) == "Switch to app setup?");
 
   ui.open_provisioning_confirm(1); // cancel
   v = ui.build_values(make_default_ctx());
-  CHECK(std::string(v.rows[0].text) == "Cancel setup?");
+  CHECK(std::string(v.list.rows[0].text) == "Cancel setup?");
 }
 
 TEST_CASE("UIManager: ProvisioningConfirm No returns to Provisioning with no action",
@@ -2657,7 +2666,7 @@ TEST_CASE("UIManager: ProvisioningConfirm No returns to Provisioning with no act
       UIManager ui(DEFAULT_UI_CONFIG);
       ui.open_provisioning(transport);
       ui.open_provisioning_confirm(kind);
-      REQUIRE(ui.build_values(make_default_ctx()).provisioning_confirm_index == 0);
+      REQUIRE(ui.build_values(make_default_ctx()).list.selected_row == 0);
 
       auto result = press(ui, InputSource::TouchEnter); // No is index 0 (default)
       CHECK(result.action == UIAction::None);
@@ -2688,7 +2697,7 @@ TEST_CASE("UIManager: ProvisioningConfirm Yes on cancel emits ConfirmCancel",
     press(ui, InputSource::TouchDown); // Switch transport -> Cancel setup
     press(ui, InputSource::TouchEnter);
     REQUIRE(ui.current_screen() == Screen::ProvisioningConfirm);
-    REQUIRE(ui.build_values(make_default_ctx()).provisioning_confirm_index == 0);
+    REQUIRE(ui.build_values(make_default_ctx()).list.selected_row == 0);
 
     press(ui, InputSource::TouchDown); // No -> Yes
     auto result = press(ui, InputSource::TouchEnter);
@@ -2706,12 +2715,12 @@ TEST_CASE("UIManager: open_provisioning_confirm resets cursor to No",
   // First confirm session — toggle to Yes.
   ui.open_provisioning_confirm(0);
   press(ui, InputSource::TouchDown);
-  CHECK(ui.build_values(make_default_ctx()).provisioning_confirm_index == 1);
+  CHECK(ui.build_values(make_default_ctx()).list.selected_row == 1);
 
   // Re-open via TouchEnter on Provisioning — cursor should reset to No.
   ui.set_screen(Screen::Provisioning);
   press(ui, InputSource::TouchEnter);
-  CHECK(ui.build_values(make_default_ctx()).provisioning_confirm_index == 0);
+  CHECK(ui.build_values(make_default_ctx()).list.selected_row == 0);
 }
 
 // ============================================================================
@@ -2724,11 +2733,11 @@ TEST_CASE("UIManager: WaitingForCredentials text varies with transport",
 
   ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
   ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
-  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning.status) ==
         "Waiting for app...");
 
   ui.set_provisioning_transport(ProvisioningTransport::WifiOnly);
-  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning.status) ==
         "Waiting for setup...");
 }
 
@@ -2738,11 +2747,11 @@ TEST_CASE("UIManager: SwitchingTransport names the target transport",
 
   ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
   ui.set_provisioning_ui_state(ProvisioningUiState::SwitchingTransport);
-  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning.status) ==
         "Switching to Wi-Fi...");
 
   ui.set_provisioning_transport(ProvisioningTransport::WifiOnly);
-  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning.status) ==
         "Switching to BLE...");
 }
 
@@ -2751,10 +2760,10 @@ TEST_CASE("UIManager: Connecting/ConnectFailed map to fixed ASCII text",
   UIManager ui(DEFAULT_UI_CONFIG);
 
   ui.set_provisioning_ui_state(ProvisioningUiState::Connecting);
-  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) == "Connecting...");
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning.status) == "Connecting...");
 
   ui.set_provisioning_ui_state(ProvisioningUiState::ConnectFailed);
-  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning.status) ==
         "Connect failed - try again");
 }
 
@@ -2764,9 +2773,8 @@ TEST_CASE("UIManager: set_provisioning_connected formats Connected! a.b.c.d",
 
   ui.set_provisioning_connected(0x0104a8c0); // network byte order: 192.168.4.1
   DisplayValues v = ui.build_values(make_default_ctx());
-  REQUIRE(v.provisioning_status != nullptr);
-  CHECK(std::string(v.provisioning_status) == "Connected! 192.168.4.1");
-  CHECK(v.provisioning_connected_ip == 0x0104a8c0);
+  REQUIRE(v.provisioning.status != nullptr);
+  CHECK(std::string(v.provisioning.status) == "Connected! 192.168.4.1");
 }
 
 TEST_CASE("UIManager: set_provisioning_connected(0) restores transport-derived status",
@@ -2776,14 +2784,14 @@ TEST_CASE("UIManager: set_provisioning_connected(0) restores transport-derived s
   ui.set_provisioning_transport(ProvisioningTransport::BleOnly);
   ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
   ui.set_provisioning_connected(0xffffffff);
-  REQUIRE(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+  REQUIRE(std::string(ui.build_values(make_default_ctx()).provisioning.status) ==
           "Connected! 255.255.255.255");
 
   ui.set_provisioning_connected(0);
   // After clear, the underlying UI state may still be Connected — restore
   // to WaitingForCredentials to verify the IP override is gone.
   ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
-  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning_status) ==
+  CHECK(std::string(ui.build_values(make_default_ctx()).provisioning.status) ==
         "Waiting for app...");
 }
 
@@ -2791,7 +2799,7 @@ TEST_CASE("UIManager: Idle clears provisioning status", "[UIManager][provisionin
   UIManager ui(DEFAULT_UI_CONFIG);
   ui.set_provisioning_ui_state(ProvisioningUiState::WaitingForCredentials);
   ui.set_provisioning_ui_state(ProvisioningUiState::Idle);
-  CHECK(ui.build_values(make_default_ctx()).provisioning_status == nullptr);
+  CHECK(ui.build_values(make_default_ctx()).provisioning.status == nullptr);
 }
 
 TEST_CASE("UIManager: provisioning_ap_ssid is built from serial number",
@@ -2799,8 +2807,8 @@ TEST_CASE("UIManager: provisioning_ap_ssid is built from serial number",
   UIManager ui(DEFAULT_UI_CONFIG);
   ui.open_provisioning(ProvisioningTransport::WifiOnly);
   DisplayValues v = ui.build_values(make_default_ctx());
-  REQUIRE(v.provisioning_ap_ssid != nullptr);
-  CHECK(std::string(v.provisioning_ap_ssid) == "airgradient-AABBCCDDEEFF");
+  REQUIRE(v.provisioning.ap_ssid != nullptr);
+  CHECK(std::string(v.provisioning.ap_ssid) == "airgradient-AABBCCDDEEFF");
 }
 
 TEST_CASE("UIManager: interval boundary controls the compact home layout", "[UIManager][chart]") {
@@ -2822,13 +2830,13 @@ TEST_CASE("UIManager: interval boundary controls the compact home layout", "[UIM
     settings.measure_interval_seconds = interval;
     ui.sync_settings(settings);
     const auto v = ui.build_values(ctx);
-    CHECK(v.show_temp_hum == (interval >= 300));
-    CHECK(v.active_metric == Metric::None);
+    CHECK(v.home.show_temp_hum == (interval >= 300));
+    CHECK(v.home.active_metric == Metric::None);
     CHECK(v.chart_metric() == Metric::Pm25);
-    CHECK(v.chart_count == 2);
+    CHECK(v.home.chart.count == 2);
     // Visibility never invalidates readings or mutates the source data.
-    CHECK(v.temperature_c == 26.0f);
-    CHECK(v.humidity_pct == 45.0f);
+    CHECK(v.home.readings.temperature_c == 26.0f);
+    CHECK(v.home.readings.humidity_pct == 45.0f);
     CHECK(sensors.temp_hum_a.temperature == 26.0f);
     CHECK(sensors.temp_hum_a.humidity == 45.0f);
   }
@@ -2850,37 +2858,37 @@ TEST_CASE("UIManager: compact browsing and locking reset to the default PM chart
   ctx.history.count = 2;
 
   auto v = ui.build_values(ctx);
-  CHECK(v.active_metric == Metric::None);
+  CHECK(v.home.active_metric == Metric::None);
   CHECK(v.chart_metric() == Metric::Pm25);
-  CHECK(v.chart_min == 10.0f);
-  CHECK(v.chart_max == 30.0f);
+  CHECK(v.home.chart.min == 10.0f);
+  CHECK(v.home.chart.max == 30.0f);
   press(ui, InputSource::TouchDown);
-  CHECK(ui.build_values(ctx).active_metric == Metric::Pm25);
+  CHECK(ui.build_values(ctx).home.active_metric == Metric::Pm25);
   press(ui, InputSource::TouchDown);
   v = ui.build_values(ctx);
-  CHECK(v.active_metric == Metric::Co2);
+  CHECK(v.home.active_metric == Metric::Co2);
   CHECK(v.chart_metric() == Metric::Co2);
-  CHECK(v.chart_min == 500.0f);
-  CHECK(v.chart_max == 800.0f);
+  CHECK(v.home.chart.min == 500.0f);
+  CHECK(v.home.chart.max == 800.0f);
   for (auto metric : {Metric::Tvoc, Metric::Nox, Metric::Pressure, Metric::Altitude}) {
     press(ui, InputSource::TouchDown);
-    CHECK(ui.build_values(ctx).active_metric == metric);
+    CHECK(ui.build_values(ctx).home.active_metric == metric);
   }
   press(ui, InputSource::TouchDown);
-  CHECK(ui.build_values(ctx).active_metric == Metric::None);
+  CHECK(ui.build_values(ctx).home.active_metric == Metric::None);
   press(ui, InputSource::TouchUp);
-  CHECK(ui.build_values(ctx).active_metric == Metric::Altitude);
+  CHECK(ui.build_values(ctx).home.active_metric == Metric::Altitude);
 
   // Even before navigation reset, a locked view cannot retain another metric chart.
   ctx.locked = true;
   v = ui.build_values(ctx);
-  CHECK(v.active_metric == Metric::None);
+  CHECK(v.home.active_metric == Metric::None);
   CHECK(v.chart_metric() == Metric::Pm25);
-  CHECK(v.chart_min == 10.0f);
-  CHECK(v.chart_max == 30.0f);
+  CHECK(v.home.chart.min == 10.0f);
+  CHECK(v.home.chart.max == 30.0f);
   ui.reset_to_home(); // Existing orchestrator lock behavior.
   ctx.locked = false;
-  CHECK(ui.build_values(ctx).active_metric == Metric::None);
+  CHECK(ui.build_values(ctx).home.active_metric == Metric::None);
   CHECK(ui.build_values(ctx).chart_metric() == Metric::Pm25);
 }
 
@@ -2893,19 +2901,19 @@ TEST_CASE("UIManager: interval changes remove hidden metric focus", "[UIManager]
     auto ctx = make_default_ctx();
     for (int i = 0; i < selected_steps; ++i)
       press(ui, InputSource::TouchDown);
-    REQUIRE(ui.build_values(ctx).active_metric ==
+    REQUIRE(ui.build_values(ctx).home.active_metric ==
             (selected_steps == 3 ? Metric::Temp : Metric::Humidity));
     settings.measure_interval_seconds = 299;
     ui.sync_settings(settings);
-    CHECK_FALSE(ui.build_values(ctx).show_temp_hum);
-    CHECK(ui.build_values(ctx).active_metric == Metric::None);
+    CHECK_FALSE(ui.build_values(ctx).home.show_temp_hum);
+    CHECK(ui.build_values(ctx).home.active_metric == Metric::None);
     CHECK(ui.build_values(ctx).chart_metric() == Metric::Pm25);
     settings.measure_interval_seconds = 300;
     ui.sync_settings(settings);
-    CHECK(ui.build_values(ctx).show_temp_hum);
+    CHECK(ui.build_values(ctx).home.show_temp_hum);
     CHECK(ui.build_values(ctx).chart_metric() == Metric::Pm25);
     press(ui, InputSource::TouchUp);
-    CHECK(ui.build_values(ctx).active_metric == Metric::Altitude);
+    CHECK(ui.build_values(ctx).home.active_metric == Metric::Altitude);
   }
 }
 
@@ -2916,8 +2924,8 @@ TEST_CASE("UIManager: default PM chart handles empty and invalid history", "[UIM
   ui.sync_settings(settings);
   auto ctx = make_default_ctx();
   auto v = ui.build_values(ctx);
-  CHECK(v.chart_samples == nullptr);
-  CHECK(v.chart_count == 0);
+  CHECK(v.home.chart.samples == nullptr);
+  CHECK(v.home.chart.count == 0);
 
   MeasuresAGo cache[4]{};
   cache[1].pm_a.pm_25 = std::numeric_limits<float>::quiet_NaN();
@@ -2925,15 +2933,15 @@ TEST_CASE("UIManager: default PM chart handles empty and invalid history", "[UIM
   ctx.history.samples = cache;
   ctx.history.count = 4;
   v = ui.build_values(ctx);
-  CHECK(v.chart_samples == nullptr);
-  CHECK(v.chart_count == 0);
+  CHECK(v.home.chart.samples == nullptr);
+  CHECK(v.home.chart.count == 0);
   cache[3].pm_a.pm_25 = 12.0f;
   v = ui.build_values(ctx);
-  REQUIRE(v.chart_samples != nullptr);
-  CHECK(v.chart_count == 1);
-  CHECK(v.chart_samples[0] == 12.0f);
-  CHECK(v.chart_min == 12.0f);
-  CHECK(v.chart_max == 12.0f);
+  REQUIRE(v.home.chart.samples != nullptr);
+  CHECK(v.home.chart.count == 1);
+  CHECK(v.home.chart.samples[0] == 12.0f);
+  CHECK(v.home.chart.min == 12.0f);
+  CHECK(v.home.chart.max == 12.0f);
 }
 
 TEST_CASE("UIManager: pinned chart is independent of browsing and lock state",
@@ -3017,7 +3025,7 @@ TEST_CASE("UIManager: selected charts never show the pin hint even without histo
     for (bool locked : {false, true}) {
       ctx.locked = locked;
       const auto v = ui.build_values(ctx);
-      CHECK(v.chart_count == 0);
+      CHECK(v.home.chart.count == 0);
       CHECK_FALSE(v.show_pinned_chart_hint());
     }
   }
@@ -3056,9 +3064,9 @@ TEST_CASE("UIManager: Pinned Chart menu scrolls to every choice and applies None
   open_row(ui, "Pinned Chart");
   auto ctx = make_default_ctx();
   auto v = ui.build_values(ctx);
-  REQUIRE(v.selected_row < v.row_count);
-  CHECK(std::string(v.rows[v.selected_row].text) == "Altitude");
-  CHECK(v.row_count <= MAX_LIST_ROWS);
+  REQUIRE(v.list.selected_row < v.list.row_count);
+  CHECK(std::string(v.list.rows[v.list.selected_row].text) == "Altitude");
+  CHECK(v.list.row_count <= MAX_LIST_ROWS);
   // The last option is beyond the first page, and must still be selectable.
   CHECK(press(ui, InputSource::TouchEnter).action == UIAction::SettingsChanged);
   open_row(ui, "Pinned Chart");
@@ -3093,23 +3101,23 @@ TEST_CASE("UIManager: every chart extracts its own valid history", "[UIManager][
     auto v = ui.build_values(ctx);
     CAPTURE(i);
     CHECK(v.chart_metric() == static_cast<Metric>(i + 1));
-    REQUIRE(v.chart_samples != nullptr);
-    REQUIRE(v.chart_count == 2);
-    CHECK(v.chart_samples[0] == expected[i]);
-    CHECK(v.chart_min == expected[i]);
-    CHECK(v.chart_max == (i == 7 ? 100.0f : expected[i]));
+    REQUIRE(v.home.chart.samples != nullptr);
+    REQUIRE(v.home.chart.count == 2);
+    CHECK(v.home.chart.samples[0] == expected[i]);
+    CHECK(v.home.chart.min == expected[i]);
+    CHECK(v.home.chart.max == (i == 7 ? 100.0f : expected[i]));
   }
   // Pressure remains chartable when altitude alone fails validation.
   cache[0].pressure.altitude = MeasuresInvalid::ALTITUDE;
   cache[2].pressure.altitude = std::numeric_limits<float>::quiet_NaN();
   auto v = ui.build_values(ctx);
-  CHECK(v.chart_count == 0);
-  CHECK(v.chart_samples == nullptr);
+  CHECK(v.home.chart.count == 0);
+  CHECK(v.home.chart.samples == nullptr);
   press(ui, InputSource::TouchUp);
   v = ui.build_values(ctx);
   CHECK(v.chart_metric() == Metric::Pressure);
-  CHECK(v.chart_count == 2);
-  CHECK(v.chart_min == 1013.0f);
+  CHECK(v.home.chart.count == 2);
+  CHECK(v.home.chart.min == 1013.0f);
 }
 
 TEST_CASE("UIManager: Local Server is only visible in Stationary and retains its selection",
@@ -3123,7 +3131,7 @@ TEST_CASE("UIManager: Local Server is only visible in Stationary and retains its
                   "Buzzer: Off", "Local Server"});
   open_row(ui, "Local Server");
   check_rows(ui, {"Exit", "Back", "Disable", "Enable"});
-  CHECK(ui.build_values(make_default_ctx()).selected_row == 3);
+  CHECK(ui.build_values(make_default_ctx()).list.selected_row == 3);
   CHECK(open_row(ui, "Disable").action == UIAction::SettingsChanged);
   ui.apply_to_settings(settings);
   REQUIRE_FALSE(settings.local_server_enabled);
@@ -3132,10 +3140,10 @@ TEST_CASE("UIManager: Local Server is only visible in Stationary and retains its
     settings.operating_mode = mode;
     ui.sync_settings(settings);
     auto values = ui.build_values(make_default_ctx());
-    REQUIRE(values.row_count == 6);
-    CHECK(values.selected_row < values.row_count);
-    for (uint8_t row = 0; row < values.row_count; ++row)
-      CHECK(std::string(values.rows[row].text) != "Local Server");
+    REQUIRE(values.list.row_count == 6);
+    CHECK(values.list.selected_row < values.list.row_count);
+    for (uint8_t row = 0; row < values.list.row_count; ++row)
+      CHECK(std::string(values.list.rows[row].text) != "Local Server");
     ui.apply_to_settings(settings);
     CHECK_FALSE(settings.local_server_enabled);
   }
@@ -3143,7 +3151,7 @@ TEST_CASE("UIManager: Local Server is only visible in Stationary and retains its
   settings.operating_mode = OperatingMode::Stationary;
   ui.sync_settings(settings);
   open_row(ui, "Local Server");
-  CHECK(ui.build_values(make_default_ctx()).selected_row == 2);
+  CHECK(ui.build_values(make_default_ctx()).list.selected_row == 2);
   CHECK(open_row(ui, "Enable").action == UIAction::SettingsChanged);
   ui.apply_to_settings(settings);
   CHECK(settings.local_server_enabled);
@@ -3153,7 +3161,7 @@ TEST_CASE("UIManager: Local Server is only visible in Stationary and retains its
   settings.operating_mode = OperatingMode::Portable;
   ui.sync_settings(settings);
   CHECK(ui.current_screen() == Screen::Operations);
-  CHECK(ui.build_values(make_default_ctx()).row_count == 6);
+  CHECK(ui.build_values(make_default_ctx()).list.row_count == 6);
 }
 
 TEST_CASE("UIManager: LED Indicator shows its value and retains the selected option",
@@ -3166,15 +3174,16 @@ TEST_CASE("UIManager: LED Indicator shows its value and retains the selected opt
     ui.sync_settings(settings);
     go_to_group(ui, "Display & Touch");
     auto values = ui.build_values(make_default_ctx());
-    REQUIRE(values.row_count == MAX_LIST_ROWS);
+    REQUIRE(values.list.row_count == MAX_LIST_ROWS);
     select_row(ui, "LED Indicator");
     values = ui.build_values(make_default_ctx());
     const char *initial_label =
         initial == BackLedIndicator::Aqi ? "LED Indicator: AQI" : "LED Indicator: CO2";
-    CHECK(std::string(values.rows[values.selected_row].text) == initial_label);
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) == initial_label);
     open_row(ui, "LED Indicator");
     check_rows(ui, {"Exit", "Back", "AQI", "CO2"});
-    CHECK(ui.build_values(make_default_ctx()).selected_row == 2 + static_cast<uint8_t>(initial));
+    CHECK(ui.build_values(make_default_ctx()).list.selected_row ==
+          2 + static_cast<uint8_t>(initial));
     const auto next =
         initial == BackLedIndicator::Aqi ? BackLedIndicator::Co2 : BackLedIndicator::Aqi;
     select_row(ui, next == BackLedIndicator::Aqi ? "AQI" : "CO2");
@@ -3184,9 +3193,9 @@ TEST_CASE("UIManager: LED Indicator shows its value and retains the selected opt
     CHECK(settings.back_led_indicator == next);
     CHECK(settings.back_led_brightness == LedBrightness::Off);
     values = ui.build_values(make_default_ctx());
-    CHECK(std::string(values.rows[values.selected_row].text) ==
+    CHECK(std::string(values.list.rows[values.list.selected_row].text) ==
           (next == BackLedIndicator::Aqi ? "LED Indicator: AQI" : "LED Indicator: CO2"));
     open_row(ui, "LED Indicator");
-    CHECK(ui.build_values(make_default_ctx()).selected_row == 2 + static_cast<uint8_t>(next));
+    CHECK(ui.build_values(make_default_ctx()).list.selected_row == 2 + static_cast<uint8_t>(next));
   }
 }

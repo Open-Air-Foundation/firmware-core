@@ -6,13 +6,12 @@
 
 // Cache values must already have presentation corrections applied. The caller
 // owns chart_buffer (DISPLAY_CHART_BUF_SIZE floats) through display rendering.
-inline void populate_display_chart(DisplayValues &v, const MeasuresAGo *cache, uint8_t cache_count,
-                                   float *chart_buffer) {
-  v.chart_samples = nullptr;
-  v.chart_count = 0;
-  v.chart_min = 0.0f;
-  v.chart_max = 0.0f;
-  const Metric metric = v.chart_metric();
+inline void populate_display_chart(DisplayChartData &chart, Metric metric, const MeasuresAGo *cache,
+                                   uint8_t cache_count, float *chart_buffer) {
+  chart.samples = nullptr;
+  chart.count = 0;
+  chart.min = 0.0f;
+  chart.max = 0.0f;
   if (metric == Metric::None || cache == nullptr || cache_count == 0 || chart_buffer == nullptr) {
     return;
   }
@@ -96,8 +95,8 @@ inline void populate_display_chart(DisplayValues &v, const MeasuresAGo *cache, u
     }
   }
 
-  v.chart_samples = (valid_count > 0) ? chart_buffer : nullptr;
-  v.chart_count = valid_count;
-  v.chart_min = (valid_count > 0) ? min_val : 0.0f;
-  v.chart_max = (valid_count > 0) ? max_val : 0.0f;
+  chart.samples = (valid_count > 0) ? chart_buffer : nullptr;
+  chart.count = valid_count;
+  chart.min = (valid_count > 0) ? min_val : 0.0f;
+  chart.max = (valid_count > 0) ? max_val : 0.0f;
 }

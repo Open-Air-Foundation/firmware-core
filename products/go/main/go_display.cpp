@@ -37,25 +37,25 @@ RTC_DATA_ATTR static RtcDisplaySnapshot s_rtc_display_snapshot;
 RTC_DATA_ATTR static bool s_rtc_display_snapshot_valid = false;
 
 void save_rtc_display_snapshot(const DisplayValues &values) {
-  s_rtc_display_snapshot.co2_ppm = values.co2_ppm;
-  s_rtc_display_snapshot.pm25_ugm3 = values.pm25_ugm3;
-  s_rtc_display_snapshot.temperature_c = values.temperature_c;
-  s_rtc_display_snapshot.humidity_pct = values.humidity_pct;
-  s_rtc_display_snapshot.tvoc_index = values.tvoc_index;
-  s_rtc_display_snapshot.nox_index = values.nox_index;
-  s_rtc_display_snapshot.pressure_hpa = values.pressure_hpa;
-  s_rtc_display_snapshot.altitude_m = values.altitude_m;
-  s_rtc_display_snapshot.battery_pct = values.battery_pct;
-  s_rtc_display_snapshot.is_battery_charging = values.is_battery_charging;
-  s_rtc_display_snapshot.gps_enabled = values.gps_enabled;
-  s_rtc_display_snapshot.gps_fix = values.gps_fix;
-  s_rtc_display_snapshot.tracking_state = values.tracking_state;
-  s_rtc_display_snapshot.ble_enabled = values.ble_enabled;
-  s_rtc_display_snapshot.use_fahrenheit = values.use_fahrenheit;
-  s_rtc_display_snapshot.use_feet = values.use_feet;
-  s_rtc_display_snapshot.pm_use_usaqi = values.pm_use_usaqi;
-  s_rtc_display_snapshot.show_temp_hum = values.show_temp_hum;
-  s_rtc_display_snapshot.pinned_chart = values.pinned_chart;
+  s_rtc_display_snapshot.co2_ppm = values.home.readings.co2_ppm;
+  s_rtc_display_snapshot.pm25_ugm3 = values.home.readings.pm25_ugm3;
+  s_rtc_display_snapshot.temperature_c = values.home.readings.temperature_c;
+  s_rtc_display_snapshot.humidity_pct = values.home.readings.humidity_pct;
+  s_rtc_display_snapshot.tvoc_index = values.home.readings.tvoc_index;
+  s_rtc_display_snapshot.nox_index = values.home.readings.nox_index;
+  s_rtc_display_snapshot.pressure_hpa = values.home.readings.pressure_hpa;
+  s_rtc_display_snapshot.altitude_m = values.home.readings.altitude_m;
+  s_rtc_display_snapshot.battery_pct = values.header.battery.pct;
+  s_rtc_display_snapshot.is_battery_charging = values.header.battery.is_charging;
+  s_rtc_display_snapshot.gps_enabled = values.header.connectivity.gps_enabled;
+  s_rtc_display_snapshot.gps_fix = values.header.connectivity.gps_fix;
+  s_rtc_display_snapshot.tracking_state = values.header.tracking_state;
+  s_rtc_display_snapshot.ble_enabled = values.header.connectivity.ble_enabled;
+  s_rtc_display_snapshot.use_fahrenheit = values.preferences.use_fahrenheit;
+  s_rtc_display_snapshot.use_feet = values.preferences.use_feet;
+  s_rtc_display_snapshot.pm_use_usaqi = values.preferences.pm_use_usaqi;
+  s_rtc_display_snapshot.show_temp_hum = values.home.show_temp_hum;
+  s_rtc_display_snapshot.pinned_chart = values.home.pinned_chart;
   s_rtc_display_snapshot_valid = true;
 }
 
@@ -929,36 +929,37 @@ void format_chart_current(char *out, size_t out_size, const DisplayValues &v) {
   float value = 0.0f;
   switch (metric) {
   case Metric::Pm25:
-    value = v.pm25_ugm3;
-    unit = v.pm_use_usaqi ? " USAQI" : " ug/m3";
+    value = v.home.readings.pm25_ugm3;
+    unit = v.preferences.pm_use_usaqi ? " USAQI" : " ug/m3";
     break;
   case Metric::Co2:
-    value = static_cast<float>(v.co2_ppm);
+    value = static_cast<float>(v.home.readings.co2_ppm);
     unit = " ppm";
     break;
   case Metric::Temp:
-    value = v.temperature_c;
+    value = v.home.readings.temperature_c;
     break;
   case Metric::Humidity:
-    value = v.humidity_pct;
+    value = v.home.readings.humidity_pct;
     break;
   case Metric::Tvoc:
-    value = static_cast<float>(v.tvoc_index);
+    value = static_cast<float>(v.home.readings.tvoc_index);
     break;
   case Metric::Nox:
-    value = static_cast<float>(v.nox_index);
+    value = static_cast<float>(v.home.readings.nox_index);
     break;
   case Metric::Pressure:
-    value = v.pressure_hpa;
+    value = v.home.readings.pressure_hpa;
     break;
   case Metric::Altitude:
-    value = v.altitude_m;
+    value = v.home.readings.altitude_m;
     break;
   case Metric::None:
     snprintf(out, out_size, "-");
     return;
   }
-  format_chart_stat(out, out_size, metric, value, v.use_fahrenheit, v.pm_use_usaqi, v.use_feet);
+  format_chart_stat(out, out_size, metric, value, v.preferences.use_fahrenheit,
+                    v.preferences.pm_use_usaqi, v.preferences.use_feet);
   if (out_size > 0 && strcmp(out, "-") != 0) {
     const size_t len = strlen(out);
     snprintf(out + len, out_size - len, "%s", unit);
@@ -1243,30 +1244,30 @@ void draw_provisioning_action_row(u8g2_t *u, const char *text, int y, bool selec
 }
 
 // Draw list/menu rows with selection highlight.
-void draw_list_rows(u8g2_t *u, const DisplayValues &v, bool full_screen) {
+void draw_list_rows(u8g2_t *u, const ListContent &list, bool full_screen) {
   const int row_base_y = full_screen ? 20 : 166;
   constexpr int ROW_RECT_H = 20;
   constexpr int ROW_STEP = 22;
   const int text_baseline = full_screen ? 33 : 179;
   // Extra offset for content rows (index >= 2) to clear the separator line.
-  const int content_pad = (full_screen && v.show_separator_after_back) ? 2 : 0;
+  const int content_pad = (full_screen && list.show_separator_after_back) ? 2 : 0;
 
-  for (uint8_t i = 0; i < v.row_count && i < MAX_LIST_ROWS; ++i) {
+  for (uint8_t i = 0; i < list.row_count && i < MAX_LIST_ROWS; ++i) {
     const int pad = (i >= 2) ? content_pad : 0;
     const int row_y = row_base_y + ROW_STEP * static_cast<int>(i) + pad;
-    const bool selected = (i == v.selected_row) && !v.rows[i].disabled;
+    const bool selected = (i == list.selected_row) && !list.rows[i].disabled;
     if (selected) {
       u8g2_DrawBox(u, 0, row_y, SCREEN_W, ROW_RECT_H);
       u8g2_SetDrawColor(u, 1);
     }
     u8g2_SetFont(u, u8g2_font_6x10_tr);
-    draw_text(u, 10, text_baseline + ROW_STEP * static_cast<int>(i) + pad, v.rows[i].text);
+    draw_text(u, 10, text_baseline + ROW_STEP * static_cast<int>(i) + pad, list.rows[i].text);
     if (selected) {
       u8g2_SetDrawColor(u, 0);
     }
   }
 
-  if (v.show_separator_after_back) {
+  if (list.show_separator_after_back) {
     u8g2_DrawHLine(u, 0, 63, SCREEN_W);
   }
 }
@@ -1357,7 +1358,7 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
 
   const bool same_list_screen =
       is_list_screen(_prev_values.screen) && _prev_values.screen == values.screen;
-  const bool header_changed = _is_header_changed(values, _prev_values);
+  const bool header_changed = _is_header_changed(values.header, _prev_values.header);
   const bool both_navigable = is_navigable(_prev_values.screen) && is_navigable(values.screen);
   const bool can_partial = (both_navigable && !header_changed) || same_list_screen;
 
@@ -1395,7 +1396,8 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
     _pending_mode = RefreshMode::Partial;
     _menu_exited = false;
   } else if (values.screen == Screen::Home &&
-             (_prev_values.screen == Screen::Home || values.locked != _prev_values.locked)) {
+             (_prev_values.screen == Screen::Home ||
+              values.header.locked != _prev_values.header.locked)) {
     // Locking from a menu must paint the header and snackbar together.
     // Apply the Home cooldown before the body-only menu-navigation rule.
     const auto decision = _refresh_policy.home_update(
@@ -1536,35 +1538,35 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     return;
   }
   if (v.screen == Screen::PairingPasskey) {
-    _draw_pairing_passkey(v);
+    _draw_pairing_passkey(v.ble_passkey);
     return;
   }
 
   // Factory learning dashboard owns the full canvas — no status bar.
   if (v.show_fg_dashboard) {
-    _draw_fg_learning_dashboard(v);
+    _draw_fg_learning_dashboard(v.screen, v.fg_dashboard);
     return;
   }
 
   // Session screens own the full canvas — no status bar, no snackbar.
   if (v.screen == Screen::Info) {
-    _draw_info(v);
+    _draw_info(v.info_text);
     return;
   }
   if (v.screen == Screen::Provisioning) {
-    _draw_provisioning(v);
+    _draw_provisioning(v.provisioning, v.list, v.qr);
     return;
   }
   if (v.screen == Screen::ProvisioningConfirm) {
-    _draw_provisioning_confirm(v);
+    _draw_provisioning_confirm(v.list);
     return;
   }
   if (v.screen == Screen::GettingStarted) {
-    _draw_getting_started(v);
+    _draw_getting_started(v.list, v.qr, v.getting_started_from_boot);
     return;
   }
 
-  _draw_status_bar(v);
+  _draw_status_bar(v.header);
 
   switch (v.screen) {
   case Screen::Home:
@@ -1572,7 +1574,7 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     break;
   case Screen::MainMenu:
     _draw_home(v);
-    _draw_menu_overlay(v);
+    _draw_menu_overlay(v.list);
     break;
   case Screen::TrackingMenu:
   case Screen::TrackingStatus:
@@ -1614,27 +1616,29 @@ void DisplayService::_render_frame(const DisplayValues &v) {
     break;
   }
 
-  _draw_snackbar(v);
+  _draw_snackbar(v.snackbar_text);
 }
 
-bool DisplayService::_is_header_changed(const DisplayValues &a, const DisplayValues &b) const {
-  return a.battery_pct != b.battery_pct || a.is_battery_charging != b.is_battery_charging ||
-         a.is_plugged_in != b.is_plugged_in || a.locked != b.locked ||
-         a.ble_enabled != b.ble_enabled || a.ble_connected != b.ble_connected ||
-         a.wifi_enabled != b.wifi_enabled || a.wifi_connected != b.wifi_connected ||
-         a.gps_enabled != b.gps_enabled || a.gps_fix != b.gps_fix ||
-         a.tracking_state != b.tracking_state;
+bool DisplayService::_is_header_changed(const DisplayHeader &a, const DisplayHeader &b) const {
+  return a.battery.pct != b.battery.pct || a.battery.is_charging != b.battery.is_charging ||
+         a.battery.is_plugged_in != b.battery.is_plugged_in || a.locked != b.locked ||
+         a.connectivity.ble_enabled != b.connectivity.ble_enabled ||
+         a.connectivity.ble_connected != b.connectivity.ble_connected ||
+         a.connectivity.wifi_enabled != b.connectivity.wifi_enabled ||
+         a.connectivity.wifi_connected != b.connectivity.wifi_connected ||
+         a.connectivity.gps_enabled != b.connectivity.gps_enabled ||
+         a.connectivity.gps_fix != b.connectivity.gps_fix || a.tracking_state != b.tracking_state;
 }
 
 // ===========================================================================
 // DisplayService — screen draw methods
 // ===========================================================================
 
-void DisplayService::_draw_status_bar(const DisplayValues &v) {
+void DisplayService::_draw_status_bar(const DisplayHeader &header) {
   int cursor = LOCK_X;
 
   // 1. Lock or Unlock icon (left-pinned, always drawn)
-  if (v.locked) {
+  if (header.locked) {
     u8g2_SetFont(&_u8g2, u8g2_font_open_iconic_all_1x_t);
     u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0xCA);
   } else {
@@ -1644,16 +1648,17 @@ void DisplayService::_draw_status_bar(const DisplayValues &v) {
   cursor += 10 + ICON_GAP;
 
   // 2. Dynamic flow icons: WiFi (connected vs disconnected), Link/Unlink, GPS
-  if (v.wifi_enabled) {
+  if (header.connectivity.wifi_enabled) {
     u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
     u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y,
-                   v.wifi_connected ? WIFI_GLYPH_CONNECTED : WIFI_GLYPH_DISCONNECTED);
+                   header.connectivity.wifi_connected ? WIFI_GLYPH_CONNECTED
+                                                      : WIFI_GLYPH_DISCONNECTED);
     cursor += 10 + ICON_GAP;
   }
 
-  if (v.ble_enabled) {
+  if (header.connectivity.ble_enabled) {
     const int x = cursor;
-    if (v.ble_connected) {
+    if (header.connectivity.ble_connected) {
       // Link: two frames + connecting bar
       u8g2_DrawFrame(&_u8g2, x, LINK_CY, 5, 5);
       u8g2_DrawFrame(&_u8g2, x + 6, LINK_CY, 5, 5);
@@ -1672,17 +1677,17 @@ void DisplayService::_draw_status_bar(const DisplayValues &v) {
     cursor += 12 + ICON_GAP;
   }
 
-  if (v.gps_fix) {
+  if (header.connectivity.gps_fix) {
     u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
     u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0xE0A1);
     cursor += 10 + ICON_GAP;
   }
 
   // 3. Tracking dot (right-pinned; shifts left when plug icon is present)
-  if (tracking_session_active(v.tracking_state)) {
-    const bool plug_visible = v.is_plugged_in && !v.is_battery_charging;
+  if (tracking_session_active(header.tracking_state)) {
+    const bool plug_visible = header.battery.is_plugged_in && !header.battery.is_charging;
     const int track_x = plug_visible ? (BATTERY_X - 10 - ICON_GAP - ICON_GAP - 2) : TRACKING_X;
-    if (v.tracking_state == TrackingState::Paused) {
+    if (header.tracking_state == TrackingState::Paused) {
       constexpr int PAUSE_BAR_WIDTH = 2;
       constexpr int PAUSE_BAR_HEIGHT = 6;
       constexpr int PAUSE_BAR_OFFSET = 3;
@@ -1696,17 +1701,17 @@ void DisplayService::_draw_status_bar(const DisplayValues &v) {
   }
 
   // 4. Battery + optional plug icon (right-pinned, fixed position)
-  if (v.battery_pct != 0xFFu || v.is_battery_charging) {
+  if (header.battery.pct != 0xFFu || header.battery.is_charging) {
     u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
 
     // Show plug icon left of battery when plugged in but not actively
     // charging (e.g. charge termination or a temperature inhibit).
-    if (v.is_plugged_in && !v.is_battery_charging) {
+    if (header.battery.is_plugged_in && !header.battery.is_charging) {
       u8g2_DrawGlyph(&_u8g2, BATTERY_X - 10 - ICON_GAP, STATUS_BASELINE_Y + 1, PLUG_GLYPH);
     }
 
     u8g2_DrawGlyph(&_u8g2, BATTERY_X, STATUS_BASELINE_Y,
-                   battery_glyph(v.is_battery_charging, v.battery_pct));
+                   battery_glyph(header.battery.is_charging, header.battery.pct));
   }
 
   // Header divider
@@ -1714,7 +1719,7 @@ void DisplayService::_draw_status_bar(const DisplayValues &v) {
 }
 
 void DisplayService::_draw_home(const DisplayValues &v) {
-  if (v.display_off) {
+  if (v.home.display_off) {
     draw_logo(&_u8g2, DISPLAY_OFF_LOGO_Y, DISPLAY_OFF_LOGO_H);
     return;
   }
@@ -1734,7 +1739,7 @@ void DisplayService::_draw_home(const DisplayValues &v) {
     u8g2_DrawVLine(&_u8g2, GRID_DIVIDER_X, GRID_DIVIDER_1_Y, GRID_DIVIDER_2_Y - GRID_DIVIDER_1_Y);
   } else {
     const int grid_bottom =
-        !chart_visible && v.show_temp_hum ? PLOT_Y + PLOT_H - 1 : GRID_DIVIDER_2_Y;
+        !chart_visible && v.home.show_temp_hum ? PLOT_Y + PLOT_H - 1 : GRID_DIVIDER_2_Y;
     u8g2_DrawVLine(&_u8g2, GRID_DIVIDER_X, GRID_DIVIDER_0_Y, grid_bottom - GRID_DIVIDER_0_Y);
   }
 
@@ -1745,7 +1750,7 @@ void DisplayService::_draw_home(const DisplayValues &v) {
   // Dual-font label: "PM2.5" in Logisoso16 + "(ug/m3)" or "(USAQI)" in HelvR12
   {
     const char *pm_name = "PM2.5";
-    const char *pm_unit = v.pm_use_usaqi ? "(USAQI)" : "(ug/m3)";
+    const char *pm_unit = v.preferences.pm_use_usaqi ? "(USAQI)" : "(ug/m3)";
 
     u8g2_SetFont(&_u8g2, u8g2_font_logisoso16_tr);
     const int name_w = static_cast<int>(u8g2_GetStrWidth(&_u8g2, pm_name));
@@ -1762,7 +1767,7 @@ void DisplayService::_draw_home(const DisplayValues &v) {
 
   // PM2.5 value — centered at x=64
   u8g2_SetFont(&_u8g2, u8g2_font_logisoso32_tr);
-  format_pm_value(buf, sizeof(buf), v.pm25_ugm3, v.pm_use_usaqi);
+  format_pm_value(buf, sizeof(buf), v.home.readings.pm25_ugm3, v.preferences.pm_use_usaqi);
   draw_centered_text(&_u8g2, SCREEN_W / 2, PM_VALUE_BASELINE_Y, buf);
 
   // --- CO2 hero section ---
@@ -1787,7 +1792,7 @@ void DisplayService::_draw_home(const DisplayValues &v) {
 
   // CO2 value — centered at x=64
   u8g2_SetFont(&_u8g2, u8g2_font_logisoso32_tr);
-  format_co2_value(buf, sizeof(buf), v.co2_ppm);
+  format_co2_value(buf, sizeof(buf), v.home.readings.co2_ppm);
   draw_centered_text(&_u8g2, SCREEN_W / 2, CO2_VALUE_BASELINE_Y, buf);
 
   if (browsing) {
@@ -1797,31 +1802,33 @@ void DisplayService::_draw_home(const DisplayValues &v) {
 
   // A pinned chart keeps the overview above it. Only active browsing replaces
   // these rows with a chart title and statistics.
-  if (v.show_temp_hum) {
+  if (v.home.show_temp_hum) {
     char temp_buf[24];
     char hum_buf[24];
-    format_temperature_value(temp_buf, sizeof(temp_buf), v.temperature_c, v.use_fahrenheit);
-    format_humidity_value(hum_buf, sizeof(hum_buf), v.humidity_pct);
+    format_temperature_value(temp_buf, sizeof(temp_buf), v.home.readings.temperature_c,
+                             v.preferences.use_fahrenheit);
+    format_humidity_value(hum_buf, sizeof(hum_buf), v.home.readings.humidity_pct);
     draw_cell(&_u8g2, 0, "Temperature", temp_buf, true);
     draw_cell(&_u8g2, 1, "Humidity", hum_buf, false);
   }
 
-  const int gas_cell = v.show_temp_hum ? 2 : 0;
+  const int gas_cell = v.home.show_temp_hum ? 2 : 0;
   char value[24];
-  format_int_index_value(value, sizeof(value), v.tvoc_index);
+  format_int_index_value(value, sizeof(value), v.home.readings.tvoc_index);
   draw_cell(&_u8g2, gas_cell, "TVOC", value, false);
-  format_int_index_value(value, sizeof(value), v.nox_index);
+  format_int_index_value(value, sizeof(value), v.home.readings.nox_index);
   draw_cell(&_u8g2, gas_cell + 1, "NOx", value, false);
-  if (!v.show_temp_hum || !chart_visible) {
-    format_pressure_value(value, sizeof(value), v.pressure_hpa);
+  if (!v.home.show_temp_hum || !chart_visible) {
+    format_pressure_value(value, sizeof(value), v.home.readings.pressure_hpa);
     draw_cell(&_u8g2, gas_cell + 2, "Pressure", value, false);
-    format_altitude_value(value, sizeof(value), v.altitude_m, v.use_feet);
+    format_altitude_value(value, sizeof(value), v.home.readings.altitude_m, v.preferences.use_feet);
     draw_cell(&_u8g2, gas_cell + 3, "Altitude", value, false);
   }
   const bool thermal_chart_hidden =
-      !v.show_temp_hum && (v.pinned_chart == Metric::Temp || v.pinned_chart == Metric::Humidity);
+      !v.home.show_temp_hum &&
+      (v.home.pinned_chart == Metric::Temp || v.home.pinned_chart == Metric::Humidity);
   if (chart_visible) {
-    _draw_chart(v);
+    _draw_chart(v.home.chart);
   } else if (v.show_pinned_chart_hint() || thermal_chart_hidden) {
     u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
     const int hint_baseline =
@@ -1867,21 +1874,23 @@ void DisplayService::_draw_chart_details(const DisplayValues &v) {
 
   char min_buf[24];
   char max_buf[24];
-  if (v.chart_count > 0 && v.chart_samples != nullptr) {
-    format_chart_stat(min_buf, sizeof(min_buf), v.chart_metric(), v.chart_min, v.use_fahrenheit,
-                      v.pm_use_usaqi, v.use_feet);
-    format_chart_stat(max_buf, sizeof(max_buf), v.chart_metric(), v.chart_max, v.use_fahrenheit,
-                      v.pm_use_usaqi, v.use_feet);
+  if (v.home.chart.count > 0 && v.home.chart.samples != nullptr) {
+    format_chart_stat(min_buf, sizeof(min_buf), v.chart_metric(), v.home.chart.min,
+                      v.preferences.use_fahrenheit, v.preferences.pm_use_usaqi,
+                      v.preferences.use_feet);
+    format_chart_stat(max_buf, sizeof(max_buf), v.chart_metric(), v.home.chart.max,
+                      v.preferences.use_fahrenheit, v.preferences.pm_use_usaqi,
+                      v.preferences.use_feet);
   } else {
     snprintf(min_buf, sizeof(min_buf), "-");
     snprintf(max_buf, sizeof(max_buf), "-");
   }
   draw_cell(&_u8g2, 2, "Min", min_buf, true);
   draw_cell(&_u8g2, 3, "Max", max_buf, true);
-  _draw_chart(v);
+  _draw_chart(v.home.chart);
 }
 
-void DisplayService::_draw_menu_overlay(const DisplayValues &v) {
+void DisplayService::_draw_menu_overlay(const ListContent &list) {
   // Erase below the 2px-thick grid divider at MAIN_MENU_BG_Y, preserving
   // the divider pair (y, y+1) as the top border of the menu overlay.
   constexpr int erase_y = MAIN_MENU_BG_Y + 2;
@@ -1890,7 +1899,7 @@ void DisplayService::_draw_menu_overlay(const DisplayValues &v) {
   u8g2_SetDrawColor(&_u8g2, 1);
   u8g2_DrawBox(&_u8g2, 0, erase_y, SCREEN_W, erase_h);
   u8g2_SetDrawColor(&_u8g2, 0);
-  draw_list_rows(&_u8g2, v, false);
+  draw_list_rows(&_u8g2, list, false);
 }
 
 void DisplayService::_draw_full_screen_list(const DisplayValues &v) {
@@ -1899,27 +1908,27 @@ void DisplayService::_draw_full_screen_list(const DisplayValues &v) {
   u8g2_SetDrawColor(&_u8g2, 1);
   u8g2_DrawBox(&_u8g2, 0, FULL_SCREEN_BG_Y, CONTENT_W, FULL_SCREEN_BG_H);
   u8g2_SetDrawColor(&_u8g2, 0);
-  draw_list_rows(&_u8g2, v, true);
+  draw_list_rows(&_u8g2, v.list, true);
 
   // About screen has additional text fields below the list rows
   if (v.screen == Screen::About) {
     u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
-    draw_text(&_u8g2, 10, 88, v.about_title);
+    draw_text(&_u8g2, 10, 88, v.about.title);
     u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
-    draw_text(&_u8g2, 10, 103, v.about_firmware);
-    draw_text(&_u8g2, 10, 117, v.about_serial);
-    draw_text(&_u8g2, 10, 130, v.about_hardware);
+    draw_text(&_u8g2, 10, 103, v.about.firmware);
+    draw_text(&_u8g2, 10, 117, v.about.serial);
+    draw_text(&_u8g2, 10, 130, v.about.hardware);
   }
 }
 
-void DisplayService::_draw_snackbar(const DisplayValues &v) {
-  if (v.snackbar_text == nullptr || v.snackbar_text[0] == '\0')
+void DisplayService::_draw_snackbar(const char *text) {
+  if (text == nullptr || text[0] == '\0')
     return;
 
   u8g2_DrawBox(&_u8g2, 0, SNACKBAR_Y, SCREEN_W, SNACKBAR_H);
   u8g2_SetDrawColor(&_u8g2, 1);
   u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
-  draw_centered_text(&_u8g2, SCREEN_W / 2, SNACKBAR_TEXT_BASELINE_Y, v.snackbar_text);
+  draw_centered_text(&_u8g2, SCREEN_W / 2, SNACKBAR_TEXT_BASELINE_Y, text);
   u8g2_SetDrawColor(&_u8g2, 0);
 }
 
@@ -1962,7 +1971,7 @@ void DisplayService::_draw_shutdown(Screen s) {
   }
 }
 
-void DisplayService::_draw_pairing_passkey(const DisplayValues &v) {
+void DisplayService::_draw_pairing_passkey(uint32_t passkey) {
   u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
   draw_centered_text(&_u8g2, SCREEN_W / 2, PAIRING_TITLE_L1_BASELINE_Y, "Bluetooth");
   draw_centered_text(&_u8g2, SCREEN_W / 2, PAIRING_TITLE_L2_BASELINE_Y, "Pairing");
@@ -1973,7 +1982,7 @@ void DisplayService::_draw_pairing_passkey(const DisplayValues &v) {
   }
 
   char passkey_str[8];
-  snprintf(passkey_str, sizeof(passkey_str), "%06" PRIu32, v.ble_passkey);
+  snprintf(passkey_str, sizeof(passkey_str), "%06" PRIu32, passkey);
   u8g2_SetFont(&_u8g2, u8g2_font_logisoso32_tr);
   draw_centered_text(&_u8g2, SCREEN_W / 2, PAIRING_PASSKEY_BASELINE_Y, passkey_str);
 
@@ -1985,8 +1994,8 @@ void DisplayService::_draw_pairing_passkey(const DisplayValues &v) {
 // Session-screen render methods (Info / Provisioning / ProvisioningConfirm)
 // ---------------------------------------------------------------------------
 
-void DisplayService::_draw_info(const DisplayValues &v) {
-  if (v.info_text == nullptr || v.info_text[0] == '\0') {
+void DisplayService::_draw_info(const char *text) {
+  if (text == nullptr || text[0] == '\0') {
     return;
   }
 
@@ -2006,8 +2015,8 @@ void DisplayService::_draw_info(const DisplayValues &v) {
 
   static constexpr size_t MAX_INFO_LINES = 8;
   WrapLine lines[MAX_INFO_LINES];
-  const size_t n = compute_wrapped_lines(v.info_text, SCREEN_W, &u8g2_str_width_fn, &_u8g2, lines,
-                                         MAX_INFO_LINES);
+  const size_t n =
+      compute_wrapped_lines(text, SCREEN_W, &u8g2_str_width_fn, &_u8g2, lines, MAX_INFO_LINES);
   if (n == 0) {
     return;
   }
@@ -2038,9 +2047,11 @@ void DisplayService::_draw_info(const DisplayValues &v) {
   }
 }
 
-void DisplayService::_draw_provisioning(const DisplayValues &v) {
+void DisplayService::_draw_provisioning(const ProvisioningContent &provisioning,
+                                        const ListContent &list,
+                                        const AirgradientProvisioning::QrCode *qr) {
   // ProvisioningTransport::BleOnly == 0, ProvisioningTransport::WifiOnly == 1.
-  const bool ble_active = (v.provisioning_transport == 0);
+  const bool ble_active = (provisioning.transport == 0);
 
   constexpr int TITLE_L1_Y = 21;
   constexpr int TITLE_L2_Y = 40;
@@ -2061,7 +2072,7 @@ void DisplayService::_draw_provisioning(const DisplayValues &v) {
   draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_L2_Y, "to Wi-Fi");
 
   // --- QR code (UIManager encodes go-to-app for BleOnly, WIFI:... for WifiOnly) ---
-  draw_provisioning_qr(&_u8g2, v.qr, SCREEN_W / 2, QR_TOP_Y);
+  draw_provisioning_qr(&_u8g2, qr, SCREEN_W / 2, QR_TOP_Y);
 
   // --- QR caption ---
   u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
@@ -2075,12 +2086,12 @@ void DisplayService::_draw_provisioning(const DisplayValues &v) {
     draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_L2_Y, "to continue");
   } else {
     u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
-    const char *ssid = (v.provisioning_ap_ssid != nullptr) ? v.provisioning_ap_ssid : "airgradient";
+    const char *ssid = (provisioning.ap_ssid != nullptr) ? provisioning.ap_ssid : "airgradient";
     draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_L1_Y, ssid);
     u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
     char pwd_buf[40];
     const char *password =
-        (v.provisioning_ap_password != nullptr) ? v.provisioning_ap_password : "cleanair";
+        (provisioning.ap_password != nullptr) ? provisioning.ap_password : "cleanair";
     (void)snprintf(pwd_buf, sizeof(pwd_buf), "Password: %s", password);
     draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_L2_Y, pwd_buf);
   }
@@ -2092,10 +2103,10 @@ void DisplayService::_draw_provisioning(const DisplayValues &v) {
   // helvB08 lines (~10 px each) with breathing room around the separators.
   draw_provisioning_separator(&_u8g2, STATUS_TOP_Y);
   u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
-  if (v.provisioning_status != nullptr && v.provisioning_status[0] != '\0') {
+  if (provisioning.status != nullptr && provisioning.status[0] != '\0') {
     constexpr size_t MAX_STATUS_LINES = 2;
     WrapLine status_lines[MAX_STATUS_LINES];
-    const size_t n = compute_wrapped_lines(v.provisioning_status, SCREEN_W, &u8g2_str_width_fn,
+    const size_t n = compute_wrapped_lines(provisioning.status, SCREEN_W, &u8g2_str_width_fn,
                                            &_u8g2, status_lines, MAX_STATUS_LINES);
     // Single-line keeps the original baseline; two-line splits +/- 6 px
     // around the single-line baseline so the block stays centered in the
@@ -2124,18 +2135,18 @@ void DisplayService::_draw_provisioning(const DisplayValues &v) {
   draw_centered_text(&_u8g2, SCREEN_W / 2, ACTION_HELPER_Y,
                      ble_active ? "Setup without app?" : "Prefer the app?");
 
-  // Action labels come from UIManager via v.rows[0..1].  Selection drives
+  // Action labels come from UIManager via list.rows[0..1].  Selection drives
   // which row gets the filled rectangle.
-  const char *row0 = (v.row_count >= 1) ? v.rows[0].text : "";
-  const char *row1 = (v.row_count >= 2) ? v.rows[1].text : "";
-  draw_provisioning_action_row(&_u8g2, row0, ACTION_ROW0_Y, v.selected_row == 0);
-  draw_provisioning_action_row(&_u8g2, row1, ACTION_ROW1_Y, v.selected_row == 1);
+  const char *row0 = (list.row_count >= 1) ? list.rows[0].text : "";
+  const char *row1 = (list.row_count >= 2) ? list.rows[1].text : "";
+  draw_provisioning_action_row(&_u8g2, row0, ACTION_ROW0_Y, list.selected_row == 0);
+  draw_provisioning_action_row(&_u8g2, row1, ACTION_ROW1_Y, list.selected_row == 1);
 }
 
-void DisplayService::_draw_provisioning_confirm(const DisplayValues &v) {
+void DisplayService::_draw_provisioning_confirm(const ListContent &list) {
   // Question text picked by orchestrator/UIManager: surfaced through
-  // v.rows[0].text (kind + active transport are folded into one string).
-  const char *question = (v.row_count >= 1) ? v.rows[0].text : "Confirm?";
+  // list.rows[0].text (kind + active transport are folded into one string).
+  const char *question = (list.row_count >= 1) ? list.rows[0].text : "Confirm?";
 
   // Buttons: No (index 0, default) on the left, Yes (index 1) on the right.
   constexpr int QUESTION_Y = 110;
@@ -2149,7 +2160,7 @@ void DisplayService::_draw_provisioning_confirm(const DisplayValues &v) {
   u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
   draw_centered_text(&_u8g2, SCREEN_W / 2, QUESTION_Y, question);
 
-  const bool no_selected = (v.provisioning_confirm_index == 0);
+  const bool no_selected = (list.selected_row == 0);
 
   // No button
   if (no_selected) {
@@ -2178,7 +2189,9 @@ void DisplayService::_draw_provisioning_confirm(const DisplayValues &v) {
   }
 }
 
-void DisplayService::_draw_getting_started(const DisplayValues &v) {
+void DisplayService::_draw_getting_started(const ListContent &list,
+                                           const AirgradientProvisioning::QrCode *qr,
+                                           bool from_boot) {
   // Simplified sibling of _draw_provisioning with its own layout: a
   // chunkier 3px QR and a single hold instruction on first boot.
   // Title -> QR -> caption -> instruction -> action.
@@ -2200,7 +2213,7 @@ void DisplayService::_draw_getting_started(const DisplayValues &v) {
   draw_centered_text(&_u8g2, SCREEN_W / 2, TITLE_L2_Y, "Started");
 
   // --- QR code (chunkier 3px modules for easier scanning) ---
-  draw_provisioning_qr(&_u8g2, v.qr, SCREEN_W / 2, QR_TOP_Y, QR_MODULE_PX);
+  draw_provisioning_qr(&_u8g2, qr, SCREEN_W / 2, QR_TOP_Y, QR_MODULE_PX);
 
   // --- QR caption ---
   u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
@@ -2210,9 +2223,9 @@ void DisplayService::_draw_getting_started(const DisplayValues &v) {
   u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
   draw_centered_text(&_u8g2, SCREEN_W / 2, INSTRUCTION_Y, "Or just use it right now");
 
-  // --- Single action (label from v.rows[0]) ---
-  const char *row0 = (v.row_count >= 1) ? v.rows[0].text : "";
-  if (v.getting_started_from_boot) {
+  // --- Single action (label from list.rows[0]) ---
+  const char *row0 = (list.row_count >= 1) ? list.rows[0].text : "";
+  if (from_boot) {
     u8g2_DrawBox(&_u8g2, ACTION_X, ACTION_ROW_Y, ACTION_W, HOLD_ACTION_H);
     u8g2_SetDrawColor(&_u8g2, 1);
     u8g2_SetFont(&_u8g2, u8g2_font_helvB08_tf);
@@ -2266,14 +2279,12 @@ const char *fg_bms_state_str(uint8_t raw) {
 
 } // namespace
 
-void DisplayService::_draw_fg_learning_dashboard(const DisplayValues &v) {
-  const FgLearningDashboardData &d = v.fg_dashboard;
-
+void DisplayService::_draw_fg_learning_dashboard(Screen screen, const FgLearningDashboardData &d) {
   // Phase banner (helvB14). Two-word states wrap to two lines; single-word
   // states sit centered in the reserved two-line block. Once the charger is
   // unplugged, the Discharge cue ("Unplug charger") becomes "Discharging".
-  FgPhaseText phase = fg_learning_phase_lines(v.screen);
-  if (v.screen == Screen::FgLearnUnplug && !d.external_input_present) {
+  FgPhaseText phase = fg_learning_phase_lines(screen);
+  if (screen == Screen::FgLearnUnplug && !d.external_input_present) {
     phase = {"Discharging", nullptr};
   }
   u8g2_SetFont(&_u8g2, u8g2_font_helvB14_tf);
@@ -2298,7 +2309,7 @@ void DisplayService::_draw_fg_learning_dashboard(const DisplayValues &v) {
   draw_centered_text(&_u8g2, SCREEN_W / 2, 46, buf);
 
   // Failed: show the cause under the banner (the BOOT-exit hint is at the bottom).
-  if (v.screen == Screen::FgLearnFailed && d.fail_reason != nullptr) {
+  if (screen == Screen::FgLearnFailed && d.fail_reason != nullptr) {
     u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
     char rbuf[40];
     snprintf(rbuf, sizeof(rbuf), "FAIL: %s", d.fail_reason);
@@ -2353,7 +2364,7 @@ void DisplayService::_draw_fg_learning_dashboard(const DisplayValues &v) {
   draw_text(&_u8g2, X, y, buf);
 
   // Terminal screens (Complete/Failed): POWER-press exit hint at the bottom.
-  if (v.screen == Screen::FgLearnComplete || v.screen == Screen::FgLearnFailed) {
+  if (screen == Screen::FgLearnComplete || screen == Screen::FgLearnFailed) {
     u8g2_SetFont(&_u8g2, u8g2_font_helvR08_tr);
     draw_centered_text(&_u8g2, SCREEN_W / 2, 216, "Press POWER to exit");
   }
@@ -2370,24 +2381,24 @@ void DisplayService::_draw_fg_learning_dashboard(const DisplayValues &v) {
   draw_centered_text(&_u8g2, SCREEN_W / 2, 230, buf);
 }
 
-void DisplayService::_draw_chart(const DisplayValues &v) {
+void DisplayService::_draw_chart(const DisplayChartData &chart) {
   // Polyline only — no axes, no border lines.
-  if (v.chart_samples == nullptr || v.chart_count == 0)
+  if (chart.samples == nullptr || chart.count == 0)
     return;
 
-  const float range = v.chart_max - v.chart_min;
+  const float range = chart.max - chart.min;
   const int plot_h = PLOT_H - 1; // drawable height range
   int prev_x = PLOT_X;
   int prev_y = PLOT_Y + plot_h / 2;
 
   for (int x = 0; x < PLOT_W; ++x) {
     const int sample_index =
-        (x * static_cast<int>(v.chart_count - 1)) / ((PLOT_W > 1) ? (PLOT_W - 1) : 1);
-    const float sample = v.chart_samples[sample_index];
+        (x * static_cast<int>(chart.count - 1)) / ((PLOT_W > 1) ? (PLOT_W - 1) : 1);
+    const float sample = chart.samples[sample_index];
 
     int y = PLOT_Y + plot_h / 2;
     if (range > 0.001f) {
-      const float norm = (sample - v.chart_min) / range;
+      const float norm = (sample - chart.min) / range;
       y = PLOT_Y + plot_h - static_cast<int>(norm * static_cast<float>(plot_h));
     }
     if (y < PLOT_Y)

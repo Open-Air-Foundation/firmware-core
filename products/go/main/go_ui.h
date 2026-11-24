@@ -107,21 +107,6 @@ struct TrackingStatusSnapshot {
   bool point_count_known = false;
 };
 
-struct BatteryStatus {
-  uint8_t pct = 0xFF; // 0xFF = no data
-  bool is_charging = false;
-  bool is_plugged_in = false;
-};
-
-struct ConnectivityStatus {
-  bool ble_enabled = false;
-  bool ble_connected = false;
-  bool wifi_enabled = false;
-  bool wifi_connected = false;
-  bool gps_enabled = false;
-  bool gps_fix = false;
-};
-
 struct ChartHistoryView {
   /// Corrected samples borrowed from the orchestrator for this build.
   const MeasuresAGo *samples = nullptr;

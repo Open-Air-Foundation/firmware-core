@@ -886,8 +886,8 @@ struct AccelWorker {
 static void open_ui_row(TestFixture &f, Orchestrator &orch, const std::string &prefix) {
   for (uint8_t step = 0; step < MAX_LIST_ROWS; ++step) {
     const auto values = f.ui_manager.build_values(A::build_context(orch));
-    REQUIRE(values.selected_row < values.row_count);
-    if (std::string(values.rows[values.selected_row].text).rfind(prefix, 0) == 0) {
+    REQUIRE(values.list.selected_row < values.list.row_count);
+    if (std::string(values.list.rows[values.list.selected_row].text).rfind(prefix, 0) == 0) {
       A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
       return;
     }
@@ -1196,8 +1196,8 @@ TEST_CASE("init(PowerOn): Getting Started is usable before the first measurement
     CHECK_FALSE(A::raw_measures(orch).pm_a.is_pm_25_valid());
     CHECK_FALSE(A::raw_measures(orch).temp_hum_a.is_temp_valid());
     const auto values = f.ui_manager.build_values(A::build_context(orch));
-    CHECK(values.co2_ppm == MeasuresInvalid::CO2);
-    CHECK(values.pm25_ugm3 == MeasuresInvalid::PM);
+    CHECK(values.home.readings.co2_ppm == MeasuresInvalid::CO2);
+    CHECK(values.home.readings.pm25_ugm3 == MeasuresInvalid::PM);
 
     SECTION("First measurement fills Home") {
       MeasuresAGo data{};
@@ -1207,21 +1207,21 @@ TEST_CASE("init(PowerOn): Getting Started is usable before the first measurement
       CHECK(A::first_measurement_done(orch));
       CHECK(f.ui_manager.current_screen() == Screen::Home);
       const auto home = f.ui_manager.build_values(A::build_context(orch));
-      CHECK(home.co2_ppm == 420);
+      CHECK(home.home.readings.co2_ppm == 420);
     }
 
     SECTION("First measurement preserves a menu opened during warmup") {
       A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
       REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
       const auto update_count = DisplayService::spy_update_count;
-      const auto selected_row = f.ui_manager.build_values(A::build_context(orch)).selected_row;
+      const auto selected_row = f.ui_manager.build_values(A::build_context(orch)).list.selected_row;
       MeasuresAGo data{};
       data.co2.co2 = 420;
       A::on_sensor_data(orch, data);
 
       CHECK(A::first_measurement_done(orch));
       CHECK(f.ui_manager.current_screen() == Screen::MainMenu);
-      CHECK(f.ui_manager.build_values(A::build_context(orch)).selected_row == selected_row);
+      CHECK(f.ui_manager.build_values(A::build_context(orch)).list.selected_row == selected_row);
       CHECK(DisplayService::spy_update_count == update_count);
     }
 
@@ -1544,7 +1544,7 @@ TEST_CASE("init: prepainted boot synchronizes tracking without waiting for input
     CHECK(action.action == UIAction::None);
     REQUIRE(f.ui_manager.current_screen() == Screen::TrackingMenu);
     const auto values = f.ui_manager.build_values(A::build_context(orch));
-    CHECK(std::string(values.rows[3].text) ==
+    CHECK(std::string(values.list.rows[3].text) ==
           (state == TrackingState::Recording ? "Pause Tracking" : "Resume Tracking"));
     CHECK(A::tracking_state(orch) == state);
     CHECK(A::tracking_session_id(orch) == 42000);
@@ -1577,7 +1577,7 @@ TEST_CASE("init: failed route reopen synchronizes Idle after any early unlock re
     CHECK(A::tracking_session_id(orch) == 0);
     f.ui_manager.set_screen(Screen::MainMenu);
     const auto values = f.ui_manager.build_values(A::build_context(orch));
-    CHECK(std::string(values.rows[1].text) == "Start Tracking");
+    CHECK(std::string(values.list.rows[1].text) == "Start Tracking");
     f.ui_manager.handle_input(InputSource::TouchDown, InputType::ShortPress);
     const auto action = f.ui_manager.handle_input(InputSource::TouchEnter, InputType::ShortPress);
     CHECK(action.action == UIAction::StartTracking);
@@ -1962,8 +1962,8 @@ TEST_CASE("Tracking Status refresh: five-second cadence in both views and states
       check_tracking_status_tick(orch, 0);
       CHECK(A::lock_state(orch) == LockState::Unlocked);
       const auto after = f.ui_manager.build_values(A::build_context(orch));
-      CHECK(after.selected_row == before.selected_row);
-      CHECK(std::string(after.rows[2].text) == before.rows[2].text);
+      CHECK(after.list.selected_row == before.list.selected_row);
+      CHECK(std::string(after.list.rows[2].text) == before.list.rows[2].text);
     }
   }
 }
@@ -2042,8 +2042,8 @@ TEST_CASE("Tracking Status refresh: immediate input view Pause and Resume preser
     CHECK(A::last_input_ms(orch) == 2000);
     CHECK(A::tracking_status_refresh_deadline_ms(orch) == 5000);
     const auto after = f.ui_manager.build_values(A::build_context(orch));
-    CHECK(after.selected_row == before.selected_row);
-    CHECK(std::string(after.rows[2].text) == before.rows[2].text);
+    CHECK(after.list.selected_row == before.list.selected_row);
+    CHECK(std::string(after.list.rows[2].text) == before.list.rows[2].text);
   }
   now_ms = 4999;
   const auto attempts = DisplayService::spy_update_count;
@@ -2051,11 +2051,11 @@ TEST_CASE("Tracking Status refresh: immediate input view Pause and Resume preser
   CHECK(DisplayService::spy_update_count == attempts + 1);
   check_tracking_status_tick(orch, 0);
   CHECK(A::tracking_status_refresh_deadline_ms(orch) == 5000);
-  const auto cursor = f.ui_manager.build_values(A::build_context(orch)).selected_row;
+  const auto cursor = f.ui_manager.build_values(A::build_context(orch)).list.selected_row;
   now_ms = 5000; // A recent input frame intentionally does not postpone the periodic frame.
   check_tracking_status_tick(orch, 1);
   CHECK(DisplayService::spy_update_count == attempts + 2);
-  CHECK(f.ui_manager.build_values(A::build_context(orch)).selected_row == cursor);
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).list.selected_row == cursor);
   CHECK(A::tracking_status_refresh_deadline_ms(orch) == 10'000);
 }
 
@@ -2460,8 +2460,8 @@ TEST_CASE("Tracking Status: external transitions reliably paint and preserve vie
     CHECK(DisplayService::spy_last_screen == Screen::TrackingStatus);
     REQUIRE(f.ui_manager.current_screen() == Screen::TrackingStatus);
     const auto values = f.ui_manager.build_values(A::build_context(orch));
-    CHECK(values.selected_row == before.selected_row);
-    CHECK(std::string(values.rows[2].text) == before.rows[2].text);
+    CHECK(values.list.selected_row == before.list.selected_row);
+    CHECK(std::string(values.list.rows[2].text) == before.list.rows[2].text);
   };
 
   f.mock_rtos.retained_time_ms = 10'000;
@@ -2576,8 +2576,8 @@ TEST_CASE("Tracking Status: both views remain unlocked while Recording or Paused
         CHECK(A::last_input_ms(orch) == last_input);
       }
       const auto after = f.ui_manager.build_values(A::build_context(orch));
-      CHECK(after.selected_row == before.selected_row);
-      CHECK(std::string(after.rows[2].text) == before.rows[2].text);
+      CHECK(after.list.selected_row == before.list.selected_row);
+      CHECK(std::string(after.list.rows[2].text) == before.list.rows[2].text);
       CHECK(A::settings(orch).auto_lock_seconds == 10);
     }
   }
@@ -3161,8 +3161,8 @@ TEST_CASE("pause/resume: keep session, GPS and live data; record results only wh
   CHECK(A::latest_gps(orch).position.latitude == fix.position.latitude);
   CHECK(A::latest_gps(orch).position.longitude == fix.position.longitude);
   const auto paused = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(paused.gps_enabled);
-  CHECK(paused.gps_fix);
+  CHECK(paused.header.connectivity.gps_enabled);
+  CHECK(paused.header.connectivity.gps_fix);
   CHECK(test_spy::ble_last_status_tracking);
   CHECK(test_spy::ble_last_status_session == session);
   CHECK(test_spy::ble_tracking_state == TrackingState::Paused);
@@ -3187,12 +3187,12 @@ TEST_CASE("pause/resume: keep session, GPS and live data; record results only wh
   CHECK(DisplayService::spy_update_count == display_updates + 1);
   CHECK(DisplayService::spy_last_screen == Screen::TrackingStatus);
   const auto details = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(details.row_count == 9);
-  CHECK(details.gps_fix);
-  CHECK(std::string(details.rows[3].text) == "GPS: On");
-  CHECK(std::string(details.rows[4].text) == "Fix: 3D");
-  CHECK(std::string(details.rows[7].text) == "Lat: 47.37700");
-  CHECK(std::string(details.rows[8].text) == "Lon: 8.54200");
+  REQUIRE(details.list.row_count == 9);
+  CHECK(details.header.connectivity.gps_fix);
+  CHECK(std::string(details.list.rows[3].text) == "GPS: On");
+  CHECK(std::string(details.list.rows[4].text) == "Fix: 3D");
+  CHECK(std::string(details.list.rows[7].text) == "Lat: 47.37700");
+  CHECK(std::string(details.list.rows[8].text) == "Lon: 8.54200");
   CHECK(A::tracking_state(orch) == TrackingState::Paused);
   CHECK_FALSE(test_spy::gps_stopped);
   CHECK_FALSE(test_spy::gps_started);
@@ -3515,7 +3515,7 @@ TEST_CASE("clear_data: clears cache and routes, stopping tracking first",
     f.mock_rtos.retained_time_ms = 110'000;
     REQUIRE(A::pause_tracking(orch));
     REQUIRE(A::tracking_state(orch) == TrackingState::Paused);
-    REQUIRE(f.ui_manager.build_values(A::build_context(orch)).tracking_state ==
+    REQUIRE(f.ui_manager.build_values(A::build_context(orch)).header.tracking_state ==
             TrackingState::Paused);
     route_was_open = false;
   }
@@ -3534,12 +3534,13 @@ TEST_CASE("clear_data: clears cache and routes, stopping tracking first",
   CHECK(test_spy::routes_cleared);
 
   REQUIRE(f.ui_manager.current_screen() == Screen::Home);
-  CHECK(f.ui_manager.build_values(A::build_context(orch)).tracking_state == TrackingState::Idle);
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).header.tracking_state ==
+        TrackingState::Idle);
   A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
   REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
   const auto menu = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(menu.row_count > 1);
-  CHECK(std::string(menu.rows[1].text) == "Start Tracking");
+  REQUIRE(menu.list.row_count > 1);
+  CHECK(std::string(menu.list.rows[1].text) == "Start Tracking");
 }
 
 TEST_CASE("on_input: cancelling Clear Data preserves a paused session",
@@ -3573,8 +3574,8 @@ TEST_CASE("on_input: cancelling Clear Data preserves a paused session",
 
   REQUIRE(f.ui_manager.current_screen() == Screen::Settings);
   const auto values = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(values.selected_row < values.row_count);
-  CHECK(std::string(values.rows[values.selected_row].text) == "Clear Data");
+  REQUIRE(values.list.selected_row < values.list.row_count);
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Clear Data");
   if (values.snackbar_text != nullptr) {
     CHECK(std::string(values.snackbar_text) != "Data cleared");
   }
@@ -5368,8 +5369,8 @@ TEST_CASE("Unlocked Energy Saving keeps sensing and menus usable with Auto Lock 
   CHECK(DisplayService::spy_update_count > display_updates);
   CHECK(DisplayService::spy_last_screen == Screen::Home);
   const auto values = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(values.pm25_ugm3 == 12.0f);
-  CHECK(values.co2_ppm == 650);
+  CHECK(values.home.readings.pm25_ugm3 == 12.0f);
+  CHECK(values.home.readings.co2_ppm == 650);
   CHECK(A::lock_state(orch) == LockState::Unlocked);
 
   now = 360'000;
@@ -5421,9 +5422,9 @@ TEST_CASE("apply_settings_change: display preferences follow persistence result"
   CHECK(A::settings(orch).use_feet == save_ok);
   CHECK(A::settings(orch).pm_use_usaqi == save_ok);
   const auto values = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(values.use_fahrenheit == save_ok);
-  CHECK(values.use_feet == save_ok);
-  CHECK(values.pm_use_usaqi == save_ok);
+  CHECK(values.preferences.use_fahrenheit == save_ok);
+  CHECK(values.preferences.use_feet == save_ok);
+  CHECK(values.preferences.pm_use_usaqi == save_ok);
 }
 
 TEST_CASE("settings activation: display preferences are synchronized before stopping tracking",
@@ -5448,9 +5449,9 @@ TEST_CASE("settings activation: display preferences are synchronized before stop
         if (A::mode(orch) == OperatingMode::Offline) {
           ++observations;
           const auto values = f.ui_manager.build_values(ctx);
-          CHECK(values.use_fahrenheit);
-          CHECK(values.use_feet);
-          CHECK(values.pm_use_usaqi);
+          CHECK(values.preferences.use_fahrenheit);
+          CHECK(values.preferences.use_feet);
+          CHECK(values.preferences.pm_use_usaqi);
         }
       })
       .RETURN(0);
@@ -5620,7 +5621,7 @@ TEST_CASE("BLE config set: applies altitude display unit", "[Orchestrator][setti
   A::dispatch(orch, evt);
 
   CHECK(A::settings(orch).use_feet);
-  CHECK(f.ui_manager.build_values(A::build_context(orch)).use_feet);
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).preferences.use_feet);
   CHECK(test_spy::ble_notify_config_called);
 
   GoSettings ui_settings{};
@@ -5659,7 +5660,7 @@ TEST_CASE("BLE config set: persists pinned chart and updates the display",
   CHECK(test_spy::ble_notify_config_called);
   CHECK(DisplayService::spy_update_count > 0);
   const auto values = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(values.pinned_chart == Metric::Humidity);
+  CHECK(values.home.pinned_chart == Metric::Humidity);
   CHECK(values.chart_metric() == Metric::None);
 }
 
@@ -6053,9 +6054,9 @@ TEST_CASE("build_context: populates sensor data and status flags", "[Orchestrato
   REQUIRE(ctx.locked == true); // still locked by default
   REQUIRE(ctx.connectivity.gps_enabled == true);
   const auto values = f.ui_manager.build_values(ctx);
-  REQUIRE(values.use_fahrenheit);
-  REQUIRE(values.use_feet);
-  REQUIRE(values.pm_use_usaqi);
+  REQUIRE(values.preferences.use_fahrenheit);
+  REQUIRE(values.preferences.use_feet);
+  REQUIRE(values.preferences.pm_use_usaqi);
 }
 
 TEST_CASE("build_context: battery percentage 0xFF when invalid", "[Orchestrator][display]") {
@@ -6747,8 +6748,8 @@ TEST_CASE("dispatch: BleAuthComplete failure in setup session returns to boot gu
 
   // Boot variant: action row names the hold gesture (not "Back").
   DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(v.row_count == 1);
-  CHECK(std::string(v.rows[0].text) == "Hold menu to start");
+  REQUIRE(v.list.row_count == 1);
+  CHECK(std::string(v.list.rows[0].text) == "Hold menu to start");
 }
 
 TEST_CASE("dispatch: BleAuthComplete is no-op when not on passkey screen", "[Orchestrator][ble]") {
@@ -7033,8 +7034,8 @@ TEST_CASE("on_input: cancelling CO2 calibration does not request calibration",
   CHECK_FALSE(test_spy::co2_calibration_requested);
   REQUIRE(f.ui_manager.current_screen() == Screen::Operations);
   const auto values = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(values.selected_row < values.row_count);
-  CHECK(std::string(values.rows[values.selected_row].text) == "CO2 Calibration");
+  REQUIRE(values.list.selected_row < values.list.row_count);
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "CO2 Calibration");
   if (values.snackbar_text != nullptr) {
     CHECK(std::string(values.snackbar_text) != "Calibrating CO2...");
   }
@@ -7060,8 +7061,8 @@ TEST_CASE("on_input: cancelling Battery Calibration leaves factory state unchang
 
   REQUIRE(f.ui_manager.current_screen() == Screen::HardwareTest);
   const auto values = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(values.selected_row < values.row_count);
-  CHECK(std::string(values.rows[values.selected_row].text) == "Battery Calibration");
+  REQUIRE(values.list.selected_row < values.list.row_count);
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Battery Calibration");
   CHECK(reboot_count == 0);
 }
 
@@ -7194,7 +7195,7 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   REQUIRE(f.ui_manager.current_screen() == Screen::PeripheralTest);
 
   const auto first_view = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(std::string(first_view.rows[0].text) == "Back LED cycling?");
+  CHECK(std::string(first_view.list.rows[0].text) == "Back LED cycling?");
   bool back_pass = true;
   bool sensors_pass = true;
   SECTION("all actuators pass") {}
@@ -7209,12 +7210,12 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   A::on_input(orch, touch_enter); // Back LED result
   if (has_touch_led) {
     const auto touch_view = f.ui_manager.build_values(A::build_context(orch));
-    CHECK(std::string(touch_view.rows[0].text) == "Touch LEDs on?");
+    CHECK(std::string(touch_view.list.rows[0].text) == "Touch LEDs on?");
     A::on_input(orch, touch_enter); // Touch LED pass
   }
   CHECK(test_spy::led_touch_all_on_seen == has_touch_led);
   const auto buzzer_view = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(std::string(buzzer_view.rows[0].text) == "Buzzer beeping?");
+  CHECK(std::string(buzzer_view.list.rows[0].text) == "Buzzer beeping?");
   CHECK_FALSE(test_spy::self_test_requested);
   A::on_input(orch, touch_enter); // Buzzer pass → triggers AQ sweep
   CHECK(test_spy::self_test_requested);
@@ -7228,21 +7229,22 @@ TEST_CASE("on_input: Peripheral Test runs actuators then AQ sweep and summary",
   A::dispatch(orch, evt);
   CHECK(f.ui_manager.current_screen() == Screen::PeripheralTest);
   const auto summary = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(summary.row_count == (has_touch_led ? 9 : 8));
-  CHECK(std::string(summary.rows[0].text) ==
+  REQUIRE(summary.list.row_count == (has_touch_led ? 9 : 8));
+  CHECK(std::string(summary.list.rows[0].text) ==
         (back_pass && sensors_pass ? "PASS - tap to exit" : "FAIL - tap to exit"));
-  CHECK(std::string(summary.rows[1].text) == (back_pass ? "Back LED: PASS" : "Back LED: FAIL"));
+  CHECK(std::string(summary.list.rows[1].text) ==
+        (back_pass ? "Back LED: PASS" : "Back LED: FAIL"));
   uint8_t row = 2;
   if (has_touch_led) {
-    CHECK(std::string(summary.rows[row++].text) == "Touch LED: PASS");
+    CHECK(std::string(summary.list.rows[row++].text) == "Touch LED: PASS");
   }
-  CHECK(std::string(summary.rows[row++].text) == "Buzzer: PASS");
-  CHECK(std::string(summary.rows[row++].text) ==
+  CHECK(std::string(summary.list.rows[row++].text) == "Buzzer: PASS");
+  CHECK(std::string(summary.list.rows[row++].text) ==
         (sensors_pass ? "Temp/Hum: PASS" : "Temp/Hum: FAIL"));
-  CHECK(std::string(summary.rows[row++].text) == "CO2: PASS");
-  CHECK(std::string(summary.rows[row++].text) == "PM: PASS");
-  CHECK(std::string(summary.rows[row++].text) == "TVOC/NOx: PASS");
-  CHECK(std::string(summary.rows[row++].text) == "Pressure: PASS");
+  CHECK(std::string(summary.list.rows[row++].text) == "CO2: PASS");
+  CHECK(std::string(summary.list.rows[row++].text) == "PM: PASS");
+  CHECK(std::string(summary.list.rows[row++].text) == "TVOC/NOx: PASS");
+  CHECK(std::string(summary.list.rows[row++].text) == "Pressure: PASS");
 
   // Tap on the summary exits back to the Hardware Test submenu.
   A::on_input(orch, touch_enter);
@@ -7510,7 +7512,7 @@ TEST_CASE("Accel Test: polling recovers from FAIL to PASS without replaying entr
   REQUIRE(test_spy::buzzer_play_count == sounds_before_entry + 1);
   REQUIRE(test_spy::led_back_solid_count == led_cues_before_entry + 1);
   auto values = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(std::string(values.rows[6].text) == "Result: PASS");
+  REQUIRE(std::string(values.list.rows[6].text) == "Result: PASS");
   const int reads_after_entry = accel.read_calls;
   const auto renders_after_entry = DisplayService::spy_update_count;
 
@@ -7522,8 +7524,8 @@ TEST_CASE("Accel Test: polling recovers from FAIL to PASS without replaying entr
   CHECK(DisplayService::spy_update_count == renders_after_entry + 1);
   CHECK(DisplayService::spy_last_screen == Screen::AccelTest);
   values = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(std::string(values.rows[5].text) == "|a|: 300 mg");
-  CHECK(std::string(values.rows[6].text) == "Result: FAIL");
+  CHECK(std::string(values.list.rows[5].text) == "|a|: 300 mg");
+  CHECK(std::string(values.list.rows[6].text) == "Result: FAIL");
   CHECK(test_spy::buzzer_play_count == sounds_before_entry + 1);
   CHECK(test_spy::led_back_solid_count == led_cues_before_entry + 1);
 
@@ -7535,8 +7537,8 @@ TEST_CASE("Accel Test: polling recovers from FAIL to PASS without replaying entr
   CHECK(DisplayService::spy_update_count == renders_after_entry + 2);
   CHECK(DisplayService::spy_last_screen == Screen::AccelTest);
   values = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(std::string(values.rows[5].text) == "|a|: 1000 mg");
-  CHECK(std::string(values.rows[6].text) == "Result: PASS");
+  CHECK(std::string(values.list.rows[5].text) == "|a|: 1000 mg");
+  CHECK(std::string(values.list.rows[6].text) == "Result: PASS");
   CHECK(test_spy::buzzer_play_count == sounds_before_entry + 1);
   CHECK(test_spy::led_back_solid_count == led_cues_before_entry + 1);
 }
@@ -7632,7 +7634,7 @@ TEST_CASE("prepare_for_sleep: reconciles tracking navigation before its final re
     CHECK(f.ui_manager.current_screen() == Screen::MainMenu);
     CHECK(DisplayService::spy_last_screen == Screen::MainMenu);
     const auto values = f.ui_manager.build_values(A::build_context(orch));
-    CHECK(std::string(values.rows[1].text) == "Start Tracking");
+    CHECK(std::string(values.list.rows[1].text) == "Start Tracking");
     CHECK(test_spy::last_saved_state.tracking_state == TrackingState::Idle);
   }
   SECTION("Paused state controls the menu label") {
@@ -7643,7 +7645,7 @@ TEST_CASE("prepare_for_sleep: reconciles tracking navigation before its final re
     A::prepare_for_sleep(orch);
     CHECK(f.ui_manager.current_screen() == Screen::TrackingMenu);
     const auto values = f.ui_manager.build_values(A::build_context(orch));
-    CHECK(std::string(values.rows[3].text) == "Resume Tracking");
+    CHECK(std::string(values.list.rows[3].text) == "Resume Tracking");
     CHECK(test_spy::last_saved_state.tracking_state == TrackingState::Paused);
   }
 }
@@ -8557,7 +8559,7 @@ TEST_CASE("Peripheral Test: serializes the sweep with scheduled measurements",
   done.sensor_test_results = SensorTestResults{true, true, true, true, true};
   A::dispatch(orch, done);
   const auto view = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(std::string(view.rows[0].text) == "PASS - tap to exit");
+  CHECK(std::string(view.list.rows[0].text) == "PASS - tap to exit");
   A::check_timers(orch);
   CHECK(test_spy::measurement_requested);
 }
@@ -8675,7 +8677,7 @@ TEST_CASE("Peripheral Test: an in-flight sweep retains PM ownership after exit",
     A::dispatch(orch, done);
     CHECK(test_spy::self_test_requested);
     const auto view = f.ui_manager.build_values(A::build_context(orch));
-    CHECK(view.row_count != 9); // The old result must not become the new summary.
+    CHECK(view.list.row_count != 9); // The old result must not become the new summary.
     CHECK_FALSE(test_spy::pm_sleep_requested);
   }
 }
@@ -8986,19 +8988,19 @@ TEST_CASE("AlwaysOff clears an existing fix and keeps GPS inactive when tracking
 
   REQUIRE(f.ui_manager.current_screen() == Screen::Home);
   const auto home = f.ui_manager.build_values(A::build_context(orch));
-  CHECK_FALSE(home.gps_enabled);
-  CHECK_FALSE(home.gps_fix);
+  CHECK_FALSE(home.header.connectivity.gps_enabled);
+  CHECK_FALSE(home.header.connectivity.gps_fix);
 
   enter_tracking_status(f, orch);
   open_ui_row(f, orch, "GPS details");
   const auto details = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(details.row_count == 9);
-  CHECK(std::string(details.rows[3].text) == "GPS: Off");
-  CHECK(std::string(details.rows[4].text) == "Fix: --");
-  CHECK(std::string(details.rows[5].text) == "Sats: --");
-  CHECK(std::string(details.rows[6].text) == "HDOP: --");
-  CHECK(std::string(details.rows[7].text) == "Lat: --");
-  CHECK(std::string(details.rows[8].text) == "Lon: --");
+  REQUIRE(details.list.row_count == 9);
+  CHECK(std::string(details.list.rows[3].text) == "GPS: Off");
+  CHECK(std::string(details.list.rows[4].text) == "Fix: --");
+  CHECK(std::string(details.list.rows[5].text) == "Sats: --");
+  CHECK(std::string(details.list.rows[6].text) == "HDOP: --");
+  CHECK(std::string(details.list.rows[7].text) == "Lat: --");
+  CHECK(std::string(details.list.rows[8].text) == "Lon: --");
 }
 
 TEST_CASE("OnWhenTracking clears an existing fix and stays inactive while idle",
@@ -9045,8 +9047,8 @@ TEST_CASE("OnWhenTracking clears an existing fix and stays inactive while idle",
     CHECK(test_spy::gps_sleeping_start_count == 1);
     REQUIRE(f.ui_manager.current_screen() == Screen::Home);
     const auto home = f.ui_manager.build_values(A::build_context(orch));
-    CHECK_FALSE(home.gps_enabled);
-    CHECK_FALSE(home.gps_fix);
+    CHECK_FALSE(home.header.connectivity.gps_enabled);
+    CHECK_FALSE(home.header.connectivity.gps_fix);
   }
 }
 
@@ -9452,8 +9454,8 @@ TEST_CASE("Stationary ends tracking and returning to Portable leaves it idle",
   check_stopped();
   A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
   const auto menu = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(menu.row_count == 3);
-  CHECK(std::string(menu.rows[1].text) == "Operating Mode");
+  REQUIRE(menu.list.row_count == 3);
+  CHECK(std::string(menu.list.rows[1].text) == "Operating Mode");
 
   // Requests delivered after the mode change cannot restart the session.
   for (auto type : {EventType::UserStartTracking, EventType::UserResumeTracking}) {
@@ -10576,8 +10578,8 @@ TEST_CASE("Cancel Setup No preserves the active provisioning session",
     A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
     REQUIRE(f.ui_manager.current_screen() == Screen::ProvisioningConfirm);
     const auto confirm = f.ui_manager.build_values(A::build_context(orch));
-    REQUIRE(confirm.provisioning_confirm_kind == 1);
-    REQUIRE(confirm.provisioning_confirm_index == 0);
+    REQUIRE(std::string(confirm.list.rows[0].text) == "Cancel setup?");
+    REQUIRE(confirm.list.selected_row == 0);
 
     A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
 
@@ -10613,8 +10615,8 @@ TEST_CASE("ConfirmCancelProvisioning routes through leave_session_to_portable",
     A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
     REQUIRE(f.ui_manager.current_screen() == Screen::ProvisioningConfirm);
     const auto confirm = f.ui_manager.build_values(A::build_context(orch));
-    REQUIRE(confirm.provisioning_confirm_kind == 1);
-    REQUIRE(confirm.provisioning_confirm_index == 0);
+    REQUIRE(std::string(confirm.list.rows[0].text) == "Cancel setup?");
+    REQUIRE(confirm.list.selected_row == 0);
 
     A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress}); // No -> Yes
     A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
@@ -11349,7 +11351,7 @@ TEST_CASE("local altitude activation persists syncs redraws publishes and conver
   }
 
   CHECK(A::settings(orch).use_feet);
-  CHECK(f.ui_manager.build_values(A::build_context(orch)).use_feet);
+  CHECK(f.ui_manager.build_values(A::build_context(orch)).preferences.use_feet);
   CHECK(*f.local_api.get_config().altitude_unit == "ft");
   CHECK(DisplayService::spy_update_count == 1);
   GoSettings ui_settings{};
@@ -11396,7 +11398,7 @@ TEST_CASE("local pinned chart activation persists updates UI and publishes confi
   CHECK(DisplayService::spy_update_count == 1);
   CHECK(test_spy::ble_notify_config_called);
   const auto values = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(values.pinned_chart == Metric::Humidity);
+  CHECK(values.home.pinned_chart == Metric::Humidity);
   CHECK(values.chart_metric() == Metric::None);
 
   REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
@@ -11584,13 +11586,13 @@ TEST_CASE("local temperature correction redraws existing chart history without n
   A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress}); // CO2
   A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress}); // Temperature
   auto values = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(values.active_metric == Metric::Temp);
-  REQUIRE(values.chart_count == temperatures.size());
-  REQUIRE(values.chart_samples != nullptr);
-  REQUIRE(values.chart_min == 18.0f);
-  REQUIRE(values.chart_max == 23.0f);
+  REQUIRE(values.home.active_metric == Metric::Temp);
+  REQUIRE(values.home.chart.count == temperatures.size());
+  REQUIRE(values.home.chart.samples != nullptr);
+  REQUIRE(values.home.chart.min == 18.0f);
+  REQUIRE(values.home.chart.max == 23.0f);
   for (size_t i = 0; i < temperatures.size(); ++i) {
-    REQUIRE(values.chart_samples[i] == temperatures[i]);
+    REQUIRE(values.home.chart.samples[i] == temperatures[i]);
   }
 
   Corrections corrections{};
@@ -11607,17 +11609,17 @@ TEST_CASE("local temperature correction redraws existing chart history without n
   CHECK_FALSE(test_spy::measurement_requested);
   CHECK_FALSE(test_spy::cache_measurement_called);
   values = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(values.active_metric == Metric::Temp);
-  CHECK_FALSE(values.use_fahrenheit);
-  CHECK(values.temperature_c == 20.0f);
-  REQUIRE(values.chart_count == temperatures.size());
-  REQUIRE(values.chart_samples != nullptr);
-  CHECK(values.chart_min == 20.0f);
-  CHECK(values.chart_max == 20.0f);
+  CHECK(values.home.active_metric == Metric::Temp);
+  CHECK_FALSE(values.preferences.use_fahrenheit);
+  CHECK(values.home.readings.temperature_c == 20.0f);
+  REQUIRE(values.home.chart.count == temperatures.size());
+  REQUIRE(values.home.chart.samples != nullptr);
+  CHECK(values.home.chart.min == 20.0f);
+  CHECK(values.home.chart.max == 20.0f);
   REQUIRE(test_spy::cached_measurements.size() == temperatures.size());
   for (size_t i = 0; i < temperatures.size(); ++i) {
     CAPTURE(i);
-    CHECK(values.chart_samples[i] == 20.0f);
+    CHECK(values.home.chart.samples[i] == 20.0f);
     CHECK(test_spy::cached_measurements[i].temp_hum_a.temperature == temperatures[i]);
     CHECK(test_spy::cached_measurements[i].temp_hum_a.humidity == 50.0f);
     CHECK(test_spy::cached_measurements[i].pm_a.pm_25 == 10.0f);
@@ -11651,10 +11653,10 @@ TEST_CASE("local correction limits recover original display values without anoth
   REQUIRE(restore.corrections.has_value());
 
   auto values = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(values.show_temp_hum);
-  REQUIRE(values.temperature_c == 22.0f);
-  REQUIRE(values.humidity_pct == 45.0f);
-  REQUIRE(values.pm25_ugm3 == 21.0f);
+  REQUIRE(values.home.show_temp_hum);
+  REQUIRE(values.home.readings.temperature_c == 22.0f);
+  REQUIRE(values.home.readings.humidity_pct == 45.0f);
+  REQUIRE(values.home.readings.pm25_ugm3 == 21.0f);
 
   // The same constant-output inputs used by go.display.correction-limits.
   Corrections limits{};
@@ -11669,9 +11671,9 @@ TEST_CASE("local correction limits recover original display values without anoth
 
   CHECK(DisplayService::spy_update_count > display_updates);
   values = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(values.temperature_c == MeasuresInvalid::TEMPERATURE);
-  CHECK(values.humidity_pct == MeasuresInvalid::HUMIDITY);
-  CHECK(values.pm25_ugm3 == 0.0f);
+  CHECK(values.home.readings.temperature_c == MeasuresInvalid::TEMPERATURE);
+  CHECK(values.home.readings.humidity_pct == MeasuresInvalid::HUMIDITY);
+  CHECK(values.home.readings.pm25_ugm3 == 0.0f);
   auto published = f.local_api.get_measures();
   CHECK_FALSE(published.temp_hum_a.is_temp_valid());
   CHECK_FALSE(published.temp_hum_a.is_hum_valid());
@@ -11685,9 +11687,9 @@ TEST_CASE("local correction limits recover original display values without anoth
   CHECK(DisplayService::spy_update_count > display_updates);
   CHECK(measurement_corrections_equal(A::settings(orch).corrections, original));
   values = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(values.temperature_c == 22.0f);
-  CHECK(values.humidity_pct == 45.0f);
-  CHECK(values.pm25_ugm3 == 21.0f);
+  CHECK(values.home.readings.temperature_c == 22.0f);
+  CHECK(values.home.readings.humidity_pct == 45.0f);
+  CHECK(values.home.readings.pm25_ugm3 == 21.0f);
   published = f.local_api.get_measures();
   CHECK(published.temp_hum_a.is_temp_valid());
   CHECK(published.temp_hum_a.is_hum_valid());
@@ -11715,7 +11717,7 @@ TEST_CASE("local PM correction drives AQI display and LEDs on activation and lat
   raw.pm_a.pm_25 = 5.0f;
   A::on_sensor_data(orch, raw);
   REQUIRE(test_spy::led_last_aqi_pm25 == 5.0f);
-  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).pm25_ugm3 == 5.0f);
+  REQUIRE(f.ui_manager.build_values(A::build_context(orch)).home.readings.pm25_ugm3 == 5.0f);
 
   constexpr float CORRECTED_PM25 = 35.4f;
   Corrections corrections{};
@@ -11733,8 +11735,8 @@ TEST_CASE("local PM correction drives AQI display and LEDs on activation and lat
   CHECK(DisplayService::spy_update_count > display_updates);
   CHECK(test_spy::led_last_aqi_pm25 == CORRECTED_PM25);
   auto values = f.ui_manager.build_values(A::build_context(orch));
-  CHECK(values.pm_use_usaqi);
-  CHECK(values.pm25_ugm3 == CORRECTED_PM25);
+  CHECK(values.preferences.pm_use_usaqi);
+  CHECK(values.home.readings.pm25_ugm3 == CORRECTED_PM25);
   CHECK(f.local_api.get_measures().pm_a.pm_25 == CORRECTED_PM25);
   CHECK(A::raw_measures(orch).pm_a.pm_25 == 5.0f);
 
@@ -11750,8 +11752,8 @@ TEST_CASE("local PM correction drives AQI display and LEDs on activation and lat
     CHECK(DisplayService::spy_update_count > previous_display_updates);
     CHECK(test_spy::led_last_aqi_pm25 == CORRECTED_PM25);
     values = f.ui_manager.build_values(A::build_context(orch));
-    CHECK(values.pm_use_usaqi);
-    CHECK(values.pm25_ugm3 == CORRECTED_PM25);
+    CHECK(values.preferences.pm_use_usaqi);
+    CHECK(values.home.readings.pm25_ugm3 == CORRECTED_PM25);
     CHECK(f.local_api.get_measures().pm_a.pm_25 == CORRECTED_PM25);
     CHECK(A::raw_measures(orch).pm_a.pm_25 == pm25);
   }
@@ -12424,8 +12426,8 @@ TEST_CASE("Energy Saving transitions save the mode and stop tracking before char
       A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
       REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
       const auto offline_menu = f.ui_manager.build_values(A::build_context(orch));
-      REQUIRE(offline_menu.row_count == 3);
-      CHECK(std::string(offline_menu.rows[1].text) == "Operating Mode");
+      REQUIRE(offline_menu.list.row_count == 3);
+      CHECK(std::string(offline_menu.list.rows[1].text) == "Operating Mode");
 
       f.stub_bms.on_reset = nullptr;
       A::change_mode(orch, mode);
@@ -12444,8 +12446,8 @@ TEST_CASE("Energy Saving transitions save the mode and stop tracking before char
       A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
       REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
       const auto menu = f.ui_manager.build_values(A::build_context(orch));
-      REQUIRE(menu.row_count == (mode == OperatingMode::Portable ? 4 : 3));
-      CHECK(std::string(menu.rows[1].text) ==
+      REQUIRE(menu.list.row_count == (mode == OperatingMode::Portable ? 4 : 3));
+      CHECK(std::string(menu.list.rows[1].text) ==
             (mode == OperatingMode::Portable ? "Start Tracking" : "Operating Mode"));
     }
   }
