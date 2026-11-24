@@ -90,8 +90,10 @@ moved content with links.
 
 Keep the root README as the repository entry point. Link to the relevant
 product or component README, then to architecture and detailed topic documents.
-Add new documents to the nearest useful index so readers can discover them.
-Link directly to a relevant section when it helps the reader continue a task.
+Add new evergreen documents to the nearest useful index so readers can discover
+them. Specifications are temporary implementation plans and do not need incoming
+links from READMEs, indexes, or other documents. Link directly to a relevant
+section when it helps the reader continue a task.
 
 ## Writing Useful Content
 
@@ -202,8 +204,7 @@ configuration, or directories to fill a template.
    hardware and power behavior
 4. `## Build` — optional; include only for product-specific requirements not
    covered by the root README. Omit when the shared instructions are sufficient.
-5. `## Documentation` — links to `ARCHITECTURE.md`, `docs/`, `specs/`,
-   board config
+5. `## Documentation` — links to `ARCHITECTURE.md`, `docs/`, board config
 
 ### Architecture Doc (`products/<name>/ARCHITECTURE.md`)
 
@@ -415,7 +416,8 @@ pre-commit run markdownlint-cli2 --all-files
 
 Before opening a PR that touches docs:
 
-- [ ] Reader and purpose are clear; the document is linked from a useful index
+- [ ] Reader and purpose are clear; evergreen documents are linked from a useful
+      index (specifications do not require incoming links)
 - [ ] Each topic has one authoritative home; other docs summarize and link
 - [ ] Behavior and examples agree with the current code and relevant tests
 - [ ] Important constraints, errors, and design rationale are preserved
