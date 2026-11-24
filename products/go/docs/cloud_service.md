@@ -66,9 +66,14 @@ File-local constants in `go_cloud.cpp`:
 
 | Constant | Value | Notes |
 |---|---|---|
-| `CLOUD_TASK_STACK_SIZE` | `8192` | Task stack from heap (only while running) |
+| `CLOUD_TASK_STACK_SIZE` | `6144` | Task stack from heap (only while running) |
 | `CLOUD_TASK_PRIORITY` | `4` | Below SensorProducer (5), above GpsService (3) |
-| `FETCH_BUFFER_BYTES` | `2048` | Heap-allocated fetch response buffer, including the terminating NUL |
+| `FETCH_BUFFER_BYTES` | `1024` | Heap-allocated fetch response buffer, including the terminating NUL |
+
+Configuration responses can contain up to 1,023 bytes plus the terminating NUL.
+Truncated responses return `BufferTooSmall` and do not apply configuration updates.
+The Go measurement POST uses a 512-byte stack buffer; other device models retain
+1,024 bytes. Serialization failure prevents transmission of an incomplete payload.
 
 ## Behavior
 
@@ -78,7 +83,7 @@ The constructor initializes the object and its snapshot mutex. The mutex
 allocates its RTOS resource on target; the larger worker allocations are deferred
 to `start()`:
 
-- **`start()`** — allocates 8 KB task stack + 2 KB fetch buffer +
+- **`start()`** — allocates 6 KiB task stack + 1 KiB fetch buffer +
   semaphore. Called by the orchestrator only after Wi-Fi is online.
 - **`stop()`** — frees the task, fetch buffer, and semaphore; the object and
   snapshot mutex remain alive.
@@ -295,6 +300,7 @@ active services; they are not a fixed device budget. The checked-in
 | Setting | Configured Value | Purpose |
 |---|---|---|
 | `CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN` | `4096` | TLS input buffer limit |
+| `CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN` | `2048` | TLS output buffer limit |
 | `CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM` | `6` | Static Wi-Fi receive buffer count |
 | `CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM` | `10` | Dynamic Wi-Fi receive buffer limit |
 | `CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM` | `16` | Dynamic Wi-Fi transmit buffer limit |
