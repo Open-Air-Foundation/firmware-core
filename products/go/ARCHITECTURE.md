@@ -351,7 +351,10 @@ polling. See [GPS Service](docs/gps_service.md) and
 ### UI State and Locking
 
 UIManager owns screen navigation and builds `DisplayValues` from application
-state. The orchestrator forwards eligible input, executes returned actions,
+inputs and synchronized display settings. See
+[UI frame inputs](docs/ui_manager.md#frame-inputs-and-settings) and
+[display frame ownership](docs/display_service.md#displayvalues) for their
+contracts. The orchestrator forwards eligible input, executes returned actions,
 and directly selects lifecycle screens such as pairing, provisioning, and
 shutdown. Opening a menu does not pause sensing or tracking. The first-use guide
 is both a boot-gate screen and a screen that can be reopened from Settings.
