@@ -349,6 +349,13 @@ public:
   void stop();
 
 private:
+  // Previous frame metadata used for refresh selection. Completion counters and
+  // cooldown timing belong to DisplayRefreshPolicy; no render payload is retained.
+  struct DisplayRefreshState {
+    Screen screen = Screen::Home;
+    DisplayHeader header{};
+  };
+
   static constexpr int BUF_TILE_HEIGHT = static_cast<int>(go_display_geometry::RENDER_ROWS / 8);
   static constexpr size_t BUF_SIZE = go_display_geometry::RENDER_BYTES;
   static constexpr uint32_t WORKER_POLL_MS = 10;
@@ -360,7 +367,7 @@ private:
   uint8_t _render_buf[BUF_SIZE];
 
   // Refresh state
-  DisplayValues _prev_values;
+  DisplayRefreshState _prev_state;
   DisplayRefreshPolicy _refresh_policy;
   RefreshMode _pending_mode = RefreshMode::Full;
   bool _pending_full_canvas_partial = false;

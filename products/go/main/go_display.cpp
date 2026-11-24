@@ -1279,7 +1279,7 @@ void draw_list_rows(u8g2_t *u, const ListContent &list, bool full_screen) {
 // ===========================================================================
 
 DisplayService::DisplayService(const Config &config)
-    : _config(config), _u8g2{}, _render_buf{}, _prev_values{}, _pending_mode(RefreshMode::Full),
+    : _config(config), _u8g2{}, _render_buf{}, _prev_state{}, _pending_mode(RefreshMode::Full),
       _task_handle(nullptr), _running(false), _worker_busy(false) {}
 
 bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
@@ -1295,7 +1295,7 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
                    U8G2_MIRROR);
   u8g2_SetFontMode(&_u8g2, 1); // Transparent font mode
 
-  _prev_values = initial;
+  _prev_state = {.screen = initial.screen, .header = initial.header};
   _render_frame(initial);
 
   if (!defer_refresh) {
@@ -1357,16 +1357,16 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
   }
 
   const bool same_list_screen =
-      is_list_screen(_prev_values.screen) && _prev_values.screen == values.screen;
-  const bool header_changed = _is_header_changed(values.header, _prev_values.header);
-  const bool both_navigable = is_navigable(_prev_values.screen) && is_navigable(values.screen);
+      is_list_screen(_prev_state.screen) && _prev_state.screen == values.screen;
+  const bool header_changed = _is_header_changed(values.header, _prev_state.header);
+  const bool both_navigable = is_navigable(_prev_state.screen) && is_navigable(values.screen);
   const bool can_partial = (both_navigable && !header_changed) || same_list_screen;
 
   // Crossing the full-canvas session boundary forces a full refresh so no
   // ghosting from the prior layout remains. All in-session transitions use
   // partial refresh over y=0..249 so disjoint layouts clear cleanly without
   // the Full waveform's ~3 s flash.
-  const bool prev_in_session = is_session_screen(_prev_values.screen);
+  const bool prev_in_session = is_session_screen(_prev_state.screen);
   const bool next_in_session = is_session_screen(values.screen);
   const bool crossing_session_boundary = prev_in_session != next_in_session;
   _pending_full_canvas_partial = next_in_session;
@@ -1377,7 +1377,7 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
       is_shutdown_screen(values.screen) || values.screen == Screen::PairingPasskey;
   const bool menu_navigation =
       !entering_system_screen &&
-      (is_menu_navigation_screen(_prev_values.screen) || is_menu_navigation_screen(values.screen));
+      (is_menu_navigation_screen(_prev_state.screen) || is_menu_navigation_screen(values.screen));
 
   if (values.screen == Screen::TrackingStatus) {
     // Status never refreshes the top bar, even on entry or beyond the partial budget.
@@ -1395,9 +1395,8 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
     // consulted inside the session.
     _pending_mode = RefreshMode::Partial;
     _menu_exited = false;
-  } else if (values.screen == Screen::Home &&
-             (_prev_values.screen == Screen::Home ||
-              values.header.locked != _prev_values.header.locked)) {
+  } else if (values.screen == Screen::Home && (_prev_state.screen == Screen::Home ||
+                                               values.header.locked != _prev_state.header.locked)) {
     // Locking from a menu must paint the header and snackbar together.
     // Apply the Home cooldown before the body-only menu-navigation rule.
     const auto decision = _refresh_policy.home_update(
@@ -1423,7 +1422,7 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
     _menu_exited = false;
   }
 
-  _prev_values = values;
+  _prev_state = {.screen = values.screen, .header = values.header};
 
   RTOS::task_notify_give(_task_handle);
   return true;
@@ -1450,7 +1449,7 @@ void DisplayService::update_sync(const DisplayValues &values) {
   } else {
     _refresh_policy.completed(RefreshMode::Full, static_cast<uint32_t>(RTOS::get_time_ms()));
   }
-  _prev_values = values;
+  _prev_state = {.screen = values.screen, .header = values.header};
   _release_framebuffer();
 }
 
