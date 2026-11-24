@@ -42,8 +42,14 @@ constexpr int LOCAL_API_ROUTE_COUNT = 6;
 
 class FakeWifiHal : public WifiHal {
 public:
-  WifiStatus init() override { return WifiStatus::Ok; }
-  void deinit() override {}
+  WifiStatus init() override {
+    ++init_calls;
+    return init_status;
+  }
+  void deinit() override { ++deinit_calls; }
+  int init_calls = 0;
+  int deinit_calls = 0;
+  WifiStatus init_status = WifiStatus::Ok;
 
   WifiStatus set_mode(WifiMode mode) override {
     _mode = mode;
@@ -115,7 +121,7 @@ public:
     if (call_log != nullptr) {
       call_log->push_back("mdns_stop");
     }
-    return WifiStatus::Ok;
+    return stop_mdns_status;
   }
 
   WifiStatus arm_dhcp_timeout(uint32_t) override { return WifiStatus::Ok; }
@@ -153,6 +159,7 @@ public:
     std::vector<std::pair<std::string, std::string>> txt;
   };
   WifiStatus start_mdns_status = WifiStatus::Ok;
+  WifiStatus stop_mdns_status = WifiStatus::Ok;
   int start_mdns_calls = 0;
   int stop_mdns_calls = 0;
   std::string last_mdns_hostname;
@@ -312,6 +319,8 @@ public:
     return s._provisioning_connected_event_pending.load();
   }
   static bool provisioning_active(const WifiService &s) { return s._provisioning_active; }
+  // TEST_HOST does not spawn tasks; pump the same worker body after request_suspend.
+  static void finish_suspend(WifiService &s) { s._suspend(); }
   static bool local_http_active(const WifiService &s) { return s._local_http_active; }
   static void set_provisioning_active(WifiService &s, bool active) {
     s._provisioning_active = active;
@@ -1387,4 +1396,96 @@ TEST_CASE("on_provisioning_event Started during a transport switch reports the d
   REQUIRE(evt != nullptr);
   CHECK(evt->prov.event == static_cast<uint8_t>(ProvisioningEvent::Started));
   CHECK(evt->prov.transport == static_cast<uint8_t>(ProvisioningTransport::WifiOnly));
+}
+
+TEST_CASE("WifiService handoff stops endpoints and retains driver and online history",
+          "[WifiService][handoff]") {
+  WifiService::Config config{};
+  config.serial_number = "TEST00";
+  config.firmware_version = "test";
+  config.model = "P-1PSG";
+  config.hostname = "airgradient-TEST00";
+  Fixture f(config);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x01020304);
+  REQUIRE(f.svc.has_been_online());
+  REQUIRE(f.svc.ensure_local_http());
+  REQUIRE(f.svc.ensure_local_mdns());
+  f.svc.schedule_reconnect();
+  const uint32_t before = f.svc.event_epoch();
+  // Task creation is deliberately unavailable on host. Failure still gates
+  // retries/callbacks, and the worker is pumped at the existing service seam.
+  CHECK_FALSE(f.svc.request_suspend(false));
+  CHECK(f.svc.is_suspended());
+  CHECK(f.svc.event_epoch() != before);
+  CHECK_FALSE(f.svc.poll_suspend());
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
+  f.hal.got_ip_cb(0x05060708);
+  CHECK_FALSE(f.svc.is_online());
+  WifiServiceTestAccess::finish_suspend(f.svc);
+  CHECK(f.svc.poll_suspend());
+  CHECK_FALSE(WifiServiceTestAccess::local_http_active(f.svc));
+  CHECK(f.http.active_routes == 0);
+  CHECK(f.hal.get_mode() == WifiMode::Off);
+  CHECK(f.hal.deinit_calls == 0);
+  CHECK(f.svc.has_saved_networks());
+  CHECK(f.svc.has_been_online());
+  REQUIRE(f.svc.resume_station());
+  CHECK_FALSE(f.svc.is_suspended());
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 0); // Runtime resume, not initial failure.
+  CHECK(f.hal.init_calls == 1);
+  CHECK(f.hal.get_mode() == WifiMode::Sta);
+}
+
+TEST_CASE("WifiService tracking upgrades suspension and reinitializes on return",
+          "[WifiService][handoff]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  (void)f.svc.request_suspend(false);
+  WifiServiceTestAccess::finish_suspend(f.svc);
+  REQUIRE(f.svc.poll_suspend());
+  (void)f.svc.request_suspend(true);
+  WifiServiceTestAccess::finish_suspend(f.svc);
+  REQUIRE(f.svc.poll_suspend());
+  CHECK(f.svc.driver_released());
+  CHECK(f.hal.deinit_calls == 1);
+  CHECK(f.svc.has_saved_networks());
+  f.hal.init_status = WifiStatus::Failed;
+  CHECK_FALSE(f.svc.resume_station());
+  CHECK(f.svc.is_suspended());
+  f.hal.init_status = WifiStatus::Ok;
+  REQUIRE(f.svc.resume_station());
+  CHECK_FALSE(f.svc.driver_released());
+  // Never previously online: preserve the initial-failure provisioning policy.
+  CHECK(WifiServiceTestAccess::deadline(f.svc) != 0);
+}
+
+TEST_CASE("WifiService cleanup failure cannot release ownership before retry succeeds",
+          "[WifiService][handoff]") {
+  WifiService::Config config{};
+  config.serial_number = "TEST00";
+  config.firmware_version = "test";
+  config.model = "P-1PSG";
+  config.hostname = "airgradient-TEST00";
+  Fixture f(config);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x01020304);
+  REQUIRE(f.svc.ensure_local_http());
+  REQUIRE(f.svc.ensure_local_mdns());
+  f.hal.stop_mdns_status = WifiStatus::Failed;
+  (void)f.svc.request_suspend(true);
+  WifiServiceTestAccess::finish_suspend(f.svc);
+  CHECK_FALSE(f.svc.poll_suspend());
+  CHECK_FALSE(f.svc.driver_released());
+  CHECK(f.hal.deinit_calls == 0);
+  f.hal.stop_mdns_status = WifiStatus::Ok;
+  (void)f.svc.request_suspend(true);
+  WifiServiceTestAccess::finish_suspend(f.svc);
+  CHECK(f.svc.poll_suspend());
+  CHECK(f.svc.driver_released());
+  CHECK(f.hal.deinit_calls == 1);
 }

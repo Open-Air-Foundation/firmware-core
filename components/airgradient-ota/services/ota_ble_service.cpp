@@ -155,7 +155,18 @@ void OtaBleService::handle_disconnect() {
   _latch_abort(OtaStatus::TransportError);
 }
 
-bool OtaBleService::is_active() const { return _is_active.load(); }
+bool OtaBleService::is_active() const { return _admission.load() == Admission::Active; }
+
+bool OtaBleService::block_start() {
+  Admission expected = Admission::Idle;
+  return _admission.compare_exchange_strong(expected, Admission::Blocked) ||
+         expected == Admission::Blocked;
+}
+
+void OtaBleService::allow_start() {
+  Admission expected = Admission::Blocked;
+  _admission.compare_exchange_strong(expected, Admission::Idle);
+}
 
 // ---------------------------------------------------------------------------
 // Control characteristic (NimBLE host task)
@@ -253,12 +264,16 @@ void OtaBleService::_handle_start(const void *map_ptr) {
   }
   AG_LOGI(TAG, "START: total=%u fw='%s'", static_cast<unsigned>(total), fw);
 
+  Admission expected = Admission::Idle;
+  if (!_admission.compare_exchange_strong(expected, Admission::Active)) {
+    _reject_start(OtaStatus::Aborted);
+    return;
+  }
   _total = static_cast<size_t>(total);
   _bytes_accepted.store(0);
   _pending.store(Cmd::None);
   _state = State::Starting;
   // is_active before begin() so the product can inhibit sleep across the erase.
-  _is_active.store(true);
   _signal.give(); // wake a run() parked waiting for START
 }
 
@@ -464,9 +479,9 @@ void OtaBleService::_emit_terminal(OtaState state, OtaStatus status) {
     _restore_conn_params();
   }
   _result = status;
-  _is_active.store(false);
   _pending.store(Cmd::None);
   _state = State::Idle;
+  _admission.store(Admission::Idle);
 }
 
 void OtaBleService::_request_fast_conn_params() {

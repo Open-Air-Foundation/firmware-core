@@ -192,6 +192,10 @@ Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services
 // ---------------------------------------------------------------------------
 
 void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
+  _connectivity_initialized = false;
+  _wifi_owned = false;
+  _ble_owned = false;
+  _connectivity_handoff = ConnectivityHandoff::None;
   AG_LOGI(TAG,
           "init: wake_cause=%d display_painted=%d measurement_done=%d "
           "lock=%d",
@@ -313,13 +317,12 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   publish_local_snapshots();
   publish_local_wifi_snapshot();
 
-  init_ble_if_available();
+  _connectivity_initialized = true;
+  if (_lock_state == LockState::Unlocked)
+    _ble_window_pending = true;
   const uint32_t initial_gps_sleep_ms = is_gps_active() ? 0 : gps_sleep_interval_ms();
   if (!_svc.gps_service.start(initial_gps_sleep_ms)) {
     AG_LOGE(TAG, "Failed to start GPS task");
-  }
-  if (_settings.wifi_enabled) {
-    enter_wifi();
   }
 
   // The first-use guide needs no readings. Open it once initialization is
@@ -333,6 +336,7 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     AG_LOGI(TAG, "first-boot guide ready; first measurement pending");
     update_display(/*wait=*/true);
   }
+  reconcile_connectivity();
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +424,21 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
                ? 0
                : static_cast<uint32_t>(std::min<uint64_t>(_tracking_stop_ms - retained_now,
                                                           MAX_REASONABLE_TIMEOUT_MS));
+  }
+  if (_connectivity_initialized) {
+    if (_network_handoff ||
+        (_ble_window_pending && _connectivity_handoff != ConnectivityHandoff::ToBle))
+      next = std::min<uint32_t>(next, CONNECTIVITY_POLL_MS);
+    if (_ble_window_active)
+      next = std::min(next, until(_ble_window_deadline_ms));
+    if (_connectivity_handoff != ConnectivityHandoff::None)
+      next = std::min(next, until(_connectivity_handoff_deadline_ms));
+    if (_ble_release_pending)
+      next = std::min(next, until(_ble_release_deadline_ms));
+    if (_ble_auth_pending)
+      next = std::min(next, until(_ble_auth_deadline_ms));
+    if (_network_retry_ms != 0)
+      next = std::min(next, until(_network_retry_ms));
   }
   if (_svc.ble_service.export_active())
     next = std::min<uint32_t>(next, 20);
@@ -535,13 +554,8 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
 
 void Orchestrator::check_timers() {
   check_tracking_deadline();
-  if (_lock_state == LockState::Locked && !tracking_session_active(_tracking_state) &&
-      _svc.ota.is_ble_active() && !_locked_ota_admitted)
-    stop_ble();
   _svc.ble_service.tick_history();
-  if (_lock_state == LockState::Locked && !tracking_session_active(_tracking_state) &&
-      !_svc.ble_service.export_active() && !_svc.ota.is_ble_active() && !_setup_session_active)
-    stop_ble();
+  reconcile_connectivity();
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
 
   uint32_t interval =
@@ -719,7 +733,7 @@ void Orchestrator::on_bms_status_timer() {
 
 void Orchestrator::on_inactivity_timeout() {
   if (auto_lock_allowed()) {
-    lock();
+    lock(true);
   }
 }
 
@@ -843,10 +857,12 @@ void Orchestrator::dispatch(const Event &event) {
 
   // Wi-Fi
   case EventType::WifiConnected:
-    on_wifi_connected(event.wifi_ip);
+    if (event.wifi_epoch == _svc.wifi.event_epoch())
+      on_wifi_connected(event.wifi_ip);
     break;
   case EventType::WifiDisconnected:
-    on_wifi_disconnected(static_cast<WifiDisconnectReason>(event.wifi_disconnect_reason));
+    if (event.wifi_epoch == _svc.wifi.event_epoch())
+      on_wifi_disconnected(static_cast<WifiDisconnectReason>(event.wifi_disconnect_reason));
     break;
 
   case EventType::ProvisioningStateChanged:
@@ -1629,15 +1645,15 @@ void Orchestrator::on_input(const InputEventData &input) {
 // State transitions
 // ---------------------------------------------------------------------------
 
-void Orchestrator::lock() {
+void Orchestrator::lock(bool automatic) {
   AG_LOGI(TAG, "lock");
   _svc.ui_manager.show_snackbar("Locked");
   _lock_state = LockState::Locked;
-  _locked_ota_admitted = _svc.ota.is_ble_active();
-  _svc.ble_service.set_connectable(tracking_session_active(_tracking_state));
-  if (!tracking_session_active(_tracking_state) && !_svc.ble_service.export_active() &&
-      !_svc.ota.is_ble_active())
-    stop_ble();
+  if (!automatic && !_svc.ble_service.is_connected()) {
+    _ble_window_pending = false;
+    _ble_window_active = false;
+  }
+  reconcile_connectivity();
   _svc.ui_manager.reset_to_home();
   update_display(/*wait=*/true);
 }
@@ -1650,9 +1666,13 @@ void Orchestrator::unlock() {
   }
   _svc.ui_manager.show_snackbar("Unlocked");
   _lock_state = LockState::Unlocked;
-  _locked_ota_admitted = false;
-  if (!_setup_session_active)
-    init_ble_if_available();
+  _ble_release_pending = false;
+  _svc.ota.allow_ble_start();
+  _ble_window_pending = true;
+  _ble_window_active = false;
+  if (_connectivity_handoff == ConnectivityHandoff::FromBle)
+    _connectivity_handoff = ConnectivityHandoff::None;
+  reconcile_connectivity();
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
   // Preserve the lock-icon change even if persistent progress owns the snackbar.
   _display_feedback_pending = true;
@@ -1660,6 +1680,8 @@ void Orchestrator::unlock() {
 }
 
 bool Orchestrator::start_tracking(uint16_t duration_minutes) {
+  if (_svc.wifi.is_provisioning())
+    return false;
   if (duration_minutes > TRACKING_DURATION_MAX_MINUTES)
     return false;
   if (tracking_session_active(_tracking_state)) {
@@ -1688,6 +1710,12 @@ bool Orchestrator::start_tracking(uint16_t duration_minutes) {
   _svc.ble_service.set_tracking_stop_reason(TrackingStopReason::None);
   _tracking_session_id = session_id;
   _tracking_state = TrackingState::Recording;
+  // Client commands are already gated during release; a later local request
+  // supersedes that intent only once storage has admitted the new session.
+  if (_ble_release_pending) {
+    _ble_release_pending = false;
+    _svc.ota.allow_ble_start();
+  }
   _behavior = Behavior::Tracking;
   (void)set_tracking_duration(duration_minutes);
   reconcile_runtime();
@@ -1772,8 +1800,6 @@ void Orchestrator::stop_tracking(TrackingStopReason reason) {
   const uint32_t ended_session_id = _tracking_session_id;
   _svc.storage_service.end_route();
   _tracking_state = TrackingState::Idle;
-  if (_lock_state == LockState::Locked)
-    _locked_ota_admitted = _svc.ota.is_ble_active();
   _tracking_session_id = 0;
   _tracking_timing = TrackingTiming{};
   _behavior = Behavior::Idle;
@@ -2255,17 +2281,15 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
   if (previous_settings.log_measurements != _settings.log_measurements)
     _svc.storage_service.set_log_boundary(MeasurementLogBoundary::Enabled);
   if (wifi_changing) {
-    if (_settings.wifi_enabled) {
-      enter_wifi();
-    } else {
-      _svc.local_api.set_access(ConfigAccess::Disabled);
-      discard_local_requests("Wi-Fi disabled");
-      _local_api_activation_retry_deadline_ms = 0;
-      _svc.cloud.disarm();
-      _svc.cloud.stop();
+    _network_retry_ms = 0;
+    if (!_settings.wifi_enabled && _svc.wifi.is_provisioning()) {
       _svc.wifi.shutdown();
-      _svc.local_api.publish_wifi_rssi(std::nullopt);
-      _cloud_first_post_pending = false;
+      _wifi_owned = false;
+    } else if (_settings.wifi_enabled && !tracking_session_active(_tracking_state) &&
+               !_svc.wifi.has_saved_networks() && !_network_handoff) {
+      enter_wifi();
+    } else if (_manufacturing_mode && _settings.wifi_enabled) {
+      enter_wifi();
     }
   }
   if (wifi_changing)
@@ -2427,6 +2451,9 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
 
 void Orchestrator::on_ble_connected() {
   AG_LOGI(TAG, "BLE client connected");
+  _ble_auth_pending = true;
+  _ble_auth_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + BLE_AUTH_TIMEOUT_MS;
+  _connectivity_handoff = ConnectivityHandoff::None;
 
   // Dismiss pairing passkey screen if it was showing
   _svc.ui_manager.dismiss_pairing_passkey();
@@ -2441,6 +2468,7 @@ void Orchestrator::on_ble_connected() {
 
 void Orchestrator::on_ble_disconnected() {
   AG_LOGI(TAG, "BLE client disconnected");
+  _ble_auth_pending = false;
   // The provisioner has no transport disconnect callback; forward so it
   // drops the radio.
   _svc.portable_provisioner.on_ble_disconnected();
@@ -2450,6 +2478,8 @@ void Orchestrator::on_ble_disconnected() {
 
 void Orchestrator::on_ble_auth_complete(bool success) {
   AG_LOGI(TAG, "BLE auth complete: %s", success ? "OK" : "FAILED");
+  if (success)
+    _ble_auth_pending = false;
 
   // Only an encrypted pairing counts as engagement; a failed/empty-PIN attempt
   // leaves onboarding untouched so a retry re-shows a fresh PIN.
@@ -2480,14 +2510,15 @@ void Orchestrator::on_ble_config_write() {
     return;
   }
 
-  if (_lock_state == LockState::Locked && !tracking_session_active(_tracking_state)) {
-    _svc.ble_service.notify_command_result(BleCommand::Set, false, BLE_VAL_ERR_BUSY);
-    return;
-  }
-
   // Decode into a copy of current settings (merge approach)
   GoSettings temp = _settings;
   BleConfigDecodeResult result = BleService::decode_config_write(buf, len, temp);
+  if (_ble_release_pending) {
+    _svc.ble_service.update_config(_settings);
+    _svc.ble_service.notify_command_result(
+        result.op == BleConfigOp::Command ? result.cmd : BleCommand::Set, false, BLE_VAL_ERR_BUSY);
+    return;
+  }
 
   // A GATT write stores the raw written bytes as the characteristic value, so a
   // READ would otherwise echo the write (a rejected "set", or an "op:cmd"
@@ -2599,6 +2630,9 @@ void Orchestrator::on_ble_config_write() {
       _svc.ble_service.notify_command_result(result.cmd, ok,
                                              ok ? nullptr : BLE_VAL_ERR_FLASH_ERROR);
     } break;
+    case BleCommand::ReleaseBle:
+      request_ble_release();
+      break;
     case BleCommand::SetTrackingDuration: {
       const bool ok = result.duration_present && set_tracking_duration(result.duration_minutes);
       _svc.ble_service.notify_command_result(result.cmd, ok,
@@ -2653,8 +2687,7 @@ void Orchestrator::on_ble_history_write() {
     return;
   }
 
-  if (_lock_state == LockState::Locked && !tracking_session_active(_tracking_state) &&
-      result.op != BleHistoryOp::Fill && result.op != BleHistoryOp::End) {
+  if (_ble_release_pending) {
     _svc.ble_service.notify_history_error(BLE_VAL_ERR_BUSY);
     return;
   }
@@ -2715,12 +2748,12 @@ void Orchestrator::on_ble_pairing_request(uint32_t passkey) {
 }
 
 void Orchestrator::init_ble_if_available() {
-  _svc.ble_service.set_connectable(_lock_state == LockState::Unlocked ||
-                                   tracking_session_active(_tracking_state));
-  if ((_lock_state == LockState::Locked && !tracking_session_active(_tracking_state)) ||
-      _svc.wifi.is_provisioning())
+  if (!ble_needed() || _network_handoff || _wifi_owned || _svc.wifi.is_provisioning())
     return;
-
+  if (!_svc.ble_service.set_connectable(true)) {
+    stop_ble();
+    return;
+  }
   if (_svc.ble_service.is_initialized()) {
     return; // already running
   }
@@ -2737,6 +2770,7 @@ void Orchestrator::init_ble_if_available() {
   // Co-register OTA between the register phase and advertising. Non-fatal on
   // failure: drop any partial registration, advertise without OTA.
   bool ota_ready = _svc.ota.setup_ble();
+  _svc.ota.allow_ble_start();
   if (!ota_ready) {
     AG_LOGW(TAG, "OTA setup failed — advertising without OTA");
     _svc.ota.teardown_ble(); // idempotent
@@ -2754,7 +2788,8 @@ void Orchestrator::init_ble_if_available() {
       _svc.ble_service.set_disconnect_observer(nullptr);
       _svc.ota.teardown_ble();
     }
-    _svc.portable_provisioner.stop(); // release the (now deinit'd) server
+    _svc.ble_service.deinit();
+    _svc.portable_provisioner.stop(); // release the now-deinitialized server
   }
   log_heap(TAG, "ble.init:post");
 }
@@ -2764,6 +2799,12 @@ void Orchestrator::init_ble_if_available() {
 // ---------------------------------------------------------------------------
 
 void Orchestrator::enter_wifi() {
+  if (tracking_session_active(_tracking_state) || _network_handoff)
+    return;
+  stop_ble();
+  _ble_owned = false;
+  _connectivity_handoff = ConnectivityHandoff::None;
+  _wifi_owned = true;
   log_heap(TAG, "wifi.enter-stationary:enter");
   // Idempotent — cheap no-op on warm Stationary re-entry. Portable-only
   // boots never reach this line.
@@ -2847,6 +2888,8 @@ void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
   _bring_up_pending = false;
 
   stop_ble();
+  _ble_owned = false;
+  _wifi_owned = true;
   _svc.ui_manager.open_provisioning(transport);
   log_heap(TAG, "prov.enter-page:pre");
   _svc.wifi.start_provisioning(transport);
@@ -2884,10 +2927,16 @@ void Orchestrator::leave_session_to_home() {
 
   // Silent unlock — page already showed success; no "Unlocked" snackbar.
   _lock_state = LockState::Unlocked;
-  if (!_setup_session_active)
-    init_ble_if_available();
+  _ble_window_pending = true;
+  _ble_window_active = false;
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
+  // Setup completion is not an ordinary unlock. Clean up its transport before
+  // enabling BLE, without allowing normal network services during a debounce.
+  if (_wifi_owned) {
+    _connectivity_handoff = ConnectivityHandoff::ToBle;
+    _connectivity_handoff_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+  }
   _setup_session_active = false; // gate cleared after teardown completes
   reconcile_runtime();
   update_display(true);
@@ -2923,14 +2972,11 @@ void Orchestrator::cancel_wifi_setup() {
 
 void Orchestrator::on_wifi_connected(uint32_t ip) {
   AG_LOGI(TAG, "wifi connected: ip=0x%08x", static_cast<unsigned>(ip));
-  if (!_settings.wifi_enabled) {
-    return; // ignore stray late events on non-Stationary modes
-  }
+  if ((!wifi_services_allowed() && !_bring_up_pending) || !_svc.wifi.is_online())
+    return;
   if (_svc.wifi.is_provisioning()) {
     return; // provisioning owns the shared listener until its Connected handoff
   }
-  activate_local_endpoint();
-
   if (_bring_up_pending) {
     // Initial Stationary bring-up STA success: show "Connected!\n<ip>"
     // on Screen::Info, hold STA_RESULT_HOLD_MS post-paint, then leave
@@ -2954,7 +3000,10 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
     _svc.ui_manager.show_snackbar("Wi-Fi connected");
     update_display();
   }
-  // Cloud arm: unconditional on every Stationary IP transition.
+  if (!wifi_services_allowed())
+    return;
+  activate_local_endpoint();
+  // Cloud arm: on an eligible station IP transition.
   // start() is idempotent (no-op on reconnect, heap-claim on first call).
   _svc.cloud.set_disable_cloud(_settings.disable_cloud);
   _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
@@ -2971,7 +3020,7 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
 void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   AG_LOGI(TAG, "wifi disconnected: %s", wifi_disconnect_reason_to_string(reason));
   log_heap(TAG, "wifi.disconnected:enter");
-  if (!_settings.wifi_enabled) {
+  if (_network_handoff || _svc.wifi.is_suspended() || !_settings.wifi_enabled) {
     return;
   }
   _local_api_activation_retry_deadline_ms = 0;
@@ -3127,9 +3176,9 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     // Connected, which doubles as the on-page hold now that the success
     // page is actually visible.  No snackbar — the page already shows it.
     _svc.wifi.stop_provisioning(/*stop_http_server=*/false);
-    (void)activate_local_endpoint();
-
     leave_session_to_home();
+    if (!wifi_services_allowed())
+      break;
 
     // Provisioning heap freed above; safe to claim cloud task stack now.
     _svc.cloud.set_disable_cloud(_settings.disable_cloud);
@@ -3155,7 +3204,7 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
 }
 
 bool Orchestrator::activate_local_endpoint() {
-  if (!_settings.wifi_enabled || _svc.wifi.is_provisioning()) {
+  if (!wifi_services_allowed() || _svc.wifi.is_provisioning()) {
     _local_api_activation_retry_deadline_ms = 0;
     return false;
   }
@@ -3259,13 +3308,12 @@ void Orchestrator::resume_provisioning_sensitive_services() {
 // ---------------------------------------------------------------------------
 
 bool Orchestrator::wifi_ota_allowed() const {
-  return _settings.wifi_enabled && _svc.wifi.is_online() && !_setup_session_active &&
-         !_settings.disable_cloud;
+  return wifi_services_allowed() && _svc.wifi.is_online() && !_settings.disable_cloud;
 }
 
 void Orchestrator::on_wifi_ota_available() {
   if (!wifi_ota_allowed()) {
-    if (_settings.wifi_enabled && _svc.wifi.is_online()) {
+    if (wifi_services_allowed() && _svc.wifi.is_online()) {
       _svc.cloud.arm(/*fire_now=*/false);
     }
     return;
@@ -3367,7 +3415,7 @@ void Orchestrator::exit_ota(const char *snackbar) {
     }
 
     // Cloud was only disarmed; re-arm when still online (no start() needed).
-    if (_settings.wifi_enabled && _svc.wifi.is_online()) {
+    if (wifi_services_allowed() && _svc.wifi.is_online()) {
       _svc.cloud.arm(/*fire_now=*/false);
     }
 
@@ -3381,7 +3429,7 @@ void Orchestrator::exit_ota(const char *snackbar) {
     // buffered events are real user intent, not OTA debris.
     resume_provisioning_sensitive_services(); // guarded no-op
 
-    if (_settings.wifi_enabled && _svc.wifi.is_online()) {
+    if (wifi_services_allowed() && _svc.wifi.is_online()) {
       _svc.cloud.arm(/*fire_now=*/false); // re-arm (only disarmed)
     }
 
@@ -3550,7 +3598,8 @@ BuildContext Orchestrator::build_context() const {
 
 void Orchestrator::try_enter_sleep() {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
-  if (_measurement_pending || _setup_session_active || _boot_splash_active ||
+  if (_ble_owned || _network_handoff || _ble_release_pending || ble_needed() ||
+      _measurement_pending || _setup_session_active || _boot_splash_active ||
       _svc.ble_service.export_active() || _svc.ota.is_ble_active() ||
       _svc.ui_manager.is_hardware_test_screen())
     return;
@@ -3718,6 +3767,167 @@ bool Orchestrator::continuous_acquisition() const {
   return _settings.wifi_enabled || tracking_session_active(_tracking_state);
 }
 
+bool Orchestrator::ble_needed() const {
+  return tracking_session_active(_tracking_state) || _lock_state == LockState::Unlocked ||
+         _ble_window_pending || _ble_window_active || _svc.ble_service.is_authenticated() ||
+         (_svc.ble_service.is_connected() && _ble_auth_pending) ||
+         _svc.ble_service.export_active() || _svc.ota.is_ble_active();
+}
+
+bool Orchestrator::wifi_services_allowed() const {
+  return _settings.wifi_enabled && !_network_handoff && !_ble_owned && !_ble_release_pending &&
+         (_manufacturing_mode || !ble_needed() ||
+          _connectivity_handoff == ConnectivityHandoff::ToBle) &&
+         !_setup_session_active;
+}
+
+void Orchestrator::reconcile_connectivity() {
+  if (!_connectivity_initialized || _shutting_down || _ota_committed ||
+      _svc.wifi.is_provisioning() || _bring_up_pending || _manufacturing_mode)
+    return;
+
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  const auto due = [now](uint32_t deadline) { return static_cast<int32_t>(now - deadline) >= 0; };
+  if (_ble_window_active && due(_ble_window_deadline_ms))
+    _ble_window_active = false;
+  if (_ble_auth_pending && due(_ble_auth_deadline_ms)) {
+    _ble_auth_pending = false;
+    if (_svc.ble_service.is_connected() && !_svc.ble_service.is_authenticated()) {
+      // A stalled pairing may not pin network ownership indefinitely.
+      stop_ble();
+    }
+  }
+  if (_ble_release_pending) {
+    if (!due(_ble_release_deadline_ms))
+      return;
+    _ble_release_pending = false;
+    stop_ble();
+    _ble_owned = false;
+    _connectivity_handoff = ConnectivityHandoff::None;
+  }
+
+  const bool tracking = tracking_session_active(_tracking_state);
+  const bool need_ble = ble_needed();
+  // Debounce ordinary unlock before touching the current network owner. A
+  // manual re-lock cancels this timer with Cloud/HTTP/radio still running.
+  // Tracking and explicitly disabling WiFi bypass the initial delay.
+  if (_wifi_owned && need_ble && !tracking && _settings.wifi_enabled && !_network_handoff) {
+    if (_connectivity_handoff != ConnectivityHandoff::ToBle) {
+      _connectivity_handoff = ConnectivityHandoff::ToBle;
+      _connectivity_handoff_deadline_ms = now + CONNECTIVITY_HANDOFF_DELAY_MS;
+    }
+    if (!due(_connectivity_handoff_deadline_ms))
+      return;
+  }
+  if (_connectivity_handoff == ConnectivityHandoff::ToBle)
+    _connectivity_handoff = ConnectivityHandoff::None;
+  if (need_ble) {
+    _ble_owned = true;
+    _connectivity_handoff = ConnectivityHandoff::None;
+  }
+
+  // Cloud must finish its HTTP call before any radio or listener is torn down.
+  // Keep processing UI/events while the worker drains.
+  if (!_network_handoff && ((_wifi_owned && (need_ble || !_settings.wifi_enabled)) ||
+                            (tracking && !_svc.wifi.driver_released()))) {
+    _network_handoff = true;
+    _network_retry_ms = 0;
+    _local_api_activation_retry_deadline_ms = 0;
+    _svc.local_api.set_access(ConfigAccess::Disabled);
+    // Already accepted local requests stay queued and are still dispatched.
+    _svc.cloud.request_stop();
+  }
+  if (_network_handoff) {
+    if (!_svc.cloud.poll_stop())
+      return;
+    if (_network_retry_ms != 0 && !due(_network_retry_ms))
+      return;
+    _network_retry_ms = 0;
+    if (!_svc.wifi.request_suspend(tracking)) {
+      _network_retry_ms = now + CONNECTIVITY_RETRY_MS;
+      return;
+    }
+    if (!_svc.wifi.poll_suspend()) {
+      if (!_svc.wifi.suspension_pending())
+        _network_retry_ms = now + CONNECTIVITY_RETRY_MS;
+      return;
+    }
+    // A tracking start during ordinary cleanup needs one additional deinit.
+    if (tracking && !_svc.wifi.driver_released())
+      return;
+    _network_handoff = false;
+    _wifi_owned = false;
+    _svc.local_api.publish_wifi_rssi(std::nullopt);
+  }
+
+  if (need_ble) {
+    init_ble_if_available();
+    if (_svc.ble_service.is_initialized() && _ble_window_pending) {
+      _ble_window_pending = false;
+      _ble_window_active = true;
+      _ble_window_deadline_ms =
+          static_cast<uint32_t>(RTOS::get_time_ms()) + BLE_CONNECTION_WINDOW_MS;
+    }
+    return;
+  }
+
+  if (_ble_owned || _svc.ble_service.is_initialized()) {
+    if (!_svc.ble_service.set_connectable(false))
+      stop_ble(); // Failed advertising stop cannot leave a second connection window.
+    if (_connectivity_handoff != ConnectivityHandoff::FromBle) {
+      _connectivity_handoff = ConnectivityHandoff::FromBle;
+      _connectivity_handoff_deadline_ms = now + CONNECTIVITY_HANDOFF_DELAY_MS;
+    }
+    if (!due(_connectivity_handoff_deadline_ms))
+      return;
+    stop_ble();
+    _ble_owned = false;
+    _connectivity_handoff = ConnectivityHandoff::None;
+  }
+
+  if (_settings.wifi_enabled && !_wifi_owned) {
+    if (_network_retry_ms != 0 && !due(_network_retry_ms))
+      return;
+    _network_retry_ms = 0;
+    if (!_svc.wifi.has_saved_networks()) {
+      enter_wifi();
+      return;
+    }
+    const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
+    if (!_svc.wifi.resume_station(ip)) {
+      _network_retry_ms = now + CONNECTIVITY_RETRY_MS;
+      return;
+    }
+    _wifi_owned = true;
+    _cloud_first_post_pending = true;
+    _svc.wifi.set_power_save_enabled(!_settings.local_server_enabled);
+  }
+}
+
+void Orchestrator::request_ble_release() {
+  if (tracking_session_active(_tracking_state) || _svc.ble_service.export_active() ||
+      _svc.ota.is_ble_active() || _ota_committed || _ble_release_pending ||
+      !_svc.ota.block_ble_start()) {
+    _svc.ble_service.notify_command_result(BleCommand::ReleaseBle, false, BLE_VAL_ERR_BUSY);
+    return;
+  }
+  _svc.ble_service.notify_command_result(BleCommand::ReleaseBle, true);
+  // Existing command replies are notifications. Allow a bounded drain without
+  // blocking the UI; acceptance gates further Config/History work immediately.
+  _ble_release_pending = true;
+  _ble_release_deadline_ms =
+      static_cast<uint32_t>(RTOS::get_time_ms()) + BLE_COMMAND_RESULT_DELAY_MS;
+  _ble_window_pending = false;
+  _ble_window_active = false;
+  _connectivity_handoff = ConnectivityHandoff::None;
+  _ble_auth_pending = false;
+  _svc.ble_service.set_connectable(false);
+  _lock_state = LockState::Locked;
+  _svc.ui_manager.show_snackbar("Locked");
+  _svc.ui_manager.reset_to_home();
+  update_display(/*wait=*/true);
+}
+
 uint32_t Orchestrator::gps_sleep_interval_ms() const {
   return gps_inactive_sleep_ms(
       static_cast<uint32_t>(_settings.active_measure_interval_seconds(_tracking_state)) * 1000);
@@ -3740,7 +3950,7 @@ void Orchestrator::reconcile_runtime(bool reset_cadence) {
     _last_measurement_ms = static_cast<uint32_t>(RTOS::get_time_ms());
     prepare_pm();
   }
-  init_ble_if_available();
+  reconcile_connectivity();
   _svc.ui_manager.sync_tracking_state(_tracking_state);
 }
 

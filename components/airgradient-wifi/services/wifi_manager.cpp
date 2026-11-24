@@ -261,6 +261,16 @@ WifiStatus WifiManager::set_mode(WifiMode mode) {
 
 WifiMode WifiManager::get_mode() const { return _hal.get_mode(); }
 
+WifiStatus WifiManager::initialize() { return _hal.init(); }
+
+WifiStatus WifiManager::deinitialize() {
+  const WifiStatus status = set_mode(WifiMode::Off);
+  if (status != WifiStatus::Ok)
+    return status;
+  _hal.deinit();
+  return WifiStatus::Ok;
+}
+
 // ---------------------------------------------------------------------------
 // STA operations
 // ---------------------------------------------------------------------------
@@ -414,6 +424,10 @@ void WifiManager::set_on_ap_client_left(WifiApClientLeftCallback cb) {
 // ---------------------------------------------------------------------------
 
 void WifiManager::_on_hal_sta_connected() {
+  const WifiMode mode = _hal.get_mode();
+  if (mode != WifiMode::Sta && mode != WifiMode::ApSta)
+    return; // A queued station event cannot revive work after radio suspension.
+
   _sta_state = WifiStaState::Connected;
   // Note: do NOT reset _retry_attempt here. L2 association succeeding
   // and then dropping again is itself part of the retry sequence — the
@@ -427,6 +441,10 @@ void WifiManager::_on_hal_sta_connected() {
 }
 
 void WifiManager::_on_hal_sta_disconnected(int raw_reason) {
+  const WifiMode mode = _hal.get_mode();
+  if (mode != WifiMode::Sta && mode != WifiMode::ApSta)
+    return; // A queued station event cannot revive work after radio suspension.
+
   // Ignore our own disconnect_sta() echo; no state change so an in-flight
   // next-candidate attempt survives.
   if (_swallow_next_disconnect) {
@@ -478,6 +496,10 @@ void WifiManager::_on_hal_sta_disconnected(int raw_reason) {
 }
 
 void WifiManager::_on_hal_got_ip(uint32_t ip) {
+  const WifiMode mode = _hal.get_mode();
+  if (mode != WifiMode::Sta && mode != WifiMode::ApSta)
+    return; // A queued station event cannot revive work after radio suspension.
+
   _hal.cancel_dhcp_timeout();
   // First got-IP ends the sweep. _sta_config already holds the winning
   // candidate, so a later link drop reconnects under normal retry/backoff.

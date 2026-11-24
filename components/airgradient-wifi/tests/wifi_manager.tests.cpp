@@ -19,8 +19,13 @@ namespace {
 class FakeWifiHal : public WifiHal {
 public:
   // -- Lifecycle --
-  WifiStatus init() override { return WifiStatus::Ok; }
-  void deinit() override {}
+  WifiStatus init() override {
+    ++init_calls;
+    return WifiStatus::Ok;
+  }
+  void deinit() override { ++deinit_calls; }
+  int init_calls = 0;
+  int deinit_calls = 0;
 
   WifiStatus set_mode(WifiMode mode) override {
     set_mode_calls += 1;
@@ -1489,4 +1494,39 @@ TEST_CASE("explicit connect leaves the saved-network store untouched", "[wifi-ma
   char out[WIFI_MAX_SAVED_NETWORKS][33] = {};
   REQUIRE(mgr.list_networks(out, WIFI_MAX_SAVED_NETWORKS) == 1);
   REQUIRE(std::string(out[0]) == "Saved");
+}
+
+TEST_CASE("WiFi lifecycle preserves credentials and ignores station events while stopped",
+          "[wifi-manager][handoff]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  REQUIRE(mgr.initialize() == WifiStatus::Ok);
+  REQUIRE(mgr.add_network("Net", "secret") == WifiStatus::Ok);
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+  REQUIRE(mgr.connect(make_sta_config("Net")) == WifiStatus::Ok);
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01020304);
+  REQUIRE(mgr.set_mode(WifiMode::Off) == WifiStatus::Ok);
+  const auto retries = hal.retry_armed_calls;
+  const auto dhcp = hal.dhcp_armed_calls;
+  for (int i = 0; i < 2; ++i) {
+    hal.sta_connected_cb();
+    hal.got_ip_cb(0x05060708);
+    hal.sta_disconnected_cb(201);
+    hal.retry_due_cb();
+  }
+  CHECK(mgr.status_snapshot().sta_state == WifiStaState::Disconnected);
+  CHECK(hal.retry_armed_calls == retries);
+  CHECK(hal.dhcp_armed_calls == dhcp);
+  CHECK(hal.deinit_calls == 0);
+  REQUIRE(mgr.deinitialize() == WifiStatus::Ok);
+  CHECK(hal.deinit_calls == 1);
+  CHECK(mgr.has_saved_networks());
+  REQUIRE(mgr.initialize() == WifiStatus::Ok);
+  CHECK(hal.init_calls == 2);
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+  REQUIRE(mgr.connect(make_sta_config("Net")) == WifiStatus::Ok);
+  hal.got_ip_cb(0x01020304);
+  CHECK(mgr.status_snapshot().sta_state == WifiStaState::GotIp);
 }

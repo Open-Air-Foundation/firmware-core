@@ -1088,7 +1088,7 @@ void Orchestrator::on_ble_config_write() {}
 void Orchestrator::on_ble_history_write() {}
 void Orchestrator::on_ble_pairing_request(uint32_t /*passkey*/) {}
 void Orchestrator::on_ble_auth_complete(bool /*success*/) {}
-void Orchestrator::lock() {}
+void Orchestrator::lock(bool) {}
 void Orchestrator::unlock() {}
 bool Orchestrator::start_tracking(uint16_t) { return true; }
 void Orchestrator::stop_tracking(TrackingStopReason) {}

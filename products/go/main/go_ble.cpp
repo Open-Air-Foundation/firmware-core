@@ -525,7 +525,10 @@ bool BleService::init(const char *serial, const char *model, const char *firmwar
   if (!init_stack_and_register(serial, model, firmware_version)) {
     return false;
   }
-  return start_advertising();
+  if (start_advertising())
+    return true;
+  deinit();
+  return false;
 }
 
 bool BleService::init_stack_and_register(const char *serial, const char *model,
@@ -545,10 +548,12 @@ bool BleService::init_stack_and_register(const char *serial, const char *model,
     return false;
   }
 
+  _stack_initialized = true;
+
   // --- Security: Passkey Entry (Display Only) ---
   if (!_server->set_security(AgBleIoCapability::DISPLAY_ONLY, AgBleAuth::BOND | AgBleAuth::MITM)) {
     AG_LOGE(TAG, "set_security failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -556,7 +561,7 @@ bool BleService::init_stack_and_register(const char *serial, const char *model,
   auto *svc = _server->add_service(SERVICE_UUID);
   if (svc == nullptr) {
     AG_LOGE(TAG, "add_service failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -566,7 +571,7 @@ bool BleService::init_stack_and_register(const char *serial, const char *model,
   _measures_char = svc->add_characteristic(MEASURES_CHAR_UUID, measures_properties());
   if (_measures_char == nullptr) {
     AG_LOGE(TAG, "add Measures characteristic failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -574,7 +579,7 @@ bool BleService::init_stack_and_register(const char *serial, const char *model,
   _status_char = svc->add_characteristic(STATUS_CHAR_UUID, status_properties());
   if (_status_char == nullptr) {
     AG_LOGE(TAG, "add Status characteristic failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -582,7 +587,7 @@ bool BleService::init_stack_and_register(const char *serial, const char *model,
   _config_char = svc->add_characteristic(CONFIG_CHAR_UUID, config_properties());
   if (_config_char == nullptr) {
     AG_LOGE(TAG, "add Config characteristic failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -590,7 +595,7 @@ bool BleService::init_stack_and_register(const char *serial, const char *model,
   _history_char = svc->add_characteristic(HISTORY_CHAR_UUID, history_properties());
   if (_history_char == nullptr) {
     AG_LOGE(TAG, "add History characteristic failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -603,7 +608,7 @@ bool BleService::init_stack_and_register(const char *serial, const char *model,
   // --- Start GATT service ---
   if (!svc->start()) {
     AG_LOGE(TAG, "service start failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -611,7 +616,7 @@ bool BleService::init_stack_and_register(const char *serial, const char *model,
   auto *dis = _server->add_service(DIS_SERVICE_UUID);
   if (dis == nullptr) {
     AG_LOGE(TAG, "add Device Information service failed");
-    _server->deinit();
+    deinit();
     return false;
   }
   const struct {
@@ -630,13 +635,13 @@ bool BleService::init_stack_and_register(const char *serial, const char *model,
     if (ch == nullptr ||
         !ch->set_value(reinterpret_cast<const uint8_t *>(value), std::strlen(value))) {
       AG_LOGE(TAG, "Device Information characteristic %s failed", field.uuid);
-      _server->deinit();
+      deinit();
       return false;
     }
   }
   if (!dis->start()) {
     AG_LOGE(TAG, "Device Information service start failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -667,25 +672,21 @@ bool BleService::start_advertising() {
   // --- Advertising ---
   if (!_server->set_advertising_name(_adv_name)) {
     AG_LOGE(TAG, "set_advertising_name failed");
-    _server->deinit();
     return false;
   }
 
   if (!_server->add_advertised_service_uuid(SERVICE_UUID)) {
     AG_LOGE(TAG, "add_advertised_service_uuid failed");
-    _server->deinit();
     return false;
   }
 
   if (!_server->set_advertising_interval(static_cast<uint32_t>(ADVERTISING_INTERVAL_MS * 1000))) {
     AG_LOGE(TAG, "set_advertising_interval failed");
-    _server->deinit();
     return false;
   }
 
   if (!_server->start_advertising()) {
     AG_LOGE(TAG, "start_advertising failed");
-    _server->deinit();
     return false;
   }
 
@@ -696,7 +697,7 @@ bool BleService::start_advertising() {
 
 void BleService::deinit() {
   release_export();
-  if (!_initialized) {
+  if (!_initialized && !_stack_initialized) {
     return;
   }
 
@@ -711,6 +712,7 @@ void BleService::deinit() {
   _server->deinit();
   log_heap(TAG, "ble.deinit:post");
   _initialized = false;
+  _stack_initialized = false;
   _measures_char = nullptr;
   _status_char = nullptr;
   _config_char = nullptr;
@@ -740,6 +742,18 @@ bool BleService::delete_all_bonds() {
 bool BleService::is_initialized() const { return _initialized; }
 
 bool BleService::is_connected() const { return _connected.load(); }
+
+bool BleService::set_connectable(bool allowed) {
+  const bool changed = _connectable.exchange(allowed) != allowed;
+  if (!_initialized || !changed || _connected.load())
+    return true;
+  const bool ok = allowed ? _server->start_advertising() : _server->stop_advertising();
+  if (!ok) {
+    AG_LOGE(TAG, "failed to change connectable advertising to %d", allowed);
+    _connectable.store(!allowed);
+  }
+  return ok;
+}
 
 bool BleService::is_authenticated() const {
   return _connected.load() && _server->is_peer_authenticated();
@@ -1981,6 +1995,8 @@ static bool str_to_gps_mode(const char *s, GpsMode &mode) {
 
 /// Reverse mapping: CBOR "cmd" string -> BleCommand enum.
 static BleCommand str_to_ble_command(const char *s) {
+  if (std::strcmp(s, BLE_VAL_CMD_RELEASE_BLE) == 0)
+    return BleCommand::ReleaseBle;
   if (strcmp(s, BLE_VAL_CMD_CO2_CAL) == 0) {
     return BleCommand::Co2Calibration;
   }
@@ -2013,6 +2029,8 @@ static BleCommand str_to_ble_command(const char *s) {
 /// Forward mapping: BleCommand enum -> wire string for CBOR responses.
 static const char *ble_command_to_str(BleCommand cmd) {
   switch (cmd) {
+  case BleCommand::ReleaseBle:
+    return BLE_VAL_CMD_RELEASE_BLE;
   case BleCommand::Co2Calibration:
     return BLE_VAL_CMD_CO2_CAL;
   case BleCommand::ClearData:

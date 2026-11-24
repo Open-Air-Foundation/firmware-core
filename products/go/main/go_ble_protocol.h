@@ -214,6 +214,7 @@ inline constexpr const char *BLE_VAL_CMD_CLEAR_DATA = "clear_data";
 inline constexpr const char *BLE_VAL_CMD_FACTORY_RST = "factory_rst";
 inline constexpr const char *BLE_VAL_CMD_START_TRACKING = "start_tracking";
 inline constexpr const char *BLE_VAL_CMD_STOP_TRACKING = "stop_tracking";
+inline constexpr const char *BLE_VAL_CMD_RELEASE_BLE = "release_ble";
 inline constexpr const char *BLE_VAL_CMD_PAUSE_TRACKING = "pause_tracking";
 inline constexpr const char *BLE_VAL_CMD_RESUME_TRACKING = "resume_tracking";
 inline constexpr const char *BLE_VAL_CMD_SET_AIDING = "set_aiding";

@@ -282,6 +282,7 @@ uint32_t StorageService::used_kb() const { return storage_spy::used_kb; }
 class BleServiceTestAccess {
 public:
   // --- State setters ---
+  static void stack_registered(BleService &svc) { svc._stack_initialized = true; }
   static void set_server(BleService &svc, AgBleServer *server) { svc._server = server; }
   static void set_connected(BleService &svc, bool connected) {
     svc._connected.store(connected);
@@ -2711,28 +2712,36 @@ TEST_CASE("BLE: advertising uses the Go interval before first start and after re
   CHECK(server.started_intervals_us.back() == expected_interval_us);
 }
 
-TEST_CASE("BLE: interval configuration failure tears down without starting advertising") {
+TEST_CASE("BLE: interval configuration failure leaves cleanup to the owner without starting "
+          "advertising") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   MockBleServer server;
   BleService svc(nullptr, storage, server);
   server.set_advertising_interval_result = false;
 
+  BleServiceTestAccess::stack_registered(svc);
   CHECK_FALSE(svc.start_advertising());
   CHECK_FALSE(svc.is_initialized());
   CHECK(server.start_advertising_count == 0);
+  CHECK(server.deinit_count == 0); // OTA can detach while its GATT pointers are valid.
+  svc.deinit();
   CHECK(server.deinit_count == 1);
 }
 
-TEST_CASE("BLE: advertising start failure tears down after interval configuration") {
+TEST_CASE(
+    "BLE: advertising start failure leaves cleanup to the owner after interval configuration") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   MockBleServer server;
   BleService svc(nullptr, storage, server);
   server.start_advertising_result = false;
 
+  BleServiceTestAccess::stack_registered(svc);
   CHECK_FALSE(svc.start_advertising());
   CHECK_FALSE(svc.is_initialized());
   CHECK(server.set_advertising_interval_count == 1);
   CHECK(server.start_advertising_count == 1);
+  CHECK(server.deinit_count == 0); // OTA can detach while its GATT pointers are valid.
+  svc.deinit();
   CHECK(server.deinit_count == 1);
 }
 
@@ -3553,4 +3562,57 @@ TEST_CASE("BLE: Device Information registration failure aborts stack initializat
   CHECK_FALSE(svc.is_initialized());
   CHECK(server.deinit_count == 1);
   CHECK(server.start_advertising_count == 0);
+}
+
+TEST_CASE("BLE: release_ble uses the existing Config command and result encoding") {
+  uint8_t buf[64];
+  const auto len = encode_cmd_cbor(buf, sizeof(buf), "release_ble");
+  GoSettings settings;
+  const auto decoded = BleService::decode_config_write(buf, len, settings);
+  REQUIRE(decoded.op == BleConfigOp::Command);
+  REQUIRE(decoded.cmd == BleCommand::ReleaseBle);
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+  svc.notify_command_result(decoded.cmd, true);
+  const auto entries = decode_cbor_map(config_char.last_notified_value.data(),
+                                       config_char.last_notified_value.size());
+  CHECK(find_entry(entries, "type")->text_val == "cmd_result");
+  CHECK(find_entry(entries, "cmd")->text_val == "release_ble");
+  CHECK(find_entry(entries, "ok")->bool_val);
+}
+
+TEST_CASE("BLE: return delay stops advertising and reuses the stack on unlock") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  MockBleServer server;
+  BleService svc(nullptr, storage, server);
+  REQUIRE(svc.start_advertising());
+  svc.set_connectable(false);
+  CHECK(server.stop_advertising_count == 1);
+  CHECK(svc.is_initialized());
+  CHECK(server.deinit_count == 0);
+  svc.set_connectable(false);
+  CHECK(server.stop_advertising_count == 1);
+  svc.set_connectable(true);
+  CHECK(server.start_advertising_count == 2);
+  BleServiceTestAccess::on_connect(svc, 1);
+  svc.set_connectable(false);
+  BleServiceTestAccess::on_disconnect(svc, 1, 0);
+  CHECK(server.start_advertising_count == 2); // Explicit release must not reopen advertising.
+}
+
+TEST_CASE("BLE: advertising restart failure is reported and can be retried") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  MockBleServer server;
+  BleService svc(nullptr, storage, server);
+  REQUIRE(svc.start_advertising());
+  REQUIRE(svc.set_connectable(false));
+  server.start_advertising_result = false;
+  CHECK_FALSE(svc.set_connectable(true));
+  CHECK(svc.is_initialized()); // Owner can detach companions before deinit.
+  server.start_advertising_result = true;
+  CHECK(svc.set_connectable(true));
+  CHECK(server.start_advertising_count == 3);
 }

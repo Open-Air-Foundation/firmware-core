@@ -60,6 +60,8 @@ public:
   /// wrapper over OtaBleService::is_active(): true the moment a valid START
   /// latches (before begin()) and cleared at the terminal.
   bool is_ble_active() const;
+  bool block_ble_start();
+  void allow_ble_start();
 
   /// Drive a phone-initiated BLE transfer to its terminal (wraps run(0); the
   /// START is already latched so run() drives immediately).  Blocks on the

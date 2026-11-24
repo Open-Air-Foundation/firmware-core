@@ -728,3 +728,22 @@ TEST_CASE("a pre-transfer START reject does not fire the progress callback") {
   REQUIRE(h.internal_state() == ST_IDLE);
   REQUIRE(events.empty());
 }
+
+TEST_CASE("BLE OTA admission can be blocked atomically for transport release",
+          "[OtaBleService][handoff]") {
+  Harness h;
+  REQUIRE(h.svc.block_start());
+  REQUIRE(h.svc.block_start());
+  h.write_control(encode_start(100, nullptr));
+  CHECK_FALSE(h.svc.is_active());
+  CHECK(h.internal_state() == ST_IDLE);
+  CHECK(h.last_status().second == OTA_BLE_RESULT_ABORTED);
+  h.svc.allow_start();
+  h.write_control(encode_start(100, nullptr));
+  REQUIRE(h.svc.is_active());
+  CHECK_FALSE(h.svc.block_start());
+  h.svc.allow_start();
+  CHECK(h.svc.is_active());
+  h.terminate(OtaStatus::Aborted);
+  CHECK(h.svc.block_start());
+}

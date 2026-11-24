@@ -78,6 +78,9 @@ public:
   // terminal edge. Atomic; safe to read from any task for sleep/coexistence
   // gating.
   bool is_active() const;
+  /// Atomically prevent new STARTs unless a transfer was already admitted.
+  bool block_start();
+  void allow_start();
 
 private:
   // Internal transfer state machine.
@@ -136,7 +139,8 @@ private:
   // the host task only reads it (and sets Starting at START). Cross-task
   // ordering comes from the _signal give/take and the host lock around NOTIFY.
   State _state = State::Idle;
-  std::atomic<bool> _is_active{false};
+  enum class Admission : uint8_t { Idle, Active, Blocked };
+  std::atomic<Admission> _admission{Admission::Idle};
 
   // Latched by the host task before waking run(); also the Data-callback no-op
   // guard once a terminal is pending.

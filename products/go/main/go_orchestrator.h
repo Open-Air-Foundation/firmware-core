@@ -108,8 +108,22 @@ private:
 
   // --- Application state ---
   uint64_t _tracking_stop_ms = 0;
-  bool _locked_ota_admitted = false;
   bool _storage_stop_warning = false;
+  bool _connectivity_initialized = false;
+  bool _wifi_owned = false;
+  bool _ble_owned = false;
+  bool _network_handoff = false;
+  bool _ble_window_pending = false;
+  bool _ble_window_active = false;
+  uint32_t _ble_window_deadline_ms = 0;
+  enum class ConnectivityHandoff : uint8_t { None, ToBle, FromBle };
+  ConnectivityHandoff _connectivity_handoff = ConnectivityHandoff::None;
+  uint32_t _connectivity_handoff_deadline_ms = 0;
+  bool _ble_release_pending = false;
+  uint32_t _ble_release_deadline_ms = 0;
+  bool _ble_auth_pending = false;
+  uint32_t _ble_auth_deadline_ms = 0;
+  uint32_t _network_retry_ms = 0;
   Behavior _behavior = Behavior::Idle;
   LockState _lock_state = LockState::Locked;
   bool _gps_enabled = true;
@@ -242,6 +256,11 @@ private:
   static constexpr uint32_t MAX_REASONABLE_TIMEOUT_MS = 3600000;
   static constexpr uint32_t PM_RECOVERY_TIMEOUT_MS = 30000;
   static constexpr uint32_t BLE_COMMAND_RESULT_DELAY_MS = 200;
+  static constexpr uint32_t BLE_CONNECTION_WINDOW_MS = 60000;
+  static constexpr uint32_t CONNECTIVITY_HANDOFF_DELAY_MS = 3000;
+  static constexpr uint32_t BLE_AUTH_TIMEOUT_MS = 30000;
+  static constexpr uint32_t CONNECTIVITY_POLL_MS = 50;
+  static constexpr uint32_t CONNECTIVITY_RETRY_MS = 1000;
   /// Post-paint dwell before cutting power.  DisplayService::flush() already
   /// waits for e-paper completion; this intentionally slows final shutdown so
   /// the user sees the reason screen and BLE disconnect notice can drain.
@@ -295,8 +314,12 @@ private:
   void on_ble_auth_complete(bool success);
 
   // --- State transitions ---
-  void lock();
+  void lock(bool automatic = false);
   void unlock();
+  bool ble_needed() const;
+  bool wifi_services_allowed() const;
+  void reconcile_connectivity();
+  void request_ble_release();
   /// Begin a new tracking session. Returns false on session-id exhaustion
   /// or storage-open failure; the snackbar + BLE notify fire inline first.
   bool start_tracking(uint16_t duration_minutes = 0);

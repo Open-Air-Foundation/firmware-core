@@ -152,6 +152,11 @@ std::set<uint32_t> existing_route_session_ids;
 bool ble_init_called = false;
 bool ble_deinit_called = false;
 bool ble_initialized = false;
+bool ble_connectable = false;
+bool cloud_shutdown_ready = true;
+bool wifi_cleanup_ready = true;
+unsigned wifi_suspend_count = 0;
+unsigned wifi_deinit_count = 0;
 bool ble_connected = false;
 bool ble_authenticated = false;
 bool ble_notify_measures_called = false;
@@ -379,6 +384,11 @@ void reset() {
   ble_init_called = false;
   ble_deinit_called = false;
   ble_initialized = false;
+  ble_connectable = false;
+  cloud_shutdown_ready = true;
+  wifi_cleanup_ready = true;
+  wifi_suspend_count = 0;
+  wifi_deinit_count = 0;
   ble_connected = false;
   ble_authenticated = false;
   ble_notify_measures_called = false;
@@ -948,6 +958,11 @@ void BleService::set_disconnect_observer(AgBleDisconnectCallback cb) {
   ++test_spy::ble_disconnect_observer_set_count;
 }
 
+bool BleService::set_connectable(bool allowed) {
+  test_spy::ble_connectable = allowed;
+  return true;
+}
+
 bool BleService::is_initialized() const { return test_spy::ble_initialized; }
 
 bool BleService::is_connected() const { return test_spy::ble_connected; }
@@ -1178,6 +1193,31 @@ void WifiService::shutdown() {
   stop_local_endpoint();
 }
 
+bool WifiService::request_suspend(bool deinitialize) {
+  ++test_spy::wifi_suspend_count;
+  ++_event_epoch;
+  _suspended.store(true);
+  if (test_spy::wifi_cleanup_ready && deinitialize && !_driver_released) {
+    _driver_released = true;
+    ++test_spy::wifi_deinit_count;
+  }
+  test_spy::wifi_is_online = false;
+  return true;
+}
+bool WifiService::poll_suspend() {
+  if (test_spy::wifi_cleanup_ready) {
+    test_spy::wifi_provisioning_active = false;
+    stop_local_endpoint();
+  }
+  return test_spy::wifi_cleanup_ready;
+}
+bool WifiService::resume_station(const WifiStaticIpConfig *ip) {
+  ++_event_epoch;
+  _suspended.store(false);
+  _driver_released = false;
+  connect_with_saved_credentials(ip);
+  return true;
+}
 void WifiService::clear_credentials() { test_spy::wifi_clear_credentials_called = true; }
 
 bool WifiService::is_online() const { return test_spy::wifi_is_online; }
@@ -1303,6 +1343,8 @@ bool CloudService::start() {
 }
 
 void CloudService::stop() { ++test_spy::cloud_stop_count; }
+void CloudService::request_stop() { ++test_spy::cloud_stop_count; }
+bool CloudService::poll_stop() { return test_spy::cloud_shutdown_ready; }
 
 void CloudService::arm(bool fire_now) {
   ++test_spy::cloud_arm_count;
@@ -1355,6 +1397,8 @@ bool OtaService::setup_ble() {
 
 void OtaService::handle_disconnect() { test_spy::ota_handle_disconnect_called = true; }
 
+bool OtaService::block_ble_start() { return !test_spy::ota_is_ble_active; }
+void OtaService::allow_ble_start() {}
 bool OtaService::is_ble_active() const { return test_spy::ota_is_ble_active; }
 
 OtaStatus OtaService::run_ble() {

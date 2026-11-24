@@ -85,9 +85,10 @@ enum class BleCommand : uint8_t {
   PauseTracking,  ///< "pause_tracking" — retain session, stop route writes
   ResumeTracking, ///< "resume_tracking" — continue the retained session
   SetTrackingDuration,
-  SetAiding, ///< "set_aiding" — inject A-GNSS aiding data
-  Set,       ///< Synthetic — used for config-set error notifications
-  Unknown,   ///< Unrecognised command string
+  ReleaseBle, ///< "release_ble" — lock and relinquish BLE ownership
+  SetAiding,  ///< "set_aiding" — inject A-GNSS aiding data
+  Set,        ///< Synthetic — used for config-set error notifications
+  Unknown,    ///< Unrecognised command string
 };
 
 /// Reason the device is about to drop the BLE link, carried by the NOTIFY-only
@@ -162,7 +163,8 @@ public:
   bool init_stack_and_register(const char *serial, const char *model, const char *firmware_version);
 
   /// Phase 3: set the name, service UUID and interval, then start advertising.
-  /// Marks the service initialized. Returns false if advertising fails.
+  /// Marks the service initialized. On failure, detach companion services
+  /// before calling deinit(); their GATT pointers remain valid until then.
   bool start_advertising();
 
   /// Stop advertising, disconnect clients, tear down BLE stack.
@@ -287,7 +289,7 @@ public:
   void handle_measurement_delete(uint32_t sequence);
   /// True while a GAP link exists (not necessarily usable).
   bool is_connected() const;
-  void set_connectable(bool allowed) { _connectable.store(allowed); }
+  bool set_connectable(bool allowed);
   /// True while the active link is authenticated (MITM-paired) — the
   /// usable-link signal that drives the BLE icon. Reads the stack's live
   /// security state so it cannot get stuck after a bonded reconnect.
@@ -326,6 +328,7 @@ private:
   // `_server != nullptr` initialisation gate, which is no longer valid now
   // that the BLE server is borrowed for the lifetime of the service.
   bool _initialized = false;
+  bool _stack_initialized = false;
   AgBleCharacteristic *_measures_char = nullptr;
   AgBleCharacteristic *_status_char = nullptr;
   AgBleCharacteristic *_config_char = nullptr;

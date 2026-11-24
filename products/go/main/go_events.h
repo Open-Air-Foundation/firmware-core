@@ -114,6 +114,7 @@ struct WakeEventData {
 
 struct Event {
   EventType type;
+  uint32_t wifi_epoch = 0; // Ignore queued station events from a previous ownership cycle.
 
   union {
     SensorEventData sensor_data;             // SensorDataReady

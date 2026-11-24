@@ -491,19 +491,35 @@ bool CloudService::start() {
   return true;
 }
 
-void CloudService::stop() {
+void CloudService::request_stop() {
   if (_task_handle == nullptr) {
     return;
   }
-
-  log_heap(TAG, "cloud.stop:enter");
-  AG_LOGI(TAG, "stop: latching shutdown");
+  disarm();
   _shutdown_pending.store(true);
   _wake();
+}
+
+bool CloudService::poll_stop() {
+  if (_task_handle == nullptr)
+    return true;
+  if (!_stop_ready.load())
+    return false;
+  _finish_stop();
+  return true;
+}
+
+void CloudService::stop() {
+  if (_task_handle == nullptr)
+    return;
+  request_stop();
 
   // Bounded by one WifiHttpClient timeout (~15 s).
   _done_sem.take();
+  _finish_stop();
+}
 
+void CloudService::_finish_stop() {
   // Task is parked on notify-wait; safe to delete externally.
   RTOS::task_delete(_task_handle);
   _task_handle = nullptr;
@@ -515,6 +531,7 @@ void CloudService::stop() {
   _done_sem.destroy();
 
   _shutdown_pending.store(false);
+  _stop_ready.store(false);
   _post_due = 0;
   _fetch_due.store(0);
   _was_armed = false;
@@ -594,6 +611,7 @@ uint32_t CloudService::_run_iteration(uint32_t now) {
     _test_done_signal_count += 1;
 #endif
     _done_sem.give();
+    _stop_ready.store(true);
     return UINT32_MAX;
   }
 

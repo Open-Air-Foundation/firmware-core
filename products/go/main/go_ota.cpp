@@ -29,6 +29,8 @@ bool OtaService::setup_ble() { return _ble_ota.setup(); }
 void OtaService::handle_disconnect() { _ble_ota.handle_disconnect(); }
 
 bool OtaService::is_ble_active() const { return _ble_ota.is_active(); }
+bool OtaService::block_ble_start() { return _ble_ota.block_start(); }
+void OtaService::allow_ble_start() { _ble_ota.allow_start(); }
 
 OtaStatus OtaService::run_ble() {
   // START is already latched (is_ble_active() returned true), so run(0) drives

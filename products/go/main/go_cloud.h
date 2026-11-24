@@ -62,6 +62,10 @@ public:
   /// WifiHttpClient timeout (~15 s).  Idempotent.
   void stop();
 
+  /// Nonblocking handoff: request shutdown, then poll until resources are freed.
+  void request_stop();
+  bool poll_stop();
+
   // -----------------------------------------------------------------
   // State actions (lock-free; safe to call any time)
   // -----------------------------------------------------------------
@@ -114,6 +118,8 @@ private:
   std::atomic<bool> _config_fetch_enabled;
   std::atomic<bool> _fire_now_pending{false};
   std::atomic<bool> _shutdown_pending{false};
+  std::atomic<bool> _stop_ready{false};
+  void _finish_stop();
 
   // Snapshot
   MeasuresAGo _latest_snapshot{};

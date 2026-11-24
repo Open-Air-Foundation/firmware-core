@@ -27,6 +27,8 @@ static constexpr const char *TAG = "WifiService";
 // disconnected icon + reconnect loop) promptly, while still riding out a
 // transient missed sweep at bring-up.
 static constexpr uint8_t STATIONARY_MAX_RETRY_COUNT = 3;
+static constexpr uint32_t WIFI_CLEANUP_STACK_BYTES = 4096;
+static constexpr uint32_t WIFI_CLEANUP_PRIORITY = 3;
 
 static void apply_stationary_power_save(WifiManager &wifi, bool enabled) {
   const WifiPowerSave mode = enabled ? WifiPowerSave::MaxModem : WifiPowerSave::None;
@@ -55,6 +57,11 @@ WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Co
 }
 
 WifiService::~WifiService() {
+  if (_suspend_task != nullptr) {
+    _suspend_done_sem.take();
+    RTOS::task_delete(_suspend_task);
+    _suspend_task = nullptr;
+  }
   if (_provisioning_active && _prov != nullptr) {
     _prov->stop();
     _provisioning_active = false;
@@ -72,7 +79,7 @@ bool WifiService::has_saved_networks() const { return _wifi.has_saved_networks()
 
 void WifiService::set_power_save_enabled(bool enabled) {
   _power_save_enabled = enabled;
-  if (!_provisioning_active && _wifi.get_mode() == WifiMode::Sta) {
+  if (!_suspended.load() && !_provisioning_active && _wifi.get_mode() == WifiMode::Sta) {
     apply_stationary_power_save(_wifi, _power_save_enabled);
   }
 }
@@ -88,6 +95,7 @@ void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *stati
 
 void WifiService::_connect_saved_internal(const WifiStaticIpConfig *static_ip,
                                           bool reset_online_latches, bool arm_window) {
+  _suspended.store(false);
   _install_wifi_callbacks();
   _reset_deadline();
   if (reset_online_latches) {
@@ -125,6 +133,8 @@ void WifiService::_connect_saved_internal(const WifiStaticIpConfig *static_ip,
 }
 
 void WifiService::schedule_reconnect(const WifiStaticIpConfig *static_ip) {
+  if (_suspended.load())
+    return;
   if (static_ip != nullptr && static_ip->ip != 0) {
     _reconnect_static_ip = *static_ip;
     _reconnect_has_static_ip = true;
@@ -174,6 +184,16 @@ void WifiService::_connect_fallback_internal(bool reset_online_latches, bool arm
 // ---------------------------------------------------------------------------
 
 void WifiService::start_provisioning(ProvisioningTransport transport) {
+  if (_wifi.initialize() != WifiStatus::Ok) {
+    AG_LOGE(TAG, "Wi-Fi initialization failed for provisioning");
+    ProvisioningEventInfo failure{};
+    failure.event = ProvisioningEvent::Stopped;
+    failure.stop_reason = ProvisioningStopReason::ProductRequested;
+    _post_provisioning_event(failure);
+    return;
+  }
+  _driver_released = false;
+  _suspended.store(false);
   _use_default_credentials = false;
   _portal_used = false;
   AG_LOGI(TAG, "start_provisioning(%u)", static_cast<unsigned>(transport));
@@ -370,6 +390,14 @@ void WifiService::_ensure_provisioning_manager() {
 // ---------------------------------------------------------------------------
 
 void WifiService::shutdown() {
+  if (_suspend_task != nullptr) {
+    _suspend_done_sem.take();
+    RTOS::task_delete(_suspend_task);
+    _suspend_task = nullptr;
+    _suspend_done_sem.destroy();
+  }
+  _suspended.store(true);
+  ++_event_epoch;
   _use_default_credentials = false;
   _provisioning_connected_event_pending.store(false);
   _reset_deadline();
@@ -383,6 +411,89 @@ void WifiService::shutdown() {
   _wifi.set_mode(WifiMode::Off);
   _detach_wifi_callbacks();
   _reset_online_latches();
+}
+
+bool WifiService::request_suspend(bool deinitialize) {
+  if (_suspend_task != nullptr)
+    return true;
+  if (_suspended.load() && _suspend_ok && (!deinitialize || _driver_released))
+    return true;
+  _suspended.store(true);
+  ++_event_epoch;
+  _reset_deadline();
+  _reconnect_at_ms = 0;
+  _online.store(false);
+  _ip.store(0);
+  _rssi.store(WIFI_RSSI_INVALID);
+  _suspend_deinitialize = deinitialize;
+  _suspend_ok = false;
+  _suspend_done.store(false);
+  if (!_suspend_done_sem.create())
+    return false;
+  // HTTP/mDNS stop can block. This temporary worker exists only after Cloud
+  // has released its stack/TLS; it is reclaimed before BLE initialization.
+  if (!RTOS::task_create(_suspend_entry, "wifi_cleanup", WIFI_CLEANUP_STACK_BYTES, this,
+                         WIFI_CLEANUP_PRIORITY, &_suspend_task)) {
+    _suspend_done_sem.destroy();
+    return false;
+  }
+  return true;
+}
+
+void WifiService::_suspend_entry(void *arg) {
+  auto *self = static_cast<WifiService *>(arg);
+  self->_suspend();
+  self->_suspend_done_sem.give();
+  self->_suspend_done.store(true);
+  for (;;)
+    RTOS::task_notify_take(UINT32_MAX);
+}
+
+void WifiService::_suspend() {
+  log_heap(TAG, "wifi.suspend:enter");
+  // A failed mDNS stop must not be treated as successful ownership release.
+  if (_wifi.clear_mdns_profile() != WifiStatus::Ok) {
+    AG_LOGE(TAG, "handoff: mDNS cleanup failed; retry required");
+    return;
+  }
+  _local_mdns_profile_installed = false;
+  _http.stop();
+  _local_server.end();
+  _local_http_active = false;
+  if (_wifi.set_mode(WifiMode::Off) != WifiStatus::Ok) {
+    AG_LOGE(TAG, "handoff: Wi-Fi stop failed; retry required");
+    return;
+  }
+  log_heap(TAG, "wifi.suspend:radio-stopped");
+  if (_suspend_deinitialize) {
+    if (_wifi.deinitialize() != WifiStatus::Ok)
+      return;
+    _driver_released = true;
+    log_heap(TAG, "wifi.suspend:driver-released");
+  }
+  _suspend_ok = true;
+}
+
+bool WifiService::poll_suspend() {
+  if (_suspend_task != nullptr) {
+    if (!_suspend_done.load())
+      return false;
+    RTOS::task_delete(_suspend_task);
+    _suspend_task = nullptr;
+    _suspend_done_sem.destroy();
+    log_heap(TAG, "wifi.suspend:complete");
+  }
+  return _suspended.load() && _suspend_ok;
+}
+
+bool WifiService::resume_station(const WifiStaticIpConfig *static_ip) {
+  if (_suspend_task != nullptr || _wifi.initialize() != WifiStatus::Ok)
+    return false;
+  _driver_released = false;
+  _suspend_ok = false;
+  ++_event_epoch;
+  _connect_saved_internal(static_ip, false, !_has_been_online.load());
+  return true;
 }
 
 void WifiService::clear_credentials() {
@@ -433,6 +544,8 @@ uint32_t WifiService::next_deadline_ms() const {
 }
 
 void WifiService::tick(uint32_t now_ms) {
+  if (_suspended.load())
+    return;
   if (_provisioning_connected_event_pending.load()) {
     if (RTOS::queue_send(_event_queue, &_pending_provisioning_connected_event, 0)) {
       _provisioning_connected_event_pending.store(false);
@@ -482,6 +595,8 @@ void WifiService::_detach_wifi_callbacks() {
 }
 
 void WifiService::_on_got_ip(uint32_t ip) {
+  if (_suspended.load())
+    return;
   AG_LOGI(TAG, "wifi online: ip=0x%08x", static_cast<unsigned>(ip));
   _ip.store(ip);
   _online.store(true);
@@ -492,11 +607,14 @@ void WifiService::_on_got_ip(uint32_t ip) {
 
   Event evt{};
   evt.type = EventType::WifiConnected;
+  evt.wifi_epoch = _event_epoch.load();
   evt.wifi_ip = ip;
   RTOS::queue_send(_event_queue, &evt);
 }
 
 void WifiService::_on_disconnected(WifiDisconnectReason reason) {
+  if (_suspended.load())
+    return;
   AG_LOGI(TAG, "wifi disconnected: reason=%u", static_cast<unsigned>(reason));
   _online.store(false);
   _last_disconnect_reason.store(static_cast<uint8_t>(reason));
@@ -525,6 +643,7 @@ void WifiService::_reset_online_latches() {
 bool WifiService::_post_wifi_disconnected(WifiDisconnectReason reason) {
   Event evt{};
   evt.type = EventType::WifiDisconnected;
+  evt.wifi_epoch = _event_epoch.load();
   evt.wifi_disconnect_reason = static_cast<uint8_t>(reason);
   return RTOS::queue_send(_event_queue, &evt);
 }

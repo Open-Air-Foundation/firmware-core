@@ -93,6 +93,11 @@ public:
   /// Return the current Wi-Fi operating mode.
   WifiMode get_mode() const;
 
+  /// Initialize a previously deinitialized driver, preserving saved credentials.
+  WifiStatus initialize();
+  /// Stop the radio before releasing driver allocations; preserve callbacks/store.
+  WifiStatus deinitialize();
+
   // -- STA Operations --
 
   /// Start a STA connection. Non-blocking. Requires Sta or ApSta mode

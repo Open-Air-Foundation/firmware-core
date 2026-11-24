@@ -1,6 +1,7 @@
 # AirGradient Go BLE and WiFi Handoff Extension
 
-> **Status: agreed behavior specification; not implemented.** This standalone
+> **Status: implemented; host tests and firmware builds pass; hardware checks pending.**
+> This standalone
 > extension changes connectivity ownership and lock behavior from
 > [Operation and Measurement Logging](operation_and_measurement_logging.md).
 > Where their requirements conflict, this extension takes precedence for the
@@ -79,12 +80,13 @@ The eventual implementation references are [Orchestrator](../docs/orchestrator.m
 [Power Management](../docs/power_management.md), and the
 [BLE Client Reference](../go_ble_client.md). They describe existing behavior,
 not completion of this extension. Broad documentation and VHUB updates remain
-deferred for the present specification task.
+deferred for this implementation.
 
 ### 2. Ownership and WiFi Resource Lifetime
 
 Treat UI lock state, BLE ownership, saved WiFi preference, and actual WiFi
-runtime state as separate concepts. Compute desired ownership centrally rather
+runtime state as separate concepts. The table describes settled ownership;
+during the initial three-second unlock delay, WiFi retains ownership. Compute desired ownership centrally rather
 than starting services independently from lock, tracking, and connection callbacks.
 
 | Situation | BLE Ownership | WiFi Radio and Services | WiFi Driver |
@@ -109,20 +111,21 @@ Merely disabling Cloud requests without releasing its task and buffers is
 insufficient. Driver retention during ordinary BLE use reduces allocation churn,
 but must be measured rather than described as a fragmentation guarantee.
 
-### 3. Connection Window and Return Delay
+### 3. BLE Connection Window and Connectivity Handoff Delay
 
 These timers serve different purposes and are fixed firmware constants, not
-NVS preferences or menu settings. Their eventual code names are implementation
-details.
+NVS preferences or menu settings. `CONNECTIVITY_HANDOFF_DELAY_MS` supplies the
+same three-second delay in both directions, using one timer with its pending
+direction recorded.
 
 | Parameter | Value | Purpose |
 |---|---:|---|
 | BLE connection window | 60 seconds | Allow time to open the phone app after unlocking |
-| Automatic return delay | 5 seconds | Avoid restarting WiFi during rapid lock/unlock changes |
+| Connectivity handoff delay | 3 seconds | Avoid switching WiFi/BLE during rapid lock/unlock changes |
 
 Grant a connection window on an explicit unlock. Start its clock when BLE is
 actually connectable, after the handoff completes; if BLE is already ready,
-start at unlock. Waiting for Cloud cleanup must not consume the window. An
+start at unlock. Neither the handoff delay nor Cloud cleanup consumes the window. An
 auto-lock before BLE becomes ready must not cancel the pending opportunity.
 
 The connection window runs independently of the UI inactivity timer. If it
@@ -135,29 +138,46 @@ Disconnecting does not renew the window. A subsequent physical unlock grants
 a new window. Tracking does not need a window, and stopping tracking does not
 create one; reevaluate any window already granted by unlock.
 
-Start the five-second return delay only when the last ordinary BLE reason has
-ended. For example, window expiry while locked begins this delay; it does not
-run concurrently with the window. Manual lock without a client cancels the
-unused window and starts the shorter delay instead.
+Apply the connectivity handoff delay in both directions:
 
-During the return delay, stop accepting new ordinary connections but retain the
-BLE stack for reuse if the user unlocks again. Keep WiFi suspended. At expiry,
-release BLE resources before starting WiFi. This delay must not become another
-connectable window. A new unlock, tracking start, or other valid ownership
-reason cancels the pending return. Do not repeatedly extend the delay on timer
-ticks or unrelated events.
+- **WiFi to BLE:** when ordinary unlock requests BLE while WiFi owns
+  connectivity, wait three seconds before requesting any network cleanup. During
+  this delay, keep WiFi, Cloud, Local Server, and mDNS operating according to
+  their settings; do not initialize ordinary BLE yet. Manual lock without a
+  client cancels the pending window and handoff, leaving WiFi connected. Another
+  unlock starts a fresh delay. Auto-lock preserves the pending connection window
+  and therefore still allows the handoff to proceed.
+- **BLE to WiFi or sleep:** begin the three-second delay only after the last BLE
+  ownership reason ends. Window expiry while locked starts this delay; the two
+  timers do not run concurrently. Manual lock without a client cancels the unused
+  window and starts the handoff delay. Stop advertising immediately, retain the
+  BLE stack during the delay, and keep WiFi suspended. Unlock or another valid
+  BLE reason cancels the delay and reuses the stack. At expiry, release BLE before
+  starting WiFi or following normal sleep eligibility.
 
-Explicit client release skips the five-second delay, but never skips required
-resource cleanup. With WiFi disabled, the same ordinary release process leads
-to existing sleep eligibility rather than WiFi startup.
+Do not extend a pending delay on timer ticks or unrelated events. If network
+cleanup has already started when the desired owner changes, complete cleanup
+safely, then reevaluate ownership. A final manual lock in that case skips
+unnecessary BLE startup and uses the three-second delay before returning to WiFi.
+
+Tracking bypasses the initial handoff delay and immediately requests network
+cleanup and driver deinitialization, including when an ordinary unlock delay
+is already pending. Disabling WiFi explicitly also bypasses its shutdown delay.
+If WiFi does not own connectivity, unlock can enable BLE immediately. Provisioning
+completion retains its separate cleanup flow; it does not start ordinary network
+services while waiting to return to BLE.
+
+Explicit client release skips the connectivity handoff delay, but never skips
+required acknowledgement or resource cleanup. With WiFi disabled, ordinary BLE
+release leads to existing sleep eligibility rather than WiFi startup.
 
 ### 4. Lock and Connection Cases
 
 | Event or Condition | Required Behavior |
 |---|---|
-| Unlock, no tracking | Request BLE ownership; suspend WiFi; grant the connection window when ready |
+| Unlock, no tracking | If WiFi owns connectivity, debounce for three seconds, then suspend it; grant the connection window when BLE is ready |
 | Auto-lock without a client | Retain only the remaining connection window, then begin automatic return |
-| Manual lock without a client | Cancel unused window; begin automatic return unless another BLE reason exists |
+| Manual lock without a client | Cancel unused window; cancel a pending WiFi-to-BLE delay, or begin the BLE-to-WiFi/sleep delay |
 | Manual lock or auto-lock with an established client | Lock controls; preserve the connection and BLE ownership |
 | Window expires with an established client | Preserve the connection; window expiry alone does not release BLE |
 | Client disconnects while unlocked | Continue advertising; WiFi remains suspended |
@@ -193,7 +213,7 @@ For an accepted request:
    completion mechanism or a bounded drain procedure rather than freeing BLE
    immediately after queuing the response.
 3. Lock controls if needed, cancel the connection window and pending ordinary
-   return delay, and prevent new BLE work from extending this session.
+   connectivity handoff delay, and prevent new BLE work from extending this session.
 4. Disconnect and release BLE resources safely.
 5. Resume eligible WiFi services if Enable WiFi is On. Otherwise follow existing
    sleep conditions, including sensor, storage, display, and GPS requirements.
@@ -215,7 +235,9 @@ client work that would conflict with the handoff.
 
 ### 6. Asynchronous Handoff and Resource Ordering
 
-Reflect unlock or tracking state changes in the UI immediately. Do not block the
+Reflect unlock or tracking state changes in the UI immediately. For ordinary
+unlock, keep the current WiFi owner active until the handoff delay expires.
+Tracking bypasses that delay. Do not block the
 orchestrator while waiting for network cleanup. The current Cloud stop waits for
 its worker and can wait approximately one HTTP timeout; split shutdown request
 from completion handling using existing RTOS/service boundaries.
@@ -228,6 +250,9 @@ sequenceDiagram
     participant B as BLE
     U->>O: Request BLE ownership
     O->>O: Update UI and desired state
+    opt Ordinary unlock while WiFi owns connectivity
+        O->>O: Wait 3 seconds; cancel if manually locked again
+    end
     O->>W: Stop new work and request cleanup
     W-->>O: Cloud, HTTP, and mDNS stopped
     O->>W: Disconnect and stop radio
@@ -311,7 +336,10 @@ Provisioning is a separately admitted setup flow, not ordinary Local Server
 operation. Credential verification can require WiFi while a BLE setup transport
 is active. Do not silently force this flow through the ordinary exclusivity
 rule or start Cloud/Local Server as a side effect of verification. Resolve the
-explicit setup exception listed below before implementing that path.
+setup exception below: provisioning and tracking are independent, mutually
+exclusive flows. Tracking cannot start while provisioning is active, and
+tracking does not open WiFi setup. Preserve the existing temporary dual-radio
+provisioning transport outside tracking.
 
 ## Implementation Plan
 
@@ -332,7 +360,7 @@ explicit setup exception listed below before implementing that path.
 
 Keep this extension standalone. Do not edit the original operation/logging
 specification, delete the heap specification, or add index links as part of
-this task. This specification does not itself authorize firmware implementation.
+this task. Firmware implementation was subsequently requested by the user.
 
 ## Testing Strategy
 
@@ -343,8 +371,14 @@ this task. This specification does not itself authorize firmware implementation.
   expires once, and is not renewed by disconnect or unrelated activity.
 - Verify manual lock without a client cancels the window, while either lock
   preserves an established authenticated client.
-- Check the five-second return delay at its boundary, cancellation on unlock,
-  and disabled connectability during the delay. Explicit release must bypass it.
+- Check the three-second connectivity handoff delay in both directions, including
+  clock wrap, cancellation, and repeated events without deadline extension.
+- Starting with WiFi connected, unlock and manually lock within three seconds:
+  no Cloud shutdown, HTTP/mDNS cleanup, radio stop, or BLE startup may occur.
+- Verify tracking bypasses a pending initial delay, and the 60-second window
+  starts only after the initial delay and cleanup finish.
+- Verify BLE advertising stops immediately during the delay toward WiFi/sleep,
+  unlock reuses the stack, and explicit release bypasses the handoff delay.
 - Check release when unlocked with auto-lock Off, when already locked, and
   when WiFi is disabled. Verify rejection leaves state unchanged during
   tracking, transfer, or update; accepted release locks before WiFi resumes.
@@ -384,22 +418,39 @@ full teardown. Neither the power saving nor freedom from fragmentation is an
 acceptance result until measured. Ensure interrupted connectivity does not
 silently lose locally required tracking/log records or change their validity.
 
-## Remaining Implementation Decisions
+## Implementation Decisions
 
-1. **Release command encoding and acknowledgement:** choose the existing control
-   channel, unused operation value, response/error mapping, and bounded response
-   drain behavior. Do not invent a new service unless existing capabilities are
-   insufficient. The lock/release behavior itself is agreed.
-2. **Provisioning exception:** define ownership during BLE credential verification
-   and explicit setup while unlocked, including requests during tracking. Decide
-   whether to retain the existing temporary dual-radio setup flow or defer setup
-   until tracking stops. Ordinary Cloud/Local Server must remain suspended.
-3. **Authentication bounds and failures:** verify existing pairing/link timeouts
-   prevent unauthenticated links retaining ownership indefinitely, and define
-   recovery when acknowledgement or service teardown cannot complete normally.
-   Do not introduce an idle timeout for authenticated clients without a separate
-   behavior decision; their retained connection is intentional.
-
-Resolve these details before implementing their affected paths. They do not
-reopen the agreed 60-second window, five-second return delay, lock semantics,
-tracking ownership, or driver-retention policy.
+1. **Release command:** the authenticated Config characteristic accepts the CBOR
+   map `{"op":"cmd","cmd":"release_ble"}`. It uses the existing
+   `{"type":"cmd_result","cmd":"release_ble","ok":true}` notification.
+   Busy rejection adds `"ok":false,"err":"busy"` instead. A successful command
+   locks Go immediately, prevents further Config/History work, and blocks new
+   OTA START admission atomically. Allow the existing 200 ms command-response
+   drain before disconnecting; this bounds the attempt, not delivery assurance.
+   A physical unlock or a subsequently admitted local tracking start cancels a
+   pending release. Late OTA START receives the
+   existing aborted result without starting an image write.
+2. **Provisioning exception:** provisioning and tracking remain independent,
+   mutually exclusive flows, as clarified by the user. Keep the existing setup
+   transports outside tracking. On setup success, return Home unlocked and hand
+   connectivity to ordinary BLE; Cloud and Local Server wait for WiFi ownership.
+3. **Authentication bound:** allow an unauthenticated connection 30 seconds from
+   its connection event. At expiry, tear down the stalled link and reevaluate
+   ownership. An unlocked device, active tracking, or an unexpired window can
+   advertise again. Authenticated clients have no idle timeout.
+4. **Shutdown coordination:** the orchestrator requests Cloud shutdown and polls
+   until its current request completes and its resources are freed. A temporary
+   4 KiB worker then stops HTTP/mDNS and the WiFi radio, with driver teardown only
+   for tracking. Reclaim that worker before starting BLE. Retry failed cleanup
+   after one second; do not start the other owner while cleanup is incomplete.
+   Previously accepted local configuration requests remain queued for dispatch.
+5. **Driver recreation and stale events:** WiFi deinitialization also releases
+   its default network interfaces. Resume initializes the driver if needed and
+   preserves the previously-online latch, so an ordinary AP failure after a
+   handoff stays on the runtime reconnect path. WiFi event epochs reject queued
+   events from earlier ownership periods.
+6. **Verification boundary:** host tests exercise handoff sequencing, both timers
+   including clock wrap, retained connections, tracking and pause, release,
+   service cleanup, and protocol encoding. Real radio teardown/restart, response
+   delivery, stack headroom, heap fragmentation, UI responsiveness, and current
+   consumption still require the user’s on-device checks described above.

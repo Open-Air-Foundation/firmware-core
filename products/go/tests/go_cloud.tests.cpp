@@ -94,6 +94,8 @@ public:
   // Create the done-semaphore so the shutdown branch's _done_sem.give()
   // does not hit an uncreated handle.  is_created() == true under
   // TEST_HOST returns the sentinel handle.
+  static void simulate_task(CloudService &c) { c._task_handle = reinterpret_cast<void *>(1); }
+  static bool task_exists(const CloudService &c) { return c._task_handle != nullptr; }
   static void create_done_sem(CloudService &c) { c._done_sem.create(); }
 };
 
@@ -1352,4 +1354,35 @@ TEST_CASE("Cloud acknowledges shutdown arriving during an OTA probe",
   CHECK(cloud_spy::ota_check_count == 1);
   CHECK(A::done_signal_count(f.cloud) == 1);
   CHECK(f.mock_rtos.events_posted == 0);
+}
+
+static void stop_during_post() {
+  s_disarm_target->request_stop();
+  CHECK_FALSE(s_disarm_target->poll_stop());
+}
+
+TEST_CASE("Cloud asynchronous stop waits for the current request and suppresses FETCH",
+          "[CloudService][shutdown][handoff]") {
+  CloudFixture f;
+  A::simulate_task(f.cloud);
+  A::set_armed(f.cloud, true);
+  A::set_was_armed(f.cloud, true);
+  A::set_post_due(f.cloud, 0);
+  A::set_fetch_due(f.cloud, 0);
+  s_disarm_target = &f.cloud;
+  cloud_spy::on_post_hook = stop_during_post;
+  A::run_once(f.cloud, 1000);
+  CHECK(cloud_spy::post_call_count == 1);
+  CHECK_FALSE(f.cloud.poll_stop());
+  CHECK(A::task_exists(f.cloud));
+  A::run_once(f.cloud, 1001);
+  CHECK(cloud_spy::fetch_call_count == 0);
+  CHECK(A::done_signal_count(f.cloud) == 1);
+  // The fixture borrows its fetch array; production owns a malloc allocation.
+  A::set_fetch_buf(f.cloud, nullptr);
+  CHECK(f.cloud.poll_stop());
+  CHECK_FALSE(A::task_exists(f.cloud));
+  CHECK(f.cloud.poll_stop());
+  cloud_spy::on_post_hook = nullptr;
+  s_disarm_target = nullptr;
 }

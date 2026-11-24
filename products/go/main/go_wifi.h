@@ -130,6 +130,16 @@ public:
   /// Called by the orchestrator on Stationary teardown.
   void shutdown();
 
+  /// Async handoff cleanup. Call only after Cloud has released HTTP/TLS.
+  /// While pending, only poll_suspend()/state queries may touch this service.
+  bool request_suspend(bool deinitialize);
+  bool poll_suspend();
+  bool suspension_pending() const { return _suspend_task != nullptr; }
+  bool is_suspended() const { return _suspended.load(); }
+  bool driver_released() const { return _driver_released.load(); }
+  uint32_t event_epoch() const { return _event_epoch.load(); }
+  bool resume_station(const WifiStaticIpConfig *static_ip = nullptr);
+
   /// Erase all saved networks and reset online latches.
   void clear_credentials();
 
@@ -161,6 +171,16 @@ public:
 #endif
 
 private:
+  static void _suspend_entry(void *arg);
+  void _suspend();
+  RtosTaskHandle _suspend_task = nullptr;
+  RtosBinarySemaphore _suspend_done_sem;
+  std::atomic<bool> _suspend_done{false};
+  std::atomic<bool> _suspended{false};
+  std::atomic<uint32_t> _event_epoch{0};
+  bool _suspend_ok = false;
+  bool _suspend_deinitialize = false;
+  std::atomic<bool> _driver_released{false};
   // Bind on_got_ip / on_disconnected to WifiManager. Cleared by passing
   // null callbacks. Owned by WifiService at all times outside provisioning.
   void _install_wifi_callbacks();
