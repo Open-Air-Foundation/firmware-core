@@ -204,9 +204,10 @@ Configurable through Kconfig under **AirGradient HTTP Server**:
 | `CONFIG_AG_HTTP_MAX_BODY_SIZE` | `4096` | Maximum complete request body size in bytes; oversized bodies are rejected |
 | `CONFIG_AG_HTTP_MAX_ROUTES` | `24` | Maximum number of registered URI handlers (passed to `esp_http_server` as `max_uri_handlers`); default sized for the provisioning captive portal |
 
-The HTTP server task stack is fixed at 6144 bytes to provide sufficient
-headroom for nested JSON route handlers. Other `httpd_config_t` fields retain
-their `HTTPD_DEFAULT_CONFIG()` values unless listed above.
+The HTTP server task stack is 4,096 bytes when `CONFIG_AG_DEVICE_MODEL_GO` is
+selected and 6,144 bytes for other models. Go uses this stack for both Local
+Server and provisioning routes. Other `httpd_config_t` fields retain their
+`HTTPD_DEFAULT_CONFIG()` values unless listed above.
 
 ## Dependencies
 

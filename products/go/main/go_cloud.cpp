@@ -39,9 +39,9 @@ static constexpr const char *TAG = "CloudService";
 // Tunables
 // ---------------------------------------------------------------------------
 
-static constexpr uint32_t CLOUD_TASK_STACK_SIZE = 8192;
+static constexpr uint32_t CLOUD_TASK_STACK_SIZE = 6144;
 static constexpr uint32_t CLOUD_TASK_PRIORITY = 4;
-static constexpr size_t FETCH_BUFFER_BYTES = 2048;
+static constexpr size_t FETCH_BUFFER_BYTES = 1024;
 
 /// Dashboard "no RSSI" convention; avoids a misleading 0 dB reading.
 static constexpr int RSSI_UNAVAILABLE = -127;

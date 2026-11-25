@@ -152,7 +152,7 @@ struct CloudFixture {
 
   // Persistent buffer for fetch_config so _do_fetch has somewhere to
   // write into.  Sized to match FETCH_BUFFER_BYTES.
-  static constexpr size_t FETCH_BUF_SIZE = 2048;
+  static constexpr size_t FETCH_BUF_SIZE = 1024;
   char fetch_buf[FETCH_BUF_SIZE] = {};
 
   std::unique_ptr<trompeloeil::expectation> _exp_time;
@@ -828,10 +828,11 @@ TEST_CASE("FETCH rejects malformed unsupported and case-mismatched scalars indep
   REQUIRE(update.use_fahrenheit);
 }
 
-TEST_CASE("FETCH allocation accepts 2047 bytes but not larger responses",
+TEST_CASE("FETCH allocation accepts 1023 bytes but not larger responses",
           "[CloudService][fetch][buffer]") {
   CloudFixture f;
-  std::string body(2047, ' ');
+  std::string body = R"({"temperatureUnit":"f"})";
+  body.resize(1023, ' ');
   cloud_spy::fetch_body_to_write = body.data();
   cloud_spy::fetch_bytes_to_write = body.size();
 
@@ -840,14 +841,20 @@ TEST_CASE("FETCH allocation accepts 2047 bytes but not larger responses",
   A::set_post_due(f.cloud, 999'999'999);
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 1000);
-  REQUIRE(cloud_spy::last_fetch_buf_size == 2048);
+  REQUIRE(cloud_spy::last_fetch_buf_size == CloudFixture::FETCH_BUF_SIZE);
+  REQUIRE(f.mock_rtos.events_posted == 1);
   REQUIRE(f.mock_rtos.last_event.fetch_config.result == static_cast<uint8_t>(AgClientResult::Ok));
+  REQUIRE(has_go_config_field(f.mock_rtos.last_event.fetch_config.update.update_mask,
+                              GoConfigField::TemperatureUnit));
+  REQUIRE(f.mock_rtos.last_event.fetch_config.update.use_fahrenheit);
 
-  body.push_back('x');
+  body.push_back(' ');
+  cloud_spy::fetch_body_to_write = body.data();
   cloud_spy::next_fetch_result = AgClientResult::BufferTooSmall;
   cloud_spy::fetch_bytes_to_write = body.size();
   A::set_fetch_due(f.cloud, 0);
   A::run_once(f.cloud, 2000);
+  REQUIRE(f.mock_rtos.events_posted == 2);
   REQUIRE(f.mock_rtos.last_event.fetch_config.result ==
           static_cast<uint8_t>(AgClientResult::BufferTooSmall));
   REQUIRE(f.mock_rtos.last_event.fetch_config.update.update_mask == 0);

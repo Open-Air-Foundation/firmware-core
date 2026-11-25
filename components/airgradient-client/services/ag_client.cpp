@@ -24,6 +24,12 @@
 namespace {
 constexpr const char *TAG = "AgClient";
 
+#if defined(CONFIG_AG_DEVICE_MODEL_GO)
+constexpr size_t POST_BODY_BUFFER_SIZE = 512;
+#else
+constexpr size_t POST_BODY_BUFFER_SIZE = 1024;
+#endif
+
 [[noreturn]] void abort_unsupported(const char *method, const char *reason) {
   AG_LOGE(TAG, "%s: %s", method, reason);
   std::abort();
