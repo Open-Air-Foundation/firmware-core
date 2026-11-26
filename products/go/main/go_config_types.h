@@ -48,14 +48,16 @@ enum class GoConfigField : uint32_t {
   BuzzerEnabled = 1U << 16,
   PinnedChart = 1U << 17,
   BackLedIndicator = 1U << 18,
+  IdleInterval = 1U << 19,
+  TrackingInterval = 1U << 20,
 };
 
-constexpr int MEASURE_INTERVAL_SECONDS_MIN = 1;
-constexpr int MEASURE_INTERVAL_SECONDS_MAX = 3600;
-constexpr int MEASURE_INTERVAL_SECONDS_DEFAULT = 10;
-constexpr int ENERGY_SAVING_MEASURE_INTERVAL_SECONDS_MIN = 300;
-constexpr int ENERGY_SAVING_MEASURE_INTERVAL_SECONDS_DEFAULT =
-    ENERGY_SAVING_MEASURE_INTERVAL_SECONDS_MIN;
+constexpr int TRACKING_INTERVAL_SECONDS_MIN = 1;
+constexpr int TRACKING_INTERVAL_SECONDS_MAX = 3600;
+constexpr int TRACKING_INTERVAL_SECONDS_DEFAULT = 10;
+constexpr int IDLE_INTERVAL_SECONDS_MIN = TRACKING_INTERVAL_SECONDS_MIN;
+constexpr int IDLE_INTERVAL_SECONDS_MAX = TRACKING_INTERVAL_SECONDS_MAX;
+constexpr int IDLE_INTERVAL_SECONDS_DEFAULT = 300;
 
 constexpr int CO2_ABC_DAYS_DISABLED = -1;
 constexpr int CO2_ABC_DAYS_MIN = 1;
@@ -66,13 +68,12 @@ constexpr int LEARNING_OFFSET_HOURS_MIN = 1;
 constexpr int LEARNING_OFFSET_HOURS_MAX = 1000;
 constexpr int LEARNING_OFFSET_HOURS_DEFAULT = 12;
 
-inline bool is_measure_interval_seconds_valid(int value) {
-  return value >= MEASURE_INTERVAL_SECONDS_MIN && value <= MEASURE_INTERVAL_SECONDS_MAX;
+inline bool is_tracking_interval_seconds_valid(int value) {
+  return value >= TRACKING_INTERVAL_SECONDS_MIN && value <= TRACKING_INTERVAL_SECONDS_MAX;
 }
 
-inline bool is_energy_saving_measure_interval_seconds_valid(int value) {
-  return value >= ENERGY_SAVING_MEASURE_INTERVAL_SECONDS_MIN &&
-         value <= MEASURE_INTERVAL_SECONDS_MAX;
+inline bool is_idle_interval_seconds_valid(int value) {
+  return value >= IDLE_INTERVAL_SECONDS_MIN && value <= IDLE_INTERVAL_SECONDS_MAX;
 }
 
 inline bool is_gps_mode_valid(int value) {
@@ -115,7 +116,8 @@ struct GoConfigUpdate {
   Metric pinned_chart = Metric::Pm25;
   bool disable_cloud = false;
   ConfigurationControl configuration_control = ConfigurationControl::Both;
-  int measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
+  int tracking_interval_seconds = TRACKING_INTERVAL_SECONDS_DEFAULT;
+  int idle_interval_seconds = IDLE_INTERVAL_SECONDS_DEFAULT;
   GpsMode gps_mode = GpsMode::OnWhenTracking;
   LedBrightness back_led_brightness = LedBrightness::Off;
   BackLedIndicator back_led_indicator = BackLedIndicator::Aqi;

@@ -316,8 +316,9 @@ FetchConfigEventPayload parse_cloud_config(const char *buffer, size_t bytes) {
   const cJSON *measurement_interval =
       cJSON_GetObjectItemCaseSensitive(root, JSON_MEASUREMENT_INTERVAL);
   if (measurement_interval != nullptr &&
-      parse_int_range(measurement_interval, JSON_MEASUREMENT_INTERVAL, MEASURE_INTERVAL_SECONDS_MIN,
-                      MEASURE_INTERVAL_SECONDS_MAX, update.measure_interval_seconds)) {
+      parse_int_range(measurement_interval, JSON_MEASUREMENT_INTERVAL,
+                      TRACKING_INTERVAL_SECONDS_MIN, TRACKING_INTERVAL_SECONDS_MAX,
+                      update.tracking_interval_seconds)) {
     update.update_mask |= static_cast<uint32_t>(GoConfigField::MeasurementInterval);
   }
 

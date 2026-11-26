@@ -20,13 +20,7 @@ inline constexpr bool is_chart_metric_valid(int value) {
   return value >= static_cast<int>(Metric::None) && value <= static_cast<int>(Metric::Altitude);
 }
 
-// --- Operating mode and behavior ---
-
-enum class OperatingMode : uint8_t {
-  Portable,
-  Stationary,
-  Offline,
-};
+// --- Runtime behavior ---
 
 enum class Behavior : uint8_t {
   Tracking,
@@ -89,7 +83,7 @@ enum class InputType : uint8_t {
 //
 // Saved to RTC memory before deep sleep; restored on wake to resume application
 // state without full re-initialization. Defaults represent a safe starting
-// point for a fresh power-on (Portable, Idle, Locked).
+// point for a fresh power-on (Idle, Locked).
 
 enum class RtcAppFlag : uint32_t {
   GpsEnabled = 1u << 0,
@@ -99,7 +93,6 @@ enum class RtcAppFlag : uint32_t {
 };
 
 struct RtcAppState {
-  OperatingMode mode = OperatingMode::Portable;
   Behavior behavior = Behavior::Idle;
   LockState lock_state = LockState::Locked;
   TrackingState tracking_state = TrackingState::Idle;

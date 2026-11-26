@@ -20,6 +20,7 @@ enum class Screen : uint8_t {
   MainMenu,
   TrackingMenu,
   Settings,
+  WifiSettings,
   Operations,
   DisplayTouch,
   SettingsChoice,

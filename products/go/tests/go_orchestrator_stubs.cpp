@@ -821,7 +821,7 @@ RtcAppState PowerService::load_state() const { return test_spy::state_to_load; }
 
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*settings*/,
                                                        LockState /*lock_state*/,
-                                                       OperatingMode /*mode*/,
+                                                       TrackingState /*tracking*/,
                                                        uint32_t /*awake_ms*/) const {
   return {test_spy::sleep_type_to_return, 10000};
 }
@@ -1071,7 +1071,6 @@ size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSetti
 }
 const char *BleService::charging_state_to_str(BmsChargingState /*s*/) { return "unknown"; }
 const char *BleService::gps_mode_to_str(GpsMode /*m*/) { return "tracking"; }
-const char *BleService::operating_mode_to_str(OperatingMode /*m*/) { return "offline"; }
 
 // ============================================================================
 // ULP stubs (go_ulp.h — LP Core not available on host)

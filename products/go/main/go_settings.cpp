@@ -1,4 +1,5 @@
 #include "go_settings.h"
+#include "go_runtime_policy.h"
 
 #include <cmath>
 
@@ -8,9 +9,11 @@ static constexpr const char *TAG = "Settings";
 
 static constexpr const char *KEY_PENDING_TRACKING_START = "trk_start";
 
-MeasurementCorrections effective_measurement_corrections(const GoSettings &settings) {
+MeasurementCorrections effective_measurement_corrections(const GoSettings &settings,
+                                                         TrackingState tracking,
+                                                         bool wifi_fallback) {
   MeasurementCorrections corrections = settings.corrections;
-  if (settings.operating_mode == OperatingMode::Offline) {
+  if (GoRuntimePolicy{settings, tracking, wifi_fallback}.bypass_temp_hum_corrections()) {
     corrections.temperature.algorithm = LinearCorrectionAlgorithm::None;
     corrections.humidity.algorithm = LinearCorrectionAlgorithm::None;
   }
@@ -29,10 +32,10 @@ bool save_pending_tracking_start(ConfigStore &store, bool pending) {
 
 namespace {
 
-constexpr const char *KEY_MEASURE_INTERVAL_SECONDS = "mi";
-constexpr const char *KEY_ENERGY_SAVING_MEASURE_INTERVAL_SECONDS = "es_mi";
+constexpr const char *KEY_TRACKING_INTERVAL_SECONDS = "mi";
+constexpr const char *KEY_IDLE_INTERVAL_SECONDS = "es_mi";
 constexpr const char *KEY_GPS_MODE = "gpm";
-constexpr const char *KEY_OPERATING_MODE = "opm";
+constexpr const char *KEY_WIFI_ENABLED = "wifi";
 constexpr const char *KEY_USE_FAHRENHEIT = "uf";
 constexpr const char *KEY_USE_FEET = "auf";
 constexpr const char *KEY_PM_USE_USAQI = "pmu";
@@ -80,8 +83,6 @@ bool is_fg_learning_stage_valid(int value) {
 }
 
 bool is_byte_valid(int value) { return value >= 0 && value <= 255; }
-
-bool is_operating_mode_valid(int value) { return value >= 0 && value <= 2; }
 
 bool is_configuration_control_valid(int value) {
   return value >= static_cast<int>(ConfigurationControl::Cloud) &&
@@ -203,18 +204,17 @@ bool save_measurement_corrections(ConfigStore &store, const MeasurementCorrectio
 GoSettings load_go_settings(ConfigStore &store) {
   GoSettings settings;
 
-  int measure_interval_seconds = 0;
-  if (store.get_int(KEY_MEASURE_INTERVAL_SECONDS, measure_interval_seconds) ==
+  int tracking_interval_seconds = 0;
+  if (store.get_int(KEY_TRACKING_INTERVAL_SECONDS, tracking_interval_seconds) ==
           ConfigStoreResult::OK &&
-      is_measure_interval_seconds_valid(measure_interval_seconds)) {
-    settings.measure_interval_seconds = measure_interval_seconds;
+      is_tracking_interval_seconds_valid(tracking_interval_seconds)) {
+    settings.tracking_interval_seconds = tracking_interval_seconds;
   }
 
-  int energy_saving_measure_interval_seconds = 0;
-  if (store.get_int(KEY_ENERGY_SAVING_MEASURE_INTERVAL_SECONDS,
-                    energy_saving_measure_interval_seconds) == ConfigStoreResult::OK &&
-      is_energy_saving_measure_interval_seconds_valid(energy_saving_measure_interval_seconds)) {
-    settings.energy_saving_measure_interval_seconds = energy_saving_measure_interval_seconds;
+  int idle_interval_seconds = 0;
+  if (store.get_int(KEY_IDLE_INTERVAL_SECONDS, idle_interval_seconds) == ConfigStoreResult::OK &&
+      is_idle_interval_seconds_valid(idle_interval_seconds)) {
+    settings.idle_interval_seconds = idle_interval_seconds;
   }
 
   int gps_mode = 0;
@@ -223,10 +223,9 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.gps_mode = static_cast<GpsMode>(gps_mode);
   }
 
-  int operating_mode = 0;
-  if (store.get_int(KEY_OPERATING_MODE, operating_mode) == ConfigStoreResult::OK &&
-      is_operating_mode_valid(operating_mode)) {
-    settings.operating_mode = static_cast<OperatingMode>(operating_mode);
+  bool wifi_enabled = false;
+  if (store.get_bool(KEY_WIFI_ENABLED, wifi_enabled) == ConfigStoreResult::OK) {
+    settings.wifi_enabled = wifi_enabled;
   }
 
   bool use_fahrenheit = false;
@@ -306,7 +305,7 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.buzzer_enabled = buzzer_enabled;
   }
 
-  bool local_server_enabled = true;
+  bool local_server_enabled = false;
   if (store.get_bool(KEY_LOCAL_SERVER_ENABLED, local_server_enabled) == ConfigStoreResult::OK) {
     settings.local_server_enabled = local_server_enabled;
   }
@@ -337,17 +336,16 @@ GoSettings load_go_settings(ConfigStore &store) {
   return settings;
 }
 
-int GoSettings::active_measure_interval_seconds() const {
-  return operating_mode == OperatingMode::Offline ? energy_saving_measure_interval_seconds
-                                                  : measure_interval_seconds;
+int GoSettings::active_measure_interval_seconds(TrackingState tracking) const {
+  return tracking == TrackingState::Idle ? idle_interval_seconds : tracking_interval_seconds;
 }
 
 bool GoSettings::equals(const GoSettings &other) const {
-  return measure_interval_seconds == other.measure_interval_seconds &&
-         energy_saving_measure_interval_seconds == other.energy_saving_measure_interval_seconds &&
+  return tracking_interval_seconds == other.tracking_interval_seconds &&
+         idle_interval_seconds == other.idle_interval_seconds &&
          use_fahrenheit == other.use_fahrenheit && use_feet == other.use_feet &&
          pm_use_usaqi == other.pm_use_usaqi && pinned_chart == other.pinned_chart &&
-         gps_mode == other.gps_mode && operating_mode == other.operating_mode &&
+         gps_mode == other.gps_mode && wifi_enabled == other.wifi_enabled &&
          auto_lock_seconds == other.auto_lock_seconds &&
          back_led_brightness == other.back_led_brightness &&
          back_led_indicator == other.back_led_indicator &&
@@ -371,20 +369,15 @@ bool is_go_settings_valid(const GoSettings &settings) {
     return false;
   }
 
-  if (!is_measure_interval_seconds_valid(settings.measure_interval_seconds)) {
+  if (!is_tracking_interval_seconds_valid(settings.tracking_interval_seconds)) {
     return false;
   }
 
-  if (!is_energy_saving_measure_interval_seconds_valid(
-          settings.energy_saving_measure_interval_seconds)) {
+  if (!is_idle_interval_seconds_valid(settings.idle_interval_seconds)) {
     return false;
   }
 
   if (!is_gps_mode_valid(static_cast<int>(settings.gps_mode))) {
-    return false;
-  }
-
-  if (!is_operating_mode_valid(static_cast<int>(settings.operating_mode))) {
     return false;
   }
 
@@ -428,13 +421,13 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
     return false;
   }
 
-  if (store.set_int(KEY_MEASURE_INTERVAL_SECONDS, settings.measure_interval_seconds) !=
+  if (store.set_int(KEY_TRACKING_INTERVAL_SECONDS, settings.tracking_interval_seconds) !=
       ConfigStoreResult::OK) {
     return false;
   }
 
-  if (store.set_int(KEY_ENERGY_SAVING_MEASURE_INTERVAL_SECONDS,
-                    settings.energy_saving_measure_interval_seconds) != ConfigStoreResult::OK) {
+  if (store.set_int(KEY_IDLE_INTERVAL_SECONDS, settings.idle_interval_seconds) !=
+      ConfigStoreResult::OK) {
     return false;
   }
 
@@ -442,8 +435,7 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
     return false;
   }
 
-  if (store.set_int(KEY_OPERATING_MODE, static_cast<int>(settings.operating_mode)) !=
-      ConfigStoreResult::OK) {
+  if (store.set_bool(KEY_WIFI_ENABLED, settings.wifi_enabled) != ConfigStoreResult::OK) {
     return false;
   }
 
@@ -620,24 +612,23 @@ bool clear_factory_settings(ConfigStore &store) {
 }
 
 void print_settings(const GoSettings &settings) {
-  AG_LOGI(TAG,
-          "** settings | meas_int=%d | energy_saving_meas_int=%d | gps_mode=%d "
-          "op_mode=%d | auto_lock=%d | pinned_chart=%d | fahrenheit=%s feet=%s usaqi=%s | "
-          "led: back=%d indicator=%d touch=%d | buzzer=%s | "
-          "local_server=%s disable_cloud=%s config_control=%d co2_abc_days=%d "
-          "tvoc_learning_offset=%d nox_learning_offset=%d static_ip=%s "
-          "onboarding_done=%s **",
-          settings.measure_interval_seconds, settings.energy_saving_measure_interval_seconds,
-          settings.gps_mode, settings.operating_mode, settings.auto_lock_seconds,
-          static_cast<int>(settings.pinned_chart), settings.use_fahrenheit ? "true" : "false",
-          settings.use_feet ? "true" : "false", settings.pm_use_usaqi ? "true" : "false",
-          static_cast<int>(settings.back_led_brightness),
-          static_cast<int>(settings.back_led_indicator),
-          static_cast<int>(settings.touch_led_intensity), settings.buzzer_enabled ? "on" : "off",
-          settings.local_server_enabled ? "on" : "off", settings.disable_cloud ? "true" : "false",
-          static_cast<int>(settings.configuration_control), settings.co2_abc_days,
-          settings.tvoc_learning_offset, settings.nox_learning_offset,
-          settings.static_ip.ip != 0 ? "set" : "dhcp", settings.onboarding_done ? "true" : "false");
+  AG_LOGI(
+      TAG,
+      "** settings | tracking_int=%d | idle_int=%d | gps_mode=%d "
+      "wifi=%d | auto_lock=%d | pinned_chart=%d | fahrenheit=%s feet=%s usaqi=%s | "
+      "led: back=%d indicator=%d touch=%d | buzzer=%s | "
+      "local_server=%s disable_cloud=%s config_control=%d co2_abc_days=%d "
+      "tvoc_learning_offset=%d nox_learning_offset=%d static_ip=%s "
+      "onboarding_done=%s **",
+      settings.tracking_interval_seconds, settings.idle_interval_seconds, settings.gps_mode,
+      settings.wifi_enabled, settings.auto_lock_seconds, static_cast<int>(settings.pinned_chart),
+      settings.use_fahrenheit ? "true" : "false", settings.use_feet ? "true" : "false",
+      settings.pm_use_usaqi ? "true" : "false", static_cast<int>(settings.back_led_brightness),
+      static_cast<int>(settings.back_led_indicator), static_cast<int>(settings.touch_led_intensity),
+      settings.buzzer_enabled ? "on" : "off", settings.local_server_enabled ? "on" : "off",
+      settings.disable_cloud ? "true" : "false", static_cast<int>(settings.configuration_control),
+      settings.co2_abc_days, settings.tvoc_learning_offset, settings.nox_learning_offset,
+      settings.static_ip.ip != 0 ? "set" : "dhcp", settings.onboarding_done ? "true" : "false");
   AG_LOGI(TAG,
           "** corrections | pm_alg=%d pm_scale=%.6f pm_intercept=%.6f "
           "temp_alg=%d temp_scale=%.6f temp_intercept=%.6f "

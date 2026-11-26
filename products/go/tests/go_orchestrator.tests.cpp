@@ -581,7 +581,7 @@ public:
   static RtcAppState snapshot_state(const Orchestrator &o) { return o.snapshot_state(); }
 
   // State readers
-  static OperatingMode mode(const Orchestrator &o) { return o._mode; }
+  static bool wifi_active(const Orchestrator &o) { return o._wifi_active; }
   static Behavior behavior(const Orchestrator &o) { return o._behavior; }
   static LockState lock_state(const Orchestrator &o) { return o._lock_state; }
   static bool gps_enabled(const Orchestrator &o) { return o._gps_enabled; }
@@ -651,6 +651,11 @@ public:
   static bool pause_tracking(Orchestrator &o) { return o.pause_tracking(); }
   static bool resume_tracking(Orchestrator &o) { return o.resume_tracking(); }
   static TrackingState tracking_state(const Orchestrator &o) { return o._tracking_state; }
+  static void set_tracking_state(Orchestrator &o, TrackingState state) {
+    o._tracking_state = state;
+    o._behavior = state == TrackingState::Idle ? Behavior::Idle : Behavior::Tracking;
+    o._svc.ui_manager.sync_tracking_state(state);
+  }
   static void stop_tracking(Orchestrator &o) { o.stop_tracking(); }
   static bool clear_data(Orchestrator &o) { return o.clear_data(); }
   static bool factory_reset(Orchestrator &o) { return o.factory_reset(); }
@@ -672,9 +677,10 @@ public:
   static void prepare_for_sleep(Orchestrator &o, uint32_t sleep_ms = 60000) {
     o.prepare_for_sleep(sleep_ms);
   }
-  static void set_mode(Orchestrator &o, OperatingMode mode) {
-    o._mode = mode;
-    o._settings.operating_mode = mode;
+  static void set_wifi(Orchestrator &o, bool mode) {
+    o._wifi_active = mode;
+    o._settings.wifi_enabled = mode;
+    o._settings.local_server_enabled = true;
   }
   static void set_first_measurement_done(Orchestrator &o, bool v) { o._first_measurement_done = v; }
   static void set_latest_power(Orchestrator &o, const PowerSnapshot &v) { o._latest_power = v; }
@@ -695,7 +701,11 @@ public:
   }
   static void clear_refresh(Orchestrator &o) { o.clear_refresh(); }
   static bool refresh_pending(const Orchestrator &o) { return o._refresh_pending; }
-  static void change_mode(Orchestrator &o, OperatingMode mode) { o.change_mode(mode); }
+  static void configure_wifi(Orchestrator &o, bool enabled) {
+    auto candidate = o._settings;
+    candidate.wifi_enabled = enabled;
+    (void)o.activate_settings_candidate(candidate);
+  }
   static void enter_manufacturing_mode(Orchestrator &o) { o.enter_manufacturing_mode(); }
   static bool manufacturing_mode(const Orchestrator &o) { return o._manufacturing_mode; }
   static void set_manufacturing_mode(Orchestrator &o, bool v) { o._manufacturing_mode = v; }
@@ -719,7 +729,7 @@ public:
   static uint32_t last_bms_status_poll_ms(const Orchestrator &o) {
     return o._last_bms_status_poll_ms;
   }
-  static void enter_stationary(Orchestrator &o) { o.enter_stationary(); }
+  static void enter_wifi(Orchestrator &o) { o.enter_wifi(); }
   static void on_wifi_connected(Orchestrator &o, uint32_t ip) { o.on_wifi_connected(ip); }
   static void on_wifi_disconnected(Orchestrator &o, WifiDisconnectReason reason) {
     o.on_wifi_disconnected(reason);
@@ -953,7 +963,6 @@ TEST_CASE("snapshot_state: captures current application state", "[Orchestrator][
   auto orch = f.make_orchestrator();
 
   RtcAppState state = A::snapshot_state(orch);
-  REQUIRE(state.mode == OperatingMode::Portable);
   REQUIRE(state.behavior == Behavior::Idle);
   REQUIRE(state.lock_state == LockState::Locked);
   REQUIRE(state.has_flag(RtcAppFlag::GpsEnabled) == true);
@@ -981,7 +990,7 @@ TEST_CASE("init(PowerOn): default state with first measurement and BMS poll",
   orch.init(WakeCause::PowerOn);
 
   // Verify default state
-  REQUIRE(A::mode(orch) == OperatingMode::Portable);
+  REQUIRE(A::wifi_active(orch) == false);
   REQUIRE(A::lock_state(orch) == LockState::Locked);
   REQUIRE(A::tracking_active(orch) == false);
 
@@ -1294,7 +1303,7 @@ TEST_CASE("init(PowerOn): Getting Started is usable before the first measurement
   SECTION("Manufacturing shortcut during warmup retains Stationary ownership") {
     A::on_input(orch, {InputSource::ButtonBoot, InputType::ShortPress});
     REQUIRE(A::manufacturing_mode(orch));
-    REQUIRE(A::mode(orch) == OperatingMode::Stationary);
+    REQUIRE(A::wifi_active(orch) == true);
     CHECK_FALSE(A::first_measurement_done(orch));
     CHECK_FALSE(A::settings(orch).onboarding_done);
     CHECK(f.ui_manager.current_screen() == Screen::Info);
@@ -1335,7 +1344,7 @@ TEST_CASE("on_sensor_data: splash transition is suppressed when setup session is
 TEST_CASE("init(PowerOn): Stationary connection owns the screen before the first measurement",
           "[Orchestrator][init][boot-splash][onboarding]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Stationary;
+  f.settings.wifi_enabled = true;
   auto orch = f.make_orchestrator();
   f.ui_manager.show_info(BOOT_SPLASH_TEXT);
   test_spy::wifi_has_saved_networks = true;
@@ -1384,12 +1393,12 @@ TEST_CASE("on_input: ButtonPower short press is silent during cold-boot splash",
   CHECK(f.ui_manager.current_screen() == Screen::Info);
 }
 
-TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][init]") {
+TEST_CASE("init(Button): clears retained tracking and unlocks", "[Orchestrator][init]") {
   TestFixture f;
 
   // Set up RTC state to restore
   test_spy::state_to_load = RtcAppState{
-      .mode = OperatingMode::Portable,
+
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
       .tracking_state = TrackingState::Recording,
@@ -1411,16 +1420,16 @@ TEST_CASE("init(Button): restores state from RTC and unlocks", "[Orchestrator][i
   handoff.initial_lock_state = LockState::Unlocked;
   orch.init(WakeCause::Button, handoff);
 
-  REQUIRE(A::mode(orch) == OperatingMode::Portable);
-  REQUIRE(A::tracking_active(orch) == true);
-  REQUIRE(A::tracking_session_id(orch) == 12345);
+  REQUIRE(A::wifi_active(orch) == false);
+  REQUIRE(A::tracking_active(orch) == false);
+  REQUIRE(A::tracking_session_id(orch) == 0);
   REQUIRE(A::lock_state(orch) == LockState::Unlocked); // button wake unlocks
 
   // Tracking route should be resumed — init() now explicitly takes the
   // resume_route() path so a torn trailing record gets truncated.
-  REQUIRE(test_spy::route_resumed);
+  REQUIRE_FALSE(test_spy::route_resumed);
   CHECK_FALSE(test_spy::route_started);
-  REQUIRE(test_spy::route_session_id == 12345);
+  REQUIRE(test_spy::route_session_id == 0);
 }
 
 TEST_CASE(
@@ -1429,7 +1438,7 @@ TEST_CASE(
   TestFixture f;
 
   test_spy::state_to_load = RtcAppState{
-      .mode = OperatingMode::Offline,
+
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
       .tracking_state = TrackingState::Idle,
@@ -1459,7 +1468,7 @@ TEST_CASE(
 
   // State fields restored from RTC (behavior and GPS flag, not mode — mode
   // always comes from settings, not RTC).
-  REQUIRE(A::gps_enabled(orch) == false);
+  REQUIRE(A::gps_enabled(orch) == true);
 
   // Fresh measurement must be requested in the already_painted branch.
   REQUIRE(test_spy::measurement_requested);
@@ -1478,77 +1487,6 @@ TEST_CASE(
 
   // No route resumed (tracking_active == false in the RTC state).
   CHECK_FALSE(test_spy::route_started);
-}
-
-TEST_CASE("init(Button, display_painted + unlocked): resumes route when tracking was active",
-          "[Orchestrator][init]") {
-  TestFixture f;
-
-  test_spy::state_to_load = RtcAppState{
-      .mode = OperatingMode::Offline,
-      .behavior = Behavior::Tracking,
-      .lock_state = LockState::Locked,
-      .tracking_state = TrackingState::Recording,
-      .tracking_session_id = 42000,
-  };
-  test_spy::state_to_load.set_flag(RtcAppFlag::GpsEnabled, true);
-
-  auto orch = f.make_orchestrator();
-
-  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-
-  BootHandoff handoff{};
-  handoff.display_painted = true;
-  handoff.suppress_wake_press = true;
-  handoff.initial_lock_state = LockState::Unlocked;
-  orch.init(WakeCause::Button, handoff);
-
-  REQUIRE(A::lock_state(orch) == LockState::Unlocked);
-  REQUIRE(A::tracking_active(orch) == true);
-  REQUIRE(test_spy::route_resumed);
-  CHECK_FALSE(test_spy::route_started);
-  REQUIRE(test_spy::route_session_id == 42000);
-}
-
-TEST_CASE("init: prepainted boot synchronizes tracking without waiting for input or rendering",
-          "[Orchestrator][init][tracking]") {
-  for (const auto state : {TrackingState::Recording, TrackingState::Paused}) {
-    CAPTURE(state);
-    TestFixture f;
-    f.settings.onboarding_done = true;
-    test_spy::state_to_load.tracking_state = state;
-    test_spy::state_to_load.tracking_session_id = 42000;
-    auto orch = f.make_orchestrator();
-    ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
-        .RETURN(ConfigStoreResult::NOT_FOUND);
-    ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
-        .RETURN(ConfigStoreResult::NOT_FOUND);
-    ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
-        .RETURN(ConfigStoreResult::NOT_FOUND);
-    BootHandoff handoff{};
-    handoff.display_painted = true;
-    handoff.measurement_completed = true;
-    handoff.initial_lock_state = LockState::Unlocked;
-    orch.init(WakeCause::Button, handoff);
-
-    // Inspect UI input directly: neither an orchestrator input nor a later render
-    // may hide missing synchronization in init().
-    f.ui_manager.set_screen(Screen::MainMenu);
-    f.ui_manager.handle_input(InputSource::TouchDown, InputType::ShortPress);
-    const auto action = f.ui_manager.handle_input(InputSource::TouchEnter, InputType::ShortPress);
-    CHECK(action.action == UIAction::None);
-    REQUIRE(f.ui_manager.current_screen() == Screen::TrackingMenu);
-    const auto values = f.ui_manager.build_values(A::build_context(orch));
-    CHECK(std::string(values.list.rows[3].text) ==
-          (state == TrackingState::Recording ? "Pause Tracking" : "Resume Tracking"));
-    CHECK(A::tracking_state(orch) == state);
-    CHECK(A::tracking_session_id(orch) == 42000);
-  }
 }
 
 TEST_CASE("init: failed route reopen synchronizes Idle after any early unlock render",
@@ -1927,7 +1865,7 @@ TEST_CASE("Tracking Status refresh: five-second cadence in both views and states
     for (const bool gps_view : {false, true}) {
       CAPTURE(paused, gps_view);
       TestFixture f;
-      f.settings.measure_interval_seconds = 3600;
+      f.settings.tracking_interval_seconds = 3600;
       auto orch = f.make_orchestrator();
       uint32_t now_ms = 0;
       ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
@@ -1971,7 +1909,7 @@ TEST_CASE("Tracking Status refresh: five-second cadence in both views and states
 TEST_CASE("Tracking Status refresh: busy attempts retry without spinning and restore cadence",
           "[Orchestrator][tracking][status][refresh]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 3600;
+  f.settings.tracking_interval_seconds = 3600;
   auto orch = f.make_orchestrator();
   uint32_t now_ms = 0;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
@@ -2010,7 +1948,7 @@ TEST_CASE("Tracking Status refresh: busy attempts retry without spinning and res
 TEST_CASE("Tracking Status refresh: immediate input view Pause and Resume preserve cadence",
           "[Orchestrator][tracking][status][refresh]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 3600;
+  f.settings.tracking_interval_seconds = 3600;
   auto orch = f.make_orchestrator();
   uint32_t now_ms = 0;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
@@ -2063,7 +2001,7 @@ TEST_CASE("Tracking Status refresh: rendering returns acceptance without lifecyc
           "[Orchestrator][tracking][status][refresh]") {
   TestFixture f;
   f.settings.auto_lock_seconds = 10;
-  f.settings.measure_interval_seconds = 3600;
+  f.settings.tracking_interval_seconds = 3600;
   auto orch = f.make_orchestrator();
   uint32_t now_ms = 1000;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
@@ -2113,7 +2051,7 @@ TEST_CASE("Tracking Status refresh: rendering returns acceptance without lifecyc
 TEST_CASE("Tracking Status refresh: periodic deadlines use the post-attempt timestamp",
           "[Orchestrator][tracking][status][refresh]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 3600;
+  f.settings.tracking_interval_seconds = 3600;
   auto orch = f.make_orchestrator();
   uint32_t base_now = 0;
   bool simulate_delay = false;
@@ -2151,7 +2089,7 @@ TEST_CASE("Tracking Status refresh: exits cancel and reentry starts a fresh dead
           "[Orchestrator][tracking][status][refresh]") {
   TestFixture f;
   f.settings.auto_lock_seconds = 0;
-  f.settings.measure_interval_seconds = 3600;
+  f.settings.tracking_interval_seconds = 3600;
   auto orch = f.make_orchestrator();
   uint32_t now_ms = 0;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
@@ -2233,7 +2171,7 @@ TEST_CASE("Tracking Status refresh: raw ineligible screens and states cannot sch
           "[Orchestrator][tracking][status][refresh]") {
   TestFixture f;
   f.settings.auto_lock_seconds = 0;
-  f.settings.measure_interval_seconds = 3600;
+  f.settings.tracking_interval_seconds = 3600;
   auto orch = f.make_orchestrator();
   uint32_t now_ms = 0;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
@@ -2257,7 +2195,7 @@ TEST_CASE("Tracking Status refresh: raw ineligible screens and states cannot sch
   test_spy::wifi_next_deadline_ms = 6000;
   test_spy::session_point_count_query_count = 0;
   test_spy::retained_time_read_count = 0;
-  CHECK(A::compute_queue_timeout_ms(orch) == 999);
+  CHECK(A::compute_queue_timeout_ms(orch) == 0);
   CHECK(test_spy::session_point_count_query_count == 0);
   CHECK(test_spy::retained_time_read_count == 0);
   const auto attempts = DisplayService::spy_update_count;
@@ -2275,7 +2213,7 @@ TEST_CASE("Tracking Status refresh: raw ineligible screens and states cannot sch
 TEST_CASE("Tracking Status refresh: ordinary and busy retry deadlines survive uint32 wrap",
           "[Orchestrator][tracking][status][refresh]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 3600;
+  f.settings.tracking_interval_seconds = 3600;
   auto orch = f.make_orchestrator();
   uint32_t now_ms = UINT32_MAX - 4999;
   bool busy = false;
@@ -2323,7 +2261,7 @@ TEST_CASE("Tracking Status refresh: ordinary and busy retry deadlines survive ui
 TEST_CASE("Tracking Status refresh: overdue wins over future timers and jumps never catch up",
           "[Orchestrator][tracking][status][refresh]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 3600;
+  f.settings.tracking_interval_seconds = 3600;
   auto orch = f.make_orchestrator();
   uint32_t now_ms = 0;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
@@ -2350,7 +2288,7 @@ TEST_CASE("Tracking Status refresh: timer phase uses the clock after an earlier 
           "[Orchestrator][tracking][status][refresh]") {
   TestFixture f;
   f.settings.auto_lock_seconds = 10;
-  f.settings.measure_interval_seconds = 3600;
+  f.settings.tracking_interval_seconds = 3600;
   auto orch = f.make_orchestrator();
   uint32_t now_ms = 25'001;
   bool simulate_delay = false;
@@ -2391,7 +2329,7 @@ TEST_CASE("Tracking Status refresh: timer phase uses the clock after an earlier 
 TEST_CASE("Tracking Status refresh: late OTA override is observed before a due periodic frame",
           "[Orchestrator][tracking][status][refresh]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 3600;
+  f.settings.tracking_interval_seconds = 3600;
   auto orch = f.make_orchestrator();
   uint32_t now_ms = 0;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
@@ -2545,7 +2483,7 @@ TEST_CASE("Tracking Status: both views remain unlocked while Recording or Paused
       CAPTURE(paused, gps_view);
       TestFixture f;
       f.settings.auto_lock_seconds = 10;
-      f.settings.measure_interval_seconds = 3600;
+      f.settings.tracking_interval_seconds = 3600;
       auto orch = f.make_orchestrator();
       uint32_t now_ms = 1000;
       ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
@@ -2587,7 +2525,7 @@ TEST_CASE("Tracking Status: inactivity deadline is excluded from the queue timeo
           "[Orchestrator][tracking][status][timers]") {
   TestFixture f;
   f.settings.auto_lock_seconds = 10;
-  f.settings.measure_interval_seconds = 3600;
+  f.settings.tracking_interval_seconds = 3600;
   auto orch = f.make_orchestrator();
   uint32_t now_ms = 1000;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
@@ -2610,7 +2548,7 @@ TEST_CASE("Tracking Status: every ordinary exit starts one fresh inactivity wind
           "[Orchestrator][tracking][status][timers]") {
   TestFixture f;
   f.settings.auto_lock_seconds = 10;
-  f.settings.measure_interval_seconds = 3600;
+  f.settings.tracking_interval_seconds = 3600;
   auto orch = f.make_orchestrator();
   uint32_t now_ms = 1000;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
@@ -3013,46 +2951,6 @@ TEST_CASE("tracking timing: only accepted scheduled route points advance last-re
   CHECK(test_spy::route_file_open);
 }
 
-TEST_CASE("tracking timing: recording and paused sleep preserve timing across per-boot clock reset",
-          "[Orchestrator][tracking][timing][init]") {
-  TestFixture f;
-  f.settings.onboarding_done = true;
-  auto orch = f.make_orchestrator();
-  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-  f.mock_rtos.retained_time_ms = 100000;
-  REQUIRE(A::start_tracking(orch));
-  f.mock_rtos.retained_time_ms = 110000;
-  A::on_sensor_data(orch, MeasuresAGo{});
-  f.mock_rtos.retained_time_ms = 130000;
-  bool paused = false;
-  SECTION("Recording") {}
-  SECTION("Paused") {
-    REQUIRE(A::pause_tracking(orch));
-    paused = true;
-  }
-  const auto before = A::tracking_timing(orch);
-  A::prepare_for_sleep(orch);
-  REQUIRE(test_spy::state_saved);
-  check_tracking_timing(test_spy::last_saved_state.tracking_timing, before);
-  CHECK_FALSE(test_spy::route_file_open);
-
-  test_spy::state_to_load = test_spy::last_saved_state;
-  f.mock_rtos.retained_time_ms = 200000;
-  auto restored = f.make_orchestrator();
-  restored.init(WakeCause::Button, {.measurement_completed = true});
-  check_tracking_timing(A::tracking_timing(restored), before);
-  CHECK(tracking_elapsed_s(A::tracking_timing(restored), 200) == 100);
-  CHECK(tracking_recording_s(A::tracking_timing(restored), 200) == (paused ? 30 : 100));
-  CHECK(tracking_last_record_age_s(A::tracking_timing(restored), 200) == 90);
-  CHECK(A::tracking_state(restored) == (paused ? TrackingState::Paused : TrackingState::Recording));
-  CHECK(test_spy::route_file_open == !paused);
-}
-
 TEST_CASE("tracking timing: cold boot, inactive RTC and failed reopen discard stale timing",
           "[Orchestrator][tracking][timing][init]") {
   TestFixture f;
@@ -3079,34 +2977,6 @@ TEST_CASE("tracking timing: cold boot, inactive RTC and failed reopen discard st
   CHECK(A::tracking_state(orch) == TrackingState::Idle);
   check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
   check_tracking_timing(A::snapshot_state(orch).tracking_timing, TrackingTiming{});
-}
-
-TEST_CASE("tracking timing: mismatched RTC segment invalidates active duration only",
-          "[Orchestrator][tracking][timing][init]") {
-  TestFixture f;
-  f.settings.onboarding_done = true;
-  auto orch = f.make_orchestrator();
-  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-  test_spy::state_to_load.tracking_session_id = 12345;
-  SECTION("Recording with a paused timing value") {
-    test_spy::state_to_load.tracking_state = TrackingState::Recording;
-    test_spy::state_to_load.tracking_timing = {100, 30, TRACKING_TIME_INVALID_S, 110};
-  }
-  SECTION("Paused with a running segment") {
-    test_spy::state_to_load.tracking_state = TrackingState::Paused;
-    test_spy::state_to_load.tracking_timing = {100, 0, 100, 110};
-  }
-  f.mock_rtos.retained_time_ms = 200000;
-  orch.init(WakeCause::Button, {.measurement_completed = true});
-  CHECK(A::tracking_state(orch) == test_spy::state_to_load.tracking_state);
-  CHECK(tracking_elapsed_s(A::tracking_timing(orch), 200) == 100);
-  CHECK(tracking_recording_s(A::tracking_timing(orch), 200) == TRACKING_TIME_INVALID_S);
-  CHECK(tracking_last_record_age_s(A::tracking_timing(orch), 200) == 90);
 }
 
 TEST_CASE("tracking timing: inactive Stop is a no-op while Clear Data clears stale timing",
@@ -3251,27 +3121,6 @@ TEST_CASE("pause/resume: storage failures retain a paused session",
   CHECK(test_spy::ble_tracking_state == TrackingState::Idle);
   CHECK_FALSE(A::pause_tracking(orch));
   CHECK_FALSE(A::resume_tracking(orch));
-}
-
-TEST_CASE("paused tracking survives button wake without reopening the route",
-          "[Orchestrator][tracking][pause][init]") {
-  TestFixture f;
-  test_spy::state_to_load.tracking_state = TrackingState::Paused;
-  test_spy::state_to_load.tracking_session_id = 12345;
-  auto orch = f.make_orchestrator();
-  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-  ALLOW_CALL(f.mock_config, get_bool(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-  ALLOW_CALL(f.mock_config, get_string(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::NOT_FOUND);
-  orch.init(WakeCause::Button);
-  CHECK(A::tracking_state(orch) == TrackingState::Paused);
-  CHECK(A::tracking_session_id(orch) == 12345);
-  CHECK_FALSE(test_spy::route_resumed);
-  CHECK(A::is_gps_active(orch));
-  CHECK(A::snapshot_state(orch).tracking_state == TrackingState::Paused);
-  CHECK(A::build_context(orch).tracking_state == TrackingState::Paused);
 }
 
 TEST_CASE("paused route may be exported but cannot be deleted",
@@ -3618,9 +3467,9 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
   auto orch = f.make_orchestrator();
   A::set_tracking_timing(orch, {100, 20, 130, 140});
 
-  A::settings(orch).operating_mode = OperatingMode::Offline;
-  A::settings(orch).measure_interval_seconds = 17;
-  A::settings(orch).energy_saving_measure_interval_seconds = 900;
+  A::settings(orch).wifi_enabled = false;
+  A::settings(orch).tracking_interval_seconds = 17;
+  A::settings(orch).idle_interval_seconds = 900;
   A::settings(orch).gps_mode = GpsMode::AlwaysOff;
   A::settings(orch).configuration_control = ConfigurationControl::Local;
   A::settings(orch).corrections.temperature = {
@@ -3628,7 +3477,7 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
       1.1f,
       -0.3f,
   };
-  A::set_mode(orch, OperatingMode::Offline);
+  A::set_wifi(orch, false);
   f.local_api.publish_config_snapshot(A::settings(orch));
   f.local_api.publish_wifi_rssi(-61);
 
@@ -3641,16 +3490,15 @@ TEST_CASE("factory_reset: resets settings to defaults without keeping tracking s
 
   REQUIRE(A::factory_reset(orch));
 
-  CHECK(A::settings(orch).operating_mode == OperatingMode::Portable);
-  CHECK(A::settings(orch).measure_interval_seconds == MEASURE_INTERVAL_SECONDS_DEFAULT);
-  CHECK(A::settings(orch).energy_saving_measure_interval_seconds ==
-        ENERGY_SAVING_MEASURE_INTERVAL_SECONDS_DEFAULT);
+  CHECK(A::settings(orch).wifi_enabled == false);
+  CHECK(A::settings(orch).tracking_interval_seconds == TRACKING_INTERVAL_SECONDS_DEFAULT);
+  CHECK(A::settings(orch).idle_interval_seconds == IDLE_INTERVAL_SECONDS_DEFAULT);
   CHECK(A::settings(orch).gps_mode == GpsMode::OnWhenTracking);
   CHECK(A::settings(orch).configuration_control == ConfigurationControl::Both);
   CHECK(A::settings(orch).corrections.temperature.algorithm == LinearCorrectionAlgorithm::None);
   CHECK(test_spy::cloud_set_fetch_enabled_count == 1);
   CHECK(test_spy::cloud_last_config_fetch_enabled);
-  CHECK(A::mode(orch) == OperatingMode::Portable);
+  CHECK(A::wifi_active(orch) == false);
   CHECK(A::behavior(orch) == Behavior::Idle);
   CHECK(A::lock_state(orch) == LockState::Locked);
   CHECK_FALSE(A::tracking_active(orch));
@@ -3801,22 +3649,7 @@ TEST_CASE("BLE auth failure leaves onboarding untouched", "[Orchestrator][onboar
   CHECK_FALSE(A::settings(orch).onboarding_done);
 }
 
-TEST_CASE("change_mode marks onboarding done", "[Orchestrator][onboarding][change_mode]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-
-  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
-  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
-  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::OK);
-  REQUIRE_CALL(f.mock_config, commit()).TIMES(1).RETURN(ConfigStoreResult::OK);
-
-  CHECK_FALSE(A::settings(orch).onboarding_done);
-  A::change_mode(orch, OperatingMode::Offline);
-  CHECK(A::settings(orch).onboarding_done);
-}
-
-TEST_CASE("change_mode persistence failure leaves mode and services unchanged",
+TEST_CASE("Wi-Fi persistence failure leaves settings and services unchanged",
           "[Orchestrator][change_mode][failure]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -3827,10 +3660,10 @@ TEST_CASE("change_mode persistence failure leaves mode and services unchanged",
       .RETURN(ConfigStoreResult::OK);
   REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
 
-  A::change_mode(orch, OperatingMode::Offline);
+  A::configure_wifi(orch, true);
 
-  CHECK(A::mode(orch) == OperatingMode::Portable);
-  CHECK(A::settings(orch).operating_mode == OperatingMode::Portable);
+  CHECK(A::wifi_active(orch) == false);
+  CHECK(A::settings(orch).wifi_enabled == false);
   CHECK_FALSE(A::settings(orch).onboarding_done);
   CHECK_FALSE(test_spy::ble_deinit_called);
   CHECK_FALSE(test_spy::wifi_shutdown_called);
@@ -3849,7 +3682,7 @@ TEST_CASE("manufacturing: boot short-press before onboarding enters Stationary e
   REQUIRE_FALSE(A::settings(orch).onboarding_done);
   A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
 
-  CHECK(A::mode(orch) == OperatingMode::Stationary);
+  CHECK(A::wifi_active(orch) == true);
   CHECK(A::manufacturing_mode(orch));
   CHECK_FALSE(A::settings(orch).onboarding_done); // never persisted
   CHECK(test_spy::wifi_try_fallback_called);      // Stationary bring-up ran
@@ -3858,13 +3691,14 @@ TEST_CASE("manufacturing: boot short-press before onboarding enters Stationary e
 TEST_CASE("manufacturing: local endpoint stays disabled while cloud remains available",
           "[Orchestrator][manufacturing][local_endpoint]") {
   TestFixture f;
+  f.settings.local_server_enabled = true;
   auto orch = f.make_orchestrator();
   test_spy::wifi_has_saved_networks = false;
   FORBID_CALL(f.mock_config, commit());
 
   A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
   REQUIRE(A::manufacturing_mode(orch));
-  REQUIRE(A::mode(orch) == OperatingMode::Stationary);
+  REQUIRE(A::wifi_active(orch) == true);
   REQUIRE(A::settings(orch).local_server_enabled);
   CHECK(test_spy::wifi_power_save_enabled);
 
@@ -3981,7 +3815,7 @@ TEST_CASE("manufacturing: boot short-press after onboarding does not enter Stati
   A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
 
   CHECK_FALSE(A::manufacturing_mode(orch));
-  CHECK(A::mode(orch) == OperatingMode::Portable);
+  CHECK(A::wifi_active(orch) == false);
   CHECK_FALSE(test_spy::wifi_try_fallback_called);
 }
 
@@ -4004,7 +3838,7 @@ TEST_CASE("manufacturing: repeated boot short-presses do not arm fuel-gauge lear
   A::on_input(orch, InputEventData{InputSource::ButtonBoot, InputType::ShortPress});
 
   CHECK(A::manufacturing_mode(orch));
-  CHECK(A::mode(orch) == OperatingMode::Stationary);
+  CHECK(A::wifi_active(orch) == true);
   CHECK_FALSE(A::settings(orch).onboarding_done);
   CHECK_FALSE(test_spy::wifi_try_fallback_called);
 }
@@ -4689,8 +4523,9 @@ TEST_CASE("on_gps_fix: NoFix data clears cached fix when GPS is active", "[Orche
 
 TEST_CASE("check_timers: fires measurement when interval elapses", "[Orchestrator][timers]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 10;
+  f.settings.tracking_interval_seconds = 10;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
 
   // Advance time past interval
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(11000);
@@ -4706,7 +4541,7 @@ TEST_CASE("check_timers: fires measurement when interval elapses", "[Orchestrato
 
 TEST_CASE("check_timers: no measurement when interval not yet elapsed", "[Orchestrator][timers]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 10;
+  f.settings.tracking_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
   // Time not yet past interval
@@ -4725,8 +4560,9 @@ TEST_CASE("check_timers: three-second cadence continues after each completed mea
   static constexpr uint32_t COMPLETION_DELAY_MS = 100;
   static constexpr uint32_t MEASUREMENT_COUNT = 5;
   TestFixture f;
-  f.settings.measure_interval_seconds = INTERVAL_SECONDS;
+  f.settings.tracking_interval_seconds = INTERVAL_SECONDS;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
   uint32_t now_ms = 0;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
 
@@ -4775,7 +4611,7 @@ TEST_CASE("check_timers: fires BMS timer when due", "[Orchestrator][timers]") {
 TEST_CASE("compute_queue_timeout: includes BMS status poll deadline", "[Orchestrator][timers]") {
   TestFixture f;
   // Set large sensor interval so it doesn't dominate the timeout
-  f.settings.measure_interval_seconds = 600;
+  f.settings.tracking_interval_seconds = 600;
   auto orch = f.make_orchestrator();
 
   // At t=0, all last-poll timestamps are 0.
@@ -4790,7 +4626,7 @@ TEST_CASE("compute_queue_timeout: includes BMS status poll deadline", "[Orchestr
 
 TEST_CASE("compute_queue_timeout: clamps to zero when deadline passed", "[Orchestrator][timers]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 10;
+  f.settings.tracking_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
   // All timestamps are 0, advance time well past all deadlines.
@@ -4803,7 +4639,7 @@ TEST_CASE("compute_queue_timeout: clamps to zero when deadline passed", "[Orches
 TEST_CASE("compute_queue_timeout: BMS full poll dominates when status poll not due",
           "[Orchestrator][timers]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 600;
+  f.settings.tracking_interval_seconds = 600;
   auto orch = f.make_orchestrator();
 
   // At t=3000, BMS status poll (5000) is 2000ms away,
@@ -4842,7 +4678,7 @@ TEST_CASE("auto-lock eligibility is shared by scheduling, timer firing, and time
       CAPTURE(item.name, via_event);
       TestFixture f;
       f.settings.auto_lock_seconds = item.auto_lock_seconds;
-      f.settings.measure_interval_seconds = 3600;
+      f.settings.tracking_interval_seconds = 3600;
       auto orch = f.make_orchestrator();
       uint32_t now_ms = 1000;
       ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
@@ -4903,7 +4739,7 @@ TEST_CASE("check_timers: each Auto Lock duration fires exactly at its deadline",
     DYNAMIC_SECTION(timeout_seconds << " seconds") {
       TestFixture f;
       f.settings.auto_lock_seconds = timeout_seconds;
-      f.settings.measure_interval_seconds = 3600;
+      f.settings.tracking_interval_seconds = 3600;
       auto orch = f.make_orchestrator();
       uint32_t now_ms = UNLOCK_TIME_MS;
       ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
@@ -5219,7 +5055,7 @@ TEST_CASE("button wake: pre-armed snackbar clears in single timer fire",
   TestFixture f;
 
   test_spy::state_to_load = RtcAppState{
-      .mode = OperatingMode::Offline,
+
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
       .tracking_state = TrackingState::Idle,
@@ -5266,46 +5102,15 @@ TEST_CASE("button wake: pre-armed snackbar clears in single timer fire",
 // 12. Settings
 // ============================================================================
 
-TEST_CASE("Energy Saving restores independent intervals and reschedules mode transitions",
-          "[Orchestrator][settings][interval]") {
-  TestFixture f;
-  f.settings.measure_interval_seconds = 17;
-  f.settings.energy_saving_measure_interval_seconds = 900;
-  auto orch = f.make_orchestrator();
-  test_spy::wifi_has_saved_networks = true;
-  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
-  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
-  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
-      .RETURN(ConfigStoreResult::OK);
-  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
-
-  for (auto mode : {OperatingMode::Offline, OperatingMode::Portable, OperatingMode::Offline,
-                    OperatingMode::Stationary}) {
-    A::set_last_measurement_ms(orch, 1000);
-    A::change_mode(orch, mode);
-    CHECK(A::mode(orch) == mode);
-    CHECK(A::settings(orch).measure_interval_seconds == 17);
-    CHECK(A::settings(orch).energy_saving_measure_interval_seconds == 900);
-    CHECK(A::settings(orch).active_measure_interval_seconds() ==
-          (mode == OperatingMode::Offline ? 900 : 17));
-    CHECK(A::last_measurement_ms(orch) == 9000);
-    GoSettings displayed;
-    f.ui_manager.apply_to_settings(displayed);
-    CHECK(displayed.active_measure_interval_seconds() ==
-          A::settings(orch).active_measure_interval_seconds());
-  }
-}
-
 TEST_CASE("Energy Saving interval edits reschedule only after successful persistence",
           "[Orchestrator][settings][interval]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Offline;
-  f.settings.measure_interval_seconds = 17;
+  f.settings.wifi_enabled = false;
+  f.settings.tracking_interval_seconds = 17;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
+  A::set_wifi(orch, false);
   GoSettings updated = f.settings;
-  updated.energy_saving_measure_interval_seconds = 900;
+  updated.idle_interval_seconds = 900;
   f.ui_manager.sync_settings(updated);
   A::set_last_measurement_ms(orch, 1000);
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
@@ -5321,25 +5126,25 @@ TEST_CASE("Energy Saving interval edits reschedule only after successful persist
 
   A::apply_settings_change(orch);
 
-  CHECK(A::settings(orch).measure_interval_seconds == 17);
-  CHECK(A::settings(orch).energy_saving_measure_interval_seconds == (save_ok ? 900 : 300));
+  CHECK(A::settings(orch).tracking_interval_seconds == 17);
+  CHECK(A::settings(orch).idle_interval_seconds == (save_ok ? 900 : 300));
   CHECK(A::last_measurement_ms(orch) == (save_ok ? 9000 : 1000));
   GoSettings displayed;
   f.ui_manager.apply_to_settings(displayed);
-  CHECK(displayed.energy_saving_measure_interval_seconds == (save_ok ? 900 : 300));
+  CHECK(displayed.idle_interval_seconds == (save_ok ? 900 : 300));
 }
 
 TEST_CASE("Unlocked Energy Saving keeps sensing and menus usable with Auto Lock Off",
           "[Orchestrator][timers][interval][lock]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Offline;
-  f.settings.measure_interval_seconds = 10;
-  f.settings.energy_saving_measure_interval_seconds = 300;
+  f.settings.wifi_enabled = false;
+  f.settings.tracking_interval_seconds = 10;
+  f.settings.idle_interval_seconds = 300;
   f.settings.auto_lock_seconds = 0;
   uint32_t now = 0;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
+  A::set_wifi(orch, false);
   A::unlock(orch);
 
   const auto navigate_settings = [&] {
@@ -5427,14 +5232,14 @@ TEST_CASE("apply_settings_change: display preferences follow persistence result"
   CHECK(values.preferences.pm_use_usaqi == save_ok);
 }
 
-TEST_CASE("settings activation: display preferences are synchronized before stopping tracking",
+TEST_CASE("settings activation: display preferences are synchronized without stopping tracking",
           "[Orchestrator][settings][display]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   REQUIRE(A::start_tracking(orch));
 
   GoSettings candidate = f.settings;
-  candidate.operating_mode = OperatingMode::Offline;
+  candidate.wifi_enabled = false;
   candidate.use_fahrenheit = true;
   candidate.use_feet = true;
   candidate.pm_use_usaqi = true;
@@ -5446,7 +5251,7 @@ TEST_CASE("settings activation: display preferences are synchronized before stop
   unsigned observations = 0;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl())
       .LR_SIDE_EFFECT({
-        if (A::mode(orch) == OperatingMode::Offline) {
+        if (A::wifi_active(orch) == false) {
           ++observations;
           const auto values = f.ui_manager.build_values(ctx);
           CHECK(values.preferences.use_fahrenheit);
@@ -5457,14 +5262,14 @@ TEST_CASE("settings activation: display preferences are synchronized before stop
       .RETURN(0);
 
   REQUIRE(A::activate_settings_candidate(orch, candidate, false));
-  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  CHECK(A::tracking_state(orch) == TrackingState::Recording);
   CHECK(observations > 0);
 }
 
 TEST_CASE("apply_settings_change: unrelated update preserves custom measurement interval",
           "[Orchestrator][settings]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 17;
+  f.settings.tracking_interval_seconds = 17;
   auto orch = f.make_orchestrator();
 
   GoSettings updated = f.settings;
@@ -5481,7 +5286,7 @@ TEST_CASE("apply_settings_change: unrelated update preserves custom measurement 
   A::apply_settings_change(orch);
 
   CHECK(A::settings(orch).use_feet);
-  CHECK(A::settings(orch).measure_interval_seconds == 17);
+  CHECK(A::settings(orch).tracking_interval_seconds == 17);
   CHECK(A::last_measurement_ms(orch) == 1000);
   const LocalServerConfig config = f.local_api.get_config();
   REQUIRE(config.measurement_interval_seconds.has_value());
@@ -5491,11 +5296,12 @@ TEST_CASE("apply_settings_change: unrelated update preserves custom measurement 
 TEST_CASE("apply_settings_change: reschedules timer when interval changes",
           "[Orchestrator][settings]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 10;
+  f.settings.tracking_interval_seconds = 10;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
 
   GoSettings updated = f.settings;
-  updated.measure_interval_seconds = 30;
+  updated.tracking_interval_seconds = 30;
   f.ui_manager.sync_settings(updated);
 
   A::set_last_measurement_ms(orch, 1000);
@@ -5509,13 +5315,13 @@ TEST_CASE("apply_settings_change: reschedules timer when interval changes",
 
   A::apply_settings_change(orch);
 
-  CHECK(A::settings(orch).measure_interval_seconds == 30);
+  CHECK(A::settings(orch).tracking_interval_seconds == 30);
   CHECK(A::last_measurement_ms(orch) == 9000);
 }
 
 TEST_CASE("apply_settings_change: no-op when interval unchanged", "[Orchestrator][settings]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 10;
+  f.settings.tracking_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
   f.ui_manager.sync_settings(f.settings); // same settings
@@ -5533,11 +5339,11 @@ TEST_CASE("apply_settings_change: no-op when interval unchanged", "[Orchestrator
 TEST_CASE("apply_settings_change: persistence failure restores authoritative UI settings",
           "[Orchestrator][settings][failure]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 10;
+  f.settings.tracking_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
   GoSettings requested = f.settings;
-  requested.measure_interval_seconds = 30;
+  requested.tracking_interval_seconds = 30;
   f.ui_manager.sync_settings(requested);
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -5548,10 +5354,10 @@ TEST_CASE("apply_settings_change: persistence failure restores authoritative UI 
 
   A::apply_settings_change(orch);
 
-  CHECK(A::settings(orch).measure_interval_seconds == 10);
+  CHECK(A::settings(orch).tracking_interval_seconds == 10);
   GoSettings ui_settings = f.settings;
   f.ui_manager.apply_to_settings(ui_settings);
-  CHECK(ui_settings.measure_interval_seconds == 10);
+  CHECK(ui_settings.tracking_interval_seconds == 10);
 }
 
 TEST_CASE("settings candidate activation skips persistence and runtime effects for a no-op",
@@ -5572,8 +5378,9 @@ TEST_CASE("settings candidate activation skips persistence and runtime effects f
 TEST_CASE("BLE config set: reschedules timer when interval changes",
           "[Orchestrator][settings][ble]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 10;
+  f.settings.tracking_interval_seconds = 10;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
 
   A::set_last_measurement_ms(orch, 1000);
 
@@ -5581,7 +5388,7 @@ TEST_CASE("BLE config set: reschedules timer when interval changes",
   test_spy::ble_config_decode_result.op = BleConfigOp::Set;
   test_spy::ble_decode_updates_settings = true;
   test_spy::ble_decoded_settings = f.settings;
-  test_spy::ble_decoded_settings.measure_interval_seconds = 30;
+  test_spy::ble_decoded_settings.tracking_interval_seconds = 30;
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -5594,7 +5401,7 @@ TEST_CASE("BLE config set: reschedules timer when interval changes",
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
-  CHECK(A::settings(orch).measure_interval_seconds == 30);
+  CHECK(A::settings(orch).tracking_interval_seconds == 30);
   CHECK(A::last_measurement_ms(orch) == 9000);
 }
 
@@ -5632,8 +5439,9 @@ TEST_CASE("BLE config set: applies altitude display unit", "[Orchestrator][setti
 TEST_CASE("BLE config set: persists pinned chart and updates the display",
           "[Orchestrator][settings][ble][chart]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 30;
+  f.settings.tracking_interval_seconds = 30;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
 
   test_spy::ble_connected = true;
   test_spy::ble_pending_config_len = 1;
@@ -5667,14 +5475,14 @@ TEST_CASE("BLE config set: persists pinned chart and updates the display",
 TEST_CASE("BLE config set: commit failure retains settings and reports save failure",
           "[Orchestrator][settings][ble][failure]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 10;
+  f.settings.tracking_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
   test_spy::ble_pending_config_len = 1;
   test_spy::ble_config_decode_result.op = BleConfigOp::Set;
   test_spy::ble_decode_updates_settings = true;
   test_spy::ble_decoded_settings = f.settings;
-  test_spy::ble_decoded_settings.measure_interval_seconds = 30;
+  test_spy::ble_decoded_settings.tracking_interval_seconds = 30;
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -5686,7 +5494,7 @@ TEST_CASE("BLE config set: commit failure retains settings and reports save fail
   evt.type = EventType::BleConfigWrite;
   A::dispatch(orch, evt);
 
-  CHECK(A::settings(orch).measure_interval_seconds == 10);
+  CHECK(A::settings(orch).tracking_interval_seconds == 10);
   CHECK(test_spy::ble_notify_command_result_called);
   CHECK_FALSE(test_spy::ble_last_command_success);
   CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_CONFIG_SAVE_FAILED);
@@ -5696,6 +5504,7 @@ TEST_CASE("BLE config set: correction updates derived view without notifying raw
           "[Orchestrator][correction][ble]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
 
   MeasuresAGo raw{};
   raw.pm_a.pm_25 = 10.0f;
@@ -5884,7 +5693,7 @@ TEST_CASE("BLE config set: V2 touch LED rejection preserves validation error pre
 TEST_CASE("BLE config set: rejected when unknown config key present",
           "[Orchestrator][settings][ble]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 10;
+  f.settings.tracking_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
   A::set_last_measurement_ms(orch, 1000);
@@ -5894,7 +5703,7 @@ TEST_CASE("BLE config set: rejected when unknown config key present",
   test_spy::ble_config_decode_result.has_unknown_keys = true;
   test_spy::ble_decode_updates_settings = true;
   test_spy::ble_decoded_settings = f.settings;
-  test_spy::ble_decoded_settings.measure_interval_seconds = 30;
+  test_spy::ble_decoded_settings.tracking_interval_seconds = 30;
 
   test_spy::ble_notify_command_result_called = false;
 
@@ -5903,7 +5712,7 @@ TEST_CASE("BLE config set: rejected when unknown config key present",
   A::dispatch(orch, evt);
 
   // Settings unchanged — write was rejected
-  CHECK(A::settings(orch).measure_interval_seconds == 10);
+  CHECK(A::settings(orch).tracking_interval_seconds == 10);
   CHECK(A::last_measurement_ms(orch) == 1000);
 
   // Error notification sent
@@ -5942,7 +5751,7 @@ TEST_CASE("BLE config set: rejected when correction value is invalid",
 TEST_CASE("on_ble_config_write: multi-field set rejected with single_field_only",
           "[Orchestrator][settings][ble]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 10;
+  f.settings.tracking_interval_seconds = 10;
   auto orch = f.make_orchestrator();
 
   test_spy::ble_pending_config_len = 1;
@@ -5951,7 +5760,7 @@ TEST_CASE("on_ble_config_write: multi-field set rejected with single_field_only"
   test_spy::ble_config_decode_result.recognized_config_key_count = 2;
   test_spy::ble_decode_updates_settings = true;
   test_spy::ble_decoded_settings = f.settings;
-  test_spy::ble_decoded_settings.measure_interval_seconds = 30;
+  test_spy::ble_decoded_settings.tracking_interval_seconds = 30;
 
   test_spy::ble_notify_command_result_called = false;
 
@@ -5960,7 +5769,7 @@ TEST_CASE("on_ble_config_write: multi-field set rejected with single_field_only"
   A::dispatch(orch, evt);
 
   // Rejected before adoption — settings unchanged.
-  CHECK(A::settings(orch).measure_interval_seconds == 10);
+  CHECK(A::settings(orch).tracking_interval_seconds == 10);
   CHECK(test_spy::ble_notify_command_result_called);
   CHECK(test_spy::ble_last_command == BleCommand::Set);
   CHECK_FALSE(test_spy::ble_last_command_success);
@@ -6226,6 +6035,7 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   SECTION("factory PM") { pm_algorithm = Pm25CorrectionAlgorithm::FactoryCalibration; }
   TestFixture f(nullptr, variant);
   auto orch = f.make_orchestrator();
+  A::set_wifi(orch, true);
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -6262,7 +6072,7 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   evt.fetch_config.update.use_fahrenheit = true;
   evt.fetch_config.update.disable_cloud = true;
   evt.fetch_config.update.configuration_control = ConfigurationControl::Local;
-  evt.fetch_config.update.measure_interval_seconds = 30;
+  evt.fetch_config.update.tracking_interval_seconds = 30;
   evt.fetch_config.update.gps_mode = GpsMode::AlwaysOn;
   evt.fetch_config.update.back_led_brightness = LedBrightness::Mid;
   evt.fetch_config.update.touch_led_intensity = TouchLedIntensity::Bright;
@@ -6284,7 +6094,7 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
   CHECK(A::settings(orch).use_fahrenheit);
   CHECK_FALSE(A::settings(orch).disable_cloud);
   CHECK(A::settings(orch).configuration_control == ConfigurationControl::Both);
-  CHECK(A::settings(orch).measure_interval_seconds == 30);
+  CHECK(A::settings(orch).tracking_interval_seconds == 30);
   CHECK(A::settings(orch).gps_mode == GpsMode::AlwaysOn);
   CHECK(A::settings(orch).back_led_brightness == LedBrightness::Mid);
   CHECK(A::settings(orch).touch_led_intensity ==
@@ -6616,7 +6426,7 @@ TEST_CASE("dispatch: routes GpsFixUpdate to on_gps_fix", "[Orchestrator][dispatc
 
 TEST_CASE("dispatch: BleConnected pushes measures, status, and config", "[Orchestrator][ble]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Portable;
+  f.settings.wifi_enabled = false;
   auto orch = f.make_orchestrator();
   test_spy::ble_connected = true;
 
@@ -6631,7 +6441,7 @@ TEST_CASE("dispatch: BleConnected pushes measures, status, and config", "[Orches
 
 TEST_CASE("dispatch: BleConnected dismisses pairing passkey screen", "[Orchestrator][ble]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Portable;
+  f.settings.wifi_enabled = false;
   auto orch = f.make_orchestrator();
 
   // Simulate passkey screen is showing
@@ -6722,7 +6532,7 @@ TEST_CASE("dispatch: BleAuthComplete failure dismisses passkey to Home (no sessi
 TEST_CASE("dispatch: BleAuthComplete failure in setup session returns to boot guide",
           "[Orchestrator][ble][onboarding]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Portable;
+  f.settings.wifi_enabled = false;
   auto orch = f.make_orchestrator();
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -6789,7 +6599,7 @@ TEST_CASE("dispatch: BleHistoryWrite list calls handle_history_list", "[Orchestr
 
 TEST_CASE("on_sensor_data: always updates BLE measures characteristic", "[Orchestrator][ble]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Portable;
+  f.settings.wifi_enabled = false;
   auto orch = f.make_orchestrator();
 
   SECTION("when connected") {
@@ -6815,7 +6625,7 @@ TEST_CASE("on_sensor_data: always updates BLE measures characteristic", "[Orches
 
 TEST_CASE("apply_settings_change: notifies BLE when connected", "[Orchestrator][ble]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Portable;
+  f.settings.wifi_enabled = false;
   auto orch = f.make_orchestrator();
   test_spy::ble_connected = true;
 
@@ -6825,6 +6635,9 @@ TEST_CASE("apply_settings_change: notifies BLE when connected", "[Orchestrator][
       .RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
 
+  auto edited = f.settings;
+  edited.use_feet = true;
+  f.ui_manager.sync_settings(edited);
   A::apply_settings_change(orch);
 
   // notify_config() now refreshes the stored snapshot internally; the
@@ -6852,7 +6665,7 @@ TEST_CASE("apply_settings_change: does not notify BLE when disconnected", "[Orch
 
 TEST_CASE("init: starts BLE in Portable mode", "[Orchestrator][ble]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Portable;
+  f.settings.wifi_enabled = false;
 
   ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
@@ -6863,25 +6676,25 @@ TEST_CASE("init: starts BLE in Portable mode", "[Orchestrator][ble]") {
   CHECK(test_spy::ble_init_called);
 }
 
-TEST_CASE("init: does not start BLE in Offline mode", "[Orchestrator][ble]") {
+TEST_CASE("init: starts BLE with Wi-Fi Off", "[Orchestrator][ble]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Offline;
+  f.settings.wifi_enabled = false;
   auto orch = f.make_orchestrator();
 
-  // Set mode to Offline before init (PowerOn doesn't read settings.operating_mode)
-  A::set_mode(orch, OperatingMode::Offline);
+  // Set mode to Offline before init (PowerOn doesn't read settings.wifi_enabled)
+  A::set_wifi(orch, false);
 
   ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
 
   orch.init(WakeCause::PowerOn);
 
-  CHECK_FALSE(test_spy::ble_init_called);
+  CHECK(test_spy::ble_init_called);
 }
 
 TEST_CASE("build_context: ble_enabled true in Portable mode", "[Orchestrator][ble]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Portable;
+  f.settings.wifi_enabled = false;
 
   ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
       .RETURN(ConfigStoreResult::NOT_FOUND);
@@ -6897,7 +6710,7 @@ TEST_CASE("build_context: ble_enabled true in Portable mode", "[Orchestrator][bl
 TEST_CASE("build_context: ble_enabled false in Offline mode", "[Orchestrator][ble]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Offline);
+  A::set_wifi(orch, false);
 
   auto ctx = A::build_context(orch);
 
@@ -6906,7 +6719,7 @@ TEST_CASE("build_context: ble_enabled false in Offline mode", "[Orchestrator][bl
 
 TEST_CASE("build_context: ble_connected reflects authenticated link state", "[Orchestrator][ble]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Portable;
+  f.settings.wifi_enabled = false;
   auto orch = f.make_orchestrator();
 
   // The icon shows "connected" only for a usable (encrypted/authenticated)
@@ -7608,7 +7421,7 @@ TEST_CASE("Co2CalibrationDone Unsupported shows snackbar", "[Orchestrator][calib
 TEST_CASE("prepare_for_sleep: clears unexpired Locked snackbar",
           "[Orchestrator][sleep][snackbar]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Offline;
+  f.settings.wifi_enabled = false;
   auto orch = f.make_orchestrator();
 
   A::lock(orch);
@@ -7754,13 +7567,14 @@ TEST_CASE("prepare_for_sleep: flushes and closes route file when tracking is act
 // 24. Boot-to-runtime promotion (BootHandoff)
 // ============================================================================
 
-TEST_CASE("init(Timer, promoted, locked): RTC restored, measures seeded, no measurement requested",
-          "[Orchestrator][init][promotion]") {
+TEST_CASE(
+    "init(Timer, promoted, locked): tracking cleared, measures seeded, no measurement requested",
+    "[Orchestrator][init][promotion]") {
   TestFixture f;
 
   // Timer wake with tracking active — RTC state should be restored
   test_spy::state_to_load = RtcAppState{
-      .mode = OperatingMode::Offline,
+
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
       .tracking_state = TrackingState::Recording,
@@ -7789,10 +7603,10 @@ TEST_CASE("init(Timer, promoted, locked): RTC restored, measures seeded, no meas
   orch.init(WakeCause::Timer, handoff);
 
   // RTC state restored (Timer wake, not PowerOn)
-  CHECK(A::behavior(orch) == Behavior::Tracking);
+  CHECK(A::behavior(orch) == Behavior::Idle);
   CHECK(A::gps_enabled(orch) == true);
-  CHECK(A::tracking_active(orch) == true);
-  CHECK(A::tracking_session_id(orch) == 55555);
+  CHECK(A::tracking_active(orch) == false);
+  CHECK(A::tracking_session_id(orch) == 0);
 
   // Cached measures seeded from fast_path_measures
   CHECK(A::cached_measures(orch).co2.co2 == 450);
@@ -7807,9 +7621,9 @@ TEST_CASE("init(Timer, promoted, locked): RTC restored, measures seeded, no meas
 
   // Route resumed since tracking was active — init() now uses resume_route()
   // explicitly so it can truncate any torn trailing record.
-  CHECK(test_spy::route_resumed);
+  CHECK_FALSE(test_spy::route_resumed);
   CHECK_FALSE(test_spy::route_started);
-  CHECK(test_spy::route_session_id == 55555);
+  CHECK(test_spy::route_session_id == 0);
 }
 
 TEST_CASE("init(Timer, promoted, unlocked): RTC restored, unlock called, no measurement requested",
@@ -7817,7 +7631,7 @@ TEST_CASE("init(Timer, promoted, unlocked): RTC restored, unlock called, no meas
   TestFixture f;
 
   test_spy::state_to_load = RtcAppState{
-      .mode = OperatingMode::Offline,
+
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
       .tracking_state = TrackingState::Idle,
@@ -7846,7 +7660,7 @@ TEST_CASE("init(Timer, promoted, unlocked): RTC restored, unlock called, no meas
   orch.init(WakeCause::Timer, handoff);
 
   // RTC state restored
-  CHECK(A::gps_enabled(orch) == false);
+  CHECK(A::gps_enabled(orch) == true);
 
   // Unlocked via unlock() (display_painted=false triggers unlock())
   CHECK(A::lock_state(orch) == LockState::Unlocked);
@@ -7868,7 +7682,7 @@ TEST_CASE("init(Timer, promoted, unlocked, painted): state set directly, no upda
   TestFixture f;
 
   test_spy::state_to_load = RtcAppState{
-      .mode = OperatingMode::Offline,
+
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
       .tracking_state = TrackingState::Idle,
@@ -7904,7 +7718,7 @@ TEST_CASE("init(Timer, promoted, no measures): RTC restored, measurement request
   TestFixture f;
 
   test_spy::state_to_load = RtcAppState{
-      .mode = OperatingMode::Offline,
+
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
       .tracking_state = TrackingState::Idle,
@@ -7942,7 +7756,7 @@ TEST_CASE("init(PowerOn, default handoff): no RTC restored, locked, measurement 
 
   // Set RTC state that should NOT be loaded (PowerOn doesn't restore RTC)
   test_spy::state_to_load = RtcAppState{
-      .mode = OperatingMode::Offline,
+
       .behavior = Behavior::Tracking,
       .lock_state = LockState::Locked,
       .tracking_state = TrackingState::Recording,
@@ -7982,7 +7796,7 @@ TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with bu
   TestFixture f;
 
   test_spy::state_to_load = RtcAppState{
-      .mode = OperatingMode::Offline,
+
       .behavior = Behavior::Idle,
       .lock_state = LockState::Locked,
       .tracking_state = TrackingState::Idle,
@@ -8035,7 +7849,7 @@ TEST_CASE("init(Button, display_painted + snapshot): backward-compatible with bu
   CHECK(A::snackbar_refresh_deadline_ms(orch) != 0);
 
   // RTC state restored (Button wake)
-  CHECK(A::gps_enabled(orch) == false);
+  CHECK(A::gps_enabled(orch) == true);
 }
 
 // ============================================================================
@@ -8105,7 +7919,7 @@ TEST_CASE("settings groups and moved melody choices retain inactivity lock",
 TEST_CASE("background suppression: BLE connect on MainMenu does not update display",
           "[Orchestrator][display][suppression]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Portable;
+  f.settings.wifi_enabled = false;
   auto orch = f.make_orchestrator();
   test_spy::ble_connected = true;
   f.ui_manager.set_screen(Screen::MainMenu);
@@ -8447,7 +8261,7 @@ struct PmSleepFixture {
                  ota_service,       accel_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
-    settings.operating_mode = OperatingMode::Portable;
+    settings.wifi_enabled = false;
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
     _exp_delay = NAMED_ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
     // Allow all config store operations (mode/settings changes trigger saves)
@@ -8484,7 +8298,7 @@ static void confirm_peripheral_actuators(Orchestrator &orch) {
 TEST_CASE("Peripheral Test: wakes PM and waits for preparation before the sweep",
           "[Orchestrator][hwtest][peripheral][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   A::unlock(orch);
   f.ui_manager.set_screen(Screen::PeripheralTest);
@@ -8524,7 +8338,7 @@ TEST_CASE("Peripheral Test: wakes PM and waits for preparation before the sweep"
   A::dispatch(orch, event);
   CHECK(test_spy::self_test_requested);
   CHECK_FALSE(test_spy::pm_sleep_requested);
-  CHECK(A::settings(orch).measure_interval_seconds == 60);
+  CHECK(A::settings(orch).tracking_interval_seconds == 60);
 
   test_spy::self_test_requested = false;
   A::dispatch(orch, event);
@@ -8534,8 +8348,9 @@ TEST_CASE("Peripheral Test: wakes PM and waits for preparation before the sweep"
 TEST_CASE("Peripheral Test: serializes the sweep with scheduled measurements",
           "[Orchestrator][hwtest][peripheral][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
   A::unlock(orch);
   f.ui_manager.set_screen(Screen::PeripheralTest);
   uint64_t now = 60000;
@@ -8567,8 +8382,9 @@ TEST_CASE("Peripheral Test: serializes the sweep with scheduled measurements",
 TEST_CASE("Peripheral Test: holds PM awake until any test exit",
           "[Orchestrator][hwtest][peripheral][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
   A::unlock(orch);
   f.ui_manager.set_screen(Screen::PeripheralTest);
   A::start_peripheral_test(orch);
@@ -8580,7 +8396,7 @@ TEST_CASE("Peripheral Test: holds PM awake until any test exit",
   A::on_sensor_data(orch, measures);
   CHECK_FALSE(test_spy::pm_sleep_requested);
   const GoSettings previous = A::settings(orch);
-  A::settings(orch).measure_interval_seconds = 120;
+  A::settings(orch).tracking_interval_seconds = 120;
   A::reschedule_sensor_timer(orch, previous);
   CHECK_FALSE(test_spy::pm_sleep_requested);
 
@@ -8600,14 +8416,15 @@ TEST_CASE("Peripheral Test: holds PM awake until any test exit",
   CHECK(f.ui_manager.current_screen() != Screen::PeripheralTest);
   CHECK(test_spy::pm_sleep_requested);
   CHECK_FALSE(test_spy::recover_pm_sensor_called);
-  CHECK(A::settings(orch).measure_interval_seconds == 120);
+  CHECK(A::settings(orch).tracking_interval_seconds == 120);
 }
 
 TEST_CASE("Peripheral Test: early exit cancels a sweep waiting for PM",
           "[Orchestrator][hwtest][peripheral][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
   A::unlock(orch);
   f.ui_manager.set_screen(Screen::PeripheralTest);
   bool sleep_pending = false;
@@ -8631,8 +8448,9 @@ TEST_CASE("Peripheral Test: early exit cancels a sweep waiting for PM",
 TEST_CASE("Peripheral Test: an in-flight sweep retains PM ownership after exit",
           "[Orchestrator][hwtest][peripheral][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
   A::unlock(orch);
   f.ui_manager.set_screen(Screen::PeripheralTest);
   A::start_peripheral_test(orch);
@@ -8685,8 +8503,9 @@ TEST_CASE("Peripheral Test: an in-flight sweep retains PM ownership after exit",
 TEST_CASE("Peripheral Test: stopping the producer cancels pending test ownership",
           "[Orchestrator][hwtest][peripheral][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
   A::unlock(orch);
   f.ui_manager.set_screen(Screen::PeripheralTest);
   A::start_peripheral_test(orch);
@@ -8705,9 +8524,10 @@ TEST_CASE("Peripheral Test: stopping the producer cancels pending test ownership
 TEST_CASE("PM sleep: on_sensor_data requests PM sleep for Portable + long interval",
           "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::set_tracking_state(orch, TrackingState::Paused);
 
   test_spy::pm_sleep_requested = false;
 
@@ -8719,9 +8539,10 @@ TEST_CASE("PM sleep: on_sensor_data requests PM sleep for Portable + long interv
 
 TEST_CASE("PM sleep: PmSensorAsleep event isolates the PM bus", "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::set_tracking_state(orch, TrackingState::Paused);
 
   test_spy::pm_power_set = false;
 
@@ -8736,7 +8557,7 @@ TEST_CASE("PM sleep: PmSensorAsleep event isolates the PM bus", "[Orchestrator][
 TEST_CASE("PM sleep: on_sensor_data does NOT request PM sleep for short interval",
           "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 10; // below threshold
+  f.settings.tracking_interval_seconds = 10; // below threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
 
@@ -8751,8 +8572,8 @@ TEST_CASE("PM sleep: on_sensor_data does NOT request PM sleep for short interval
 TEST_CASE("PM sleep: on_sensor_data does NOT request PM sleep in Offline mode",
           "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
-  f.settings.operating_mode = OperatingMode::Offline;
+  f.settings.tracking_interval_seconds = 60;
+  f.settings.wifi_enabled = false;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
 
@@ -8767,11 +8588,12 @@ TEST_CASE("PM sleep: on_sensor_data does NOT request PM sleep in Offline mode",
 TEST_CASE("PM sleep: on_sensor_data requests PM sleep in Stationary mode",
           "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
-  f.settings.operating_mode = OperatingMode::Stationary;
+  f.settings.tracking_interval_seconds = 60;
+  f.settings.wifi_enabled = true;
   test_spy::wifi_has_saved_networks = true; // keep provisioning from pausing sensors
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::set_tracking_state(orch, TrackingState::Paused);
 
   test_spy::pm_sleep_requested = false;
 
@@ -8784,7 +8606,7 @@ TEST_CASE("PM sleep: on_sensor_data requests PM sleep in Stationary mode",
 TEST_CASE("PM sleep: mode change powers on and wakes PM", "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
   test_spy::wifi_has_saved_networks = true;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
   A::sensor_asleep(orch); // Boot measurement has already completed.
@@ -8793,7 +8615,7 @@ TEST_CASE("PM sleep: mode change powers on and wakes PM", "[Orchestrator][pm_sle
   test_spy::pm_power_on = false;
   test_spy::prepare_requested = false;
 
-  A::change_mode(orch, OperatingMode::Stationary);
+  A::configure_wifi(orch, true);
   CHECK(test_spy::pm_power_set);
   CHECK(test_spy::pm_power_on);
   CHECK(test_spy::prepare_requested);
@@ -8801,9 +8623,10 @@ TEST_CASE("PM sleep: mode change powers on and wakes PM", "[Orchestrator][pm_sle
 
 TEST_CASE("PM sleep: check_timers fires prepare at warmup deadline", "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::set_tracking_state(orch, TrackingState::Paused);
   A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Advance time to prepare deadline: 60000 - 10000 = 50000 ms after last measurement
@@ -8823,9 +8646,10 @@ TEST_CASE("PM sleep: check_timers fires prepare at warmup deadline", "[Orchestra
 TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
           "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::set_tracking_state(orch, TrackingState::Paused);
   A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Advance time to 49s — 1s before prepare deadline
@@ -8841,9 +8665,10 @@ TEST_CASE("PM sleep: check_timers does NOT fire prepare before deadline",
 
 TEST_CASE("PM sleep: check_timers skips prepare for short interval", "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 10; // below threshold
+  f.settings.tracking_interval_seconds = 10; // below threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::set_tracking_state(orch, TrackingState::Paused);
   A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Even past the would-be deadline, prepare should not fire
@@ -8859,17 +8684,18 @@ TEST_CASE("PM sleep: check_timers skips prepare for short interval", "[Orchestra
 TEST_CASE("PM sleep: reschedule requests PM sleep when interval increases above threshold",
           "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 10; // starts below threshold
+  f.settings.tracking_interval_seconds = 10; // starts below threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::set_tracking_state(orch, TrackingState::Paused);
   A::sensor_ready(orch); // Boot measurement has already completed.
 
   // Change interval to above threshold
-  A::settings(orch).measure_interval_seconds = 60;
+  A::settings(orch).tracking_interval_seconds = 60;
   test_spy::pm_sleep_requested = false;
 
   GoSettings prev{};
-  prev.measure_interval_seconds = 10;
+  prev.tracking_interval_seconds = 10;
   A::reschedule_sensor_timer(orch, prev);
 
   CHECK(test_spy::pm_sleep_requested);
@@ -8878,18 +8704,19 @@ TEST_CASE("PM sleep: reschedule requests PM sleep when interval increases above 
 TEST_CASE("PM sleep: reschedule powers on and wakes PM when interval decreases below threshold",
           "[Orchestrator][pm_sleep]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60; // starts above threshold
+  f.settings.tracking_interval_seconds = 60; // starts above threshold
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
+  A::set_tracking_state(orch, TrackingState::Paused);
   A::sensor_asleep(orch); // Boot measurement has already completed.
 
   // Change interval to below threshold
-  A::settings(orch).measure_interval_seconds = 10;
+  A::settings(orch).tracking_interval_seconds = 10;
   test_spy::pm_power_set = false;
   test_spy::prepare_requested = false;
 
   GoSettings prev{};
-  prev.measure_interval_seconds = 60;
+  prev.tracking_interval_seconds = 60;
   A::reschedule_sensor_timer(orch, prev);
 
   CHECK(test_spy::pm_power_set);
@@ -8951,7 +8778,7 @@ TEST_CASE("apply_settings_change: AlwaysOn to AlwaysOff sleeps GPS", "[Orchestra
 TEST_CASE("AlwaysOff clears an existing fix and keeps GPS inactive when tracking starts",
           "[Orchestrator][gps_sync][tracking]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Portable;
+  f.settings.wifi_enabled = false;
   f.settings.gps_mode = GpsMode::AlwaysOn;
   auto orch = f.make_orchestrator();
   A::unlock(orch);
@@ -9006,7 +8833,7 @@ TEST_CASE("AlwaysOff clears an existing fix and keeps GPS inactive when tracking
 TEST_CASE("OnWhenTracking clears an existing fix and stays inactive while idle",
           "[Orchestrator][gps_sync][tracking]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Portable;
+  f.settings.wifi_enabled = false;
   f.settings.gps_mode = GpsMode::AlwaysOn;
   auto orch = f.make_orchestrator();
   uint32_t now_ms = 0;
@@ -9032,12 +8859,12 @@ TEST_CASE("OnWhenTracking clears an existing fix and stays inactive while idle",
   A::apply_settings_change(orch);
 
   CHECK(test_spy::gps_sleeping_start_count == 1);
-  CHECK(test_spy::gps_sleep_interval_ms == GPS_IDLE_SLEEP_MS);
+  CHECK(test_spy::gps_sleep_interval_ms == GPS_MAX_INACTIVE_SLEEP_MS);
   CHECK(A::latest_gps(orch).fix.fix_type == GpsFixType::NoFix);
   CHECK(A::latest_gps(orch).position.latitude == GPS_LATITUDE_INVALID);
   CHECK(A::latest_gps(orch).position.longitude == GPS_LONGITUDE_INVALID);
 
-  for (uint32_t elapsed : {0u, GPS_IDLE_SLEEP_MS, GPS_IDLE_SLEEP_MS * 2}) {
+  for (uint32_t elapsed : {0u, GPS_MAX_INACTIVE_SLEEP_MS, GPS_MAX_INACTIVE_SLEEP_MS * 2}) {
     now_ms = elapsed;
     f.mock_rtos.retained_time_ms = now_ms;
     A::check_timers(orch);
@@ -9299,7 +9126,7 @@ TEST_CASE("Stationary entry with saved credentials calls connect_with_saved_cred
   CP2_ALLOW_CONFIG_WRITES(f);
   test_spy::wifi_has_saved_networks = true;
 
-  A::change_mode(orch, OperatingMode::Stationary);
+  A::configure_wifi(orch, true);
 
   CHECK(test_spy::wifi_connect_saved_called);
   CHECK_FALSE(test_spy::wifi_try_fallback_called);
@@ -9313,7 +9140,7 @@ TEST_CASE("Stationary entry without saved credentials opens BLE provisioning imm
   CP2_ALLOW_CONFIG_WRITES(f);
   test_spy::wifi_has_saved_networks = false;
 
-  A::change_mode(orch, OperatingMode::Stationary);
+  A::configure_wifi(orch, true);
 
   CHECK_FALSE(test_spy::wifi_try_fallback_called);
   CHECK_FALSE(test_spy::wifi_connect_saved_called);
@@ -9331,7 +9158,7 @@ TEST_CASE("Stationary entry forwards static IP when settings.static_ip.ip != 0",
   A::settings(orch).static_ip.netmask = 0x00FFFFFF;
   test_spy::wifi_has_saved_networks = true;
 
-  A::change_mode(orch, OperatingMode::Stationary);
+  A::configure_wifi(orch, true);
 
   REQUIRE(test_spy::wifi_connect_saved_called);
   CHECK_FALSE(test_spy::wifi_static_ip_was_null);
@@ -9339,7 +9166,7 @@ TEST_CASE("Stationary entry forwards static IP when settings.static_ip.ip != 0",
   CHECK(test_spy::wifi_last_static_ip.netmask == 0x00FFFFFF);
 }
 
-TEST_CASE("enter_stationary calls init_wifi_subsystem before wifi service action",
+TEST_CASE("enter_wifi calls init_wifi_subsystem before wifi service action",
           "[Orchestrator][stationary][board]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -9347,7 +9174,7 @@ TEST_CASE("enter_stationary calls init_wifi_subsystem before wifi service action
   test_spy::wifi_has_saved_networks = true;
   REQUIRE(f.stub_board.init_wifi_subsystem_calls == 0);
 
-  A::change_mode(orch, OperatingMode::Stationary);
+  A::configure_wifi(orch, true);
 
   CHECK(f.stub_board.init_wifi_subsystem_calls == 1);
   CHECK(test_spy::wifi_connect_saved_called);
@@ -9358,7 +9185,7 @@ TEST_CASE("Cold-boot Portable does not call init_wifi_subsystem",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::settings(orch).operating_mode = OperatingMode::Portable;
+  A::settings(orch).wifi_enabled = false;
 
   orch.init(WakeCause::PowerOn);
 
@@ -9372,7 +9199,7 @@ TEST_CASE("Cold-boot Stationary calls init_wifi_subsystem exactly once",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::settings(orch).operating_mode = OperatingMode::Stationary;
+  A::settings(orch).wifi_enabled = true;
   test_spy::wifi_has_saved_networks = false;
 
   orch.init(WakeCause::PowerOn);
@@ -9387,160 +9214,15 @@ TEST_CASE("Portable -> Stationary tears down BLE before bringing up Wi-Fi",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Portable);
+  A::set_wifi(orch, false);
   test_spy::ble_initialized = true;
   test_spy::wifi_has_saved_networks = true;
 
-  A::change_mode(orch, OperatingMode::Stationary);
+  A::configure_wifi(orch, true);
 
-  // Both should have happened; the spec requires deinit BEFORE enter_stationary.
+  // Both should have happened; the spec requires deinit BEFORE enter_wifi.
   CHECK(test_spy::ble_deinit_called);
   CHECK(test_spy::wifi_connect_saved_called);
-}
-
-TEST_CASE("Stationary ends tracking and returning to Portable leaves it idle",
-          "[Orchestrator][stationary][mode_change][tracking]") {
-  const bool paused = GENERATE(false, true);
-  const auto gps_mode = GENERATE(GpsMode::OnWhenTracking, GpsMode::AlwaysOn);
-  CAPTURE(paused, gps_mode);
-  TestFixture f;
-  f.settings.gps_mode = gps_mode;
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-  A::unlock(orch);
-  test_spy::wifi_has_saved_networks = true;
-
-  f.mock_rtos.retained_time_ms = 100'000;
-  REQUIRE(A::start_tracking(orch));
-  const auto session = A::tracking_session_id(orch);
-  REQUIRE(session != 0);
-  f.mock_rtos.retained_time_ms = 110'000;
-  A::on_sensor_data(orch, MeasuresAGo{});
-  REQUIRE(f.storage_service.current_route_point_count() == 1);
-  if (paused) {
-    REQUIRE(A::pause_tracking(orch));
-  }
-  enter_tracking_status(f, orch);
-  test_spy::route_started = false;
-  test_spy::route_resumed = false;
-  test_spy::route_ended = false;
-  test_spy::route_point_appended = false;
-
-  const auto check_stopped = [&] {
-    CHECK(A::tracking_state(orch) == TrackingState::Idle);
-    CHECK(A::tracking_session_id(orch) == 0);
-    CHECK(A::behavior(orch) == Behavior::Idle);
-    check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
-    CHECK_FALSE(f.storage_service.is_route_active());
-    uint32_t points = 0;
-    REQUIRE(f.storage_service.try_get_session_point_count(session, points));
-    CHECK(points == 1);
-    CHECK_FALSE(test_spy::route_started);
-    CHECK_FALSE(test_spy::route_resumed);
-    CHECK_FALSE(test_spy::route_point_appended);
-  };
-
-  A::change_mode(orch, OperatingMode::Stationary);
-  REQUIRE(A::mode(orch) == OperatingMode::Stationary);
-  CHECK(test_spy::route_ended == !paused); // Pausing already closed the route.
-  REQUIRE(test_spy::wifi_connect_saved_called);
-  CHECK(f.stub_bms.reset_requests == 0);
-  CHECK(A::is_gps_active(orch) == (gps_mode == GpsMode::AlwaysOn));
-  check_stopped();
-
-  A::on_wifi_connected(orch, 0x0104a8c0); // 192.168.4.1
-  REQUIRE(f.ui_manager.current_screen() == Screen::Home);
-  A::on_sensor_data(orch, MeasuresAGo{});
-  check_stopped();
-  A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
-  const auto menu = f.ui_manager.build_values(A::build_context(orch));
-  REQUIRE(menu.list.row_count == 3);
-  CHECK(std::string(menu.list.rows[1].text) == "Operating Mode");
-
-  // Requests delivered after the mode change cannot restart the session.
-  for (auto type : {EventType::UserStartTracking, EventType::UserResumeTracking}) {
-    Event event{};
-    event.type = type;
-    A::dispatch(orch, event);
-    check_stopped();
-  }
-
-  A::change_mode(orch, OperatingMode::Portable);
-  REQUIRE(A::mode(orch) == OperatingMode::Portable);
-  CHECK(test_spy::wifi_shutdown_called);
-  CHECK(test_spy::ble_init_called);
-  A::on_sensor_data(orch, MeasuresAGo{});
-  check_stopped();
-  REQUIRE(A::start_tracking(orch));
-  CHECK(A::tracking_session_id(orch) != session);
-}
-
-TEST_CASE("Tracking start and resume reject non-Portable modes without storage or GPS work",
-          "[Orchestrator][tracking][mode_change]") {
-  const auto mode = GENERATE(OperatingMode::Stationary, OperatingMode::Offline);
-  CAPTURE(mode);
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-
-  SECTION("start") {
-    A::set_mode(orch, mode);
-    CHECK_FALSE(A::start_tracking(orch));
-    CHECK(A::tracking_state(orch) == TrackingState::Idle);
-    CHECK(A::tracking_session_id(orch) == 0);
-    CHECK_FALSE(test_spy::route_started);
-    CHECK_FALSE(test_spy::gps_started);
-  }
-  SECTION("resume checks the mode even with a paused session") {
-    REQUIRE(A::start_tracking(orch));
-    REQUIRE(A::pause_tracking(orch));
-    const auto session = A::tracking_session_id(orch);
-    const auto timing = A::tracking_timing(orch);
-    test_spy::route_resumed = false;
-    test_spy::gps_started = false;
-    A::set_mode(orch, mode); // Exercise the guard independently of transition cleanup.
-    CHECK_FALSE(A::resume_tracking(orch));
-    CHECK(A::tracking_state(orch) == TrackingState::Paused);
-    CHECK(A::tracking_session_id(orch) == session);
-    check_tracking_timing(A::tracking_timing(orch), timing);
-    CHECK_FALSE(test_spy::route_resumed);
-    CHECK_FALSE(test_spy::gps_started);
-    CHECK_FALSE(f.storage_service.is_route_active());
-  }
-}
-
-TEST_CASE("change_mode leaving Portable pushes a disc notice when a client is connected",
-          "[Orchestrator][ble][mode_change]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Portable);
-  test_spy::ble_initialized = true;
-  test_spy::ble_connected = true;
-  test_spy::wifi_has_saved_networks = true;
-
-  A::change_mode(orch, OperatingMode::Stationary);
-
-  // The disc notice (link dropping, reason op_stationary) is pushed and settled
-  // before teardown; no op_mode Config delta is sent for a mode change.
-  CHECK(test_spy::ble_notify_disconnect_called);
-  CHECK(test_spy::ble_last_disc_reason == BleDiscReason::OpStationary);
-  CHECK_FALSE(test_spy::ble_notify_config_called);
-  CHECK(test_spy::ble_deinit_called);
-}
-
-TEST_CASE("change_mode leaving Portable to Offline reports op_offline disc reason",
-          "[Orchestrator][ble][mode_change]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Portable);
-  test_spy::ble_initialized = true;
-  test_spy::ble_connected = true;
-
-  A::change_mode(orch, OperatingMode::Offline);
-
-  CHECK(test_spy::ble_notify_disconnect_called);
-  CHECK(test_spy::ble_last_disc_reason == BleDiscReason::OpOffline);
 }
 
 TEST_CASE("change_mode leaving Portable does not notify when no client is connected",
@@ -9548,12 +9230,12 @@ TEST_CASE("change_mode leaving Portable does not notify when no client is connec
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Portable);
+  A::set_wifi(orch, false);
   test_spy::ble_initialized = true;
   test_spy::ble_connected = false;
   test_spy::wifi_has_saved_networks = true;
 
-  A::change_mode(orch, OperatingMode::Stationary);
+  A::configure_wifi(orch, true);
 
   CHECK_FALSE(test_spy::ble_notify_disconnect_called);
   CHECK(test_spy::ble_deinit_called);
@@ -9564,9 +9246,9 @@ TEST_CASE("Stationary -> Portable shuts down Wi-Fi before initializing BLE",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
 
-  A::change_mode(orch, OperatingMode::Portable);
+  A::configure_wifi(orch, false);
 
   CHECK(test_spy::wifi_shutdown_called);
   CHECK(test_spy::ble_init_called);
@@ -9576,7 +9258,7 @@ TEST_CASE("direct got-IP activates local HTTP, admission, and mDNS",
           "[Orchestrator][stationary][local_endpoint]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   test_spy::wifi_rssi = -54;
 
@@ -9596,7 +9278,7 @@ TEST_CASE("cloud-disabled Stationary keeps local HTTP admitted",
   TestFixture f;
   f.settings.disable_cloud = true;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
 
   A::on_wifi_connected(orch, 0x0100A8C0);
@@ -9617,7 +9299,7 @@ TEST_CASE("local HTTP failure keeps admission disabled and arms five-second retr
           "[Orchestrator][stationary][local_endpoint][retry]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   test_spy::wifi_ensure_local_http_result = false;
 
@@ -9654,7 +9336,7 @@ TEST_CASE("mDNS-only failure leaves HTTP admitted and retries at five seconds",
           "[Orchestrator][stationary][local_endpoint][mdns][retry]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   test_spy::wifi_ensure_local_mdns_result = false;
 
@@ -9680,7 +9362,7 @@ TEST_CASE("runtime disconnect cancels activation retry without revoking local ad
           "[Orchestrator][stationary][local_endpoint][disconnect]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   test_spy::wifi_has_been_online = true;
   test_spy::wifi_ensure_local_mdns_result = false;
@@ -9700,7 +9382,7 @@ TEST_CASE("reconnect activation is idempotent and refreshes RSSI",
           "[Orchestrator][stationary][local_endpoint][reconnect]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   test_spy::wifi_has_been_online = true;
   test_spy::wifi_rssi = -70;
@@ -9722,7 +9404,7 @@ TEST_CASE("Disconnect-policy: auth_failed provisions at bring-up, reconnects at 
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
 
   SECTION("before first online -> provisioning") {
     test_spy::wifi_has_been_online = false;
@@ -9744,7 +9426,7 @@ TEST_CASE("Disconnect-policy: no_ap_found provisions at bring-up, reconnects at 
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
 
   SECTION("before first online -> provisioning") {
     test_spy::wifi_has_been_online = false;
@@ -9766,7 +9448,7 @@ TEST_CASE("Disconnect-policy: runtime connection_lost schedules a reconnect and 
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_been_online = true;
   DisplayService::spy_update_count = 0;
 
@@ -9783,7 +9465,7 @@ TEST_CASE("Disconnect-policy: requested_by_user is ignored (no provisioning, no 
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
 
   SECTION("before first online") {
     test_spy::wifi_has_been_online = false;
@@ -9805,7 +9487,7 @@ TEST_CASE("open_provisioning_screen pauses services before starting provisioning
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_been_online = false;
 
   // sensor_started/gps_idle defaults are false; pause flow must flip them.
@@ -9823,7 +9505,7 @@ TEST_CASE("ProvisioningEvent::Connected persists disable_cloud and static_ip",
   auto orch = f.make_orchestrator();
   test_spy::wifi_is_online = true;
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   A::settings(orch).configuration_control = ConfigurationControl::Cloud;
 
   Event evt = make_provisioning_event(ProvisioningEvent::Connected);
@@ -9849,7 +9531,7 @@ TEST_CASE("ProvisioningEvent::Connected continues after metadata persistence fai
           "[Orchestrator][stationary][provisioning][failure]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
 
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -9877,7 +9559,7 @@ TEST_CASE("Successful portal session stops provisioning before reboot without st
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   test_spy::wifi_provisioning_active = true;
 
@@ -9917,7 +9599,7 @@ TEST_CASE("BLE-only provisioning or a lost connection does not reboot",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   Event evt =
       make_provisioning_event(ProvisioningEvent::Connected, ProvisioningTransport::WifiOnly);
@@ -9941,7 +9623,7 @@ TEST_CASE("Portal failure or cancellation does not reboot",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   Event evt =
       make_provisioning_event(ProvisioningEvent::ConnectFailed, ProvisioningTransport::WifiOnly);
   evt.prov.portal_used = true;
@@ -9956,7 +9638,7 @@ TEST_CASE("ProvisioningEvent::Connected resumes services and requests a measurem
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
 
   // Walk through the pause flow first so resume actually fires.
   test_spy::wifi_has_been_online = false;
@@ -9978,12 +9660,12 @@ TEST_CASE("ProvisioningEvent::Stopped before first online falls back to Portable
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_been_online = false;
 
   A::dispatch(orch, make_provisioning_event(ProvisioningEvent::Stopped));
 
-  CHECK(A::mode(orch) == OperatingMode::Portable);
+  CHECK(A::wifi_active(orch) == false);
   CHECK(test_spy::wifi_shutdown_called);
 }
 
@@ -9995,12 +9677,12 @@ TEST_CASE("ProvisioningEvent::Stopped after first online stays in Stationary",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_been_online = true;
 
   A::dispatch(orch, make_provisioning_event(ProvisioningEvent::Stopped));
 
-  CHECK(A::mode(orch) == OperatingMode::Stationary);
+  CHECK(A::wifi_active(orch) == true);
   CHECK_FALSE(test_spy::wifi_shutdown_called);
 }
 
@@ -10026,7 +9708,7 @@ TEST_CASE("BuildContext: wifi icon shown in Stationary, glyph tracks is_online",
   CP2_ALLOW_CONFIG_WRITES(f);
 
   SECTION("Portable -> no icon, not connected") {
-    A::set_mode(orch, OperatingMode::Portable);
+    A::set_wifi(orch, false);
     test_spy::wifi_is_online = true;
     const auto ctx = A::build_context(orch);
     CHECK_FALSE(ctx.connectivity.wifi_enabled);
@@ -10034,7 +9716,7 @@ TEST_CASE("BuildContext: wifi icon shown in Stationary, glyph tracks is_online",
   }
 
   SECTION("Stationary + offline -> icon shown, disconnected") {
-    A::set_mode(orch, OperatingMode::Stationary);
+    A::set_wifi(orch, true);
     test_spy::wifi_is_online = false;
     const auto ctx = A::build_context(orch);
     CHECK(ctx.connectivity.wifi_enabled);
@@ -10042,7 +9724,7 @@ TEST_CASE("BuildContext: wifi icon shown in Stationary, glyph tracks is_online",
   }
 
   SECTION("Stationary + online -> icon shown, connected") {
-    A::set_mode(orch, OperatingMode::Stationary);
+    A::set_wifi(orch, true);
     test_spy::wifi_is_online = true;
     const auto ctx = A::build_context(orch);
     CHECK(ctx.connectivity.wifi_enabled);
@@ -10054,16 +9736,16 @@ TEST_CASE("BuildContext: wifi icon shown in Stationary, glyph tracks is_online",
 // Provisioning UX polish — session lifecycle
 // ============================================================================
 
-TEST_CASE("enter_stationary opens Screen::Info and starts a setup session",
+TEST_CASE("enter_wifi opens Screen::Info and starts a setup session",
           "[Orchestrator][session][bring_up]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   // Cold-boot default: device starts Locked.
   test_spy::wifi_has_saved_networks = true;
 
-  A::enter_stationary(orch);
+  A::enter_wifi(orch);
 
   CHECK(f.ui_manager.current_screen() == Screen::Info);
   CHECK(A::setup_session_active(orch));
@@ -10073,17 +9755,17 @@ TEST_CASE("enter_stationary opens Screen::Info and starts a setup session",
   CHECK(test_spy::wifi_connect_saved_called);
 }
 
-TEST_CASE("enter_stationary initializes both cloud runtime gates from active settings",
+TEST_CASE("enter_wifi initializes both cloud runtime gates from active settings",
           "[Orchestrator][stationary][cloud]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Stationary;
+  f.settings.wifi_enabled = true;
   f.settings.disable_cloud = true;
   f.settings.configuration_control = ConfigurationControl::Local;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_saved_networks = false;
 
-  A::enter_stationary(orch);
+  A::enter_wifi(orch);
 
   CHECK(test_spy::cloud_set_disable_count == 1);
   CHECK(test_spy::cloud_last_disable_cloud);
@@ -10096,11 +9778,11 @@ TEST_CASE("manufacturing entry uses factory Wi-Fi even with saved credentials",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   A::set_manufacturing_mode(orch, true);
   test_spy::wifi_has_saved_networks = true;
 
-  A::enter_stationary(orch);
+  A::enter_wifi(orch);
 
   CHECK(f.ui_manager.current_screen() == Screen::Info);
   CHECK(test_spy::wifi_try_fallback_called);
@@ -10110,16 +9792,16 @@ TEST_CASE("manufacturing entry uses factory Wi-Fi even with saved credentials",
   CHECK(std::string(values.info_text) == "Trying default Wi-Fi...");
 }
 
-TEST_CASE("enter_stationary clears any pre-existing snackbar on entry",
+TEST_CASE("enter_wifi clears any pre-existing snackbar on entry",
           "[Orchestrator][session][bring_up]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   f.ui_manager.show_snackbar("Mode changed");
   test_spy::wifi_has_saved_networks = true;
 
-  A::enter_stationary(orch);
+  A::enter_wifi(orch);
 
   // build_values would normally return the snackbar; session entry cleared
   // the buffer so the next frame has no snackbar text.
@@ -10127,21 +9809,21 @@ TEST_CASE("enter_stationary clears any pre-existing snackbar on entry",
   CHECK(v.snackbar_text == nullptr);
 }
 
-TEST_CASE("change_mode(Stationary) does not fire \"Mode changed\" snackbar",
+TEST_CASE("configure_wifi(Stationary) does not fire \"Mode changed\" snackbar",
           "[Orchestrator][session][change_mode]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Portable);
+  A::set_wifi(orch, false);
   test_spy::wifi_has_saved_networks = true;
 
-  A::change_mode(orch, OperatingMode::Stationary);
+  A::configure_wifi(orch, true);
 
   DisplayValues v = f.ui_manager.build_values(A::build_context(orch));
   CHECK(v.snackbar_text == nullptr);
 }
 
-TEST_CASE("change_mode(Stationary) still re-enables PM power",
+TEST_CASE("configure_wifi(Stationary) still re-enables PM power",
           "[Orchestrator][session][change_mode][regression]") {
   // Regression guard: the spec moves set_pm_power(true) above the
   // Stationary early-return so the PM rail is re-armed across a
@@ -10149,13 +9831,13 @@ TEST_CASE("change_mode(Stationary) still re-enables PM power",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Portable);
+  A::set_wifi(orch, false);
   A::sensor_asleep(orch);
   test_spy::wifi_has_saved_networks = true;
   test_spy::pm_power_set = false;
   test_spy::pm_power_on = false;
 
-  A::change_mode(orch, OperatingMode::Stationary);
+  A::configure_wifi(orch, true);
 
   CHECK(test_spy::pm_power_set);
   CHECK(test_spy::pm_power_on);
@@ -10166,9 +9848,9 @@ TEST_CASE("on_wifi_connected during bring-up transitions Info -> Home unlocked",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_saved_networks = true;
-  A::enter_stationary(orch);
+  A::enter_wifi(orch);
   REQUIRE(A::bring_up_pending(orch));
   REQUIRE(f.ui_manager.current_screen() == Screen::Info);
   test_spy::bms_poll_count = 0;
@@ -10194,9 +9876,9 @@ TEST_CASE("bring-up disconnect shows failure Info before opening provisioning",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_saved_networks = true;
-  A::enter_stationary(orch);
+  A::enter_wifi(orch);
   REQUIRE(f.ui_manager.current_screen() == Screen::Info);
   test_spy::wifi_has_been_online = false;
   DisplayService::spy_flush_count = 0;
@@ -10301,7 +9983,7 @@ TEST_CASE("on_wifi_connected reconnect on Home arms the \"Wi-Fi connected\" snac
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   // Not in a session; on Home.
   REQUIRE(f.ui_manager.current_screen() == Screen::Home);
   REQUIRE_FALSE(A::setup_session_active(orch));
@@ -10321,7 +10003,7 @@ TEST_CASE("on_wifi_connected during an active session does not arm a snackbar",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_been_online = false;
   // Enter Provisioning via the failure path so _bring_up_pending = false
   // but _setup_session_active = true.
@@ -10346,7 +10028,7 @@ TEST_CASE("on_wifi_connected reconnect on a menu screen does not arm a snackbar"
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   // User navigated into Settings; not in a session.
   f.ui_manager.set_screen(Screen::Settings);
   REQUIRE_FALSE(A::setup_session_active(orch));
@@ -10362,9 +10044,9 @@ TEST_CASE("Power short-press is suppressed on all session screens",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_saved_networks = true;
-  A::enter_stationary(orch);
+  A::enter_wifi(orch);
   REQUIRE(A::lock_state(orch) == LockState::Unlocked);
 
   // Power short-press on Screen::Info — should NOT toggle the lock.
@@ -10390,9 +10072,9 @@ TEST_CASE("Power long-press shutdown still fires on session screens",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_saved_networks = true;
-  A::enter_stationary(orch);
+  A::enter_wifi(orch);
 
   InputEventData input{InputSource::ButtonPower, InputType::LongPress};
   A::on_input(orch, input);
@@ -10421,9 +10103,9 @@ TEST_CASE("Auto-lock is suppressed while a setup session is active",
     uint32_t now_ms = 0;
     ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now_ms);
     A::settings(orch).auto_lock_seconds = 10;
-    A::set_mode(orch, OperatingMode::Stationary);
+    A::set_wifi(orch, true);
     test_spy::wifi_has_saved_networks = true;
-    A::enter_stationary(orch);
+    A::enter_wifi(orch);
     if (item.screen != Screen::Info) {
       test_spy::wifi_has_been_online = false;
       A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
@@ -10441,7 +10123,7 @@ TEST_CASE("Auto-lock is suppressed while a setup session is active",
     const auto check_session = [&] {
       CHECK(A::lock_state(orch) == LockState::Unlocked);
       CHECK(f.ui_manager.current_screen() == item.screen);
-      CHECK(A::mode(orch) == OperatingMode::Stationary);
+      CHECK(A::wifi_active(orch) == true);
       CHECK(A::setup_session_active(orch));
       if (item.screen != Screen::Info) {
         CHECK(f.ui_manager.provisioning_transport() == item.transport);
@@ -10463,8 +10145,8 @@ TEST_CASE("Sensor + BMS deadlines are suppressed while sensitive services are pa
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::settings(orch).measure_interval_seconds = 10;
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::settings(orch).tracking_interval_seconds = 10;
+  A::set_wifi(orch, true);
   test_spy::wifi_has_been_online = false;
   // Enter Provisioning page — this pauses sensitive services.
   A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
@@ -10494,13 +10176,13 @@ TEST_CASE("Sensor + BMS polls keep running on Screen::Info",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_saved_networks = true;
-  A::enter_stationary(orch);
+  A::enter_wifi(orch);
   REQUIRE(A::setup_session_active(orch));
   REQUIRE_FALSE(A::sensitive_services_paused(orch));
 
-  A::settings(orch).measure_interval_seconds = 10;
+  A::settings(orch).tracking_interval_seconds = 10;
   test_spy::measurement_requested = false;
   test_spy::bms_polled = false;
 
@@ -10516,9 +10198,9 @@ TEST_CASE("request_background_display_update is a no-op while a session is activ
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_saved_networks = true;
-  A::enter_stationary(orch);
+  A::enter_wifi(orch);
   REQUIRE(A::setup_session_active(orch));
   const uint32_t before = DisplayService::spy_update_count;
 
@@ -10532,7 +10214,7 @@ TEST_CASE("ProvisioningEvent::Connected goes through leave_session_to_home",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_been_online = false;
   A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
   REQUIRE(A::setup_session_active(orch));
@@ -10562,7 +10244,7 @@ TEST_CASE("Cancel Setup No preserves the active provisioning session",
     TestFixture f;
     auto orch = f.make_orchestrator();
     CP2_ALLOW_CONFIG_WRITES(f);
-    A::set_mode(orch, OperatingMode::Stationary);
+    A::set_wifi(orch, true);
     test_spy::wifi_has_been_online = false;
     A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
     A::dispatch(orch, make_provisioning_event(ProvisioningEvent::Started, transport));
@@ -10585,7 +10267,7 @@ TEST_CASE("Cancel Setup No preserves the active provisioning session",
 
     CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
     CHECK(f.ui_manager.provisioning_transport() == transport);
-    CHECK(A::mode(orch) == OperatingMode::Stationary);
+    CHECK(A::wifi_active(orch) == true);
     CHECK(A::setup_session_active(orch));
     CHECK(A::sensitive_services_paused(orch));
     CHECK_FALSE(test_spy::wifi_start_provisioning_called);
@@ -10594,14 +10276,14 @@ TEST_CASE("Cancel Setup No preserves the active provisioning session",
   }
 }
 
-TEST_CASE("ConfirmCancelProvisioning routes through leave_session_to_portable",
+TEST_CASE("ConfirmCancelProvisioning routes through cancel_wifi_setup",
           "[Orchestrator][session][confirm]") {
   for (const auto transport : {ProvisioningTransport::BleOnly, ProvisioningTransport::WifiOnly}) {
     CAPTURE(transport);
     TestFixture f;
     auto orch = f.make_orchestrator();
     CP2_ALLOW_CONFIG_WRITES(f);
-    A::set_mode(orch, OperatingMode::Stationary);
+    A::set_wifi(orch, true);
     test_spy::wifi_has_been_online = false;
     A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
     A::dispatch(orch, make_provisioning_event(ProvisioningEvent::Started, transport));
@@ -10621,7 +10303,7 @@ TEST_CASE("ConfirmCancelProvisioning routes through leave_session_to_portable",
     A::on_input(orch, {InputSource::TouchDown, InputType::ShortPress}); // No -> Yes
     A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
 
-    CHECK(A::mode(orch) == OperatingMode::Portable);
+    CHECK(A::wifi_active(orch) == false);
     CHECK(f.ui_manager.current_screen() == Screen::Home);
     CHECK_FALSE(A::setup_session_active(orch));
     CHECK_FALSE(A::sensitive_services_paused(orch));
@@ -10632,10 +10314,10 @@ TEST_CASE("ConfirmCancelProvisioning routes through leave_session_to_portable",
 
 TEST_CASE("change_mode syncs UIManager's cached settings to the persisted mode",
           "[Orchestrator][settings][regression]") {
-  // Regression for: after change_mode(Portable) on cancel, the Settings
+  // Regression for: after configure_wifi(Portable) on cancel, the Settings
   // menu still showed "Mode: Stationary" because UIManager's internal
   // _setting_mode option index was set by apply_setting_choice() but
-  // never refreshed.  change_mode() must push the new settings back
+  // never refreshed.  configure_wifi() must push the new settings back
   // into UIManager so the next render of the Settings row is correct.
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -10644,35 +10326,35 @@ TEST_CASE("change_mode syncs UIManager's cached settings to the persisted mode",
   // Mirror what apply_setting_choice() does when the user picks
   // Stationary in the Settings menu: sync UI cache + runtime to
   // Stationary first.
-  A::settings(orch).operating_mode = OperatingMode::Stationary;
+  A::settings(orch).wifi_enabled = true;
   f.ui_manager.sync_settings(A::settings(orch));
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
 
   // Sanity check: round-trip apply_to_settings now shows Stationary.
   {
     GoSettings rt{};
     f.ui_manager.apply_to_settings(rt);
-    REQUIRE(rt.operating_mode == OperatingMode::Stationary);
+    REQUIRE(rt.wifi_enabled == true);
   }
 
   // Cancel-from-provisioning equivalent: orchestrator-driven mode change
   // back to Portable without going through apply_setting_choice.
-  A::change_mode(orch, OperatingMode::Portable);
+  A::configure_wifi(orch, false);
 
   // Persisted + runtime + UI-cache all reflect Portable.
-  CHECK(A::settings(orch).operating_mode == OperatingMode::Portable);
-  CHECK(A::mode(orch) == OperatingMode::Portable);
+  CHECK(A::settings(orch).wifi_enabled == false);
+  CHECK(A::wifi_active(orch) == false);
 
   GoSettings rt{};
   f.ui_manager.apply_to_settings(rt);
-  CHECK(rt.operating_mode == OperatingMode::Portable);
+  CHECK(rt.wifi_enabled == false);
 }
 
 TEST_CASE("Periodic clocks are rebased on session leave", "[Orchestrator][session][clock_rebase]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_been_online = false;
   A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
   REQUIRE(A::sensitive_services_paused(orch));
@@ -10695,9 +10377,9 @@ TEST_CASE("format_ipv4_be produces the expected dotted-decimal IPv4 strings",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_saved_networks = true;
-  A::enter_stationary(orch);
+  A::enter_wifi(orch);
 
   A::on_wifi_connected(orch, 0x0104a8c0); // 192.168.4.1
 
@@ -10720,7 +10402,7 @@ TEST_CASE("compute_queue_timeout_ms returns a bounded value when sensitive servi
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_has_been_online = false;
   A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
   REQUIRE(A::setup_session_active(orch));
@@ -10759,16 +10441,16 @@ TEST_CASE("Portable entry attaches the provisioner; leaving Portable stops it",
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
 
-  // Start outside Portable so change_mode(Portable) runs the entry branch.
-  A::set_mode(orch, OperatingMode::Offline);
+  // Start outside Portable so configure_wifi(Portable) runs the entry branch.
+  A::set_wifi(orch, true);
 
-  A::change_mode(orch, OperatingMode::Portable);
+  A::configure_wifi(orch, false);
   CHECK(test_spy::portable_attach_called);
   CHECK(test_spy::ble_init_called); // init_stack_and_register
   CHECK(test_spy::ble_initialized); // start_advertising
 
   // Leaving Portable must stop the provisioner AND deinit BLE.
-  A::change_mode(orch, OperatingMode::Offline);
+  A::configure_wifi(orch, true);
   CHECK(test_spy::portable_stop_called);
   CHECK(test_spy::ble_deinit_called);
 }
@@ -10894,7 +10576,8 @@ TEST_CASE("OTA: compute_queue_timeout_ms includes the BLE poll candidate when Po
           "[Orchestrator][ota]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::ble_initialized = true;
+  A::set_wifi(orch, false);
   test_spy::ble_authenticated = true;
   A::set_last_ota_check_ms(orch, 0);
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(0);
@@ -10908,7 +10591,7 @@ TEST_CASE("OTA: Stationary timer delegates Wi-Fi scheduling to cloud",
           "[Orchestrator][ota][stationary]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   A::set_last_ota_check_ms(orch, 1U - TEST_OTA_WIFI_CHECK_INTERVAL_MS);
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(0);
@@ -10929,7 +10612,7 @@ TEST_CASE("OTA: available event runs the blocking transfer and rearms cloud",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   SECTION("image no longer available") { test_spy::ota_run_wifi_result = OtaStatus::UpToDate; }
   SECTION("transport failure") { test_spy::ota_run_wifi_result = OtaStatus::TransportError; }
@@ -10948,26 +10631,28 @@ TEST_CASE("OTA: available event runs the blocking transfer and rearms cloud",
 TEST_CASE("OTA: available event rechecks eligibility", "[Orchestrator][ota][stationary]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  test_spy::ble_initialized = true;
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   Event event{};
   event.type = EventType::WifiOtaAvailable;
-  SECTION("mode changed") { A::set_mode(orch, OperatingMode::Offline); }
+  SECTION("mode changed") { A::set_wifi(orch, false); }
   SECTION("offline") { test_spy::wifi_is_online = false; }
   SECTION("setup") { A::set_setup_session_active(orch, true); }
   SECTION("cloud disabled") { A::settings(orch).disable_cloud = true; }
   A::dispatch(orch, event);
   CHECK(test_spy::ota_run_wifi_count == 0);
   CHECK(test_spy::cloud_arm_count ==
-        ((A::mode(orch) == OperatingMode::Stationary && test_spy::wifi_is_online) ? 1 : 0));
+        ((A::wifi_active(orch) == true && test_spy::wifi_is_online) ? 1 : 0));
 }
 
 TEST_CASE("OTA: check_timers BLE poll runs run_ble when Portable+authenticated+latched",
           "[Orchestrator][ota]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  test_spy::ble_initialized = true;
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Portable);
+  A::set_wifi(orch, false);
   A::settings(orch).disable_cloud = true;
   test_spy::ble_authenticated = true;
   test_spy::ota_is_ble_active = true;
@@ -10986,8 +10671,9 @@ TEST_CASE("OTA: check_timers BLE poll skipped when unauthenticated and not latch
           "[Orchestrator][ota]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  test_spy::ble_initialized = true;
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Portable);
+  A::set_wifi(orch, false);
   test_spy::ble_authenticated = false;
   test_spy::ota_is_ble_active = false;
   A::set_last_ota_check_ms(orch, 0);
@@ -11002,8 +10688,9 @@ TEST_CASE("OTA: stranded-active (auth cleared but still latched) still runs run_
           "[Orchestrator][ota]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  test_spy::ble_initialized = true;
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Portable);
+  A::set_wifi(orch, false);
   test_spy::ble_authenticated = false;
   test_spy::ota_is_ble_active = true; // latch outlived the auth flag
   test_spy::ota_run_ble_result = OtaStatus::Ok;
@@ -11019,7 +10706,7 @@ TEST_CASE("OTA: no poll in Offline / Stationary-offline", "[Orchestrator][ota]")
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Offline);
+  A::set_wifi(orch, false);
   test_spy::ble_authenticated = true;
   test_spy::ota_is_ble_active = true;
   test_spy::wifi_is_online = false;
@@ -11036,9 +10723,10 @@ TEST_CASE("OTA: enter_ota quiesces sensing; disarms (never stops) cloud in Stati
           "[Orchestrator][ota]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  test_spy::ble_initialized = true;
 
   SECTION("Portable does not touch cloud") {
-    A::set_mode(orch, OperatingMode::Portable);
+    A::set_wifi(orch, false);
     A::enter_ota(orch);
     CHECK(test_spy::sensor_stopped);
     CHECK(test_spy::cloud_disarm_count == 0);
@@ -11046,7 +10734,7 @@ TEST_CASE("OTA: enter_ota quiesces sensing; disarms (never stops) cloud in Stati
   }
 
   SECTION("Stationary disarms cloud but never stops it") {
-    A::set_mode(orch, OperatingMode::Stationary);
+    A::set_wifi(orch, true);
     A::enter_ota(orch);
     CHECK(test_spy::sensor_stopped);
     CHECK(test_spy::cloud_disarm_count == 1);
@@ -11057,7 +10745,7 @@ TEST_CASE("OTA: enter_ota quiesces sensing; disarms (never stops) cloud in Stati
 TEST_CASE("OTA: on_ota_download_started commits (quiesce + paint + flag)", "[Orchestrator][ota]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   A::set_ota_committed(orch, false);
 
   A::on_ota_download_started(orch);
@@ -11073,7 +10761,7 @@ TEST_CASE("OTA: committed Wi-Fi transfer gates writes, clears FIFO, and retains 
           "[Orchestrator][ota][local-api]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   A::on_wifi_connected(orch, 0x0100A8C0);
   REQUIRE(test_spy::wifi_ensure_local_http_count == 1);
@@ -11123,7 +10811,7 @@ TEST_CASE("OTA: speculative up-to-date check preserves local admission and queue
           "[Orchestrator][ota][local-api]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   f.local_api.set_access(ConfigAccess::ReadWrite);
 
   LocalServerConfig partial{};
@@ -11149,7 +10837,8 @@ TEST_CASE("OTA: finish_ota Ok paints Restarting and reboots without exit_ota",
           "[Orchestrator][ota]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Portable);
+  test_spy::ble_initialized = true;
+  A::set_wifi(orch, false);
   A::set_ota_committed(orch, true);
 
   A::finish_ota(orch, OtaStatus::Ok); // reboot() is a no-op under TEST_HOST
@@ -11162,7 +10851,7 @@ TEST_CASE("OTA: finish_ota Ok paints Restarting and reboots without exit_ota",
 TEST_CASE("OTA: lightweight WiFi UpToDate resumes silently", "[Orchestrator][ota]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   A::set_ota_committed(orch, false); // speculative check never committed
 
   SECTION("offline: no cloud re-arm, no paint") {
@@ -11186,7 +10875,7 @@ TEST_CASE("OTA: lightweight WiFi failure renders a snackbar over the current scr
           "[Orchestrator][ota]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   A::set_ota_committed(orch, false);
   test_spy::wifi_is_online = false;
 
@@ -11247,6 +10936,7 @@ TEST_CASE("local snapshots publish initial settings and measurement handoff",
 
   SECTION("completed fast-path handoff is corrected") {
     TestFixture f;
+    f.settings.wifi_enabled = true;
     f.settings.corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
     f.settings.corrections.temperature.scaling_factor = 2.0f;
     f.settings.corrections.temperature.intercept = 1.0f;
@@ -11309,6 +10999,7 @@ TEST_CASE("local custom measurement interval activates exactly and synchronizes 
           "[Orchestrator][local-api][config][interval]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
   CP2_ALLOW_CONFIG_WRITES(f);
   f.local_api.set_access(ConfigAccess::ReadWrite);
   A::set_last_measurement_ms(orch, 1000);
@@ -11320,7 +11011,7 @@ TEST_CASE("local custom measurement interval activates exactly and synchronizes 
 
   dispatch_next_local_request(f, orch);
 
-  CHECK(A::settings(orch).measure_interval_seconds == 17);
+  CHECK(A::settings(orch).tracking_interval_seconds == 17);
   CHECK(A::last_measurement_ms(orch) == 9000);
   const LocalServerConfig config = f.local_api.get_config();
   REQUIRE(config.measurement_interval_seconds.has_value());
@@ -11328,7 +11019,7 @@ TEST_CASE("local custom measurement interval activates exactly and synchronizes 
 
   GoSettings ui_settings{};
   f.ui_manager.apply_to_settings(ui_settings);
-  CHECK(ui_settings.measure_interval_seconds == 17);
+  CHECK(ui_settings.tracking_interval_seconds == 17);
 }
 
 TEST_CASE("local altitude activation persists syncs redraws publishes and converges",
@@ -11372,8 +11063,9 @@ TEST_CASE("local altitude activation persists syncs redraws publishes and conver
 TEST_CASE("local pinned chart activation persists updates UI and publishes config",
           "[Orchestrator][local-api][config][chart]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 30;
+  f.settings.tracking_interval_seconds = 30;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
   test_spy::ble_connected = true;
   ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
   ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
@@ -11537,6 +11229,7 @@ TEST_CASE("local correction activation republishes corrected data",
           "[Orchestrator][local-api][snapshot][correction]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
   CP2_ALLOW_CONFIG_WRITES(f);
   f.local_api.set_access(ConfigAccess::ReadWrite);
   MeasuresAGo raw{};
@@ -11564,10 +11257,10 @@ TEST_CASE("local correction activation republishes corrected data",
 TEST_CASE("local temperature correction redraws existing chart history without new samples",
           "[Orchestrator][local-api][correction][chart]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Stationary;
-  f.settings.measure_interval_seconds = 300;
+  f.settings.wifi_enabled = true;
+  f.settings.tracking_interval_seconds = 300;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   f.ui_manager.sync_settings(f.settings);
   f.local_api.publish_config_snapshot(f.settings);
   CP2_ALLOW_CONFIG_WRITES(f);
@@ -11630,15 +11323,15 @@ TEST_CASE("local temperature correction redraws existing chart history without n
 TEST_CASE("local correction limits recover original display values without another sample",
           "[Orchestrator][local-api][correction][display]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Stationary;
-  f.settings.measure_interval_seconds = 300;
+  f.settings.wifi_enabled = true;
+  f.settings.tracking_interval_seconds = 300;
   f.settings.corrections.temperature = {LinearCorrectionAlgorithm::Custom, 1.0f, 2.0f};
   f.settings.corrections.humidity = {LinearCorrectionAlgorithm::Custom, 1.0f, -5.0f};
   f.settings.corrections.pm25 = {Pm25CorrectionAlgorithm::CustomViaPm25Raw, 2.0f, 1.0f, false};
   const auto original = f.settings.corrections;
   auto orch = f.make_orchestrator();
   // Model completed boot without starting hardware services.
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   f.ui_manager.sync_settings(f.settings);
   f.local_api.publish_config_snapshot(f.settings);
   CP2_ALLOW_CONFIG_WRITES(f);
@@ -11705,9 +11398,9 @@ TEST_CASE("local correction limits recover original display values without anoth
 TEST_CASE("local PM correction drives AQI display and LEDs on activation and later samples",
           "[Orchestrator][local-api][correction][display][led]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Stationary;
+  f.settings.wifi_enabled = true;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   f.ui_manager.sync_settings(f.settings);
   f.local_api.publish_config_snapshot(f.settings);
   CP2_ALLOW_CONFIG_WRITES(f);
@@ -11764,7 +11457,7 @@ TEST_CASE("Stationary Wi-Fi transitions publish RSSI without clearing queued wor
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   test_spy::wifi_has_been_online = true;
   test_spy::wifi_rssi = -61;
@@ -11790,14 +11483,14 @@ TEST_CASE("leaving Stationary clears queued local work and invalidates its event
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   f.local_api.set_access(ConfigAccess::ReadWrite);
   REQUIRE(f.local_api.submit_config(local_pm_standard("us-aqi")).status ==
           ConfigSubmitStatus::Accepted);
   const Event stale = receive_local_event(f);
   const uint32_t old_epoch = stale.local_api_epoch;
 
-  A::change_mode(orch, OperatingMode::Portable);
+  A::configure_wifi(orch, false);
   CHECK(f.local_api.queue_epoch() == old_epoch + 1);
   CHECK(f.local_api.access() == ConfigAccess::Disabled);
   CHECK(test_spy::wifi_stop_local_endpoint_count == 1);
@@ -11883,7 +11576,7 @@ TEST_CASE("entering provisioning clears queued local work and invalidates its ev
           "[Orchestrator][local-api][transition][provisioning]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   f.local_api.set_access(ConfigAccess::ReadWrite);
   REQUIRE(f.local_api.submit_config(local_pm_standard("us-aqi")).status ==
           ConfigSubmitStatus::Accepted);
@@ -11903,7 +11596,7 @@ TEST_CASE("provisioning success publishes online RSSI",
           "[Orchestrator][local-api][snapshot][wifi][provisioning]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   test_spy::wifi_rssi = -58;
   ProvisioningEventPayload payload{};
@@ -12079,11 +11772,12 @@ TEST_CASE("Shake: buffered shakes after melody playback are accepted by age",
 TEST_CASE("Refresh: result origin controls recording while all current readings update",
           "[Orchestrator][Shake][refresh]") {
   TestFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   f.settings.buzzer_enabled = true;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   REQUIRE(A::start_tracking(orch));
+  A::sensor_ready(orch);
   uint64_t now = 1000;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
   MeasurementOrigin origin = MeasurementOrigin::Refresh;
@@ -12131,7 +11825,7 @@ TEST_CASE("Refresh: result origin controls recording while all current readings 
 TEST_CASE("Refresh: sleep and preparation complete before measurement is requested",
           "[Orchestrator][Shake][refresh]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
   uint64_t now = 1000;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
@@ -12237,8 +11931,9 @@ TEST_CASE("Refresh: progress survives other messages and menu navigation",
 TEST_CASE("Refresh: starts near the regular deadline and keeps PM awake afterward",
           "[Orchestrator][Shake][refresh]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
   uint64_t now = 59000;
   SECTION("one second before the regular deadline") {}
   SECTION("nine seconds before the regular deadline") { now = 51000; }
@@ -12293,8 +11988,9 @@ TEST_CASE("Refresh: PM sleep policy uses time remaining before the regular measu
   for (const auto &scenario : scenarios) {
     CAPTURE(scenario.completed_ms);
     PmSleepFixture f;
-    f.settings.measure_interval_seconds = 60;
+    f.settings.tracking_interval_seconds = 60;
     auto orch = f.make_orchestrator();
+    A::set_tracking_state(orch, TrackingState::Paused);
     ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(scenario.completed_ms);
     Event result{};
     result.type = EventType::SensorDataReady;
@@ -12307,8 +12003,9 @@ TEST_CASE("Refresh: PM sleep policy uses time remaining before the regular measu
 TEST_CASE("Refresh: uses PM preparation already started by the regular timer",
           "[Orchestrator][Shake][refresh]") {
   PmSleepFixture f;
-  f.settings.measure_interval_seconds = 60;
+  f.settings.tracking_interval_seconds = 60;
   auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, TrackingState::Paused);
   A::sensor_asleep(orch);
   uint64_t now = 50000;
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
@@ -12347,7 +12044,7 @@ TEST_CASE("GPS sleep: Portable waits without a tracking reset", "[Orchestrator][
   TestFixture f;
   auto orch = f.make_orchestrator();
   f.stub_bms.status.power_source = BmsPowerSource::OtgMode;
-  test_spy::gps_remaining_ms = GPS_IDLE_SLEEP_MS + 1;
+  test_spy::gps_remaining_ms = GPS_MAX_INACTIVE_SLEEP_MS + 1;
   FORBID_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_));
   REQUIRE(A::start_tracking(orch));
   CHECK(f.stub_bms.status_reads == 0);
@@ -12356,107 +12053,10 @@ TEST_CASE("GPS sleep: Portable waits without a tracking reset", "[Orchestrator][
   CHECK(test_spy::gps_started);
 }
 
-TEST_CASE("Energy Saving transitions save the mode and stop tracking before charger reset",
-          "[Orchestrator][gps_sleep]") {
-  for (auto mode : {OperatingMode::Portable, OperatingMode::Stationary}) {
-    for (bool paused : {false, true}) {
-      CAPTURE(mode, paused);
-      TestFixture f;
-      f.settings.gps_mode = GpsMode::AlwaysOn;
-      auto orch = f.make_orchestrator();
-      CP2_ALLOW_CONFIG_WRITES(f);
-      test_spy::wifi_has_saved_networks = true;
-      A::unlock(orch);
-      f.mock_rtos.retained_time_ms = 100'000;
-      REQUIRE(A::start_tracking(orch));
-      const auto session = A::tracking_session_id(orch);
-      REQUIRE(session != 0);
-      f.mock_rtos.retained_time_ms = 110'000;
-      A::on_sensor_data(orch, MeasuresAGo{});
-      REQUIRE(f.storage_service.current_route_point_count() == 1);
-      if (paused) {
-        f.mock_rtos.retained_time_ms = 120'000;
-        REQUIRE(A::pause_tracking(orch));
-      }
-      if (mode == OperatingMode::Stationary) {
-        A::change_mode(orch, mode);
-        A::on_wifi_connected(orch, 0x0104a8c0);
-      }
-      test_spy::route_ended = false;
-      test_spy::route_started = false;
-      test_spy::route_resumed = false;
-      test_spy::route_point_appended = false;
-      const auto check_ended_session = [&] {
-        CHECK(A::tracking_state(orch) == TrackingState::Idle);
-        CHECK(A::tracking_session_id(orch) == 0);
-        check_tracking_timing(A::tracking_timing(orch), TrackingTiming{});
-        CHECK_FALSE(f.storage_service.is_route_active());
-        uint32_t points = 0;
-        REQUIRE(f.storage_service.try_get_session_point_count(session, points));
-        CHECK(points == 1);
-        CHECK_FALSE(test_spy::route_started);
-        CHECK_FALSE(test_spy::route_resumed);
-        CHECK_FALSE(test_spy::route_point_appended);
-      };
-      bool mode_saved = false;
-      bool committed = false;
-      ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
-          .WITH(std::string(_1) == "opm")
-          .LR_SIDE_EFFECT(mode_saved = _2 == static_cast<int>(OperatingMode::Offline))
-          .RETURN(ConfigStoreResult::OK);
-      ALLOW_CALL(f.mock_config, commit())
-          .LR_SIDE_EFFECT(committed = true)
-          .RETURN(ConfigStoreResult::OK);
-      f.stub_bms.on_reset = [&] {
-        CHECK(mode_saved);
-        CHECK(committed);
-        check_ended_session();
-        CHECK(test_spy::route_ended == (!paused && mode == OperatingMode::Portable));
-        CHECK(test_spy::cache_backed_up);
-        CHECK(test_spy::gps_sleep_interval_ms == GPS_ENERGY_SAVING_SLEEP_MS);
-      };
-      A::change_mode(orch, OperatingMode::Offline);
-      CHECK(f.stub_bms.reset_requests == 1);
-      CHECK_FALSE(A::is_gps_active(orch));
-      CHECK(A::settings(orch).gps_mode == GpsMode::AlwaysOn);
-      check_ended_session();
-      f.mock_rtos.retained_time_ms = 430'000;
-      A::on_sensor_data(orch, MeasuresAGo{});
-      check_ended_session();
-      A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
-      REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
-      const auto offline_menu = f.ui_manager.build_values(A::build_context(orch));
-      REQUIRE(offline_menu.list.row_count == 3);
-      CHECK(std::string(offline_menu.list.rows[1].text) == "Operating Mode");
-
-      f.stub_bms.on_reset = nullptr;
-      A::change_mode(orch, mode);
-      CHECK(f.stub_bms.reset_requests == 2);
-      CHECK(A::is_gps_active(orch));
-      check_ended_session();
-      if (mode == OperatingMode::Stationary) {
-        REQUIRE(test_spy::wifi_connect_saved_called);
-        A::on_wifi_connected(orch, 0x0104a8c0);
-        check_ended_session();
-      }
-      f.mock_rtos.retained_time_ms = 440'000;
-      A::on_sensor_data(orch, MeasuresAGo{});
-      check_ended_session();
-      f.ui_manager.reset_to_home();
-      A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
-      REQUIRE(f.ui_manager.current_screen() == Screen::MainMenu);
-      const auto menu = f.ui_manager.build_values(A::build_context(orch));
-      REQUIRE(menu.list.row_count == (mode == OperatingMode::Portable ? 4 : 3));
-      CHECK(std::string(menu.list.rows[1].text) ==
-            (mode == OperatingMode::Portable ? "Start Tracking" : "Operating Mode"));
-    }
-  }
-}
-
-TEST_CASE("Energy Saving boot ignores retained tracking and Always On GPS",
+TEST_CASE("Idle boot clears retained tracking and honors Always On GPS",
           "[Orchestrator][gps_sleep]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Offline;
+  f.settings.wifi_enabled = false;
   f.settings.gps_mode = GpsMode::AlwaysOn;
   test_spy::state_to_load.tracking_state = TrackingState::Recording;
   test_spy::state_to_load.tracking_session_id = 42000;
@@ -12464,11 +12064,11 @@ TEST_CASE("Energy Saving boot ignores retained tracking and Always On GPS",
   orch.init(WakeCause::Button);
   CHECK_FALSE(A::tracking_active(orch));
   CHECK_FALSE(test_spy::route_resumed);
-  CHECK_FALSE(test_spy::gps_started);
-  CHECK(test_spy::gps_sleep_interval_ms == GPS_ENERGY_SAVING_SLEEP_MS);
+  CHECK(test_spy::gps_started);
+  CHECK(test_spy::gps_sleep_interval_ms == 0);
 }
 
-TEST_CASE("GPS sleep: initialization selects GPS mode after restoring tracking",
+TEST_CASE("GPS sleep: initialization selects GPS mode without restoring tracking",
           "[Orchestrator][gps_sleep]") {
   TestFixture f;
   WakeCause cause = WakeCause::Button;
@@ -12490,6 +12090,7 @@ TEST_CASE("GPS sleep: initialization selects GPS mode after restoring tracking",
     cause = WakeCause::PowerOn;
   }
   auto orch = f.make_orchestrator();
+  expected_active = f.settings.gps_mode == GpsMode::AlwaysOn;
   orch.init(cause);
   CHECK(test_spy::gps_task_start_count == 1);
   CHECK(test_spy::gps_start_count == (expected_active ? 1 : 0));
@@ -12500,7 +12101,7 @@ TEST_CASE("GPS sleep: initialization selects GPS mode after restoring tracking",
 TEST_CASE("GPS task lifecycle is separate from tracking and provisioning job changes",
           "[Orchestrator][gps_sleep][provisioning]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Portable;
+  f.settings.wifi_enabled = false;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   orch.init(WakeCause::PowerOn);
@@ -12539,27 +12140,27 @@ TEST_CASE("GPS task lifecycle is separate from tracking and provisioning job cha
 TEST_CASE("GPS sleep: initialization configures maintenance once and timers leave it alone",
           "[Orchestrator][gps_sleep]") {
   TestFixture f;
-  uint32_t expected = GPS_IDLE_SLEEP_MS;
-  SECTION("Portable") { f.settings.operating_mode = OperatingMode::Portable; }
-  SECTION("Stationary") { f.settings.operating_mode = OperatingMode::Stationary; }
+  uint32_t expected = GPS_MAX_INACTIVE_SLEEP_MS;
+  SECTION("Portable") { f.settings.wifi_enabled = false; }
+  SECTION("Stationary") { f.settings.wifi_enabled = true; }
   SECTION("Offline") {
-    f.settings.operating_mode = OperatingMode::Offline;
-    f.settings.measure_interval_seconds = 300;
-    expected = GPS_ENERGY_SAVING_SLEEP_MS;
+    f.settings.wifi_enabled = false;
+    f.settings.tracking_interval_seconds = 300;
+    expected = GPS_MAX_INACTIVE_SLEEP_MS;
   }
   SECTION("Portable AlwaysOff") {
-    f.settings.operating_mode = OperatingMode::Portable;
+    f.settings.wifi_enabled = false;
     f.settings.gps_mode = GpsMode::AlwaysOff;
   }
   SECTION("Stationary AlwaysOff") {
-    f.settings.operating_mode = OperatingMode::Stationary;
+    f.settings.wifi_enabled = true;
     f.settings.gps_mode = GpsMode::AlwaysOff;
   }
   SECTION("Offline AlwaysOff") {
-    f.settings.operating_mode = OperatingMode::Offline;
+    f.settings.wifi_enabled = false;
     f.settings.gps_mode = GpsMode::AlwaysOff;
-    f.settings.measure_interval_seconds = 300;
-    expected = GPS_ENERGY_SAVING_SLEEP_MS;
+    f.settings.tracking_interval_seconds = 300;
+    expected = GPS_MAX_INACTIVE_SLEEP_MS;
   }
   auto orch = f.make_orchestrator();
   orch.init(WakeCause::PowerOn);
@@ -12587,7 +12188,7 @@ TEST_CASE("GPS sleep: preparation preserves an existing GPS timer", "[Orchestrat
   CHECK(test_spy::gps_remaining_ms == 5000);
 }
 
-TEST_CASE("Energy Saving mode changes recalculate current readings and charts",
+TEST_CASE("Wi-Fi changes recalculate corrections for readings and charts",
           "[Orchestrator][correction][display]") {
   TestFixture f;
   f.settings.onboarding_done = true;
@@ -12604,16 +12205,15 @@ TEST_CASE("Energy Saving mode changes recalculate current readings and charts",
   A::on_sensor_data(orch, raw);
   test_spy::cached_measurements = {raw};
 
-  for (auto mode : {OperatingMode::Offline, OperatingMode::Portable, OperatingMode::Offline,
-                    OperatingMode::Stationary}) {
-    CAPTURE(static_cast<int>(mode));
+  for (bool wifi_enabled : {true, false, true}) {
+    CAPTURE(wifi_enabled);
     const auto display_updates = DisplayService::spy_update_count;
     test_spy::cache_measurement_called = false;
-    A::change_mode(orch, mode);
-    CHECK(DisplayService::spy_update_count > display_updates);
+    A::configure_wifi(orch, wifi_enabled);
+    CHECK(DisplayService::spy_update_count >= display_updates);
     const auto ctx = A::build_context(orch);
-    const float expected_temp = mode == OperatingMode::Offline ? 25.0f : 23.0f;
-    const float expected_hum = mode == OperatingMode::Offline ? 60.0f : 50.0f;
+    const float expected_temp = wifi_enabled ? 23.0f : 25.0f;
+    const float expected_hum = wifi_enabled ? 50.0f : 60.0f;
     CHECK(ctx.sensor_data.temp_hum_a.temperature == expected_temp);
     CHECK(ctx.sensor_data.temp_hum_a.humidity == expected_hum);
     CHECK(ctx.sensor_data.pm_a.pm_25 == 21.0f);
@@ -12630,10 +12230,10 @@ TEST_CASE("Energy Saving mode changes recalculate current readings and charts",
   }
 }
 
-TEST_CASE("Energy Saving bypasses temperature and humidity corrections on boot and sensor updates",
+TEST_CASE("long Idle interval bypasses temperature and humidity corrections with Wi-Fi off",
           "[Orchestrator][correction][init]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Offline;
+  f.settings.wifi_enabled = false;
   f.settings.onboarding_done = true;
   f.settings.corrections.pm25 = {Pm25CorrectionAlgorithm::CustomViaPm25Raw, 2.0f, 1.0f, false};
   f.settings.corrections.temperature = {LinearCorrectionAlgorithm::Custom, 1.0f, -2.0f};
@@ -12657,12 +12257,12 @@ TEST_CASE("Energy Saving bypasses temperature and humidity corrections on boot a
   CHECK(A::corrected_measures(orch).pm_a.pm_25 == 21.0f);
 }
 
-TEST_CASE("button wake: latest raw cache supports mode changes before the first measurement",
+TEST_CASE("button wake: latest raw cache supports Wi-Fi changes before the first measurement",
           "[Orchestrator][correction][wake-snapshot]") {
-  for (auto destination : {OperatingMode::Portable, OperatingMode::Stationary}) {
+  for (bool destination : {true}) {
     CAPTURE(static_cast<int>(destination));
     TestFixture f;
-    f.settings.operating_mode = OperatingMode::Offline;
+    f.settings.wifi_enabled = false;
     f.settings.onboarding_done = true;
     f.settings.corrections.pm25 = {Pm25CorrectionAlgorithm::CustomViaPm25Raw, 2.0f, 1.0f, false};
     f.settings.corrections.temperature = {LinearCorrectionAlgorithm::Custom, 1.0f, -2.0f};
@@ -12700,7 +12300,7 @@ TEST_CASE("button wake: latest raw cache supports mode changes before the first 
     CHECK(A::raw_measures(orch).pm_a.pm_25 == 10.0f);
     CHECK(A::corrected_measures(orch).pm_a.pm_25 == 21.0f);
     CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 25.0f);
-    A::change_mode(orch, destination);
+    A::configure_wifi(orch, destination);
     auto candidate = A::settings(orch);
     candidate.corrections.temperature.intercept = -3.0f;
     REQUIRE(A::activate_settings_candidate(orch, candidate));
@@ -12730,13 +12330,13 @@ TEST_CASE("button wake: latest raw cache supports mode changes before the first 
       CHECK(A::corrected_measures(orch).pm_a.pm_25 == 21.0f);
       CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 23.0f);
       CHECK(A::corrected_measures(orch).temp_hum_a.humidity == 55.0f);
-      A::change_mode(orch, OperatingMode::Offline);
+      A::configure_wifi(orch, false);
       CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 26.0f);
       CHECK(A::corrected_measures(orch).temp_hum_a.humidity == 65.0f);
     }
     SECTION("failed first sample replaces cached readings with invalid readings") {
       A::on_sensor_data(orch, raw);
-      A::change_mode(orch, OperatingMode::Offline);
+      A::configure_wifi(orch, false);
       CHECK_FALSE(A::corrected_measures(orch).co2.is_valid());
       CHECK_FALSE(A::corrected_measures(orch).pm_a.is_pm_25_valid());
       CHECK_FALSE(A::corrected_measures(orch).temp_hum_a.is_temp_valid());
@@ -12748,7 +12348,7 @@ TEST_CASE("button wake: latest raw cache supports mode changes before the first 
 TEST_CASE("timer wake: raw handoff allows correction changes before another sample",
           "[Orchestrator][correction][wake-snapshot]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Offline;
+  f.settings.wifi_enabled = false;
   f.settings.onboarding_done = true;
   f.settings.corrections.temperature = {LinearCorrectionAlgorithm::Custom, 1.0f, -2.0f};
   f.settings.corrections.humidity = {LinearCorrectionAlgorithm::Custom, 1.0f, -10.0f};
@@ -12765,7 +12365,7 @@ TEST_CASE("timer wake: raw handoff allows correction changes before another samp
   handoff.measurement_completed = true;
   orch.init(WakeCause::Timer, handoff);
 
-  A::change_mode(orch, OperatingMode::Portable);
+  A::configure_wifi(orch, true);
   CHECK(A::corrected_measures(orch).temp_hum_a.temperature == 23.0f);
   CHECK(A::corrected_measures(orch).temp_hum_a.humidity == 50.0f);
 }
@@ -12773,7 +12373,7 @@ TEST_CASE("timer wake: raw handoff allows correction changes before another samp
 TEST_CASE("button wake: empty cache uses presentation fallback and invalid latest sample wins",
           "[Orchestrator][correction][wake-snapshot]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Offline;
+  f.settings.wifi_enabled = false;
   f.settings.onboarding_done = true;
   auto orch = f.make_orchestrator();
   RtcDisplaySnapshot snapshot{};
@@ -12809,7 +12409,7 @@ TEST_CASE("Local Server toggles live and cancels pending activation retries",
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   test_spy::wifi_has_been_online = true;
   test_spy::wifi_ensure_local_mdns_result = false;
@@ -12856,7 +12456,7 @@ TEST_CASE("Local Server enable waits for Wi-Fi when Stationary is disconnected",
   TestFixture f;
   f.settings.local_server_enabled = false;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = false;
   auto candidate = A::settings(orch);
   candidate.local_server_enabled = true;
@@ -12874,7 +12474,7 @@ TEST_CASE("Local Server save failure leaves running server and power policy unch
           "[Orchestrator][stationary][local_endpoint][settings]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   test_spy::wifi_is_online = true;
   A::on_wifi_connected(orch, 0x0100A8C0);
   auto candidate = A::settings(orch);
@@ -12902,7 +12502,7 @@ TEST_CASE("Stationary entry derives Wi-Fi power saving from Local Server prefere
     auto orch = f.make_orchestrator();
     CP2_ALLOW_CONFIG_WRITES(f);
     test_spy::wifi_has_saved_networks = true;
-    A::change_mode(orch, OperatingMode::Stationary);
+    A::configure_wifi(orch, true);
     CHECK(test_spy::wifi_power_save_enabled == !enabled);
     CHECK(test_spy::wifi_set_power_save_count == 1);
     test_spy::wifi_is_online = true;
@@ -12910,10 +12510,10 @@ TEST_CASE("Stationary entry derives Wi-Fi power saving from Local Server prefere
     CHECK(test_spy::wifi_ensure_local_http_count == (enabled ? 1 : 0));
     CHECK(test_spy::cloud_start_count == 1);
 
-    A::change_mode(orch, OperatingMode::Portable);
+    A::configure_wifi(orch, false);
     CHECK(A::settings(orch).local_server_enabled == enabled);
     test_spy::wifi_is_online = false;
-    A::change_mode(orch, OperatingMode::Stationary);
+    A::configure_wifi(orch, true);
     CHECK(A::settings(orch).local_server_enabled == enabled);
     CHECK(test_spy::wifi_power_save_enabled == !enabled);
   }
@@ -12925,7 +12525,8 @@ TEST_CASE("Disabled Local Server releases provisioning listener and allows cloud
   f.settings.local_server_enabled = false;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
+  A::settings(orch).local_server_enabled = false;
   test_spy::wifi_provisioning_active = true;
   test_spy::wifi_is_online = true;
   A::on_wifi_connected(orch, 0x0100A8C0);
@@ -13042,10 +12643,10 @@ TEST_CASE("rejected indicator changes retain the authoritative setting and LED",
 TEST_CASE("CO2 indicator ignores PM corrections and AQI uses corrected PM on selection",
           "[Orchestrator][settings][correction][led]") {
   TestFixture f;
-  f.settings.operating_mode = OperatingMode::Stationary;
+  f.settings.wifi_enabled = true;
   f.settings.back_led_indicator = BackLedIndicator::Co2;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   MeasuresAGo sample{};
   sample.co2.co2 = 1200;
   sample.pm_a.pm_25 = 10.0f;
@@ -13161,7 +12762,7 @@ TEST_CASE("local indicator update persists and publishes only after activation",
   TestFixture f;
   f.settings.back_led_brightness = LedBrightness::Mid;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   f.local_api.publish_config_snapshot(A::settings(orch));
   f.local_api.set_access(ConfigAccess::ReadWrite);
   CP2_ALLOW_CONFIG_WRITES(f);
@@ -13205,7 +12806,7 @@ TEST_CASE(
   TestFixture f;
   f.settings.back_led_indicator = BackLedIndicator::Co2;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   f.local_api.publish_config_snapshot(A::settings(orch));
   f.local_api.set_access(ConfigAccess::ReadWrite);
   CP2_ALLOW_CONFIG_WRITES(f);
@@ -13296,7 +12897,7 @@ TEST_CASE("cloud LED indicator updates persist and immediately refresh the selec
       f.settings.back_led_indicator =
           indicator == BackLedIndicator::Co2 ? BackLedIndicator::Aqi : BackLedIndicator::Co2;
       auto orch = f.make_orchestrator();
-      A::set_mode(orch, OperatingMode::Stationary);
+      A::set_wifi(orch, true);
       CP2_ALLOW_CONFIG_WRITES(f);
       REQUIRE_CALL(f.mock_config, set_int(trompeloeil::_, static_cast<int>(indicator)))
           .WITH(std::string(_1) == "bli")
@@ -13350,7 +12951,7 @@ TEST_CASE("cloud updates that omit the indicator preserve CO2 selection",
   f.settings.back_led_indicator = BackLedIndicator::Co2;
   f.settings.back_led_brightness = LedBrightness::Off;
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   CP2_ALLOW_CONFIG_WRITES(f);
   MeasuresAGo sample{};
   sample.co2.co2 = 1200;
@@ -13386,7 +12987,7 @@ TEST_CASE("cloud LED indicator retains its current state when the update cannot 
   }
   SECTION("failed persistence rejects the candidate") {}
   auto orch = f.make_orchestrator();
-  A::set_mode(orch, OperatingMode::Stationary);
+  A::set_wifi(orch, true);
   f.local_api.publish_config_snapshot(A::settings(orch));
   CP2_ALLOW_CONFIG_WRITES(f);
   MeasuresAGo sample{};
@@ -13413,4 +13014,164 @@ TEST_CASE("cloud LED indicator retains its current state when the update cannot 
   CHECK(test_spy::led_back_update_co2_count == 0);
   CHECK(test_spy::led_back_update_aqi_count == 0);
   CHECK_FALSE(test_spy::ble_notify_config_called);
+}
+
+TEST_CASE("reboots clear active tracking without reopening or deleting stored routes",
+          "[Orchestrator][stage1][tracking][boot]") {
+  for (auto cause : {WakeCause::PowerOn, WakeCause::Timer, WakeCause::Button}) {
+    for (auto prior : {TrackingState::Recording, TrackingState::Paused}) {
+      TestFixture f;
+      f.settings.onboarding_done = true;
+      auto orch = f.make_orchestrator();
+      test_spy::state_to_load.tracking_state = prior;
+      test_spy::state_to_load.tracking_session_id = 12345;
+      test_spy::state_to_load.tracking_timing = {100, 20, 130, 140};
+      test_spy::route_point_counts[12345] = 7;
+      BootHandoff handoff{};
+      handoff.display_painted = true;
+      orch.init(cause, handoff);
+      CHECK(A::tracking_state(orch) == TrackingState::Idle);
+      CHECK(A::tracking_session_id(orch) == 0);
+      CHECK(A::behavior(orch) == Behavior::Idle);
+      CHECK(A::tracking_timing(orch).session_started_s == TRACKING_TIME_INVALID_S);
+      CHECK_FALSE(test_spy::route_resumed);
+      CHECK_FALSE(test_spy::route_started);
+      CHECK(test_spy::route_point_counts[12345] == 7);
+      f.ui_manager.set_screen(Screen::MainMenu);
+      const auto menu = f.ui_manager.build_values(A::build_context(orch));
+      CHECK(std::string(menu.list.rows[1].text) == "Start Tracking");
+    }
+  }
+}
+
+TEST_CASE(
+    "tracking start pause and stop select cadence without changing preferences or resetting power",
+    "[Orchestrator][stage1][tracking]") {
+  TestFixture f;
+  f.settings.idle_interval_seconds = 901;
+  f.settings.tracking_interval_seconds = 17;
+  auto orch = f.make_orchestrator();
+  uint32_t now = 1000;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  REQUIRE(A::start_tracking(orch));
+  CHECK(A::settings(orch).active_measure_interval_seconds(A::tracking_state(orch)) == 17);
+  const auto id = A::tracking_session_id(orch);
+  REQUIRE(A::pause_tracking(orch));
+  CHECK(A::settings(orch).active_measure_interval_seconds(A::tracking_state(orch)) == 17);
+  CHECK(A::tracking_session_id(orch) == id);
+  CHECK(A::is_gps_active(orch));
+  CHECK_FALSE(f.storage_service.is_route_active());
+  REQUIRE(A::resume_tracking(orch));
+  CHECK(A::tracking_session_id(orch) == id);
+  now = 30000;
+  A::stop_tracking(orch);
+  CHECK(A::settings(orch).active_measure_interval_seconds(A::tracking_state(orch)) == 901);
+  CHECK(A::last_measurement_ms(orch) == now);
+  CHECK_FALSE(A::is_gps_active(orch));
+  CHECK(A::settings(orch).equals(f.settings));
+  CHECK(f.stub_bms.reset_requests == 0);
+}
+
+TEST_CASE(
+    "Wi-Fi preference changes during tracking preserve the session and select its return target",
+    "[Orchestrator][stage1][wifi][tracking]") {
+  for (bool paused : {false, true}) {
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    CP2_ALLOW_CONFIG_WRITES(f);
+    REQUIRE(A::start_tracking(orch));
+    if (paused)
+      REQUIRE(A::pause_tracking(orch));
+    const auto id = A::tracking_session_id(orch);
+    A::configure_wifi(orch, true);
+    CHECK(A::settings(orch).wifi_enabled);
+    CHECK_FALSE(A::wifi_active(orch));
+    CHECK(A::tracking_session_id(orch) == id);
+    CHECK(A::tracking_state(orch) == (paused ? TrackingState::Paused : TrackingState::Recording));
+    CHECK_FALSE(test_spy::wifi_connect_saved_called);
+    A::stop_tracking(orch);
+    CHECK(A::wifi_active(orch));
+    CHECK(A::settings(orch).wifi_enabled);
+    CHECK(f.stub_bms.reset_requests == 0);
+  }
+}
+
+TEST_CASE("independent interval updates reschedule only the currently selected cadence",
+          "[Orchestrator][stage1][settings]") {
+  for (auto tracking : {TrackingState::Idle, TrackingState::Recording, TrackingState::Paused}) {
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    CP2_ALLOW_CONFIG_WRITES(f);
+    A::set_tracking_state(orch, tracking);
+    A::set_last_measurement_ms(orch, 1000);
+    ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
+    GoConfigUpdate update{};
+    update.update_mask = static_cast<uint32_t>(GoConfigField::IdleInterval);
+    update.idle_interval_seconds = 901;
+    A::apply_config_update(orch, update);
+    CHECK(A::settings(orch).idle_interval_seconds == 901);
+    CHECK(A::settings(orch).tracking_interval_seconds == 10);
+    CHECK(A::last_measurement_ms(orch) == (tracking == TrackingState::Idle ? 9000 : 1000));
+    A::set_last_measurement_ms(orch, 2000);
+    update = {};
+    update.update_mask = static_cast<uint32_t>(GoConfigField::TrackingInterval);
+    update.tracking_interval_seconds = 17;
+    A::apply_config_update(orch, update);
+    CHECK(A::settings(orch).idle_interval_seconds == 901);
+    CHECK(A::settings(orch).tracking_interval_seconds == 17);
+    CHECK(A::last_measurement_ms(orch) == (tracking == TrackingState::Idle ? 2000 : 9000));
+  }
+}
+
+TEST_CASE("corrections follow Idle interval and tracking without changing on unlock",
+          "[Orchestrator][correction][settings]") {
+  TestFixture f;
+  f.settings.onboarding_done = true;
+  f.settings.wifi_enabled = false;
+  f.settings.idle_interval_seconds = 300;
+  f.settings.corrections.pm25 = {Pm25CorrectionAlgorithm::CustomViaPm25Raw, 2.0f, 1.0f, false};
+  f.settings.corrections.temperature = {LinearCorrectionAlgorithm::Custom, 1.0f, -2.0f};
+  f.settings.corrections.humidity = {LinearCorrectionAlgorithm::Custom, 1.0f, -10.0f};
+  const auto saved = f.settings.corrections;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  MeasuresAGo raw{};
+  raw.pm_a.pm_25 = 10.0f;
+  raw.temp_hum_a = {25.0f, 60.0f};
+  A::on_sensor_data(orch, raw);
+  test_spy::cached_measurements = {raw};
+
+  const auto check_corrections = [&](bool bypass) {
+    const auto ctx = A::build_context(orch);
+    CHECK(ctx.sensor_data.temp_hum_a.temperature == (bypass ? 25.0f : 23.0f));
+    CHECK(ctx.sensor_data.temp_hum_a.humidity == (bypass ? 60.0f : 50.0f));
+    CHECK(ctx.sensor_data.pm_a.pm_25 == 21.0f);
+    REQUIRE(ctx.history.count == 1);
+    CHECK(ctx.history.samples[0].temp_hum_a.temperature == (bypass ? 25.0f : 23.0f));
+    CHECK(ctx.history.samples[0].temp_hum_a.humidity == (bypass ? 60.0f : 50.0f));
+    CHECK(ctx.history.samples[0].pm_a.pm_25 == 21.0f);
+    CHECK(A::raw_measures(orch).temp_hum_a.temperature == 25.0f);
+    CHECK(A::raw_measures(orch).temp_hum_a.humidity == 60.0f);
+    CHECK(measurement_corrections_equal(A::settings(orch).corrections, saved));
+  };
+  check_corrections(true);
+  A::unlock(orch);
+  check_corrections(true);
+  A::lock(orch);
+  check_corrections(true);
+
+  for (int interval : {299, 300, 60, 301}) {
+    CAPTURE(interval);
+    auto candidate = A::settings(orch);
+    candidate.idle_interval_seconds = interval;
+    REQUIRE(A::activate_settings_candidate(orch, candidate));
+    check_corrections(interval >= 300);
+  }
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch));
+  check_corrections(false);
+  REQUIRE(A::pause_tracking(orch));
+  check_corrections(false);
+  A::stop_tracking(orch);
+  check_corrections(true);
 }

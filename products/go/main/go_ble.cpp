@@ -1784,8 +1784,7 @@ size_t BleService::encode_status_disc(uint8_t *buf, size_t buf_size, BleDiscReas
 // A single table drives both the full snapshot (READ) and the delta (NOTIFY).
 // Adding a config field is one row plus its two small helpers below. The
 // enum-to-wire string mappers are file-scope here so the free encode helpers
-// can reach them; BleService::gps_mode_to_str()/operating_mode_to_str() (kept
-// for tests) delegate to these.
+// can reach them; BleService::gps_mode_to_str() delegates to the same mapper.
 
 static const char *gps_mode_to_wire(GpsMode mode) {
   switch (mode) {
@@ -1800,19 +1799,6 @@ static const char *gps_mode_to_wire(GpsMode mode) {
   }
 }
 
-static const char *operating_mode_to_wire(OperatingMode mode) {
-  switch (mode) {
-  case OperatingMode::Portable:
-    return BLE_VAL_MODE_PORTABLE;
-  case OperatingMode::Stationary:
-    return BLE_VAL_MODE_STATIONARY;
-  case OperatingMode::Offline:
-    return BLE_VAL_MODE_OFFLINE;
-  default:
-    return BLE_VAL_MODE_OFFLINE;
-  }
-}
-
 struct ConfigField {
   const char *key;
   void (*encode_value)(CborEncoder &map, const GoSettings &s);
@@ -1821,7 +1807,7 @@ struct ConfigField {
 
 // Per-field encode helpers — write only the value (the caller writes the key).
 static void enc_meas_int(CborEncoder &m, const GoSettings &s) {
-  cbor_encode_uint(&m, static_cast<uint64_t>(s.measure_interval_seconds));
+  cbor_encode_uint(&m, static_cast<uint64_t>(s.tracking_interval_seconds));
 }
 static void enc_temp_f(CborEncoder &m, const GoSettings &s) {
   cbor_encode_boolean(&m, s.use_fahrenheit);
@@ -1839,9 +1825,7 @@ static void enc_gps_mode(CborEncoder &m, const GoSettings &s) {
 static void enc_auto_lock(CborEncoder &m, const GoSettings &s) {
   cbor_encode_uint(&m, static_cast<uint64_t>(s.auto_lock_seconds));
 }
-static void enc_op_mode(CborEncoder &m, const GoSettings &s) {
-  cbor_encode_text_stringz(&m, operating_mode_to_wire(s.operating_mode));
-}
+
 static void enc_bled(CborEncoder &m, const GoSettings &s) {
   cbor_encode_uint(&m, static_cast<uint64_t>(s.back_led_brightness));
 }
@@ -1877,7 +1861,7 @@ static void enc_hum_correction(CborEncoder &m, const GoSettings &s) {
 
 // Per-field difference predicates for delta encoding.
 static bool dif_meas_int(const GoSettings &a, const GoSettings &b) {
-  return a.measure_interval_seconds != b.measure_interval_seconds;
+  return a.tracking_interval_seconds != b.tracking_interval_seconds;
 }
 static bool dif_temp_f(const GoSettings &a, const GoSettings &b) {
   return a.use_fahrenheit != b.use_fahrenheit;
@@ -1897,9 +1881,7 @@ static bool dif_gps_mode(const GoSettings &a, const GoSettings &b) {
 static bool dif_auto_lock(const GoSettings &a, const GoSettings &b) {
   return a.auto_lock_seconds != b.auto_lock_seconds;
 }
-static bool dif_op_mode(const GoSettings &a, const GoSettings &b) {
-  return a.operating_mode != b.operating_mode;
-}
+
 static bool dif_bled(const GoSettings &a, const GoSettings &b) {
   return a.back_led_brightness != b.back_led_brightness;
 }
@@ -1945,7 +1927,6 @@ static const ConfigField CONFIG_FIELDS[] = {
     {BLE_KEY_PINNED_CHART, enc_pinned_chart, dif_pinned_chart},
     {BLE_KEY_GPS_MODE, enc_gps_mode, dif_gps_mode},
     {BLE_KEY_AUTO_LOCK, enc_auto_lock, dif_auto_lock},
-    {BLE_KEY_OP_MODE, enc_op_mode, dif_op_mode},
     {BLE_KEY_BACK_LED, enc_bled, dif_bled},
     {BLE_KEY_BACK_LED_INDICATOR, enc_bledi, dif_bledi},
     {BLE_KEY_TOUCH_LED, enc_tled, dif_tled},
@@ -2065,10 +2046,6 @@ const char *BleService::disc_reason_to_str(BleDiscReason reason) {
 
 const char *BleService::gps_mode_to_str(GpsMode mode) { return gps_mode_to_wire(mode); }
 
-const char *BleService::operating_mode_to_str(OperatingMode mode) {
-  return operating_mode_to_wire(mode);
-}
-
 // ---------------------------------------------------------------------------
 // CBOR decode helpers (called by orchestrator)
 // ---------------------------------------------------------------------------
@@ -2088,17 +2065,6 @@ static bool str_to_gps_mode(const char *s, GpsMode &mode) {
     return true;
   }
   return false;
-}
-
-/// Reverse mapping: text string -> OperatingMode.
-static OperatingMode str_to_operating_mode(const char *s) {
-  if (strcmp(s, BLE_VAL_MODE_PORTABLE) == 0) {
-    return OperatingMode::Portable;
-  }
-  if (strcmp(s, BLE_VAL_MODE_STATIONARY) == 0) {
-    return OperatingMode::Stationary;
-  }
-  return OperatingMode::Offline; // "offline" or unrecognized
 }
 
 /// Reverse mapping: CBOR "cmd" string -> BleCommand enum.
@@ -2232,8 +2198,8 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       result.recognized_config_key_count++;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
-          v >= MEASURE_INTERVAL_SECONDS_MIN && v <= MEASURE_INTERVAL_SECONDS_MAX) {
-        settings.measure_interval_seconds = static_cast<int>(v);
+          v >= TRACKING_INTERVAL_SECONDS_MIN && v <= TRACKING_INTERVAL_SECONDS_MAX) {
+        settings.tracking_interval_seconds = static_cast<int>(v);
       } else {
         result.has_invalid_config_values = true;
       }
@@ -2438,17 +2404,6 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
         }
       } else {
         result.has_invalid_config_values = true;
-      }
-      handled = true;
-    } else if (key_is(BLE_KEY_OP_MODE)) {
-      cbor_value_advance(&it);
-      result.recognized_config_key_count++;
-      char text[16] = {};
-      if (cbor_value_is_text_string(&it)) {
-        size_t slen = sizeof(text) - 1;
-        cbor_value_copy_text_string(&it, text, &slen, nullptr);
-        text[slen] = '\0';
-        settings.operating_mode = str_to_operating_mode(text);
       }
       handled = true;
     }

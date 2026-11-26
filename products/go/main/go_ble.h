@@ -397,9 +397,6 @@ private:
   /// Map GpsMode to CBOR text value.
   static const char *gps_mode_to_str(GpsMode mode);
 
-  /// Map OperatingMode to CBOR text value.
-  static const char *operating_mode_to_str(OperatingMode mode);
-
   /// Characteristic properties for the Measurements characteristic.
   static uint16_t measures_properties();
 

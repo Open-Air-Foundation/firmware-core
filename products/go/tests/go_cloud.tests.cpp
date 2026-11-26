@@ -438,7 +438,7 @@ TEST_CASE("FETCH ignores EPA while retaining valid configuration fields",
   CHECK_FALSE(has_go_config_field(payload.update.update_mask, GoConfigField::Pm25Correction));
   CHECK(has_go_config_field(payload.update.update_mask, GoConfigField::MeasurementInterval));
   CHECK(has_go_config_field(payload.update.update_mask, GoConfigField::TemperatureCorrection));
-  CHECK(payload.update.measure_interval_seconds == 17);
+  CHECK(payload.update.tracking_interval_seconds == 17);
   CHECK(payload.update.corrections.temperature.intercept == 2.0f);
 }
 
@@ -600,7 +600,7 @@ TEST_CASE("FETCH parses supported root scalars and ignores local-only fields",
   REQUIRE(update.pm_use_usaqi);
   REQUIRE(update.use_fahrenheit);
   REQUIRE_FALSE(update.use_feet);
-  REQUIRE(update.measure_interval_seconds == MEASURE_INTERVAL_SECONDS_MAX);
+  REQUIRE(update.tracking_interval_seconds == TRACKING_INTERVAL_SECONDS_MAX);
   REQUIRE(update.gps_mode == GpsMode::AlwaysOn);
   REQUIRE(update.back_led_brightness == LedBrightness::Bright);
   REQUIRE(update.touch_led_intensity == TouchLedIntensity::Bright);

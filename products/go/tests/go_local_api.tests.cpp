@@ -186,7 +186,7 @@ TEST_CASE("Go local API initializes safe snapshots") {
   CHECK(*config.pinned_chart == "pm25");
   CHECK(*config.cloud_connection);
   CHECK(*config.configuration_control == "both");
-  CHECK(*config.measurement_interval_seconds == MEASURE_INTERVAL_SECONDS_DEFAULT);
+  CHECK(*config.measurement_interval_seconds == TRACKING_INTERVAL_SECONDS_DEFAULT);
   CHECK(*config.gps_mode == "tracking");
   CHECK(*config.back_led_brightness == static_cast<int>(LedBrightness::Off));
   CHECK(*config.touch_led_intensity == static_cast<int>(TouchLedIntensity::Off));
@@ -351,7 +351,7 @@ TEST_CASE("Go local API maps the supported active config subset") {
   settings.use_feet = true;
   settings.disable_cloud = true;
   settings.configuration_control = ConfigurationControl::Local;
-  settings.measure_interval_seconds = 30;
+  settings.tracking_interval_seconds = 30;
   settings.gps_mode = GpsMode::AlwaysOn;
   settings.back_led_brightness = LedBrightness::Mid;
   settings.touch_led_intensity = TouchLedIntensity::Bright;
@@ -580,7 +580,7 @@ TEST_CASE("Go local API translates one atomic supported update") {
   CHECK(request.config.use_feet);
   CHECK(request.config.disable_cloud);
   CHECK(request.config.configuration_control == ConfigurationControl::Local);
-  CHECK(request.config.measure_interval_seconds == 30);
+  CHECK(request.config.tracking_interval_seconds == 30);
   CHECK(request.config.gps_mode == GpsMode::AlwaysOff);
   CHECK(request.config.back_led_brightness == LedBrightness::Mid);
   CHECK(request.config.touch_led_intensity == TouchLedIntensity::Bright);
@@ -841,7 +841,7 @@ TEST_CASE("Go local API maps all pinned charts independently of interval") {
       Fixture fixture;
       fixture.service->set_access(ConfigAccess::ReadWrite);
       GoSettings settings{};
-      settings.measure_interval_seconds = interval;
+      settings.tracking_interval_seconds = interval;
       settings.pinned_chart = choice.metric;
       fixture.service->publish_config_snapshot(settings);
       CHECK(fixture.service->get_config().pinned_chart == choice.name);
@@ -874,10 +874,10 @@ TEST_CASE("Go local API rejects invalid interval, GPS mode, and output settings"
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
   LocalServerConfig partial{};
-  partial.measurement_interval_seconds = MEASURE_INTERVAL_SECONDS_MIN - 1;
+  partial.measurement_interval_seconds = TRACKING_INTERVAL_SECONDS_MIN - 1;
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::MeasurementInterval);
-  partial.measurement_interval_seconds = MEASURE_INTERVAL_SECONDS_MAX + 1;
+  partial.measurement_interval_seconds = TRACKING_INTERVAL_SECONDS_MAX + 1;
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::MeasurementInterval);
 
@@ -1106,7 +1106,7 @@ TEST_CASE("Go local API rejects EPA and other fields in the same request") {
                  ConfigFieldId::CorrectionsPm25);
   CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
   const auto active = fixture.service->get_config();
-  CHECK(active.measurement_interval_seconds == settings.measure_interval_seconds);
+  CHECK(active.measurement_interval_seconds == settings.tracking_interval_seconds);
   REQUIRE(active.corrections->pm25->slr.has_value());
   CHECK(active.corrections->pm25->algorithm == "custom_via_pm25_raw");
   CHECK(*active.corrections->pm25->slr->scaling_factor == 1.2f);

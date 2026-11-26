@@ -693,7 +693,7 @@ RtcAppState PowerService::load_state() const { return test_spy::rtc_state; }
 
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*settings*/,
                                                        LockState /*lock_state*/,
-                                                       OperatingMode /*mode*/,
+                                                       TrackingState /*tracking*/,
                                                        uint32_t awake_ms) const {
   test_spy::last_sleep_awake_ms = awake_ms;
   return test_spy::sleep_decision_to_return;
@@ -830,7 +830,6 @@ size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSetti
 }
 const char *BleService::charging_state_to_str(BmsChargingState /*s*/) { return "unknown"; }
 const char *BleService::gps_mode_to_str(GpsMode /*m*/) { return "tracking"; }
-const char *BleService::operating_mode_to_str(OperatingMode /*m*/) { return "offline"; }
 
 // ============================================================================
 // WifiService stubs
@@ -1092,7 +1091,6 @@ void Orchestrator::lock() {}
 void Orchestrator::unlock() {}
 bool Orchestrator::start_tracking() { return true; }
 void Orchestrator::stop_tracking() {}
-void Orchestrator::change_mode(OperatingMode /*new_mode*/, bool /*persist*/) {}
 void Orchestrator::enter_manufacturing_mode() {}
 void Orchestrator::apply_settings_change() {}
 bool Orchestrator::clear_data() { return true; }
@@ -1113,7 +1111,7 @@ BuildContext Orchestrator::build_context() const {
 }
 void Orchestrator::try_enter_sleep() {}
 void Orchestrator::prepare_for_sleep(uint32_t /*sleep_duration_ms*/) {}
-void Orchestrator::init_ble_if_portable() {}
+void Orchestrator::init_ble_if_available() {}
 bool Orchestrator::is_gps_active() const { return false; }
 void Orchestrator::deactivate_gps() {}
 RtcAppState Orchestrator::snapshot_state() const { return RtcAppState{}; }

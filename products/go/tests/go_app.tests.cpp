@@ -695,14 +695,14 @@ TEST_CASE("select_boot_path: Timer + Unlocked -> Interactive") {
 
 TEST_CASE("select_boot_path: Button + Offline -> ButtonWake") {
   RtcAppState state{};
-  state.mode = OperatingMode::Offline;
+
   CHECK(select_boot_path(WakeCause::Button, state, false) == BootPath::ButtonWake);
 }
 
-TEST_CASE("select_boot_path: Button + Portable -> Interactive") {
+TEST_CASE("select_boot_path: Button wake restores the interactive display") {
   RtcAppState state{};
-  state.mode = OperatingMode::Portable;
-  CHECK(select_boot_path(WakeCause::Button, state, false) == BootPath::Interactive);
+
+  CHECK(select_boot_path(WakeCause::Button, state, false) == BootPath::ButtonWake);
 }
 
 TEST_CASE("select_boot_path: PowerOn -> Interactive") {
@@ -797,10 +797,9 @@ TEST_CASE("GoApp: early display respects board prerequisites after reset and but
       CAPTURE(variant, cause);
       test_spy::reset(); // Non-power-on reset: charging detection cannot initialize buses first.
       test_spy::wake_cause = cause;
-      test_spy::rtc_state.mode = OperatingMode::Offline;
       MockBoard board;
       board.board_variant = variant;
-      board.settings.operating_mode = OperatingMode::Offline;
+      board.settings.wifi_enabled = false;
       GoApp app(board);
 
       app.run();
@@ -829,17 +828,15 @@ TEST_CASE("GoApp: V2 cold boot and timer paths initialize shared-SPI prerequisit
 
   SECTION("cold battery boot") { test_spy::power_on_reset = true; }
   SECTION("timer wake") {
-    board.settings.operating_mode = OperatingMode::Offline;
+    board.settings.wifi_enabled = false;
     test_spy::wake_cause = WakeCause::Timer;
-    test_spy::rtc_state.mode = OperatingMode::Offline;
     test_spy::rtc_state.lock_state = LockState::Locked;
     test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
     expect_sleep = true;
   }
   SECTION("timer wake promoted by Power") {
-    board.settings.operating_mode = OperatingMode::Offline;
+    board.settings.wifi_enabled = false;
     test_spy::wake_cause = WakeCause::Timer;
-    test_spy::rtc_state.mode = OperatingMode::Offline;
     test_spy::rtc_state.lock_state = LockState::Locked;
     board.press_button_on_isr_install = true;
   }
@@ -968,8 +965,8 @@ TEST_CASE("Charging-only boot: light sleep retains charger until unplug, then pa
       CHECK(board.call_index("ulp_start") == -1);
       CHECK_FALSE(board.isr_installed);
       CHECK_FALSE(board.sensors_called);
-      CHECK_FALSE(board.new_gps_driver_called);
-      CHECK_FALSE(test_spy::gps_sleep_requested);
+      CHECK(board.new_gps_driver_called);
+      CHECK(test_spy::gps_sleep_requested);
       CHECK_FALSE(test_spy::gps_started);
       CHECK_FALSE(board.wifi_subsystem_init_called);
       CHECK(board.call_index("storage") == -1);
@@ -1233,12 +1230,12 @@ TEST_CASE("is_gps_active_at_boot: AlwaysOff -> false") {
   CHECK(is_gps_active_at_boot(s, state) == false);
 }
 
-TEST_CASE("is_gps_active_at_boot: OnWhenTracking + tracking -> true") {
+TEST_CASE("is_gps_active_at_boot: OnWhenTracking + retained tracking -> false") {
   GoSettings s{};
   s.gps_mode = GpsMode::OnWhenTracking;
   RtcAppState state{};
   state.tracking_state = TrackingState::Recording;
-  CHECK(is_gps_active_at_boot(s, state) == true);
+  CHECK(is_gps_active_at_boot(s, state) == false);
 }
 
 TEST_CASE("is_gps_active_at_boot: OnWhenTracking + idle -> false") {
@@ -1376,42 +1373,46 @@ TEST_CASE("build_fast_path_display: invalid sensors -> sentinels preserved") {
   CHECK(v.preferences.pm_use_usaqi == false);
 }
 
-TEST_CASE("build_fast_path_display: corrections follow operating mode") {
-  for (auto mode : {OperatingMode::Portable, OperatingMode::Stationary, OperatingMode::Offline}) {
-    CAPTURE(static_cast<int>(mode));
-    MeasuresAGo m{};
-    m.pm_a.pm_25 = 10.0f;
-    m.temp_hum_a = {20.0f, 50.0f};
+TEST_CASE("build_fast_path_display: corrections follow sleep policy and Idle interval") {
+  for (int interval : {1, 299, 300, 301, 3600}) {
+    for (bool wifi_enabled : {false, true}) {
+      CAPTURE(wifi_enabled, interval);
+      const bool bypass = !wifi_enabled && interval >= 300;
+      MeasuresAGo m{};
+      m.pm_a.pm_25 = 10.0f;
+      m.temp_hum_a = {20.0f, 50.0f};
 
-    GoSettings settings{};
-    settings.operating_mode = mode;
-    settings.corrections.pm25 = {Pm25CorrectionAlgorithm::CustomViaPm25Raw, 2.0f, 1.0f, false};
-    settings.corrections.temperature = {LinearCorrectionAlgorithm::Custom, 1.5f, -1.0f};
-    settings.corrections.humidity = {LinearCorrectionAlgorithm::Custom, 0.5f, 5.0f};
-    const auto saved = settings.corrections;
+      GoSettings settings{};
+      settings.wifi_enabled = wifi_enabled;
+      settings.idle_interval_seconds = interval;
+      settings.corrections.pm25 = {Pm25CorrectionAlgorithm::CustomViaPm25Raw, 2.0f, 1.0f, false};
+      settings.corrections.temperature = {LinearCorrectionAlgorithm::Custom, 1.5f, -1.0f};
+      settings.corrections.humidity = {LinearCorrectionAlgorithm::Custom, 0.5f, 5.0f};
+      const auto saved = settings.corrections;
 
-    SECTION("valid readings") {
-      const auto values = build_fast_path_display(m, PowerSnapshot{}, settings);
-      CHECK(values.home.readings.pm25_ugm3 == 21.0f);
-      CHECK(values.home.readings.temperature_c == (mode == OperatingMode::Offline ? 20.0f : 29.0f));
-      CHECK(values.home.readings.humidity_pct == (mode == OperatingMode::Offline ? 50.0f : 30.0f));
-      CHECK(m.pm_a.pm_25 == 10.0f);
-      CHECK(m.temp_hum_a.temperature == 20.0f);
-      CHECK(m.temp_hum_a.humidity == 50.0f);
+      SECTION("valid readings") {
+        const auto values = build_fast_path_display(m, PowerSnapshot{}, settings);
+        CHECK(values.home.readings.pm25_ugm3 == 21.0f);
+        CHECK(values.home.readings.temperature_c == (bypass ? 20.0f : 29.0f));
+        CHECK(values.home.readings.humidity_pct == (bypass ? 50.0f : 30.0f));
+        CHECK(m.pm_a.pm_25 == 10.0f);
+        CHECK(m.temp_hum_a.temperature == 20.0f);
+        CHECK(m.temp_hum_a.humidity == 50.0f);
+      }
+      SECTION("invalid temperature preserves valid humidity") {
+        m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
+        const auto values = build_fast_path_display(m, PowerSnapshot{}, settings);
+        CHECK(values.home.readings.temperature_c == MeasuresInvalid::TEMPERATURE);
+        CHECK(values.home.readings.humidity_pct == (bypass ? 50.0f : 30.0f));
+      }
+      SECTION("invalid humidity preserves valid temperature") {
+        m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
+        const auto values = build_fast_path_display(m, PowerSnapshot{}, settings);
+        CHECK(values.home.readings.temperature_c == (bypass ? 20.0f : 29.0f));
+        CHECK(values.home.readings.humidity_pct == MeasuresInvalid::HUMIDITY);
+      }
+      CHECK(measurement_corrections_equal(settings.corrections, saved));
     }
-    SECTION("invalid temperature preserves valid humidity") {
-      m.temp_hum_a.temperature = MeasuresInvalid::TEMPERATURE;
-      const auto values = build_fast_path_display(m, PowerSnapshot{}, settings);
-      CHECK(values.home.readings.temperature_c == MeasuresInvalid::TEMPERATURE);
-      CHECK(values.home.readings.humidity_pct == (mode == OperatingMode::Offline ? 50.0f : 30.0f));
-    }
-    SECTION("invalid humidity preserves valid temperature") {
-      m.temp_hum_a.humidity = MeasuresInvalid::HUMIDITY;
-      const auto values = build_fast_path_display(m, PowerSnapshot{}, settings);
-      CHECK(values.home.readings.temperature_c == (mode == OperatingMode::Offline ? 20.0f : 29.0f));
-      CHECK(values.home.readings.humidity_pct == MeasuresInvalid::HUMIDITY);
-    }
-    CHECK(measurement_corrections_equal(settings.corrections, saved));
   }
 }
 
@@ -1737,7 +1738,7 @@ TEST_CASE("fast path BLE: unavailable measurements and battery retain wire senti
 TEST_CASE("fast path: GoApp starts PM warmup after initialization") {
   test_spy::reset();
   MockBoard board;
-  board.settings.operating_mode = OperatingMode::Offline;
+  board.settings.wifi_enabled = false;
   board.sensor_init_ms = 1700;
   GoApp app(board);
   GoAppTestAccess access(app);
@@ -1773,7 +1774,7 @@ TEST_CASE("fast path: gas finishes before other sampling and PM stops before sto
   test_spy::measures_to_return.co2.co2 = 650;
   test_spy::measures_to_return.pm_a.pm_25 = 12;
   MockBoard board;
-  board.settings.operating_mode = OperatingMode::Offline;
+  board.settings.wifi_enabled = false;
   GoApp app(board);
   GoAppTestAccess access(app);
   RtcAppState state{};
@@ -1945,7 +1946,7 @@ TEST_CASE("Offline fast path: temperature trip paints shutdown screen and shuts 
     GoAppTestAccess access(app);
 
     RtcAppState state{};
-    state.mode = OperatingMode::Offline;
+
     state.lock_state = LockState::Locked;
     state.set_flag(RtcAppFlag::SensorsWarm, true);
 
@@ -2010,12 +2011,12 @@ TEST_CASE("execute_fast_path: sleep too short -> promote locked") {
 TEST_CASE("execute_fast_path: Energy Saving ignores retained tracking and route failures") {
   test_spy::reset();
   MockBoard board;
-  board.settings.operating_mode = OperatingMode::Offline;
+  board.settings.wifi_enabled = false;
   board.settings.gps_mode = GpsMode::AlwaysOn;
   GoApp app(board);
   GoAppTestAccess access(app);
   RtcAppState state{};
-  state.mode = OperatingMode::Offline;
+
   state.set_flag(RtcAppFlag::SensorsWarm, true);
   state.tracking_session_id = 12345;
   SECTION("idle") {}
@@ -2041,7 +2042,7 @@ TEST_CASE("execute_fast_path: Energy Saving ignores retained tracking and route 
   CHECK_FALSE(test_spy::route_ended);
   CHECK_FALSE(test_spy::gps_started);
   CHECK(test_spy::gps_sleep_request_count == 1);
-  CHECK(test_spy::gps_sleep_duration_ms == GPS_ENERGY_SAVING_SLEEP_MS);
+  CHECK(test_spy::gps_sleep_duration_ms == GPS_MAX_INACTIVE_SLEEP_MS);
   CHECK(test_spy::cache_backed_up);
   CHECK(test_spy::bms_poll_count == 1);
   CHECK(DisplayService::spy_init_count == 1);
@@ -2055,7 +2056,6 @@ static void check_tracking_timing(const TrackingTiming &actual, const TrackingTi
 }
 
 static void check_rtc_state(const RtcAppState &actual, const RtcAppState &expected) {
-  CHECK(actual.mode == expected.mode);
   CHECK(actual.behavior == expected.behavior);
   CHECK(actual.lock_state == expected.lock_state);
   CHECK(actual.tracking_state == expected.tracking_state);
@@ -2073,7 +2073,7 @@ TEST_CASE("run_fast_path: Sleep saves SensorsWarm and preserves unrelated RTC st
   GoApp app(board);
   GoAppTestAccess access(app);
   RtcAppState state{};
-  state.mode = OperatingMode::Offline;
+
   state.set_flag(RtcAppFlag::SensorsWarm, true);
   test_spy::rtc_state = state;
 
@@ -2096,7 +2096,7 @@ TEST_CASE("run_fast_path: promotion saves RTC state before BMS retry and interac
   MockBoard board;
   board.bms_failures_remaining = 2;
   RtcAppState state{};
-  state.mode = OperatingMode::Offline;
+
   state.set_flag(RtcAppFlag::SensorsWarm, true);
   test_spy::rtc_state = state;
   auto expected = state;
@@ -2552,7 +2552,7 @@ TEST_CASE("GoApp: interactive boot leaves GPS startup to orchestrator") {
 TEST_CASE("GoApp: Energy Saving ignores the obsolete pending tracking start") {
   test_spy::reset();
   MockBoard board;
-  board.settings.operating_mode = OperatingMode::Offline;
+  board.settings.wifi_enabled = false;
   auto &store = static_cast<EmptyConfigStore &>(board.config_store());
   store.tracking_start = true;
   GoApp app(board);
@@ -2566,7 +2566,7 @@ TEST_CASE("GoApp: Energy Saving ignores the obsolete pending tracking start") {
 TEST_CASE("GoApp: ordinary Offline power-on keeps interactive boot") {
   test_spy::reset();
   MockBoard board;
-  board.settings.operating_mode = OperatingMode::Offline;
+  board.settings.wifi_enabled = false;
   GoApp app(board);
   app.run();
   CHECK(test_spy::orchestrator_init_called);
@@ -2578,7 +2578,7 @@ TEST_CASE("GoApp: pending tracking start does not override USB charging-only boo
   test_spy::reset();
   test_spy::power_on_reset = true;
   MockBoard board;
-  board.settings.operating_mode = OperatingMode::Offline;
+  board.settings.wifi_enabled = false;
   board._bms.status.power_source = BmsPowerSource::UsbDcp;
   auto &store = static_cast<EmptyConfigStore &>(board.config_store());
   store.tracking_start = true;
@@ -2598,15 +2598,15 @@ TEST_CASE("run_fast_path: Energy Saving uses maximum GPS sleep") {
   test_spy::reset();
   ScopedRetainedClock clock(200999);
   MockBoard board;
-  board.settings.operating_mode = OperatingMode::Offline;
+  board.settings.wifi_enabled = false;
   board.settings.gps_mode = GpsMode::OnWhenTracking;
-  board.settings.measure_interval_seconds = 10;
-  board.settings.energy_saving_measure_interval_seconds = 900;
+  board.settings.tracking_interval_seconds = 10;
+  board.settings.idle_interval_seconds = 900;
   constexpr uint32_t planned_sleep_ms = 120000;
   test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, planned_sleep_ms};
-  uint32_t expected_gps_sleep_ms = GPS_ENERGY_SAVING_SLEEP_MS;
+  uint32_t expected_gps_sleep_ms = GPS_MAX_INACTIVE_SLEEP_MS;
   RtcAppState state{};
-  state.mode = OperatingMode::Offline;
+
   state.set_flag(RtcAppFlag::SensorsWarm, true);
 
   SECTION("inactive GPS uses maximum sleep") {}
@@ -2621,7 +2621,9 @@ TEST_CASE("run_fast_path: Energy Saving uses maximum GPS sleep") {
   SECTION("retained paused tracking cannot activate GPS") {
     state.tracking_state = TrackingState::Paused;
   }
-  SECTION("Always On cannot activate GPS") { board.settings.gps_mode = GpsMode::AlwaysOn; }
+  SECTION("Always On still permits fast-path sleep probing") {
+    board.settings.gps_mode = GpsMode::AlwaysOn;
+  }
 
   GoApp app(board);
   GoAppTestAccess access(app);
@@ -2643,9 +2645,9 @@ TEST_CASE("timer wake retries failed GPS sleep before deep sleep despite a retai
   test_spy::reset();
   ScopedRetainedClock clock(200000);
   MockBoard board;
-  board.settings.operating_mode = OperatingMode::Offline;
+  board.settings.wifi_enabled = false;
   RtcAppState state{};
-  state.mode = OperatingMode::Offline;
+
   state.gps_wake_deadline_ms = clock.retained_ms + 60000;
   test_spy::gps_sleep_ok = false;
   test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 120000};
@@ -2669,9 +2671,9 @@ TEST_CASE("timer wake retries failed GPS sleep before deep sleep despite a retai
   CHECK(test_spy::gps_sleep_request_count == (promote ? 1 : 2));
   CHECK(test_spy::gps_initial_deadline_ms == (promote ? state.gps_wake_deadline_ms : 0));
   CHECK(test_spy::gps_fast_path_sleep_probe == !promote);
-  CHECK(test_spy::gps_sleep_duration_ms == GPS_ENERGY_SAVING_SLEEP_MS);
+  CHECK(test_spy::gps_sleep_duration_ms == GPS_MAX_INACTIVE_SLEEP_MS);
   CHECK(test_spy::last_saved_state.gps_wake_deadline_ms ==
-        (retry_succeeds ? clock.retained_ms + GPS_ENERGY_SAVING_SLEEP_MS
+        (retry_succeeds ? clock.retained_ms + GPS_MAX_INACTIVE_SLEEP_MS
                         : state.gps_wake_deadline_ms));
   CHECK(test_spy::enter_sleep_called == !promote);
   CHECK_FALSE(test_spy::gps_started);
@@ -2681,10 +2683,10 @@ TEST_CASE("fast path includes the final GPS retry in its sleep calculation", "[G
   test_spy::reset();
   ScopedRetainedClock clock(200000);
   MockBoard board;
-  board.settings.operating_mode = OperatingMode::Offline;
-  board.settings.energy_saving_measure_interval_seconds = 300;
+  board.settings.wifi_enabled = false;
+  board.settings.idle_interval_seconds = 300;
   RtcAppState state{};
-  state.mode = OperatingMode::Offline;
+
   state.set_flag(RtcAppFlag::SensorsWarm, true);
   constexpr uint32_t interval_ms = 300000;
   constexpr uint32_t measurement_ms = 20000;
@@ -2728,9 +2730,9 @@ TEST_CASE("fast path promotes when the GPS retry leaves insufficient sleep time"
   test_spy::reset();
   ScopedRetainedClock clock(200000);
   MockBoard board;
-  board.settings.operating_mode = OperatingMode::Offline;
+  board.settings.wifi_enabled = false;
   RtcAppState state{};
-  state.mode = OperatingMode::Offline;
+
   state.set_flag(RtcAppFlag::SensorsWarm, true);
   test_spy::gps_sleep_ok = false;
   test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 8000};
@@ -2758,10 +2760,10 @@ TEST_CASE("GoApp: deep-sleep wake restores GPS deadline and derives baud from ap
   test_spy::reset();
   ScopedRetainedClock clock(200999);
   MockBoard board;
-  board.settings.operating_mode = OperatingMode::Offline;
+  board.settings.wifi_enabled = false;
   board.settings.gps_mode = GpsMode::OnWhenTracking;
   RtcAppState state{};
-  state.mode = OperatingMode::Offline;
+
   state.gps_wake_deadline_ms = clock.retained_ms + 60000;
   int expected_baud = GpsDriver::MODULE_DEFAULT_BAUD;
   SECTION("inactive GPS retains its sleep deadline") {}
@@ -2769,7 +2771,8 @@ TEST_CASE("GoApp: deep-sleep wake restores GPS deadline and derives baud from ap
     state.tracking_state = TrackingState::Recording;
     state.gps_wake_deadline_ms = 0;
   }
-  SECTION("Always On does not activate GPS") {
+  SECTION("Always On activates GPS while awake") {
+    expected_baud = GpsDriver::MODULE_ACTIVE_BAUD;
     board.settings.gps_mode = GpsMode::AlwaysOn;
     state.gps_wake_deadline_ms = 0;
   }
@@ -2789,9 +2792,8 @@ TEST_CASE("GoApp: interactive GPS initialization uses the supplied boot state") 
   WakeCause cause = WakeCause::Timer;
   int expected_baud = GpsDriver::MODULE_DEFAULT_BAUD;
   uint64_t expected_deadline_ms = 0;
-  SECTION("supplied tracking state overrides stale RTC storage") {
+  SECTION("supplied tracking state does not resume GPS acquisition") {
     state.tracking_state = TrackingState::Recording;
-    expected_baud = GpsDriver::MODULE_ACTIVE_BAUD;
   }
   SECTION("supplied sleep deadline is restored") {
     state.gps_wake_deadline_ms = clock.retained_ms + 60000;
@@ -2813,20 +2815,20 @@ TEST_CASE("inactive GPS sleeps before warmup and preserves its deadline on promo
   test_spy::reset();
   ScopedRetainedClock clock(200000);
   MockBoard board;
-  board.settings.operating_mode = OperatingMode::Offline;
+  board.settings.wifi_enabled = false;
   board.settings.gps_mode = GpsMode::AlwaysOff;
-  board.settings.measure_interval_seconds = 10;
-  board.settings.energy_saving_measure_interval_seconds = 300;
+  board.settings.tracking_interval_seconds = 10;
+  board.settings.idle_interval_seconds = 300;
   test_spy::gas_begin_ok = true;
   RtcAppState state{};
-  state.mode = OperatingMode::Offline;
+
   SECTION("button promotion") { board.press_button_on_isr_install = true; }
   SECTION("insufficient sleep time promotion") {
     test_spy::sleep_decision_to_return = {PowerService::SleepType::None, 0};
   }
   test_spy::before_sensor_measurement = [&] {
     REQUIRE(test_spy::gps_sleep_request_count == 1);
-    CHECK(test_spy::gps_sleep_duration_ms == GPS_ENERGY_SAVING_SLEEP_MS);
+    CHECK(test_spy::gps_sleep_duration_ms == GPS_MAX_INACTIVE_SLEEP_MS);
   };
   GoApp app(board);
   GoAppTestAccess access(app);
@@ -2835,9 +2837,9 @@ TEST_CASE("inactive GPS sleeps before warmup and preserves its deadline on promo
   CHECK_FALSE(test_spy::gps_started);
   REQUIRE(test_spy::orchestrator_init_called);
   CHECK(test_spy::last_saved_state.gps_wake_deadline_ms ==
-        clock.retained_ms + GPS_ENERGY_SAVING_SLEEP_MS);
+        clock.retained_ms + GPS_MAX_INACTIVE_SLEEP_MS);
   CHECK(test_spy::orchestrator_rtc_state.gps_wake_deadline_ms ==
-        clock.retained_ms + GPS_ENERGY_SAVING_SLEEP_MS);
+        clock.retained_ms + GPS_MAX_INACTIVE_SLEEP_MS);
   const auto &events = test_spy::fast_path_events;
   CHECK(std::find(events.begin(), events.end(), "gps_sleep") <
         std::find(events.begin(), events.end(), "gas_begin"));
@@ -2847,14 +2849,14 @@ TEST_CASE("fast path final GPS attempt depends only on the early result", "[GoAp
   test_spy::reset();
   ScopedRetainedClock clock(200000);
   MockBoard board;
-  board.settings.operating_mode = OperatingMode::Offline;
+  board.settings.wifi_enabled = false;
   board.settings.gps_mode = GpsMode::AlwaysOff;
-  board.settings.measure_interval_seconds = 10;
-  board.settings.energy_saving_measure_interval_seconds = 300;
+  board.settings.tracking_interval_seconds = 10;
+  board.settings.idle_interval_seconds = 300;
   test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 40000};
   RtcAppState state{};
-  state.mode = OperatingMode::Offline;
-  const uint64_t early_deadline_ms = clock.retained_ms + GPS_ENERGY_SAVING_SLEEP_MS;
+
+  const uint64_t early_deadline_ms = clock.retained_ms + GPS_MAX_INACTIVE_SLEEP_MS;
   bool final_success = true;
   SECTION("early request fails, final request succeeds") { test_spy::gps_sleep_ok = false; }
   SECTION("both requests fail") {
@@ -2869,9 +2871,9 @@ TEST_CASE("fast path final GPS attempt depends only on the early result", "[GoAp
   const bool retry_needed = !test_spy::gps_sleep_ok;
   test_spy::before_sensor_measurement = [&] {
     CHECK(test_spy::gps_sleep_request_count == 1);
-    CHECK(test_spy::gps_sleep_duration_ms == GPS_ENERGY_SAVING_SLEEP_MS);
+    CHECK(test_spy::gps_sleep_duration_ms == GPS_MAX_INACTIVE_SLEEP_MS);
     // Simulate elapsed retained time and the receiver's timer expiring.
-    clock.retained_ms += uint64_t{GPS_ENERGY_SAVING_SLEEP_MS} + 1;
+    clock.retained_ms += uint64_t{GPS_MAX_INACTIVE_SLEEP_MS} + 1;
     test_spy::gps_remaining_ms = 0;
     test_spy::gps_sleep_ok = final_success;
   };
@@ -2881,20 +2883,20 @@ TEST_CASE("fast path final GPS attempt depends only on the early result", "[GoAp
   CHECK(test_spy::enter_sleep_called);
   CHECK(test_spy::enter_sleep_duration_ms == 40000);
   CHECK(test_spy::gps_sleep_request_count == (retry_needed ? 2 : 1));
-  CHECK(test_spy::gps_sleep_duration_ms == GPS_ENERGY_SAVING_SLEEP_MS);
+  CHECK(test_spy::gps_sleep_duration_ms == GPS_MAX_INACTIVE_SLEEP_MS);
   const uint64_t expected_deadline_ms =
-      retry_needed ? (final_success ? clock.retained_ms + GPS_ENERGY_SAVING_SLEEP_MS : 0)
+      retry_needed ? (final_success ? clock.retained_ms + GPS_MAX_INACTIVE_SLEEP_MS : 0)
                    : early_deadline_ms;
   CHECK(test_spy::last_saved_state.gps_wake_deadline_ms == expected_deadline_ms);
 }
 
-TEST_CASE("build_fast_path_display: interval threshold preserves readings and controls layout") {
+TEST_CASE("build_fast_path_display: Idle interval always permits thermal display") {
   MeasuresAGo m{};
   m.temp_hum_a = {25.0f, 60.0f};
   GoSettings settings{};
   for (int interval : {60, 299, 300, 301}) {
     CAPTURE(interval);
-    settings.measure_interval_seconds = interval;
+    settings.idle_interval_seconds = interval;
     const auto v = build_fast_path_display(m, {}, settings);
     CHECK(v.home.show_temp_hum == (interval >= 300));
     CHECK(v.home.active_metric == Metric::None);
@@ -2906,11 +2908,11 @@ TEST_CASE("build_fast_path_display: interval threshold preserves readings and co
 
 TEST_CASE("build_fast_path_display: Energy Saving uses its interval for thermal visibility") {
   GoSettings settings{};
-  settings.operating_mode = OperatingMode::Offline;
-  settings.measure_interval_seconds = 10;
+  settings.wifi_enabled = false;
+  settings.tracking_interval_seconds = 10;
   settings.pinned_chart = Metric::Temp;
   for (int interval : {300, 900, 3600}) {
-    settings.energy_saving_measure_interval_seconds = interval;
+    settings.idle_interval_seconds = interval;
     const auto v = build_fast_path_display({}, {}, settings);
     CHECK(v.home.show_temp_hum);
     CHECK(v.chart_metric() == Metric::Temp);
@@ -2931,10 +2933,10 @@ TEST_CASE("build_wake_values: compact layout survives early button-wake paint") 
   CHECK(v.home.readings.humidity_pct == 60.0f);
 }
 
-TEST_CASE("fast path: compact display charts corrected PM history without changing stored data") {
+TEST_CASE("fast path: Idle display charts corrected PM history without changing stored data") {
   test_spy::reset();
   MockBoard board;
-  board.settings.measure_interval_seconds = 60;
+  board.settings.tracking_interval_seconds = 60;
   board.settings.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
   board.settings.corrections.pm25.scaling_factor = 2.0f;
   board.settings.corrections.pm25.intercept = 1.0f;
@@ -2944,7 +2946,7 @@ TEST_CASE("fast path: compact display charts corrected PM history without changi
   test_spy::measures_to_return.pm_a.pm_25 = 10.0f;
   test_spy::measures_to_return.temp_hum_a = {25.0f, 60.0f};
   DisplayService::spy_on_init = [](const DisplayValues &v) {
-    CHECK_FALSE(v.home.show_temp_hum);
+    CHECK(v.home.show_temp_hum);
     CHECK(v.header.locked);
     CHECK(v.home.active_metric == Metric::None);
     CHECK(v.chart_metric() == Metric::Pm25);
@@ -2982,7 +2984,7 @@ TEST_CASE("fast path: pinned chart is honored at every interval", "[chart]") {
       CAPTURE(interval, static_cast<int>(metric));
       test_spy::reset();
       MockBoard board;
-      board.settings.measure_interval_seconds = interval;
+      board.settings.tracking_interval_seconds = interval;
       board.settings.pinned_chart = metric;
       test_spy::measures_to_return.co2.co2 = 650;
       test_spy::measures_to_return.pressure = {1013.0f, -42.0f};
@@ -3036,8 +3038,8 @@ TEST_CASE("fast path: Energy Saving charts raw temperature and humidity", "[corr
     CAPTURE(static_cast<int>(metric));
     test_spy::reset();
     MockBoard board;
-    board.settings.operating_mode = OperatingMode::Offline;
-    board.settings.measure_interval_seconds = 300;
+    board.settings.wifi_enabled = false;
+    board.settings.tracking_interval_seconds = 300;
     board.settings.pinned_chart = metric;
     board.settings.corrections.temperature = {LinearCorrectionAlgorithm::Custom, 1.0f, -2.0f};
     board.settings.corrections.humidity = {LinearCorrectionAlgorithm::Custom, 1.0f, -10.0f};

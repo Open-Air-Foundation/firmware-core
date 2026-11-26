@@ -31,6 +31,7 @@
 #include "go_settings.h"
 #include "go_storage.h"
 #include "go_types.h"
+#include "go_runtime_policy.h"
 #include "go_ui.h"
 #include "go_board_capabilities.h"
 #include "go_ulp.h"
@@ -107,7 +108,7 @@ private:
   const char *_serial; ///< Device serial string for BLE advertising
 
   // --- Application state ---
-  OperatingMode _mode = OperatingMode::Portable;
+  bool _wifi_active = false;
   Behavior _behavior = Behavior::Idle;
   LockState _lock_state = LockState::Locked;
   bool _gps_enabled = true;
@@ -305,9 +306,6 @@ private:
   bool pause_tracking();
   bool resume_tracking();
   void stop_tracking();
-  /// persist=false skips onboarding + settings writes (manufacturing path).
-  void change_mode(OperatingMode new_mode, bool persist = true);
-  void apply_mode_transition(OperatingMode old_mode, OperatingMode new_mode, bool persisted);
   /// Boot-button manufacturing shortcut: skip onboarding and enter
   /// Stationary ephemerally (no NVS persist) for production testing.
   void enter_manufacturing_mode();
@@ -320,8 +318,7 @@ private:
   bool mark_onboarding_done();
   bool activate_settings_candidate(const GoSettings &candidate, bool persist = true,
                                    bool force_persist = false);
-  void apply_settings_runtime_delta(const GoSettings &previous_settings,
-                                    OperatingMode previous_mode, bool persisted);
+  void apply_settings_runtime_delta(const GoSettings &previous_settings);
   void apply_settings_change();
   bool clear_data();
   bool factory_reset(bool preserve_corrections = false);
@@ -361,14 +358,14 @@ private:
   void prepare_for_sleep(uint32_t sleep_duration_ms);
 
   // --- BLE ---
-  void init_ble_if_portable();
+  void init_ble_if_available();
   static constexpr size_t BLE_WRITE_BUF_SIZE = 256;
 
   // --- OTA ---
   bool wifi_ota_allowed() const;
   void on_wifi_ota_available();
   /// Full quiesce around a committed transfer: pause sensitive services
-  /// (sensor / GPS / PM rail), stop cloud (Stationary), feed the external
+  /// (sensor / GPS / PM rail), stop cloud (Wi-Fi), feed the external
   /// watchdog once.  No display work.  Called up front for BLE, lazily for
   /// WiFi (on_ota_download_started).
   void enter_ota();
@@ -386,8 +383,8 @@ private:
   /// _ota_committed.  Wired into run_wifi_check() via a thin forwarder.
   void on_ota_download_started();
 
-  // --- Stationary Wi-Fi ---
-  void enter_stationary();
+  // --- Wi-Fi ---
+  void enter_wifi();
   void on_wifi_connected(uint32_t ip);
   void on_wifi_disconnected(WifiDisconnectReason reason);
   void on_provisioning_state_changed(const ProvisioningEventPayload &payload);
@@ -398,11 +395,11 @@ private:
   void pause_provisioning_sensitive_services();
   void resume_provisioning_sensitive_services();
 
-  // --- Setup-session helpers (Stationary bring-up + provisioning) ---
+  // --- Setup-session helpers (Wi-Fi bring-up + provisioning) ---
 
   /// Idempotent session-entry preamble: silent unlock + snackbar clear.
   /// No-op when _setup_session_active is already true.  Called by both
-  /// enter_stationary() and enter_provisioning_page().
+  /// enter_wifi() and enter_provisioning_page().
   void begin_session_if_needed();
 
   /// Open Screen::Provisioning, pause sensitive services, start the
@@ -415,7 +412,7 @@ private:
   /// with a drop-free wait=true render + flush() so the leaving frame is
   /// painted before the helper returns.
   void leave_session_to_home();
-  void leave_session_to_portable();
+  void cancel_wifi_setup();
 
   /// Rebase the sensor measurement / BMS / BMS-status deadlines to now,
   /// so post-resume timers do not fire back-to-back catching up on
@@ -468,6 +465,10 @@ private:
 
   // --- Helpers ---
   bool is_gps_active() const;
+  GoRuntimePolicy runtime_policy() const;
+  uint32_t gps_sleep_interval_ms() const;
+  void stop_ble();
+  void reconcile_runtime(bool reset_cadence);
   void activate_gps();
   void deactivate_gps();
 

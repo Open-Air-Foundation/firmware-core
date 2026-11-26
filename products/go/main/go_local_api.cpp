@@ -397,7 +397,7 @@ GoLocalApiService::make_active_config(const GoSettings &settings) {
   active.pinned_chart = settings.pinned_chart;
   active.disable_cloud = settings.disable_cloud;
   active.configuration_control = settings.configuration_control;
-  active.measure_interval_seconds = settings.measure_interval_seconds;
+  active.tracking_interval_seconds = settings.tracking_interval_seconds;
   active.gps_mode = settings.gps_mode;
   active.back_led_brightness = settings.back_led_brightness;
   active.back_led_indicator = settings.back_led_indicator;
@@ -417,7 +417,7 @@ LocalServerConfig GoLocalApiService::map_config(const ActiveConfigSnapshot &acti
       active.use_fahrenheit ? TEMPERATURE_UNIT_FAHRENHEIT : TEMPERATURE_UNIT_CELSIUS;
   config.altitude_unit = active.use_feet ? ALTITUDE_UNIT_FEET : ALTITUDE_UNIT_METERS;
   config.cloud_connection = !active.disable_cloud;
-  config.measurement_interval_seconds = active.measure_interval_seconds;
+  config.measurement_interval_seconds = active.tracking_interval_seconds;
   config.back_led_brightness = static_cast<int>(active.back_led_brightness);
   switch (active.back_led_indicator) {
   case BackLedIndicator::Aqi:
@@ -613,10 +613,10 @@ ConfigSubmitResult GoLocalApiService::translate_config(const LocalServerConfig &
   }
 
   if (partial.measurement_interval_seconds.has_value()) {
-    if (!is_measure_interval_seconds_valid(*partial.measurement_interval_seconds)) {
+    if (!is_tracking_interval_seconds_valid(*partial.measurement_interval_seconds)) {
       return {ConfigSubmitStatus::InvalidValue, ConfigFieldId::MeasurementInterval};
     }
-    update.measure_interval_seconds = *partial.measurement_interval_seconds;
+    update.tracking_interval_seconds = *partial.measurement_interval_seconds;
     update.update_mask |= static_cast<uint32_t>(GoConfigField::MeasurementInterval);
   }
 

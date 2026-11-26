@@ -10,9 +10,9 @@
 
 struct GoSettings {
   // --- Measurement intervals ---
-  // Portable and Stationary share the normal preference; Offline keeps its own.
-  int measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
-  int energy_saving_measure_interval_seconds = ENERGY_SAVING_MEASURE_INTERVAL_SECONDS_DEFAULT;
+  // Numeric seconds retain the existing NVS keys across migration.
+  int tracking_interval_seconds = TRACKING_INTERVAL_SECONDS_DEFAULT;
+  int idle_interval_seconds = IDLE_INTERVAL_SECONDS_DEFAULT;
 
   // --- Display ---
   bool use_fahrenheit = false;
@@ -24,7 +24,7 @@ struct GoSettings {
   GpsMode gps_mode = GpsMode::OnWhenTracking;
 
   // --- Device behavior ---
-  OperatingMode operating_mode = OperatingMode::Portable;
+  bool wifi_enabled = false;
   int auto_lock_seconds = 10; // 0 = auto-lock disabled
 
   // --- LED settings ---
@@ -35,8 +35,8 @@ struct GoSettings {
   // --- Buzzer ---
   bool buzzer_enabled = false;
 
-  // --- Stationary connectivity ---
-  bool local_server_enabled = true;
+  // --- Connectivity ---
+  bool local_server_enabled = false;
   bool disable_cloud = false; // honored by CloudService
   ConfigurationControl configuration_control = ConfigurationControl::Both;
   int co2_abc_days = CO2_ABC_DAYS_DEFAULT;
@@ -51,13 +51,16 @@ struct GoSettings {
   // --- Measurement corrections ---
   MeasurementCorrections corrections{};
 
-  int active_measure_interval_seconds() const;
+  int active_measure_interval_seconds(TrackingState tracking = TrackingState::Idle) const;
   bool equals(const GoSettings &other) const;
 };
 
 GoSettings load_go_settings(ConfigStore &store);
-// Select corrections for the current mode without changing saved calibration.
-MeasurementCorrections effective_measurement_corrections(const GoSettings &settings);
+// Apply the sleep/interval policy without modifying saved calibration or PM correction.
+MeasurementCorrections
+effective_measurement_corrections(const GoSettings &settings,
+                                  TrackingState tracking = TrackingState::Idle,
+                                  bool wifi_fallback = false);
 bool is_go_settings_valid(const GoSettings &settings);
 bool save_go_settings(ConfigStore &store, const GoSettings &settings);
 void print_settings(const GoSettings &settings);
