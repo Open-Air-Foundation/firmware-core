@@ -255,6 +255,15 @@ ParseStatus apply_item(const cJSON *item, LocalServerConfig &out, ConfigFieldId 
     return take_int(item, out.measurement_interval_seconds) ? ParseStatus::Ok
                                                             : ParseStatus::InvalidValue;
   }
+  if (std::strcmp(key, fields::IDLE_INTERVAL) == 0) {
+    field = ConfigFieldId::IdleInterval;
+    return take_int(item, out.idle_interval_seconds) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
+  if (std::strcmp(key, fields::TRACKING_INTERVAL) == 0) {
+    field = ConfigFieldId::TrackingInterval;
+    return take_int(item, out.tracking_interval_seconds) ? ParseStatus::Ok
+                                                         : ParseStatus::InvalidValue;
+  }
   if (std::strcmp(key, fields::GPS_MODE) == 0) {
     field = ConfigFieldId::GpsMode;
     return take_enum(item, GPS_MODE_VALUES, out.gps_mode) ? ParseStatus::Ok
@@ -475,6 +484,14 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
     cJSON_AddNumberToObject(root, fields::MEASUREMENT_INTERVAL,
                             static_cast<double>(*cfg.measurement_interval_seconds));
   }
+  if (cfg.idle_interval_seconds.has_value()) {
+    cJSON_AddNumberToObject(root, fields::IDLE_INTERVAL,
+                            static_cast<double>(*cfg.idle_interval_seconds));
+  }
+  if (cfg.tracking_interval_seconds.has_value()) {
+    cJSON_AddNumberToObject(root, fields::TRACKING_INTERVAL,
+                            static_cast<double>(*cfg.tracking_interval_seconds));
+  }
   if (cfg.gps_mode.has_value()) {
     cJSON_AddStringToObject(root, fields::GPS_MODE, cfg.gps_mode->c_str());
   }
@@ -561,6 +578,10 @@ const char *config_field_wire_key(ConfigFieldId id) {
     return fields::CONFIGURATION_CONTROL;
   case ConfigFieldId::MeasurementInterval:
     return fields::MEASUREMENT_INTERVAL;
+  case ConfigFieldId::IdleInterval:
+    return fields::IDLE_INTERVAL;
+  case ConfigFieldId::TrackingInterval:
+    return fields::TRACKING_INTERVAL;
   case ConfigFieldId::GpsMode:
     return fields::GPS_MODE;
   case ConfigFieldId::FrontLedBrightness:
