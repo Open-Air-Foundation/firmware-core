@@ -62,6 +62,13 @@ public:
   /// WifiHttpClient timeout (~15 s).  Idempotent.
   void stop();
 
+  /// Drain HTTP without blocking. A running worker posts CloudStopped when done.
+  /// If no worker exists, stop_pending() remains false and cleanup can proceed.
+  void request_stop();
+  bool stop_pending() const;
+  /// Reclaim the worker and heap after receiving CloudStopped.
+  void complete_stop();
+
   // -----------------------------------------------------------------
   // State actions (lock-free; safe to call any time)
   // -----------------------------------------------------------------
@@ -89,6 +96,7 @@ public:
 #endif
 
 private:
+  void _finish_stop();
   void _run();
   static void _task_entry(void *arg);
 

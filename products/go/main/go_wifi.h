@@ -130,6 +130,17 @@ public:
   /// Called by the orchestrator on Stationary teardown.
   void shutdown();
 
+  /// Async handoff cleanup. Call only after Cloud has released HTTP/TLS.
+  /// Completion arrives as WifiSuspendComplete. The worker is reused across handoffs.
+  /// While pending, only completion acknowledgement/state queries may touch this service.
+  bool request_suspend(bool deinitialize);
+  /// Acknowledge WifiSuspendComplete on the orchestrator task before issuing more work.
+  void complete_suspend(bool success);
+  bool suspension_pending() const;
+  bool is_suspended() const;
+  bool driver_released() const;
+  bool resume_station(const WifiStaticIpConfig *static_ip = nullptr);
+
   /// Erase all saved networks and reset online latches.
   void clear_credentials();
 
@@ -161,6 +172,22 @@ public:
 #endif
 
 private:
+  // Active permits normal Wi-Fi work; it does not imply a connected station.
+  enum class WifiState : uint8_t {
+    Active,
+    Suspending,
+    Releasing,
+    Suspended,
+    Released,
+    CleanupFailed,
+  };
+  static void _suspend_entry(void *arg);
+  void _run_suspend(bool deinitialize);
+  bool _suspend(bool deinitialize);
+  void _wait_for_suspend();
+  RtosTaskHandle _suspend_task = nullptr;
+  RtosBinarySemaphore _suspend_done_sem;
+  std::atomic<WifiState> _state{WifiState::Active};
   // Bind on_got_ip / on_disconnected to WifiManager. Cleared by passing
   // null callbacks. Owned by WifiService at all times outside provisioning.
   void _install_wifi_callbacks();

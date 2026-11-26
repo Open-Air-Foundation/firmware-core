@@ -42,8 +42,15 @@ constexpr int LOCAL_API_ROUTE_COUNT = 6;
 
 class FakeWifiHal : public WifiHal {
 public:
-  WifiStatus init() override { return WifiStatus::Ok; }
-  void deinit() override {}
+  uint32_t init_calls = 0;
+  uint32_t deinit_calls = 0;
+  WifiStatus init_status = WifiStatus::Ok;
+  WifiStatus stop_mdns_status = WifiStatus::Ok;
+  WifiStatus init() override {
+    ++init_calls;
+    return init_status;
+  }
+  void deinit() override { ++deinit_calls; }
 
   WifiStatus set_mode(WifiMode mode) override {
     _mode = mode;
@@ -115,7 +122,7 @@ public:
     if (call_log != nullptr) {
       call_log->push_back("mdns_stop");
     }
-    return WifiStatus::Ok;
+    return stop_mdns_status;
   }
 
   WifiStatus arm_dhcp_timeout(uint32_t) override { return WifiStatus::Ok; }
@@ -272,6 +279,13 @@ public:
     return true;
   }
 
+  void task_notify_send_impl(RtosTaskHandle task, uint32_t value) override {
+    notified_tasks.push_back(task);
+    notifications.push_back(value);
+  }
+  std::vector<RtosTaskHandle> notified_tasks;
+  std::vector<uint32_t> notifications;
+
   void set_now(uint64_t ms) { now_ms = ms; }
   void advance(uint64_t ms) { now_ms += ms; }
   bool has_event(EventType t) const {
@@ -304,6 +318,15 @@ public:
 
 class WifiServiceTestAccess {
 public:
+  static RtosTaskHandle install_worker(WifiService &s) {
+    s._suspend_task = reinterpret_cast<RtosTaskHandle>(1);
+    s._suspend_done_sem.create();
+    return s._suspend_task;
+  }
+  static RtosTaskHandle worker(const WifiService &s) { return s._suspend_task; }
+  static void finish_suspend(WifiService &s, bool deinitialize = false) {
+    s._run_suspend(deinitialize);
+  }
   static ProvisioningManager *provisioning_manager(const WifiService &s) { return s._prov; }
   static uint32_t deadline(const WifiService &s) { return s._initial_connect_deadline_ms; }
   static uint32_t reconnect_at(const WifiService &s) { return s._reconnect_at_ms; }
@@ -1387,4 +1410,161 @@ TEST_CASE("on_provisioning_event Started during a transport switch reports the d
   REQUIRE(evt != nullptr);
   CHECK(evt->prov.event == static_cast<uint8_t>(ProvisioningEvent::Started));
   CHECK(evt->prov.transport == static_cast<uint8_t>(ProvisioningTransport::WifiOnly));
+}
+
+TEST_CASE("WifiService handoff stops endpoints and retains driver and online history",
+          "[WifiService][handoff]") {
+  WifiService::Config config{};
+  config.serial_number = "TEST00";
+  config.firmware_version = "test";
+  config.model = "P-1PSG";
+  config.hostname = "airgradient-TEST00";
+  Fixture f(config);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x01020304);
+  REQUIRE(f.svc.has_been_online());
+  REQUIRE(f.svc.ensure_local_http());
+  REQUIRE(f.svc.ensure_local_mdns());
+  f.svc.schedule_reconnect();
+  const auto worker = WifiServiceTestAccess::install_worker(f.svc);
+  REQUIRE(f.svc.request_suspend(false));
+  CHECK(f.rtos.notified_tasks.back() == worker);
+  CHECK(f.svc.is_suspended());
+  CHECK(f.svc.suspension_pending());
+  CHECK_FALSE(f.svc.resume_station());
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
+  f.hal.got_ip_cb(0x05060708);
+  CHECK_FALSE(f.svc.is_online());
+  WifiServiceTestAccess::finish_suspend(f.svc);
+  REQUIRE(f.rtos.captured.back().type == EventType::WifiSuspendComplete);
+  CHECK(f.rtos.captured.back().wifi_suspend_ok);
+  CHECK(f.rtos.last_queue_send_timeout_ms == UINT32_MAX);
+  CHECK(f.svc.suspension_pending());
+  f.svc.complete_suspend(f.rtos.captured.back().wifi_suspend_ok);
+  CHECK_FALSE(f.svc.suspension_pending());
+  CHECK(WifiServiceTestAccess::worker(f.svc) == worker);
+  CHECK_FALSE(WifiServiceTestAccess::local_http_active(f.svc));
+  CHECK(f.http.active_routes == 0);
+  CHECK(f.hal.get_mode() == WifiMode::Off);
+  CHECK(f.hal.deinit_calls == 0);
+  CHECK(f.svc.has_saved_networks());
+  CHECK(f.svc.has_been_online());
+  REQUIRE(f.svc.resume_station());
+  CHECK_FALSE(f.svc.is_suspended());
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 30000); // Every resumed attempt is bounded.
+  CHECK(f.hal.init_calls == 1);
+  CHECK(f.hal.get_mode() == WifiMode::Sta);
+}
+
+TEST_CASE("WifiService tracking upgrades suspension and reinitializes on return",
+          "[WifiService][handoff]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  const auto worker = WifiServiceTestAccess::install_worker(f.svc);
+  REQUIRE(f.svc.request_suspend(false));
+  const auto suspend_notification = f.rtos.notifications.back();
+  REQUIRE(f.svc.request_suspend(true)); // Leave the pending request untouched.
+  CHECK(f.rtos.notifications.size() == 1);
+  WifiServiceTestAccess::finish_suspend(f.svc);
+  REQUIRE(f.rtos.captured.back().wifi_suspend_ok);
+  f.svc.complete_suspend(f.rtos.captured.back().wifi_suspend_ok);
+  REQUIRE(f.svc.request_suspend(true));
+  CHECK(f.rtos.notifications.back() != suspend_notification);
+  CHECK(f.rtos.notified_tasks.back() == worker);
+  WifiServiceTestAccess::finish_suspend(f.svc, true);
+  REQUIRE(f.rtos.captured.back().wifi_suspend_ok);
+  CHECK(f.svc.suspension_pending());
+  CHECK_FALSE(f.svc.driver_released()); // Publish the final state only when the event is handled.
+  SECTION("completion after shutdown") {
+    f.svc.shutdown();
+    CHECK(f.svc.suspension_pending());
+    CHECK(WifiServiceTestAccess::worker(f.svc) == worker);
+  }
+  SECTION("ordinary completion") {}
+  f.svc.complete_suspend(f.rtos.captured.back().wifi_suspend_ok);
+  CHECK(f.svc.driver_released());
+  CHECK(f.hal.deinit_calls == 1);
+  CHECK(f.svc.has_saved_networks());
+  f.hal.init_status = WifiStatus::Failed;
+  CHECK_FALSE(f.svc.resume_station());
+  CHECK(f.svc.is_suspended());
+  CHECK(f.svc.driver_released());
+  f.hal.init_status = WifiStatus::Ok;
+  REQUIRE(f.svc.resume_station());
+  CHECK_FALSE(f.svc.driver_released());
+  // Never previously online: preserve the initial-failure provisioning policy.
+  CHECK(WifiServiceTestAccess::deadline(f.svc) != 0);
+}
+
+TEST_CASE("WifiService cleanup failure cannot release ownership before retry succeeds",
+          "[WifiService][handoff]") {
+  WifiService::Config config{};
+  config.serial_number = "TEST00";
+  config.firmware_version = "test";
+  config.model = "P-1PSG";
+  config.hostname = "airgradient-TEST00";
+  Fixture f(config);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x01020304);
+  REQUIRE(f.svc.ensure_local_http());
+  REQUIRE(f.svc.ensure_local_mdns());
+  f.hal.stop_mdns_status = WifiStatus::Failed;
+  const auto worker = WifiServiceTestAccess::install_worker(f.svc);
+  REQUIRE(f.svc.request_suspend(true));
+  WifiServiceTestAccess::finish_suspend(f.svc, true);
+  REQUIRE(f.rtos.captured.back().type == EventType::WifiSuspendComplete);
+  CHECK_FALSE(f.rtos.captured.back().wifi_suspend_ok);
+  f.svc.complete_suspend(f.rtos.captured.back().wifi_suspend_ok);
+  CHECK_FALSE(f.svc.suspension_pending());
+  CHECK(f.svc.is_suspended());
+  const auto events_after_failure = f.rtos.captured.size();
+  f.hal.got_ip_cb(0x05060708);
+  f.svc.schedule_reconnect();
+  CHECK_FALSE(f.svc.is_online());
+  CHECK(f.rtos.captured.size() == events_after_failure);
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+  CHECK_FALSE(f.svc.driver_released());
+  CHECK(f.hal.deinit_calls == 0);
+  f.hal.stop_mdns_status = WifiStatus::Ok;
+  REQUIRE(f.svc.request_suspend(true));
+  CHECK(f.rtos.notified_tasks.back() == worker);
+  WifiServiceTestAccess::finish_suspend(f.svc, true);
+  CHECK(f.rtos.captured.back().wifi_suspend_ok);
+  f.svc.complete_suspend(f.rtos.captured.back().wifi_suspend_ok);
+  CHECK(f.svc.driver_released());
+  CHECK(f.hal.deinit_calls == 1);
+}
+
+TEST_CASE("WifiService cleanup worker allocation failure leaves Wi-Fi gated",
+          "[WifiService][handoff]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  // Native RTOS task creation fails; no completion is promised for a rejected request.
+  CHECK_FALSE(f.svc.request_suspend(false));
+  CHECK(f.svc.is_suspended());
+  CHECK_FALSE(f.svc.suspension_pending());
+  CHECK_FALSE(f.rtos.has_event(EventType::WifiSuspendComplete));
+}
+
+TEST_CASE("WifiService reuses cleanup worker across reconnect and shutdown",
+          "[WifiService][handoff]") {
+  Fixture f;
+  f.seed_network();
+  const auto worker = WifiServiceTestAccess::install_worker(f.svc);
+  for (int i = 0; i < 3; ++i) {
+    REQUIRE(f.svc.resume_station());
+    REQUIRE(f.svc.request_suspend(false));
+    CHECK(f.rtos.notified_tasks.back() == worker);
+    WifiServiceTestAccess::finish_suspend(f.svc);
+    REQUIRE(f.rtos.captured.back().wifi_suspend_ok);
+    f.svc.complete_suspend(f.rtos.captured.back().wifi_suspend_ok);
+    f.svc.shutdown();
+    CHECK(WifiServiceTestAccess::worker(f.svc) == worker);
+  }
+  CHECK(f.rtos.notifications.size() == 3);
 }

@@ -61,6 +61,10 @@ extern void reset();
 
 class CloudServiceTestAccess {
 public:
+  static void model_worker(CloudService &c) {
+    c._task_handle = reinterpret_cast<RtosTaskHandle>(1);
+  }
+  static bool worker_present(const CloudService &c) { return c._task_handle != nullptr; }
   static uint32_t run_once(CloudService &c, uint32_t now) { return c._run_iteration(now); }
   static void run(CloudService &c) { c._run(); }
 
@@ -120,7 +124,8 @@ public:
     return false; // simulate timeout — tests drive the loop manually
   }
 
-  bool queue_send_impl(RtosQueueHandle /*qh*/, const void *item, uint32_t /*timeout_ms*/) override {
+  bool queue_send_impl(RtosQueueHandle /*qh*/, const void *item, uint32_t timeout_ms) override {
+    last_queue_timeout_ms = timeout_ms;
     if (queue_full) {
       return false;
     }
@@ -132,6 +137,7 @@ public:
     return false;
   }
 
+  uint32_t last_queue_timeout_ms = 0;
   bool queue_full = false;
   Event last_event{};
   uint32_t events_posted = 0;
@@ -1120,12 +1126,12 @@ TEST_CASE("Shutdown branch increments done counter, skips AgClient", "[CloudServ
   A::set_fetch_due(f.cloud, 0);
 
   A::set_shutdown_pending(f.cloud, true);
-  uint32_t wake = A::run_once(f.cloud, /*now=*/1000);
+  A::run(f.cloud);
 
   REQUIRE(A::done_signal_count(f.cloud) == 1);
   REQUIRE(cloud_spy::post_call_count == 0);
   REQUIRE(cloud_spy::fetch_call_count == 0);
-  REQUIRE(wake == UINT32_MAX);
+  REQUIRE(f.mock_rtos.last_event.type == EventType::CloudStopped);
 }
 
 // ============================================================================
@@ -1356,5 +1362,38 @@ TEST_CASE("Cloud acknowledges shutdown arriving during an OTA probe",
   A::run(f.cloud);
   CHECK(cloud_spy::ota_check_count == 1);
   CHECK(A::done_signal_count(f.cloud) == 1);
+  CHECK(f.mock_rtos.events_posted == 1);
+  CHECK(f.mock_rtos.last_event.type == EventType::CloudStopped);
+}
+
+TEST_CASE("Cloud handoff completion event precedes resource reclamation",
+          "[CloudService][handoff]") {
+  CloudFixture f;
+  A::model_worker(f.cloud);
+  f.cloud.arm(true);
+  f.cloud.request_stop();
+  CHECK(f.cloud.stop_pending());
+  CHECK(A::worker_present(f.cloud));
+  CHECK(f.mock_rtos.events_posted == 0);
+  f.cloud.request_stop();
+  A::run(f.cloud);
+  CHECK(cloud_spy::post_call_count == 0);
+  CHECK(cloud_spy::fetch_call_count == 0);
+  REQUIRE(f.mock_rtos.events_posted == 1);
+  CHECK(f.mock_rtos.last_event.type == EventType::CloudStopped);
+  CHECK(f.mock_rtos.last_queue_timeout_ms == UINT32_MAX);
+  CHECK(f.cloud.stop_pending());
+  CHECK(A::worker_present(f.cloud));
+  A::set_fetch_buf(f.cloud, nullptr); // Fixture owns the injected buffer.
+  f.cloud.complete_stop();
+  CHECK_FALSE(A::worker_present(f.cloud));
+  CHECK_FALSE(f.cloud.stop_pending());
+  f.cloud.complete_stop(); // A delayed event after synchronous stop is harmless.
+}
+
+TEST_CASE("Cloud stop without a worker needs no completion event", "[CloudService][handoff]") {
+  CloudFixture f;
+  f.cloud.request_stop();
+  CHECK_FALSE(f.cloud.stop_pending());
   CHECK(f.mock_rtos.events_posted == 0);
 }

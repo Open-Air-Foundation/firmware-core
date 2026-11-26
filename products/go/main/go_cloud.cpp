@@ -492,20 +492,36 @@ bool CloudService::start() {
   return true;
 }
 
+void CloudService::request_stop() {
+  if (_task_handle == nullptr) {
+    return;
+  }
+  disarm();
+  _shutdown_pending.store(true);
+  _wake();
+}
+
+bool CloudService::stop_pending() const { return _shutdown_pending.load(); }
+
+void CloudService::complete_stop() {
+  if (_task_handle != nullptr && stop_pending()) {
+    _finish_stop();
+  }
+}
+
 void CloudService::stop() {
   if (_task_handle == nullptr) {
     return;
   }
-
-  log_heap(TAG, "cloud.stop:enter");
-  AG_LOGI(TAG, "stop: latching shutdown");
-  _shutdown_pending.store(true);
-  _wake();
+  request_stop();
 
   // Bounded by one WifiHttpClient timeout (~15 s).
   _done_sem.take();
+  _finish_stop();
+}
 
-  // Task is parked on notify-wait; safe to delete externally.
+void CloudService::_finish_stop() {
+  // The worker has finished HTTP and signaled completion; reclaim its resources.
   RTOS::task_delete(_task_handle);
   _task_handle = nullptr;
 
@@ -573,28 +589,28 @@ void CloudService::_task_entry(void *arg) {
 
 void CloudService::_run() {
   for (;;) {
-    const bool shutting_down = _shutdown_pending.load();
     const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
     const uint32_t wake_ms = _run_iteration(now);
-
-    if (shutting_down) {
-      // This iteration acknowledged stop(). _task_entry parks until deletion.
-      // A stop arriving during HTTP needs another iteration to signal _done_sem.
-      return;
+    if (_shutdown_pending.load()) {
+      break; // Any HTTP operation from this iteration has returned.
     }
-
     if (wake_ms > 0) {
       RTOS::task_notify_take(wake_ms);
     }
   }
+#ifdef TEST_HOST
+  _test_done_signal_count += 1;
+#endif
+  // Blocking stop() may wait without draining events. Signal it before
+  // posting so a full queue cannot prevent shutdown from reclaiming the task.
+  _done_sem.give();
+  Event event{};
+  event.type = EventType::CloudStopped;
+  RTOS::queue_send(_event_queue, &event, UINT32_MAX);
 }
 
 uint32_t CloudService::_run_iteration(uint32_t now) {
   if (_shutdown_pending.load()) {
-#ifdef TEST_HOST
-    _test_done_signal_count += 1;
-#endif
-    _done_sem.give();
     return UINT32_MAX;
   }
 

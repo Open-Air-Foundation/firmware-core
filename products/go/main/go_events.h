@@ -39,6 +39,7 @@ enum class EventType : uint8_t {
   // --- Wi-Fi events ---
   WifiConnected,            // payload: uint32_t wifi_ip (network byte order)
   WifiDisconnected,         // payload: uint8_t wifi_disconnect_reason
+  WifiSuspendComplete,      // payload: bool wifi_suspend_ok
   ProvisioningStateChanged, // payload: ProvisioningEventPayload prov
   PortableProvRequest,      // no payload (parsed request in provisioner buffer)
 
@@ -46,6 +47,7 @@ enum class EventType : uint8_t {
   PostMeasuresResult, // payload: uint8_t cloud_result (AgClientResult)
   FetchConfigResult,  // payload: FetchConfigEventPayload fetch_config
   WifiOtaAvailable,   // no payload
+  CloudStopped,       // no payload (worker drained; reclaim before Wi-Fi cleanup)
 
   // --- Local API events ---
   LocalApiRequestReady, // payload: uint32_t local_api_epoch
@@ -131,6 +133,7 @@ struct Event {
     SensorTestResults sensor_test_results;   // SensorTestDone (5 bools)
     uint32_t wifi_ip;                        // WifiConnected (network byte order)
     uint8_t wifi_disconnect_reason;          // WifiDisconnected (WifiDisconnectReason)
+    bool wifi_suspend_ok;                    // WifiSuspendComplete
     ProvisioningEventPayload prov;           // ProvisioningStateChanged
     CloudResultByte cloud_result;            // PostMeasuresResult (AgClientResult byte)
     FetchConfigEventPayload fetch_config;    // FetchConfigResult

@@ -2687,7 +2687,7 @@ TEST_CASE("BLE: advertising uses the Go interval before first start and after re
   CHECK(server.started_intervals_us.back() == expected_interval_us);
 }
 
-TEST_CASE("BLE: interval configuration failure tears down without starting advertising") {
+TEST_CASE("BLE: interval configuration failure defers teardown to the owner") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   MockBleServer server;
   BleService svc(nullptr, storage, server);
@@ -2696,10 +2696,10 @@ TEST_CASE("BLE: interval configuration failure tears down without starting adver
   CHECK_FALSE(svc.start_advertising());
   CHECK_FALSE(svc.is_initialized());
   CHECK(server.start_advertising_count == 0);
-  CHECK(server.deinit_count == 1);
+  CHECK(server.deinit_count == 0); // Companion GATT services must detach first.
 }
 
-TEST_CASE("BLE: advertising start failure tears down after interval configuration") {
+TEST_CASE("BLE: advertising start failure defers teardown to the owner") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   MockBleServer server;
   BleService svc(nullptr, storage, server);
@@ -2709,7 +2709,7 @@ TEST_CASE("BLE: advertising start failure tears down after interval configuratio
   CHECK_FALSE(svc.is_initialized());
   CHECK(server.set_advertising_interval_count == 1);
   CHECK(server.start_advertising_count == 1);
-  CHECK(server.deinit_count == 1);
+  CHECK(server.deinit_count == 0); // Companion GATT services must detach first.
 }
 
 TEST_CASE("BLE: on_connect sets connected and stops advertising") {
@@ -3324,4 +3324,47 @@ TEST_CASE("BLE: retired operating mode writes are unknown and leave preferences 
     CHECK(settings.idle_interval_seconds == before.idle_interval_seconds);
     CHECK(settings.gps_mode == before.gps_mode);
   }
+}
+
+TEST_CASE("BLE handoff suppresses disconnect advertising and reuses the stack") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  MockBleServer server;
+  BleService svc(nullptr, storage, server);
+  REQUIRE(svc.start_advertising());
+  BleServiceTestAccess::on_connect(svc, 1);
+  REQUIRE(svc.set_connectable(false));
+  const auto starts = server.start_advertising_count;
+  BleServiceTestAccess::on_disconnect(svc, 1, 0);
+  CHECK(server.start_advertising_count == starts);
+  CHECK(svc.is_initialized());
+  REQUIRE(svc.set_connectable(true));
+  CHECK(server.start_advertising_count == starts + 1);
+  CHECK(server.deinit_count == 0);
+}
+
+TEST_CASE("BLE: notify_command_result encodes release_ble cmd string") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  svc.notify_command_result(BleCommand::ReleaseBle, true);
+
+  auto entries = decode_cbor_map(config_char.last_notified_value.data(),
+                                 config_char.last_notified_value.size());
+  CHECK(find_entry(entries, "type")->text_val == "cmd_result");
+  CHECK(find_entry(entries, "cmd")->text_val == "release_ble");
+  CHECK(find_entry(entries, "ok")->bool_val == true);
+}
+
+TEST_CASE("BLE: decode_config_write decodes release_ble command") {
+  uint8_t buf[64];
+  size_t len = encode_cmd_cbor(buf, sizeof(buf), "release_ble");
+
+  GoSettings settings;
+  auto result = BleService::decode_config_write(buf, len, settings);
+
+  CHECK(result.op == BleConfigOp::Command);
+  CHECK(result.cmd == BleCommand::ReleaseBle);
 }

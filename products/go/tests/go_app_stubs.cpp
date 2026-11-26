@@ -768,7 +768,7 @@ BleService::BleService(RtosQueueHandle /*event_queue*/, StorageService &storage,
                        AgBleServer & /*ble_server*/)
     : _event_queue(nullptr), _storage(storage), _server(nullptr) {}
 
-bool BleService::init(const char * /*serial*/) {
+bool BleService::init(const char * /*serial*/, const char *, const char *) {
   test_spy::ble_init_called = true;
   return true;
 }
@@ -1087,7 +1087,7 @@ void Orchestrator::on_ble_config_write() {}
 void Orchestrator::on_ble_history_write() {}
 void Orchestrator::on_ble_pairing_request(uint32_t /*passkey*/) {}
 void Orchestrator::on_ble_auth_complete(bool /*success*/) {}
-void Orchestrator::lock() {}
+void Orchestrator::lock(bool) {}
 void Orchestrator::unlock() {}
 bool Orchestrator::start_tracking() { return true; }
 void Orchestrator::stop_tracking() {}

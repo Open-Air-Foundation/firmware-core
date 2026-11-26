@@ -108,7 +108,26 @@ private:
   const char *_serial; ///< Device serial string for BLE advertising
 
   // --- Application state ---
-  bool _wifi_active = false;
+  enum class ConnectivityState : uint8_t {
+    Uninitialized,
+    Off,
+    Wifi,
+    DelayToBle,
+    StoppingWifiForBle, // Cloud drains first, then Wi-Fi cleanup completes the handoff.
+    StoppingWifiForOff,
+    RetryWifiCleanupForBle,
+    RetryWifiCleanupForOff,
+    Ble,
+    RetryBle,
+    DelayToWifi,
+    ReleaseBle,
+  };
+  ConnectivityState _connectivity = ConnectivityState::Uninitialized;
+  uint32_t _connectivity_deadline_ms = 0;
+  enum class BleWindow : uint8_t { Closed, Pending, Open };
+  BleWindow _ble_window = BleWindow::Closed;
+  uint32_t _ble_window_deadline_ms = 0;
+
   Behavior _behavior = Behavior::Idle;
   LockState _lock_state = LockState::Locked;
   bool _gps_enabled = true;
@@ -298,7 +317,7 @@ private:
   void on_ble_auth_complete(bool success);
 
   // --- State transitions ---
-  void lock();
+  void lock(bool automatic = false);
   void unlock();
   /// Begin a new tracking session. Returns false on session-id exhaustion
   /// or storage-open failure; the snackbar + BLE notify fire inline first.
@@ -387,6 +406,8 @@ private:
   void enter_wifi();
   void on_wifi_connected(uint32_t ip);
   void on_wifi_disconnected(WifiDisconnectReason reason);
+  void on_wifi_suspend_complete(bool success);
+  void on_cloud_stopped();
   void on_provisioning_state_changed(const ProvisioningEventPayload &payload);
   bool activate_local_endpoint();
   void publish_local_snapshots();
@@ -467,6 +488,20 @@ private:
   bool is_gps_active() const;
   GoRuntimePolicy runtime_policy() const;
   uint32_t gps_sleep_interval_ms() const;
+  bool wifi_active() const;
+  bool wifi_cleanup_pending() const;
+  bool connectivity_timer_active() const;
+  bool releasing_ble() const;
+  bool ble_needed() const;
+  bool wifi_services_allowed() const;
+  bool connectivity_paused() const;
+  void reconcile_connectivity();
+  void start_wifi_cleanup(bool for_ble);
+  void continue_wifi_cleanup();
+  void activate_ble();
+  void begin_ble_return();
+  void resume_wifi();
+  void request_ble_release();
   void stop_ble();
   void reconcile_runtime(bool reset_cadence);
   void activate_gps();

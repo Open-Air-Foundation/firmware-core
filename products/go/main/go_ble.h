@@ -84,6 +84,7 @@ enum class BleCommand : uint8_t {
   StopTracking,   ///< "stop_tracking"  — end route logging
   PauseTracking,  ///< "pause_tracking" — retain session, stop route writes
   ResumeTracking, ///< "resume_tracking" — continue the retained session
+  ReleaseBle,     ///< "release_ble" — lock and relinquish BLE ownership
   SetAiding,      ///< "set_aiding" — inject A-GNSS aiding data
   Set,            ///< Synthetic — used for config-set error notifications
   Unknown,        ///< Unrecognised command string
@@ -148,16 +149,19 @@ public:
   /// Convenience wrapper: init_stack_and_register() + start_advertising().
   /// serial: 12-char lowercase hex device serial; the BLE name uses its last
   ///         four chars (e.g. "AirGradient Go ef0e"). Returns false on failure.
-  bool init(const char *serial);
+  bool init(const char *serial, const char *model = nullptr,
+            const char *firmware_version = nullptr);
 
   /// Phase 1: init the stack, set security, register the AGo data service +
-  /// chars and connection callbacks; store the advertised name. Does NOT
-  /// advertise, so extra GATT services (prov + DIS) can be slotted in before
+  /// chars, Device Information and connection callbacks. Does NOT
+  /// advertise, so OTA can be registered before
   /// start_advertising(). Returns false on failure.
-  bool init_stack_and_register(const char *serial);
+  bool init_stack_and_register(const char *serial, const char *model = nullptr,
+                               const char *firmware_version = nullptr);
 
   /// Phase 3: set the name, service UUID and interval, then start advertising.
-  /// Marks the service initialized. Returns false if advertising fails.
+  /// Marks the service initialized. On failure, detach companion services
+  /// before deinit() releases their GATT pointers.
   bool start_advertising();
 
   /// Stop advertising, disconnect clients, tear down BLE stack.
@@ -274,6 +278,8 @@ public:
   // --- State queries ---
 
   bool is_initialized() const;
+  bool set_connectable(bool allowed);
+  bool export_active() const { return _export_active.load(); }
   /// True while a GAP link exists (not necessarily usable).
   bool is_connected() const;
   /// True while the active link is authenticated (MITM-paired) — the
@@ -314,6 +320,7 @@ private:
   // `_server != nullptr` initialisation gate, which is no longer valid now
   // that the BLE server is borrowed for the lifetime of the service.
   bool _initialized = false;
+  bool _stack_initialized = false;
   AgBleCharacteristic *_measures_char = nullptr;
   AgBleCharacteristic *_status_char = nullptr;
   AgBleCharacteristic *_config_char = nullptr;
@@ -323,6 +330,7 @@ private:
   char _adv_name[BLE_ADV_NAME_BUF_SIZE] = {};
 
   std::atomic<bool> _connected{false};
+  std::atomic<bool> _connectable{true};
 
   // Optional disconnect fan-out (OTA abort).  Invoked first in
   // on_disconnect(), synchronously on the NimBLE host task.  Nullable.
@@ -345,7 +353,7 @@ private:
   // --- History export state ---
 
   uint32_t _export_session_id = 0;
-  bool _export_active = false;
+  std::atomic<bool> _export_active{false};
 
   // --- Internal helpers ---
 

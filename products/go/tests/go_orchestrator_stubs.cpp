@@ -282,7 +282,26 @@ uint32_t ensure_pmid_healthy_count = 0;
 bool recover_pm_sensor_called = false;
 uint32_t recover_pm_sensor_count = 0;
 
+bool cloud_stop_ready = true;
+uint32_t cloud_request_stop_count = 0;
+bool wifi_suspend_ready = true;
+bool wifi_suspend_ok = true;
+uint32_t wifi_suspend_count = 0;
+uint32_t wifi_deinit_count = 0;
+bool wifi_suspend_deinitialize = false;
+bool ble_connectable = true;
+std::vector<std::string> connectivity_calls;
+
 void reset() {
+  cloud_stop_ready = true;
+  cloud_request_stop_count = 0;
+  wifi_suspend_ready = true;
+  wifi_suspend_ok = true;
+  wifi_suspend_count = 0;
+  wifi_deinit_count = 0;
+  wifi_suspend_deinitialize = false;
+  ble_connectable = true;
+  connectivity_calls.clear();
   during_melody = nullptr;
   buzzer_refresh_ack_count = 0;
   buzzer_play_count = 0;
@@ -909,23 +928,26 @@ BleService::BleService(RtosQueueHandle /*event_queue*/, StorageService &storage,
                        AgBleServer & /*ble_server*/)
     : _event_queue(nullptr), _storage(storage), _server(nullptr) {}
 
-bool BleService::init(const char * /*serial*/) {
+bool BleService::init(const char * /*serial*/, const char *, const char *) {
   test_spy::ble_init_called = true;
   test_spy::ble_initialized = true;
   return true;
 }
 
-bool BleService::init_stack_and_register(const char * /*serial*/) {
+bool BleService::init_stack_and_register(const char * /*serial*/, const char *, const char *) {
   test_spy::ble_init_called = true;
   return true;
 }
 
 bool BleService::start_advertising() {
+  test_spy::connectivity_calls.push_back("ble_start");
   test_spy::ble_initialized = true;
   return true;
 }
 
 void BleService::deinit() {
+  test_spy::connectivity_calls.push_back("ble_stop");
+  _export_active = false;
   test_spy::ble_deinit_called = true;
   test_spy::ble_initialized = false;
   test_spy::ble_connected = false;
@@ -1288,10 +1310,17 @@ CloudService::~CloudService() = default;
 
 bool CloudService::start() {
   ++test_spy::cloud_start_count;
+  if (test_spy::cloud_start_result) {
+    _task_handle = reinterpret_cast<RtosTaskHandle>(1);
+  }
   return test_spy::cloud_start_result;
 }
 
-void CloudService::stop() { ++test_spy::cloud_stop_count; }
+void CloudService::stop() {
+  ++test_spy::cloud_stop_count;
+  _task_handle = nullptr;
+  _shutdown_pending = false;
+}
 
 void CloudService::arm(bool fire_now) {
   ++test_spy::cloud_arm_count;
@@ -1500,4 +1529,56 @@ uint32_t play_synced(BuzzerService & /*buzzer*/, LedService & /*led*/, MelodySel
     test_spy::during_melody();
   }
   return 0;
+}
+
+bool BleService::set_connectable(bool allowed) {
+  test_spy::ble_connectable = allowed;
+  return true;
+}
+void CloudService::request_stop() {
+  ++test_spy::cloud_request_stop_count;
+  test_spy::connectivity_calls.push_back("cloud_stop_requested");
+  if (_task_handle != nullptr || !test_spy::cloud_stop_ready) {
+    _shutdown_pending = true;
+  }
+}
+bool CloudService::stop_pending() const { return _shutdown_pending.load(); }
+void CloudService::complete_stop() {
+  test_spy::connectivity_calls.push_back("cloud_stopped");
+  stop();
+}
+bool WifiService::request_suspend(bool deinitialize) {
+  if (suspension_pending()) {
+    return true;
+  }
+  deinitialize = deinitialize || driver_released();
+  _state.store(deinitialize ? WifiState::Releasing : WifiState::Suspending);
+  ++test_spy::wifi_suspend_count;
+  test_spy::wifi_suspend_deinitialize = deinitialize;
+  test_spy::connectivity_calls.push_back("wifi_suspend_requested");
+  return true;
+}
+void WifiService::complete_suspend(bool success) {
+  const auto state = _state.load();
+  if (state != WifiState::Suspending && state != WifiState::Releasing) {
+    return;
+  }
+  if (!success) {
+    _state.store(WifiState::CleanupFailed);
+    return;
+  }
+  _state.store(state == WifiState::Releasing ? WifiState::Released : WifiState::Suspended);
+}
+bool WifiService::suspension_pending() const {
+  const auto state = _state.load();
+  return state == WifiState::Suspending || state == WifiState::Releasing;
+}
+bool WifiService::is_suspended() const { return _state.load() != WifiState::Active; }
+bool WifiService::driver_released() const { return _state.load() == WifiState::Released; }
+
+bool WifiService::resume_station(const WifiStaticIpConfig *ip) {
+  _state.store(WifiState::Active);
+  test_spy::connectivity_calls.push_back("wifi_resume");
+  connect_with_saved_credentials(ip);
+  return true;
 }

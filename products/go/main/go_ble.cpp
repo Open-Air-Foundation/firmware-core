@@ -23,6 +23,7 @@
 #include "sdkconfig.h"
 #endif
 #include "rtos.h"
+#include "services/ble_device_information.h"
 
 #include <cbor.h>
 
@@ -41,6 +42,8 @@ static const char *ble_command_to_str(BleCommand cmd);
 // ---------------------------------------------------------------------------
 // GATT UUIDs
 // ---------------------------------------------------------------------------
+
+static constexpr const char *DIS_MANUFACTURER = "AirGradient";
 
 static constexpr const char *SERVICE_UUID = "d1c0c0a0-6b48-4b2a-9b1d-59f9f2b0a1e1";
 static constexpr const char *MEASURES_CHAR_UUID = "d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1";
@@ -518,14 +521,19 @@ BleService::BleService(RtosQueueHandle event_queue, StorageService &storage,
 
 #ifndef TEST_HOST
 
-bool BleService::init(const char *serial) {
-  if (!init_stack_and_register(serial)) {
+bool BleService::init(const char *serial, const char *model, const char *firmware_version) {
+  if (!init_stack_and_register(serial, model, firmware_version)) {
     return false;
   }
-  return start_advertising();
+  if (start_advertising()) {
+    return true;
+  }
+  deinit();
+  return false;
 }
 
-bool BleService::init_stack_and_register(const char *serial) {
+bool BleService::init_stack_and_register(const char *serial, const char *model,
+                                         const char *firmware_version) {
   if (_initialized) {
     AG_LOGW(TAG, "already initialized");
     return true;
@@ -541,10 +549,12 @@ bool BleService::init_stack_and_register(const char *serial) {
     return false;
   }
 
+  _stack_initialized = true;
+
   // --- Security: Passkey Entry (Display Only) ---
   if (!_server->set_security(AgBleIoCapability::DISPLAY_ONLY, AgBleAuth::BOND | AgBleAuth::MITM)) {
     AG_LOGE(TAG, "set_security failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -552,7 +562,7 @@ bool BleService::init_stack_and_register(const char *serial) {
   auto *svc = _server->add_service(SERVICE_UUID);
   if (svc == nullptr) {
     AG_LOGE(TAG, "add_service failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -562,7 +572,7 @@ bool BleService::init_stack_and_register(const char *serial) {
   _measures_char = svc->add_characteristic(MEASURES_CHAR_UUID, measures_properties());
   if (_measures_char == nullptr) {
     AG_LOGE(TAG, "add Measures characteristic failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -570,7 +580,7 @@ bool BleService::init_stack_and_register(const char *serial) {
   _status_char = svc->add_characteristic(STATUS_CHAR_UUID, status_properties());
   if (_status_char == nullptr) {
     AG_LOGE(TAG, "add Status characteristic failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -578,7 +588,7 @@ bool BleService::init_stack_and_register(const char *serial) {
   _config_char = svc->add_characteristic(CONFIG_CHAR_UUID, config_properties());
   if (_config_char == nullptr) {
     AG_LOGE(TAG, "add Config characteristic failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -586,7 +596,7 @@ bool BleService::init_stack_and_register(const char *serial) {
   _history_char = svc->add_characteristic(HISTORY_CHAR_UUID, history_properties());
   if (_history_char == nullptr) {
     AG_LOGE(TAG, "add History characteristic failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -599,7 +609,16 @@ bool BleService::init_stack_and_register(const char *serial) {
   // --- Start GATT service ---
   if (!svc->start()) {
     AG_LOGE(TAG, "service start failed");
-    _server->deinit();
+    deinit();
+    return false;
+  }
+
+  // Device Information is independent of the provisioning transport.
+  const DeviceInformation info{model, serial, firmware_version, DIS_MANUFACTURER};
+  constexpr uint16_t properties = AgBleProperty::READ | AgBleProperty::READ_ENC;
+  if (!register_device_information(*_server, info, properties)) {
+    AG_LOGE(TAG, "Device Information registration failed");
+    deinit();
     return false;
   }
 
@@ -632,25 +651,21 @@ bool BleService::start_advertising() {
   // --- Advertising ---
   if (!_server->set_advertising_name(_adv_name)) {
     AG_LOGE(TAG, "set_advertising_name failed");
-    _server->deinit();
     return false;
   }
 
   if (!_server->add_advertised_service_uuid(SERVICE_UUID)) {
     AG_LOGE(TAG, "add_advertised_service_uuid failed");
-    _server->deinit();
     return false;
   }
 
   if (!_server->set_advertising_interval(static_cast<uint32_t>(ADVERTISING_INTERVAL_MS * 1000))) {
     AG_LOGE(TAG, "set_advertising_interval failed");
-    _server->deinit();
     return false;
   }
 
   if (!_server->start_advertising()) {
     AG_LOGE(TAG, "start_advertising failed");
-    _server->deinit();
     return false;
   }
 
@@ -660,10 +675,11 @@ bool BleService::start_advertising() {
 }
 
 void BleService::deinit() {
-  if (!_initialized) {
+  if (!_initialized && !_stack_initialized) {
     return;
   }
 
+  _connectable.store(false);
   _connected.store(false);
   _export_active = false;
   _export_session_id = 0;
@@ -674,6 +690,11 @@ void BleService::deinit() {
   // table differently.
   _server->deinit();
   _initialized = false;
+  _stack_initialized = false;
+  _config_write_pending = false;
+  _config_write_len = 0;
+  _history_write_pending = false;
+  _history_write_len = 0;
   _measures_char = nullptr;
   _status_char = nullptr;
   _config_char = nullptr;
@@ -703,6 +724,19 @@ bool BleService::delete_all_bonds() {
 bool BleService::is_initialized() const { return _initialized; }
 
 bool BleService::is_connected() const { return _connected.load(); }
+
+bool BleService::set_connectable(bool allowed) {
+  const bool changed = _connectable.exchange(allowed) != allowed;
+  if (!_initialized || !changed || _connected.load()) {
+    return true;
+  }
+  const bool ok = allowed ? _server->start_advertising() : _server->stop_advertising();
+  if (!ok) {
+    AG_LOGE(TAG, "failed to change connectable advertising to %d", allowed);
+    _connectable.store(!allowed);
+  }
+  return ok;
+}
 
 bool BleService::is_authenticated() const {
   return _connected.load() && _server->is_peer_authenticated();
@@ -740,8 +774,9 @@ void BleService::on_disconnect(uint16_t conn_handle, int reason) {
   _export_active = false;
   _export_session_id = 0;
 
-  // Restart advertising — borrowed server is always bound.
-  _server->start_advertising();
+  if (_connectable.load()) {
+    _server->start_advertising();
+  }
 
   Event evt{};
   evt.type = EventType::BleDisconnected;
@@ -2090,6 +2125,9 @@ static BleCommand str_to_ble_command(const char *s) {
   if (strcmp(s, BLE_VAL_CMD_RESUME_TRACKING) == 0) {
     return BleCommand::ResumeTracking;
   }
+  if (strcmp(s, BLE_VAL_CMD_RELEASE_BLE) == 0) {
+    return BleCommand::ReleaseBle;
+  }
   if (strcmp(s, BLE_VAL_CMD_SET_AIDING) == 0) {
     return BleCommand::SetAiding;
   }
@@ -2113,6 +2151,8 @@ static const char *ble_command_to_str(BleCommand cmd) {
     return BLE_VAL_CMD_PAUSE_TRACKING;
   case BleCommand::ResumeTracking:
     return BLE_VAL_CMD_RESUME_TRACKING;
+  case BleCommand::ReleaseBle:
+    return BLE_VAL_CMD_RELEASE_BLE;
   case BleCommand::SetAiding:
     return BLE_VAL_CMD_SET_AIDING;
   case BleCommand::Set:
