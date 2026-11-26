@@ -39,6 +39,7 @@ enum class EventType : uint8_t {
   // --- Wi-Fi events ---
   WifiConnected,            // payload: uint32_t wifi_ip (network byte order)
   WifiDisconnected,         // payload: uint8_t wifi_disconnect_reason
+  WifiConnectionTimeout,    // no payload; whole initial/reconnect window expired
   WifiSuspendComplete,      // payload: bool wifi_suspend_ok
   ProvisioningStateChanged, // payload: ProvisioningEventPayload prov
   PortableProvRequest,      // no payload (parsed request in provisioner buffer)

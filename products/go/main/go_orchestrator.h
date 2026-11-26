@@ -127,6 +127,8 @@ private:
   enum class BleWindow : uint8_t { Closed, Pending, Open };
   BleWindow _ble_window = BleWindow::Closed;
   uint32_t _ble_window_deadline_ms = 0;
+  bool _wifi_fallback = false;
+  bool _wifi_setup_pending = false;
 
   Behavior _behavior = Behavior::Idle;
   LockState _lock_state = LockState::Locked;
@@ -319,9 +321,12 @@ private:
   // --- State transitions ---
   void lock(bool automatic = false);
   void unlock();
-  /// Begin a new tracking session. Returns false on session-id exhaustion
-  /// or storage-open failure; the snackbar + BLE notify fire inline first.
+  /// Start tracking, restarting first if GPS would take too long to wake.
   bool start_tracking();
+  /// GPS worker must be stopped. Returns false if pending intent cannot be cleared.
+  bool restart_for_tracking_if_needed();
+  /// Open the route and initialize session state for interactive start or silent boot.
+  bool begin_tracking_session();
   bool pause_tracking();
   bool resume_tracking();
   void stop_tracking();
@@ -495,12 +500,13 @@ private:
   bool ble_needed() const;
   bool wifi_services_allowed() const;
   bool connectivity_paused() const;
-  void reconcile_connectivity();
+  void reconcile_connectivity(const char *saved_ssid = nullptr);
   void start_wifi_cleanup(bool for_ble);
   void continue_wifi_cleanup();
   void activate_ble();
   void begin_ble_return();
-  void resume_wifi();
+  void resume_wifi(const char *saved_ssid);
+  void enter_wifi_fallback();
   void request_ble_release();
   void stop_ble();
   void reconcile_runtime(bool reset_cadence);

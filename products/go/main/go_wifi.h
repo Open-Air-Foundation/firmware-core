@@ -97,7 +97,7 @@ public:
   /// Arm a runtime reconnect, issued from tick() after reconnect_delay_ms.
   /// Reuses the credential source selected at entry: saved networks or the
   /// manufacturing-only factory network. Keeps has_been_online() latched (stays
-  /// "runtime") and arms no connect window.
+  /// "runtime"). Saved-network retries share one bounded connection window.
   void schedule_reconnect(const WifiStaticIpConfig *static_ip = nullptr);
 
   /// Connect to the factory-default airgradient/cleanair AP. Explicit SSID,
@@ -139,7 +139,8 @@ public:
   bool suspension_pending() const;
   bool is_suspended() const;
   bool driver_released() const;
-  bool resume_station(const WifiStaticIpConfig *static_ip = nullptr);
+  bool resume_station(const WifiStaticIpConfig *static_ip = nullptr,
+                      const char *saved_ssid = nullptr);
 
   /// Erase all saved networks and reset online latches.
   void clear_credentials();
@@ -203,9 +204,9 @@ private:
   void _on_provisioning_event(const struct ProvisioningEventInfo &info);
 
   // Shared saved-credentials connect. Both flags true = fresh bring-up;
-  // both false = runtime reconnect (keeps has_been_online(), no window).
+  // both false = runtime reconnect (keeps online history and the current window).
   void _connect_saved_internal(const WifiStaticIpConfig *static_ip, bool reset_online_latches,
-                               bool arm_window);
+                               bool arm_window, const char *saved_ssid = nullptr);
   void _connect_fallback_internal(bool reset_online_latches, bool arm_window);
 
   void _reset_deadline();

@@ -1283,7 +1283,8 @@ DisplayService::DisplayService(const Config &config)
     : _config(config), _u8g2{}, _render_buf{}, _prev_state{}, _pending_mode(RefreshMode::Full),
       _task_handle(nullptr), _running(false), _worker_busy(false) {}
 
-bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
+bool DisplayService::init(const DisplayValues &initial, bool defer_refresh,
+                          bool skip_initial_refresh) {
   esp_err_t err = driver_init(_config);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "driver init failed: %s", esp_err_to_name(err));
@@ -1299,7 +1300,8 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
   _prev_state = {.screen = initial.screen, .header = initial.header};
   _render_frame(initial);
 
-  if (!defer_refresh) {
+  _initial_refresh_pending = skip_initial_refresh;
+  if (!skip_initial_refresh && !defer_refresh) {
     // Synchronous initial full refresh (worker not yet started).
     // Default behavior: backward compatible with run_full_boot() and run_fast_path().
     err = driver_bus_acquire();
@@ -1318,7 +1320,8 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
       return false;
     }
     _refresh_policy.completed(RefreshMode::Full, static_cast<uint32_t>(RTOS::get_time_ms()));
-  } else {
+    _initial_refresh_pending = false;
+  } else if (!skip_initial_refresh) {
     // Deferred refresh: render is already in _render_buf. Reserve it for the
     // worker, then signal the initial full refresh. Returns in ~10 ms.
     // The worker acquires the SPI bus for ~3 s; any other SPI device (NAND)
@@ -1341,7 +1344,7 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
     return false;
   }
 
-  if (defer_refresh) {
+  if (defer_refresh && !skip_initial_refresh) {
     // Kick the worker to process the initial full refresh immediately.
     RTOS::task_notify_give(_task_handle);
   }
@@ -1380,7 +1383,9 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
       !entering_system_screen &&
       (is_menu_navigation_screen(_prev_state.screen) || is_menu_navigation_screen(values.screen));
 
-  if (values.screen == Screen::TrackingStatus) {
+  if (_initial_refresh_pending) {
+    _pending_mode = RefreshMode::Full;
+  } else if (values.screen == Screen::TrackingStatus) {
     // Status never refreshes the top bar, even on entry or beyond the partial budget.
     // Its non-session classification keeps the worker's transfer body-only.
     _pending_mode = RefreshMode::Partial;
@@ -1449,6 +1454,7 @@ void DisplayService::update_sync(const DisplayValues &values) {
     ESP_LOGE(TAG, "sync update failed: %s", esp_err_to_name(err));
   } else {
     _refresh_policy.completed(RefreshMode::Full, static_cast<uint32_t>(RTOS::get_time_ms()));
+    _initial_refresh_pending = false;
   }
   _prev_state = {.screen = values.screen, .header = values.header};
   _release_framebuffer();
@@ -1480,6 +1486,7 @@ void DisplayService::clear() {
     ESP_LOGE(TAG, "clear failed: %s", esp_err_to_name(err));
   } else {
     _refresh_policy.completed(RefreshMode::Full, static_cast<uint32_t>(RTOS::get_time_ms()));
+    _initial_refresh_pending = false;
   }
   _release_framebuffer();
 }
@@ -2471,6 +2478,9 @@ void DisplayService::_worker_loop() {
       ESP_LOGE(TAG, "worker: refresh failed: %s", esp_err_to_name(err));
     } else {
       _refresh_policy.completed(_pending_mode, static_cast<uint32_t>(RTOS::get_time_ms()));
+      if (_pending_mode == RefreshMode::Full) {
+        _initial_refresh_pending = false;
+      }
     }
 
     driver_bus_release();

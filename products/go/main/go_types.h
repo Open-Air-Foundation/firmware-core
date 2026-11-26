@@ -127,7 +127,12 @@ struct MeasuresAGo;
 // work and pick up where boot left off.  Default-initialized values represent
 // a fresh power-on boot where nothing has been done yet.
 
+enum class BootWifiState : uint8_t { Off, NetworkFound };
+
 struct BootHandoff {
+  bool tracking_restart = false; ///< Silent boot for a one-shot tracking start after BMS reset
+  BootWifiState wifi_state = BootWifiState::Off;
+  char wifi_ssid[33] = {}; ///< Selected saved network; credentials stay in WifiManager
   /// Display already shows a valid frame for the current state.
   /// When true, init() skips update_display() and sets state directly.
   bool display_painted = false;
@@ -136,6 +141,7 @@ struct BootHandoff {
   /// When true, the Orchestrator sets _first_measurement_done and
   /// skips the initial measurement request.
   bool measurement_completed = false;
+  uint32_t measurement_started_ms = 0; ///< Boot uptime; preserves cadence on promotion
 
   /// Suppress the first ButtonPower short-press event. Used when the
   /// wake press that triggered boot should not toggle lock state.

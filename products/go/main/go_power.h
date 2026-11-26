@@ -342,7 +342,8 @@ public:
   /// @param tracking   Current tracking state.
   /// @param awake_ms   Milliseconds the device has been awake this cycle.
   SleepDecision decide_sleep(const GoSettings &settings, LockState lock_state,
-                             TrackingState tracking, uint32_t awake_ms) const;
+                             TrackingState tracking, uint32_t awake_ms,
+                             bool wifi_fallback = false) const;
 
   /// Return true when the given sleep duration is short enough that keeping
   /// the PM sensor measuring (GPIO held) across deep sleep is beneficial.

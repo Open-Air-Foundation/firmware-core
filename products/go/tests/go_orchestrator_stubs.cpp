@@ -287,6 +287,8 @@ uint32_t cloud_request_stop_count = 0;
 bool wifi_suspend_ready = true;
 bool wifi_suspend_ok = true;
 uint32_t wifi_suspend_count = 0;
+uint32_t wifi_resume_count = 0;
+std::string wifi_resume_ssid;
 uint32_t wifi_deinit_count = 0;
 bool wifi_suspend_deinitialize = false;
 bool ble_connectable = true;
@@ -298,6 +300,8 @@ void reset() {
   wifi_suspend_ready = true;
   wifi_suspend_ok = true;
   wifi_suspend_count = 0;
+  wifi_resume_count = 0;
+  wifi_resume_ssid.clear();
   wifi_deinit_count = 0;
   wifi_suspend_deinitialize = false;
   ble_connectable = true;
@@ -841,7 +845,8 @@ RtcAppState PowerService::load_state() const { return test_spy::state_to_load; }
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*settings*/,
                                                        LockState /*lock_state*/,
                                                        TrackingState /*tracking*/,
-                                                       uint32_t /*awake_ms*/) const {
+                                                       uint32_t /*awake_ms*/,
+                                                       bool /*wifi_fallback*/) const {
   return {test_spy::sleep_type_to_return, 10000};
 }
 
@@ -1576,7 +1581,9 @@ bool WifiService::suspension_pending() const {
 bool WifiService::is_suspended() const { return _state.load() != WifiState::Active; }
 bool WifiService::driver_released() const { return _state.load() == WifiState::Released; }
 
-bool WifiService::resume_station(const WifiStaticIpConfig *ip) {
+bool WifiService::resume_station(const WifiStaticIpConfig *ip, const char *saved_ssid) {
+  test_spy::wifi_resume_ssid = saved_ssid != nullptr ? saved_ssid : "";
+  ++test_spy::wifi_resume_count;
   _state.store(WifiState::Active);
   test_spy::connectivity_calls.push_back("wifi_resume");
   connect_with_saved_credentials(ip);

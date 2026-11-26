@@ -215,9 +215,18 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   _behavior = Behavior::Idle;
   _gps_enabled = _settings.gps_mode != GpsMode::AlwaysOff;
 
+  // Waking from the sleep cycle with Wi-Fi enabled implies prior fallback.
+  _wifi_fallback =
+      _settings.wifi_enabled && (cause == WakeCause::Timer || cause == WakeCause::Button);
+  _wifi_setup_pending =
+      cause == WakeCause::PowerOn && _settings.wifi_enabled && !_svc.wifi.has_saved_networks();
+
   // --- Apply initial lock state ---
   if (handoff.initial_lock_state == LockState::Unlocked) {
-    if (handoff.display_painted) {
+    if (handoff.tracking_restart) {
+      _lock_state = LockState::Unlocked;
+      _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+    } else if (handoff.display_painted) {
       // Display already shows unlocked UI — set state directly.
       // Do NOT call unlock() which would trigger update_display().
       _lock_state = LockState::Unlocked;
@@ -239,12 +248,14 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   bool has_raw_measures = handoff.fast_path_measures != nullptr;
   if (handoff.fast_path_measures != nullptr) {
     _raw_measures = *handoff.fast_path_measures;
+    _svc.cloud.update_measures_snapshot(_raw_measures);
   } else if (cause == WakeCause::Button) {
     has_raw_measures = _svc.storage_service.read_latest_cached_measurement(_raw_measures);
   }
   if (has_raw_measures) {
     _corrected_measures = apply_measurement_corrections(
-        _raw_measures, effective_measurement_corrections(_settings, _tracking_state));
+        _raw_measures,
+        effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
   } else if (handoff.display_snapshot != nullptr) {
     // The RTC snapshot contains presentation values, so it can seed the
     // corrected display view but must never become authoritative raw data.
@@ -261,6 +272,16 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   // --- Mark first measurement done if boot already measured ---
   if (handoff.measurement_completed) {
     _first_measurement_done = true;
+  }
+
+  if (handoff.tracking_restart) {
+    // Consume intent before starting: ordinary reboots must never resume a session.
+    if (save_pending_tracking_start(_config_store, false)) {
+      (void)begin_tracking_session();
+    } else {
+      AG_LOGE(TAG, "Unable to consume pending tracking start");
+      _svc.ui_manager.show_snackbar("Tracking start could not be saved");
+    }
   }
 
   // Cold-boot splash gate: run_interactive seeds UIManager via show_info()
@@ -294,7 +315,7 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   }
 
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
-  _last_measurement_ms = now;
+  _last_measurement_ms = handoff.measurement_completed ? handoff.measurement_started_ms : now;
   _last_bms_poll_ms = now;
   _last_bms_status_poll_ms = now;
   _last_ext_wdt_ms = now;
@@ -325,6 +346,9 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
       handoff.initial_lock_state == LockState::Unlocked ? BleWindow::Pending : BleWindow::Closed;
   if (_connectivity == ConnectivityState::Uninitialized) {
     _connectivity = ConnectivityState::Off;
+  }
+  if (handoff.wifi_state == BootWifiState::NetworkFound) {
+    reconcile_connectivity(handoff.wifi_ssid);
   }
   reconcile_runtime(false);
 }
@@ -840,6 +864,14 @@ void Orchestrator::dispatch(const Event &event) {
     on_wifi_disconnected(static_cast<WifiDisconnectReason>(event.wifi_disconnect_reason));
     break;
 
+  case EventType::WifiConnectionTimeout:
+    if (_manufacturing_mode) {
+      on_wifi_disconnected(WifiDisconnectReason::connection_lost);
+    } else if (wifi_active()) {
+      enter_wifi_fallback();
+    }
+    break;
+
   case EventType::WifiSuspendComplete:
     on_wifi_suspend_complete(event.wifi_suspend_ok);
     break;
@@ -1084,7 +1116,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
   _raw_measures.power.charging_voltage = _latest_power.charging_voltage;
   _raw_measures.power.battery_percentage = _latest_power.battery_percentage;
   _corrected_measures = apply_measurement_corrections(
-      _raw_measures, effective_measurement_corrections(_settings, _tracking_state));
+      _raw_measures, effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
   _svc.local_api.publish_measurement_snapshot(_corrected_measures);
   AG_LOGI(TAG,
           "Measurement corrections: temp %.2f -> %.2f, humidity %.2f -> %.2f, "
@@ -1639,21 +1671,37 @@ void Orchestrator::unlock() {
   update_display();
 }
 
-bool Orchestrator::start_tracking() {
-  if (_setup_session_active || _svc.wifi.is_provisioning() || _svc.ota.is_ble_active() ||
-      _ota_committed) {
+bool Orchestrator::restart_for_tracking_if_needed() {
+  // The caller stops the GPS worker before inspecting the receiver deadline.
+  const uint32_t remaining_ms = _svc.gps_service.sleep_remaining_ms();
+  if (remaining_ms <= GPS_RESET_THRESHOLD_MS) {
+    return true;
+  }
+
+  if (save_pending_tracking_start(_config_store, true)) {
+    _svc.storage_service.backup_cache();
+    _svc.display_service.flush();
+    AG_LOGI(TAG, "GPS wake in %lu ms: requesting silent tracking restart",
+            static_cast<unsigned long>(remaining_ms));
+    if (_svc.power_service.request_system_power_reset()) {
+      RTOS::delay_ms(GPS_RESET_CONFIRM_MS);
+    }
+  }
+
+  // A successful power cycle never reaches here.
+  AG_LOGW(TAG, "System still running; starting tracking and waiting for GPS");
+  if (!save_pending_tracking_start(_config_store, false)) {
+    _svc.ui_manager.show_snackbar("Tracking start could not be saved");
+    update_display();
     return false;
   }
-  if (tracking_session_active(_tracking_state)) {
-    return false; // caller treats as "already tracking"
-  }
+  return true;
+}
 
-  AG_LOGI(TAG, "start_tracking");
-
-  const bool starting_gps = !is_gps_active() && _settings.gps_mode != GpsMode::AlwaysOff;
+bool Orchestrator::begin_tracking_session() {
   const uint32_t session_id = generate_tracking_session_id(_svc.storage_service);
   if (session_id == 0 || !_svc.storage_service.create_route(session_id)) {
-    AG_LOGE(TAG, "start_tracking: failed to open route (session=%" PRIu32 ")", session_id);
+    AG_LOGE(TAG, "begin_tracking_session: failed to open route (session=%" PRIu32 ")", session_id);
     _svc.ui_manager.show_snackbar("Storage error — can't track");
     update_display();
     _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps,
@@ -1668,14 +1716,50 @@ bool Orchestrator::start_tracking() {
   _tracking_session_id = session_id;
   _tracking_state = TrackingState::Recording;
   _behavior = Behavior::Tracking;
-  reconcile_runtime(true);
   if (!tracking_timing_start(_tracking_timing,
                              tracking_seconds_from_ms(RTOS::get_retained_time_ms()))) {
     _tracking_timing = TrackingTiming{};
   }
+  return true;
+}
 
+bool Orchestrator::start_tracking() {
+  if (_setup_session_active || _svc.wifi.is_provisioning() || _svc.ota.is_ble_active() ||
+      _ota_committed) {
+    return false;
+  }
+  if (tracking_session_active(_tracking_state)) {
+    return false; // caller treats as "already tracking"
+  }
+
+  AG_LOGI(TAG, "start_tracking");
+  const bool starting_gps = !is_gps_active() && _settings.gps_mode != GpsMode::AlwaysOff;
+  const bool gps_stopped = starting_gps && !_provisioning_sensitive_services_paused;
+  if (gps_stopped) {
+    // Finish any in-flight sleep command before inspecting its deadline.
+    _svc.gps_service.stop();
+    if (!restart_for_tracking_if_needed()) {
+      (void)_svc.gps_service.start(gps_sleep_interval_ms());
+      return false;
+    }
+  }
+
+  if (!begin_tracking_session()) {
+    if (gps_stopped) {
+      (void)_svc.gps_service.start(gps_sleep_interval_ms());
+    }
+    return false;
+  }
+
+  reconcile_runtime(true);
   if (starting_gps) {
-    activate_gps();
+    if (gps_stopped) {
+      if (!_svc.gps_service.start()) {
+        AG_LOGE(TAG, "Failed to restart GPS acquisition task");
+      }
+    } else {
+      activate_gps();
+    }
   }
 
   char msg[48];
@@ -2142,6 +2226,11 @@ bool Orchestrator::activate_settings_candidate(const GoSettings &candidate, bool
 }
 
 void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_settings) {
+  const bool was_wifi_fallback = _wifi_fallback;
+  if (previous_settings.wifi_enabled != _settings.wifi_enabled) {
+    _wifi_fallback = false;
+    _wifi_setup_pending = _settings.wifi_enabled && !_svc.wifi.has_saved_networks();
+  }
   // Rendering reads UI-owned display preferences.
   _svc.ui_manager.sync_settings(_settings);
 
@@ -2163,11 +2252,12 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
 
   // Recompute before runtime reconciliation renders, even without a new sensor sample.
   const bool corrected_measures_changed = !measurement_corrections_equal(
-      effective_measurement_corrections(previous_settings, _tracking_state),
-      effective_measurement_corrections(_settings, _tracking_state));
+      effective_measurement_corrections(previous_settings, _tracking_state, was_wifi_fallback),
+      effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
   if (corrected_measures_changed) {
     _corrected_measures = apply_measurement_corrections(
-        _raw_measures, effective_measurement_corrections(_settings, _tracking_state));
+        _raw_measures,
+        effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
   }
   if ((corrected_measures_changed ||
        previous_settings.back_led_indicator != _settings.back_led_indicator) &&
@@ -2771,6 +2861,7 @@ void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
   }
   stop_ble();
   _connectivity = ConnectivityState::Wifi;
+  _wifi_setup_pending = false;
   AG_LOGI(TAG, "enter_provisioning_page: transport=%u", static_cast<unsigned>(transport));
   _local_api_activation_retry_deadline_ms = 0;
   _svc.local_api.set_access(ConfigAccess::Disabled);
@@ -2867,6 +2958,11 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
     return; // provisioning owns the shared listener until its Connected handoff
   }
 
+  _wifi_fallback = false;
+  _corrected_measures = apply_measurement_corrections(
+      _raw_measures, effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
+  _svc.local_api.publish_measurement_snapshot(_corrected_measures);
+
   if (_bring_up_pending) {
     // Initial Wi-Fi bring-up STA success: show "Connected!\n<ip>"
     // on Screen::Info, hold STA_RESULT_HOLD_MS post-paint, then leave
@@ -2923,11 +3019,13 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
     _svc.cloud.disarm();
   }
 
-  // Runtime (already online this entry): never provision, never give up —
-  // reconnect on any reason except our own teardown (requested_by_user).
-  if (_svc.wifi.has_been_online()) {
-    if (reason != WifiDisconnectReason::requested_by_user) {
-      AG_LOGI(TAG, "runtime link lost; scheduling reconnect");
+  if (!_manufacturing_mode) {
+    if (reason == WifiDisconnectReason::requested_by_user) {
+      return;
+    }
+    if (_wifi_fallback || !_svc.wifi.has_been_online()) {
+      enter_wifi_fallback();
+    } else {
       const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
       _svc.wifi.schedule_reconnect(ip);
       update_display();
@@ -2935,56 +3033,28 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
     return;
   }
 
-  if (_manufacturing_mode) {
-    // Early failures leave the bounded factory attempt armed. Only its expiry
-    // ends the session; a successful IP routes through runtime policy above.
-    if (reason == WifiDisconnectReason::requested_by_user || _svc.wifi.is_connecting()) {
-      return;
+  if (_svc.wifi.has_been_online()) {
+    if (reason != WifiDisconnectReason::requested_by_user) {
+      const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
+      _svc.wifi.schedule_reconnect(ip);
+      update_display();
     }
-    AG_LOGW(TAG, "manufacturing Wi-Fi timed out; showing failure before reboot");
-    _bring_up_pending = false;
-    _svc.wifi.shutdown();
-    _svc.ui_manager.show_info("Wi-Fi connection failed");
-    update_display(/*wait=*/true);
-    _svc.display_service.flush();
-    RTOS::delay_ms(STA_RESULT_HOLD_MS);
-    reboot();
     return;
   }
 
-  // Normal bring-up (before first IP): provisioning is the fallback. Connectivity
-  // reasons reach here only after the WifiManager retry budget / connect
-  // window are spent; auth_failed routes here immediately (bad creds).
-  // ap_disconnected / handshake_failed / unknown stay — the window
-  // synthesizes connection_lost on expiry. requested_by_user is ignored.
-  bool open_provisioning = false;
-  switch (reason) {
-  case WifiDisconnectReason::auth_failed:
-  case WifiDisconnectReason::no_ap_found:
-  case WifiDisconnectReason::assoc_failed:
-  case WifiDisconnectReason::dhcp_failed:
-  case WifiDisconnectReason::connection_lost:
-    open_provisioning = true;
-    break;
-  case WifiDisconnectReason::ap_disconnected:
-  case WifiDisconnectReason::handshake_failed:
-  case WifiDisconnectReason::unknown:
-  case WifiDisconnectReason::requested_by_user:
-    break;
+  // Early failures leave the bounded factory attempt armed. Only its expiry
+  // ends the session; a successful IP routes through runtime policy above.
+  if (reason == WifiDisconnectReason::requested_by_user || _svc.wifi.is_connecting()) {
+    return;
   }
-
-  if (open_provisioning) {
-    // Surface the failure + reason on Screen::Info before handing off to
-    // provisioning, so the user sees why the saved connect failed.
-    char buf[48];
-    std::snprintf(buf, sizeof(buf), "Wi-Fi failed\n%s", wifi_failure_text(reason));
-    _svc.ui_manager.show_info(buf);
-    update_display(/*wait=*/true);
-    _svc.display_service.flush();
-    RTOS::delay_ms(STA_RESULT_HOLD_MS);
-
-    enter_provisioning_page(ProvisioningTransport::BleOnly);
-  }
+  AG_LOGW(TAG, "manufacturing Wi-Fi timed out; showing failure before reboot");
+  _bring_up_pending = false;
+  _svc.wifi.shutdown();
+  _svc.ui_manager.show_info("Wi-Fi connection failed");
+  update_display(/*wait=*/true);
+  _svc.display_service.flush();
+  RTOS::delay_ms(STA_RESULT_HOLD_MS);
+  reboot();
 }
 
 void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload &payload) {
@@ -3043,6 +3113,10 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     break;
 
   case ProvisioningEvent::Connected: {
+    _wifi_fallback = false;
+    _corrected_measures = apply_measurement_corrections(
+        _raw_measures,
+        effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
     GoSettings candidate = _settings;
     candidate.disable_cloud = payload.disable_cloud;
     candidate.static_ip = payload.static_ip;
@@ -3400,7 +3474,8 @@ BuildContext Orchestrator::build_context() const {
 
   // Read chart data cache
   uint16_t cache_count = _svc.storage_service.read_cache(_cache_buf, UI_CHART_BUF_SIZE);
-  const auto corrections = effective_measurement_corrections(_settings, _tracking_state);
+  const auto corrections =
+      effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback);
   for (uint16_t i = 0; i < cache_count; ++i) {
     _cache_buf[i] = apply_measurement_corrections(_cache_buf[i], corrections);
   }
@@ -3491,15 +3566,18 @@ void Orchestrator::try_enter_sleep() {
       _svc.ui_manager.is_hardware_test_screen()) {
     return;
   }
-  auto decision =
-      _svc.power_service.decide_sleep(_settings, _lock_state, _tracking_state, awake_ms);
+  auto decision = _svc.power_service.decide_sleep(_settings, _lock_state, _tracking_state, awake_ms,
+                                                  _wifi_fallback);
 
   if (decision.type == PowerService::SleepType::None) {
     return;
   }
 
   // decision.type == Deep
+  uint64_t wake_at = RTOS::get_retained_time_ms() + decision.duration_ms;
   prepare_for_sleep(decision.duration_ms);
+  const uint64_t now_retained = RTOS::get_retained_time_ms();
+  decision.duration_ms = wake_at > now_retained ? static_cast<uint32_t>(wake_at - now_retained) : 1;
   AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
   _svc.power_service.enter_sleep(decision.duration_ms);
   // Never returns — CPU reboots on wake.
@@ -3615,10 +3693,12 @@ RtcAppState Orchestrator::snapshot_state() const {
   return state;
 }
 
-GoRuntimePolicy Orchestrator::runtime_policy() const { return {_settings, _tracking_state}; }
+GoRuntimePolicy Orchestrator::runtime_policy() const {
+  return {_settings, _tracking_state, _wifi_fallback};
+}
 
 uint32_t Orchestrator::gps_sleep_interval_ms() const {
-  return gps_inactive_sleep_ms(static_cast<uint32_t>(runtime_policy().interval_seconds()) * 1000);
+  return static_cast<uint32_t>(runtime_policy().interval_seconds()) * 1000;
 }
 
 void Orchestrator::stop_ble() {
@@ -3632,7 +3712,8 @@ void Orchestrator::reconcile_runtime(bool reset_cadence) {
   _svc.ui_manager.sync_tracking_state(_tracking_state);
   if (reset_cadence) {
     _corrected_measures = apply_measurement_corrections(
-        _raw_measures, effective_measurement_corrections(_settings, _tracking_state));
+        _raw_measures,
+        effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
     _last_measurement_ms = static_cast<uint32_t>(RTOS::get_time_ms());
     prepare_pm();
     start_measurement(MeasurementOrigin::Scheduled);
@@ -3694,7 +3775,7 @@ bool Orchestrator::connectivity_paused() const {
          _svc.ota.is_ble_active();
 }
 
-void Orchestrator::reconcile_connectivity() {
+void Orchestrator::reconcile_connectivity(const char *saved_ssid) {
   if (connectivity_paused()) {
     return;
   }
@@ -3750,14 +3831,7 @@ void Orchestrator::reconcile_connectivity() {
     return;
 
   case ConnectivityState::Off:
-    if (need_ble) {
-      activate_ble();
-    } else if (_svc.ble_service.is_initialized()) {
-      begin_ble_return();
-    } else {
-      resume_wifi();
-    }
-    return;
+    break;
 
   case ConnectivityState::Ble:
   case ConnectivityState::RetryBle:
@@ -3782,8 +3856,7 @@ void Orchestrator::reconcile_connectivity() {
     }
     stop_ble();
     _connectivity = ConnectivityState::Off;
-    resume_wifi();
-    return;
+    break;
 
   case ConnectivityState::ReleaseBle:
     if (!due(_connectivity_deadline_ms)) {
@@ -3791,14 +3864,34 @@ void Orchestrator::reconcile_connectivity() {
     }
     stop_ble();
     _connectivity = ConnectivityState::Off;
-    // Reevaluate after disconnecting the client that requested release.
-    if (ble_needed()) {
-      activate_ble();
+    break;
+  }
+
+  // Radio ownership is now Off. Reevaluate BLE after any explicit release.
+  if (ble_needed()) {
+    activate_ble();
+    return;
+  }
+  if (_svc.ble_service.is_initialized()) {
+    begin_ble_return();
+    return;
+  }
+  // Giving up remains in effect until Wi-Fi is explicitly re-enabled or boot
+  // supplies a visible saved network. Measurements never restart connectivity.
+  if (!_settings.wifi_enabled || (_wifi_fallback && saved_ssid == nullptr)) {
+    return;
+  }
+  prepare_pm();
+  if (!_svc.wifi.has_saved_networks()) {
+    if (_wifi_setup_pending) {
+      _wifi_setup_pending = false;
+      enter_wifi();
     } else {
-      resume_wifi();
+      enter_wifi_fallback();
     }
     return;
   }
+  resume_wifi(saved_ssid);
 }
 
 void Orchestrator::start_wifi_cleanup(bool for_ble) {
@@ -3868,24 +3961,26 @@ void Orchestrator::begin_ble_return() {
       static_cast<uint32_t>(RTOS::get_time_ms()) + CONNECTIVITY_HANDOFF_DELAY_MS;
 }
 
-void Orchestrator::resume_wifi() {
-  if (!_settings.wifi_enabled) {
-    return;
-  }
-  prepare_pm();
-  if (!_svc.wifi.has_saved_networks()) {
-    enter_wifi();
-    return;
-  }
+void Orchestrator::resume_wifi(const char *saved_ssid) {
   _connectivity = ConnectivityState::Wifi;
   _svc.wifi.set_power_save_enabled(!_settings.local_server_enabled);
   const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
-  if (!_svc.wifi.resume_station(ip)) {
-    _connectivity = ConnectivityState::RetryWifiCleanupForOff;
-    _svc.cloud.request_stop();
-    _connectivity_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + CONNECTIVITY_RETRY_MS;
+  if (!_svc.wifi.resume_station(ip, saved_ssid)) {
+    enter_wifi_fallback();
+    return;
   }
   _cloud_first_post_pending = true;
+}
+
+void Orchestrator::enter_wifi_fallback() {
+  _wifi_fallback = _settings.wifi_enabled;
+  _bring_up_pending = false;
+  _corrected_measures = apply_measurement_corrections(
+      _raw_measures, effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
+  if (wifi_active()) {
+    start_wifi_cleanup(ble_needed());
+  }
+  request_background_display_update();
 }
 
 void Orchestrator::on_cloud_stopped() {

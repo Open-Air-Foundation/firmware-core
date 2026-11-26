@@ -53,14 +53,17 @@ inline esp_reset_reason_t esp_reset_reason() { return ESP_RST_UNKNOWN; }
 #include "go_ui.h"
 #include "go_ulp.h"
 #include "go_wifi.h"
+#include "services/wifi_manager.h"
+
 #include "gps/gps_service.h"
-#include "gps/gps_power_policy.h"
 #include "measurement_corrections.h"
 #include "retained_uptime.h"
 #include "rtos.h"
 #include "serial_command/serial_command.h"
 #include "services/local_server.h"
 #include "services/sensor_manager.h"
+
+static constexpr uint32_t WIFI_RECOVERY_SCAN_TIMEOUT_MS = 10000;
 
 static constexpr const char *TAG = "app";
 
@@ -84,9 +87,46 @@ static constexpr uint8_t CHARGING_BOOT_STATUS_ATTEMPTS = 3;
 static constexpr uint32_t CHARGING_BOOT_STATUS_RETRY_MS = 100;
 static constexpr uint32_t CHARGING_ONLY_POLL_INTERVAL_MS = 2000;
 
-// Strings owned by GoApp that WifiService::Config holds pointers into.
-// Stack-allocated in run_*; lifetime = process (functions never return).
 namespace {
+struct FastPathWifiScan {
+  WifiManager *manager = nullptr;
+  RtosQueueHandle result = nullptr;
+  char ssid[33] = {};
+  uint64_t deadline_ms = 0;
+};
+
+void finish_wifi_scan(FastPathWifiScan &scan, const volatile bool &button_pressed,
+                      uint32_t max_wait_ms) {
+  if (scan.manager == nullptr) {
+    return;
+  }
+  if (scan.result != nullptr) {
+    const uint64_t now = RTOS::get_time_ms();
+    uint32_t remaining_ms = 0;
+    if (!button_pressed && scan.deadline_ms > now) {
+      remaining_ms = static_cast<uint32_t>(scan.deadline_ms - now);
+    }
+    (void)RTOS::queue_receive(scan.result, scan.ssid, std::min(max_wait_ms, remaining_ms));
+  }
+  if (scan.manager->set_mode(WifiMode::Off) != WifiStatus::Ok) {
+    AG_LOGW(TAG, "fast-path: Wi-Fi stop failed; continuing");
+  }
+  scan.manager->set_on_scan_complete(nullptr);
+  RTOS::queue_delete(scan.result);
+  scan.result = nullptr;
+  scan.manager = nullptr;
+}
+
+void wait_for_warmup(PowerService &power, FastPathWifiScan &scan,
+                     const volatile bool &button_pressed, uint32_t duration_ms) {
+  const uint64_t until = RTOS::get_time_ms() + duration_ms;
+  finish_wifi_scan(scan, button_pressed, duration_ms);
+  const uint64_t now = RTOS::get_time_ms();
+  if (now < until) {
+    power.enter_light_sleep(static_cast<uint32_t>(until - now), false);
+  }
+}
+
 Screen charging_screen(const BmsStatus &status, Screen current) {
   if (!status.is_charging_state_valid()) {
     return current;
@@ -95,6 +135,8 @@ Screen charging_screen(const BmsStatus &status, Screen current) {
                                                 : Screen::ShutdownCharged;
 }
 
+// Strings owned by GoApp that WifiService::Config holds pointers into.
+// Stack-allocated in run_*; lifetime = process (functions never return).
 struct StationaryStrings {
   std::string ap_ssid;               // "airgradient-<12-hex>"
   std::string hostname;              // "airgradient_<12-hex>"
@@ -215,7 +257,6 @@ void GoApp::run() {
   state.tracking_session_id = 0;
   state.tracking_timing = {};
   const BootPath path = select_boot_path(cause, state, charging_only_eligible);
-
   switch (path) {
   case BootPath::ChargingOnly:
     run_charging_only(charging_status);
@@ -240,6 +281,10 @@ void GoApp::run() {
 bool GoApp::detect_charging_only_boot(BmsStatus &status, bool requested) {
   if (!requested && !PowerService::is_power_on_reset()) {
     return false;
+  }
+
+  if (!requested && pending_tracking_start(_board.config_store())) {
+    return false; // A tracking restart needs interactive startup even with USB present.
   }
 
   _board.init_buses();
@@ -347,22 +392,25 @@ void GoApp::run_factory_learning_path(const RtcAppState & /*state*/) {
 
 bool GoApp::prepare_gps_for_sleep(RtcAppState &state, bool probe_receiver) {
   const auto settings = _board.load_settings();
-  const bool probe_after_wake = probe_receiver;
-  if (!probe_after_wake && state.gps_wake_deadline_ms > RTOS::get_retained_time_ms()) {
+  if (is_gps_active_at_boot(settings, state)) {
+    state.gps_wake_deadline_ms = 0;
     return false;
   }
+  const uint64_t now = RTOS::get_retained_time_ms();
+  if (state.gps_wake_deadline_ms > now) {
+    return true;
+  }
+  const bool probe_after_wake = probe_receiver;
   auto *driver = _board.new_gps_driver();
   if (driver != nullptr) {
-    // A retained deadline cannot rule out a receiver wake/reset during MCU sleep.
-    // Bypass it for this probe; preserve it if no new sleep request is sent.
+    // The retained sleep has expired. Probe before issuing the next request.
     GpsService service(*driver, nullptr,
                        {.wake_deadline_ms = probe_after_wake ? 0 : state.gps_wake_deadline_ms,
                         .fast_path_sleep_probe = probe_after_wake});
     if (probe_after_wake) {
       AG_LOGI(TAG, "Timer wake: probing GPS before long sleep");
     }
-    if (service.request_sleep(
-            gps_inactive_sleep_ms(static_cast<uint32_t>(settings.idle_interval_seconds) * 1000))) {
+    if (service.request_sleep(static_cast<uint32_t>(settings.idle_interval_seconds) * 1000)) {
       state.gps_wake_deadline_ms = service.sleep_deadline_ms();
       AG_LOGI(TAG, "GPS sleep command sent");
       return true;
@@ -405,8 +453,10 @@ void GoApp::run_fast_path(const RtcAppState &state) {
   save.gps_wake_deadline_ms = result.gps_wake_deadline_ms;
 
   if (result.outcome == FastPathResult::Outcome::Sleep) {
-    _board.display().stop();
-    _board.display().deep_sleep();
+    if (result.has_measures) {
+      _board.display().stop();
+      _board.display().deep_sleep();
+    }
     _board.ulp_start();
     log_heap(TAG, "boot:fast-path:before-sleep");
     _board.power().save_state(save);
@@ -451,10 +501,27 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     AG_LOGW(TAG, "fast-path continuing without BMS");
   }
   _board.release_gpio_holds();
-  _board.power().set_pm_power(true);
-
   GoSettings settings = _board.load_settings();
-
+  FastPathWifiScan wifi_scan;
+  if (settings.wifi_enabled && !button_pressed && _board.wifi_manager().has_saved_networks()) {
+    wifi_scan.manager = &_board.wifi_manager();
+    wifi_scan.result = RTOS::queue_create(1, sizeof(wifi_scan.ssid));
+    if (wifi_scan.result != nullptr && wifi_scan.manager->initialize() == WifiStatus::Ok &&
+        wifi_scan.manager->set_mode(WifiMode::Sta) == WifiStatus::Ok) {
+      wifi_scan.manager->set_on_scan_complete(
+          [manager = wifi_scan.manager, result = wifi_scan.result](const WifiScanEntry *results,
+                                                                   uint16_t count) {
+            char ssid[33] = {};
+            manager->select_saved_network(results, count, ssid);
+            RTOS::queue_send(result, ssid);
+          });
+      const uint64_t scan_started_ms = RTOS::get_time_ms();
+      if (wifi_scan.manager->start_scan() == WifiStatus::Ok) {
+        wifi_scan.deadline_ms = scan_started_ms + WIFI_RECOVERY_SCAN_TIMEOUT_MS;
+      }
+    }
+  }
+  _board.power().set_pm_power(true);
   const bool sensors_warm = state.has_flag(RtcAppFlag::SensorsWarm);
   SensorManager &sm = _board.sensors(sensors_warm);
   const uint64_t pm_ready_ms =
@@ -463,9 +530,9 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   bool pm_sleep_attempted = false;
 
   // GPS sleep probing overlaps PM warmup, outside gas conditioning.
-  // Recheck on every timer wake, even with a retained deadline.
+  // Preserve an unexpired receiver sleep deadline.
   RtcAppState gps_state = state;
-  const bool gps_sleep_sent = prepare_gps_for_sleep(gps_state, /*probe_receiver=*/true);
+  const bool gps_sleep_sent = prepare_gps_for_sleep(gps_state, true);
 
   PowerService &power = _board.power();
   TVOCNOxData gas{};
@@ -474,7 +541,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     const uint64_t wake_at_ms = conditioning_end_ms - FAST_PATH_GAS_WAKE_MARGIN_MS;
     const uint64_t now = RTOS::get_time_ms();
     if (now < wake_at_ms) {
-      power.enter_light_sleep(static_cast<uint32_t>(wake_at_ms - now), false);
+      wait_for_warmup(power, wifi_scan, button_pressed, static_cast<uint32_t>(wake_at_ms - now));
     }
 
     // Raw-only acquisition discards the first sample, then retains the next.
@@ -496,7 +563,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
     if (remaining_ms < FAST_PATH_LIGHT_SLEEP_MIN_MS) {
       RTOS::delay_ms(remaining_ms);
     } else {
-      power.enter_light_sleep(remaining_ms, false);
+      wait_for_warmup(power, wifi_scan, button_pressed, remaining_ms);
     }
   }
 
@@ -516,9 +583,12 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
           ago.tvoc_nox.nox_raw, ago.pressure.pressure);
 
   const uint32_t awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
-  const auto preliminary_sleep =
-      power.decide_sleep(settings, LockState::Locked, TrackingState::Idle, awake_ms);
-  if (preliminary_sleep.type == PowerService::SleepType::Deep &&
+  const auto preliminary_sleep = power.decide_sleep(
+      settings, LockState::Locked, TrackingState::Idle, awake_ms, settings.wifi_enabled);
+  // No extra scan wait after measurement, including cycles with no warmup wait.
+  finish_wifi_scan(wifi_scan, button_pressed, 0);
+  const bool wifi_found = wifi_scan.ssid[0] != '\0';
+  if (!wifi_found && preliminary_sleep.type == PowerService::SleepType::Deep &&
       !power.should_hold_pm_sensor(preliminary_sleep.duration_ms)) {
     pm_sleep_attempted = true;
     if (!sm.pm_sleep()) {
@@ -534,14 +604,18 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   // --- Display + sleep decision ---
   const PowerSnapshot power_snapshot = power.poll_bms();
   DisplayService &disp = _board.display();
-  DisplayValues values = build_fast_path_display(ago, power_snapshot, settings);
+  DisplayValues values =
+      build_fast_path_display(ago, power_snapshot, settings, settings.wifi_enabled);
+  values.header.connectivity.wifi_enabled = settings.wifi_enabled;
+  values.header.connectivity.wifi_connected = false;
   // Rendering is synchronous even when panel refresh is deferred. Keep the
   // sample buffer alive through init() and the saved display snapshot.
   float chart_samples[DISPLAY_CHART_BUF_SIZE]{};
   if (values.chart_metric() != Metric::None) {
     MeasuresAGo cache[DISPLAY_CHART_BUF_SIZE];
     const uint16_t count = stor.read_cache(cache, DISPLAY_CHART_BUF_SIZE);
-    const auto corrections = effective_measurement_corrections(settings);
+    const auto corrections =
+        effective_measurement_corrections(settings, TrackingState::Idle, settings.wifi_enabled);
     for (uint16_t i = 0; i < count; ++i) {
       cache[i] = apply_measurement_corrections(cache[i], corrections);
     }
@@ -567,7 +641,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   // Broadcast raw measurements, matching Portable BLE, while the
   // synchronous display refresh runs.
   AgBleServer *broadcast = nullptr;
-  if (!button_pressed && preliminary_sleep.type == PowerService::SleepType::Deep &&
+  if (!wifi_found && !button_pressed && preliminary_sleep.type == PowerService::SleepType::Deep &&
       power_snapshot.ship_mode_request == ShipModeRequest::None) {
     MeasuresAGo advertised = ago;
     advertised.power.battery_percentage = power_snapshot.battery_percentage;
@@ -595,18 +669,19 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
   }
 
   uint32_t final_awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
-  auto decision =
-      power.decide_sleep(settings, LockState::Locked, TrackingState::Idle, final_awake_ms);
-  if (!button_pressed && decision.type == PowerService::SleepType::Deep && !gps_sleep_sent) {
+  auto decision = power.decide_sleep(settings, LockState::Locked, TrackingState::Idle,
+                                     final_awake_ms, settings.wifi_enabled);
+  if (!wifi_found && !button_pressed && decision.type == PowerService::SleepType::Deep &&
+      (!gps_sleep_sent || gps_state.gps_wake_deadline_ms <= RTOS::get_retained_time_ms())) {
     // Retry before the final sleep calculation so probing consumes this interval.
-    // Only this wake's early result decides whether to retry, not the deadline.
-    prepare_gps_for_sleep(gps_state, /*probe_receiver=*/true);
+    prepare_gps_for_sleep(gps_state, true);
     final_awake_ms = static_cast<uint32_t>(RTOS::get_time_ms()) - boot_time_ms;
-    decision = power.decide_sleep(settings, LockState::Locked, TrackingState::Idle, final_awake_ms);
+    decision = power.decide_sleep(settings, LockState::Locked, TrackingState::Idle, final_awake_ms,
+                                  settings.wifi_enabled);
   }
   bool warm = false;
 
-  if (decision.type == PowerService::SleepType::Deep) {
+  if (!wifi_found && decision.type == PowerService::SleepType::Deep) {
     warm = !pm_sleep_attempted && power.should_hold_pm_sensor(decision.duration_ms);
     if (!warm && !pm_sleep_attempted) {
       // Long sleep: stop the PM fan for the sleep window. Next boot's
@@ -619,7 +694,7 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
 
   // Observe the latched button once, after acquisition, storage, and display.
   const bool button_caused = button_pressed;
-  if (!button_caused && decision.type == PowerService::SleepType::Deep) {
+  if (!wifi_found && !button_caused && decision.type == PowerService::SleepType::Deep) {
     return {
         .outcome = FastPathResult::Outcome::Sleep,
         .handoff = {},
@@ -640,6 +715,11 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
 
   BootHandoff handoff{};
   handoff.measurement_completed = true;
+  handoff.measurement_started_ms = boot_time_ms;
+  handoff.wifi_state = wifi_found ? BootWifiState::NetworkFound : BootWifiState::Off;
+  if (wifi_found) {
+    std::memcpy(handoff.wifi_ssid, wifi_scan.ssid, sizeof(handoff.wifi_ssid));
+  }
   // fast_path_measures left null — caller wires the pointer (see note above)
 
   if (button_caused) {
@@ -888,6 +968,12 @@ void GoApp::run_button_wake_path(const RtcAppState &state) {
 
 void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff handoff,
                             const char *boot_message) {
+  if (cause == WakeCause::PowerOn && pending_tracking_start(_board.config_store())) {
+    handoff.tracking_restart = true;
+    handoff.initial_lock_state = LockState::Unlocked;
+    handoff.suppress_wake_press = true;
+  }
+
   const char *splash_text = boot_message != nullptr ? boot_message : BOOT_SPLASH_TEXT;
   // --- Early display paint ---
   // Start the e-paper refresh before BMS, sensor, and NAND initialization.
@@ -902,15 +988,20 @@ void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff
     DisplayService &early_display = _board.display();
 
     DisplayValues initial_values{};
-    if (handoff.display_snapshot != nullptr) {
-      initial_values = build_wake_values(*handoff.display_snapshot, true);
+    if (handoff.tracking_restart) {
+      // Keep the e-paper image through boot; the first normal update paints tracking.
+      early_display.init(initial_values, false, /*skip_initial_refresh=*/true);
     } else {
-      initial_values = build_boot_splash_values();
-      initial_values.info_text = splash_text;
-      boot_splash_requested = true;
-    }
+      if (handoff.display_snapshot != nullptr) {
+        initial_values = build_wake_values(*handoff.display_snapshot, true);
+      } else {
+        initial_values = build_boot_splash_values();
+        initial_values.info_text = splash_text;
+        boot_splash_requested = true;
+      }
 
-    early_display.init(initial_values, /* defer_refresh= */ true);
+      early_display.init(initial_values, /* defer_refresh= */ true);
+    }
     handoff.display_painted = true;
   }
 
@@ -1046,7 +1137,7 @@ void GoApp::run_interactive(WakeCause cause, RtcAppState boot_state, BootHandoff
 
   // Boot animation — runs after the splash refresh is scheduled so the screen
   // can update in parallel with the chime/LED.
-  if (cause == WakeCause::PowerOn) {
+  if (cause == WakeCause::PowerOn && !handoff.tracking_restart) {
     if (!settings.onboarding_done) {
       // Fresh unit defaults buzzer + back LED off; force a one-time synced
       // chime + LED welcome, then restore the persisted settings.
@@ -1132,9 +1223,9 @@ MeasuresAGo measures_to_ago(const Measures &m) {
 }
 
 DisplayValues build_fast_path_display(const MeasuresAGo &measures, const PowerSnapshot &bms,
-                                      const GoSettings &settings) {
-  const MeasuresAGo corrected =
-      apply_measurement_corrections(measures, effective_measurement_corrections(settings));
+                                      const GoSettings &settings, bool wifi_fallback) {
+  const MeasuresAGo corrected = apply_measurement_corrections(
+      measures, effective_measurement_corrections(settings, TrackingState::Idle, wifi_fallback));
   DisplayValues v{};
 
   if (corrected.co2.is_valid()) {

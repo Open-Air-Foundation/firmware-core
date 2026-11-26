@@ -22,11 +22,6 @@
 
 static constexpr const char *TAG = "WifiService";
 
-// Saved-credentials policy. Bounded retry; backoffs use WifiManager defaults.
-// Kept low so a runtime dead-AP drop reaches the terminal disconnect (and the
-// disconnected icon + reconnect loop) promptly, while still riding out a
-// transient missed sweep at bring-up.
-static constexpr uint8_t STATIONARY_MAX_RETRY_COUNT = 3;
 static constexpr uint32_t WIFI_CLEANUP_STACK_BYTES = 4096;
 static constexpr uint32_t WIFI_CLEANUP_PRIORITY = 3;
 
@@ -96,10 +91,14 @@ void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *stati
 }
 
 void WifiService::_connect_saved_internal(const WifiStaticIpConfig *static_ip,
-                                          bool reset_online_latches, bool arm_window) {
+                                          bool reset_online_latches, bool arm_window,
+                                          const char *saved_ssid) {
   _state.store(WifiState::Active);
   _install_wifi_callbacks();
-  _reset_deadline();
+  if (arm_window) {
+    _reset_deadline();
+    _arm_deadline(_cfg.initial_connect_window_ms);
+  }
   if (reset_online_latches) {
     _reset_online_latches();
   }
@@ -114,9 +113,11 @@ void WifiService::_connect_saved_internal(const WifiStaticIpConfig *static_ip,
   apply_stationary_power_save(_wifi, _power_save_enabled);
 
   WifiStaConfig sta{}; // empty ssid = auto-connect from saved networks
-  sta.max_retry_count = STATIONARY_MAX_RETRY_COUNT;
+  // Report link loss immediately. Go owns retries and their total deadline.
+  sta.max_retry_count = 0;
 
-  const WifiStatus status = _wifi.connect(sta);
+  const WifiStatus status =
+      saved_ssid != nullptr ? _wifi.connect_saved_network(saved_ssid, sta) : _wifi.connect(sta);
   if (status == WifiStatus::NotFound) {
     // No saved networks. Disconnect-policy router takes it from here.
     AG_LOGW(TAG, "saved-creds connect: no saved networks");
@@ -128,15 +129,17 @@ void WifiService::_connect_saved_internal(const WifiStaticIpConfig *static_ip,
     _post_wifi_disconnected(WifiDisconnectReason::unknown);
     return;
   }
-
-  if (arm_window) {
-    _arm_deadline(_cfg.initial_connect_window_ms);
-  }
 }
 
 void WifiService::schedule_reconnect(const WifiStaticIpConfig *static_ip) {
   if (is_suspended()) {
     return;
+  }
+  if (_clear_deadline_pending.exchange(false)) {
+    _initial_connect_deadline_ms = 0;
+  }
+  if (_initial_connect_deadline_ms == 0) {
+    _arm_deadline(_cfg.initial_connect_window_ms);
   }
   if (static_ip != nullptr && static_ip->ip != 0) {
     _reconnect_static_ip = *static_ip;
@@ -145,6 +148,9 @@ void WifiService::schedule_reconnect(const WifiStaticIpConfig *static_ip) {
     _reconnect_has_static_ip = false;
   }
   _reconnect_at_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + _cfg.reconnect_delay_ms;
+  if (_reconnect_at_ms == 0) {
+    _reconnect_at_ms = UINT32_MAX;
+  }
   AG_LOGI(TAG, "reconnect scheduled in %u ms", static_cast<unsigned>(_cfg.reconnect_delay_ms));
 }
 
@@ -510,11 +516,11 @@ void WifiService::complete_suspend(bool success) {
   _state.store(state == WifiState::Releasing ? WifiState::Released : WifiState::Suspended);
 }
 
-bool WifiService::resume_station(const WifiStaticIpConfig *static_ip) {
+bool WifiService::resume_station(const WifiStaticIpConfig *static_ip, const char *saved_ssid) {
   if (suspension_pending() || _wifi.initialize() != WifiStatus::Ok) {
     return false;
   }
-  _connect_saved_internal(static_ip, false, true);
+  _connect_saved_internal(static_ip, false, true, saved_ssid);
   return true;
 }
 
@@ -569,7 +575,7 @@ uint32_t WifiService::next_deadline_ms() const {
   if (reconnect == 0) {
     return connect;
   }
-  return (reconnect < connect) ? reconnect : connect;
+  return static_cast<int32_t>(reconnect - connect) < 0 ? reconnect : connect;
 }
 
 void WifiService::tick(uint32_t now_ms) {
@@ -587,18 +593,22 @@ void WifiService::tick(uint32_t now_ms) {
     _initial_connect_deadline_ms = 0;
   }
 
-  if (_initial_connect_deadline_ms != 0 && now_ms >= _initial_connect_deadline_ms) {
+  if (_initial_connect_deadline_ms != 0 &&
+      static_cast<int32_t>(now_ms - _initial_connect_deadline_ms) >= 0) {
     // Keep the deadline due until admitted so queue pressure cannot strand setup.
-    if (_post_wifi_disconnected(WifiDisconnectReason::connection_lost)) {
+    Event event{};
+    event.type = EventType::WifiConnectionTimeout;
+    _reconnect_at_ms = 0;
+    if (RTOS::queue_send(_event_queue, &event)) {
       _initial_connect_deadline_ms = 0;
-      AG_LOGW(TAG, "initial connect window expired");
+      AG_LOGW(TAG, "Wi-Fi connection window expired");
     }
+    return;
   }
 
-  if (_reconnect_at_ms != 0 && now_ms >= _reconnect_at_ms) {
+  if (_reconnect_at_ms != 0 && static_cast<int32_t>(now_ms - _reconnect_at_ms) >= 0) {
     _reconnect_at_ms = 0;
-    // Keep has_been_online() latched (stay "runtime") and skip the connect
-    // window; the WifiManager terminal disconnect drives the next cycle.
+    // Preserve the original reconnect deadline across internal retry attempts.
     if (!_use_default_credentials) {
       AG_LOGI(TAG, "runtime reconnect: attempting saved networks");
       const WifiStaticIpConfig *ip = _reconnect_has_static_ip ? &_reconnect_static_ip : nullptr;
@@ -662,6 +672,9 @@ void WifiService::_reset_deadline() {
 
 void WifiService::_arm_deadline(uint32_t window_ms) {
   _initial_connect_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + window_ms;
+  if (_initial_connect_deadline_ms == 0) {
+    _initial_connect_deadline_ms = UINT32_MAX; // Zero is unarmed; expire one millisecond earlier.
+  }
 }
 
 void WifiService::_reset_online_latches() {

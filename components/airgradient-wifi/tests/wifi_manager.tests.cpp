@@ -1516,3 +1516,63 @@ TEST_CASE("Suspended station ignores queued link events and retry deadlines",
   CHECK(disconnected == 0);
   CHECK(hal.connect_calls == attempts);
 }
+
+TEST_CASE("Scan selection returns one saved SSID without connecting", "[wifi-manager][scan]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  mgr.add_network("HomeNet", "homepass");
+  mgr.add_network("Office", "officepass");
+  char ssid[33] = "old result";
+  SECTION("strongest visible saved network wins") {
+    const WifiScanEntry results[] = {
+        make_scan_entry("Unknown", -10), make_scan_entry("HomeNet", -50),
+        make_scan_entry("Office", -70), make_scan_entry("HomeNet", -40)};
+    REQUIRE(mgr.select_saved_network(results, 4, ssid));
+    CHECK(std::string(ssid) == "HomeNet");
+  }
+  SECTION("equal signal prefers the newest saved entry") {
+    const WifiScanEntry results[] = {make_scan_entry("HomeNet", -50),
+                                     make_scan_entry("Office", -50)};
+    REQUIRE(mgr.select_saved_network(results, 2, ssid));
+    CHECK(std::string(ssid) == "Office");
+  }
+  SECTION("absent and hidden networks do not match") {
+    const WifiScanEntry results[] = {make_scan_entry("Unknown", -10), make_scan_entry("", -20)};
+    CHECK_FALSE(mgr.select_saved_network(results, 2, ssid));
+    CHECK(ssid[0] == '\0');
+  }
+  SECTION("empty scan clears the previous selection") {
+    CHECK_FALSE(mgr.select_saved_network(nullptr, 0, ssid));
+    CHECK(ssid[0] == '\0');
+  }
+  CHECK(hal.connect_calls == 0);
+  CHECK(hal.scan_calls == 0);
+}
+
+TEST_CASE("Selected saved network connects directly using its current credentials",
+          "[wifi-manager][scan]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  mgr.add_network("HomeNet", "homepass");
+  mgr.add_network("Office", "officepass");
+  mgr.set_mode(WifiMode::Sta);
+  SECTION("selected network uses stored password without another scan") {
+    REQUIRE(mgr.connect_saved_network("HomeNet") == WifiStatus::Ok);
+    CHECK(hal.connect_calls == 1);
+    CHECK(hal.last_ssid == "HomeNet");
+    CHECK(hal.last_password == "homepass");
+  }
+  SECTION("removed selection does not connect to another saved network") {
+    mgr.remove_network("HomeNet");
+    CHECK(mgr.connect_saved_network("HomeNet") == WifiStatus::NotFound);
+    CHECK(hal.connect_calls == 0);
+  }
+  SECTION("empty selection cannot trigger an automatic scan") {
+    CHECK(mgr.connect_saved_network("") == WifiStatus::InvalidArgument);
+    CHECK(mgr.connect_saved_network(nullptr) == WifiStatus::InvalidArgument);
+    CHECK(hal.connect_calls == 0);
+  }
+  CHECK(hal.scan_calls == 0);
+}

@@ -630,9 +630,10 @@ RtcAppState PowerService::load_state() const {
 
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &settings,
                                                        LockState lock_state, TrackingState tracking,
-                                                       uint32_t awake_ms) const {
+                                                       uint32_t awake_ms,
+                                                       bool wifi_fallback) const {
   // Tracking and Wi-Fi policy control sleep; gas sampling and GPS do not.
-  if (!GoRuntimePolicy{settings, tracking}.sleep_allowed()) {
+  if (!GoRuntimePolicy{settings, tracking, wifi_fallback}.sleep_allowed()) {
     return {SleepType::None, 0};
   }
 

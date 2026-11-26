@@ -25,7 +25,7 @@ class ConfigStore;
 /// Callbacks fire in the ESP-IDF system event loop task context.
 /// Callers must not block inside callbacks or call back into WifiManager,
 /// except the credential APIs (add_network / remove_network /
-/// list_networks / has_saved_networks / clear_networks), which only touch
+/// list_networks / has_saved_networks / clear_networks / select_saved_network), which only touch
 /// the ConfigStore and are safe to call from a callback.
 ///
 /// ISR-safe: no
@@ -118,6 +118,9 @@ public:
   /// Outcome delivered via on_connected / on_got_ip / on_disconnected.
   WifiStatus connect(const WifiStaConfig &config);
 
+  /// Connect directly to one saved SSID using its stored password, without scanning.
+  WifiStatus connect_saved_network(const char *ssid, const WifiStaConfig &config = {});
+
   /// Disconnect from the current AP and cancel any pending retry or auto
   /// cycle.
   WifiStatus disconnect();
@@ -128,6 +131,10 @@ public:
   /// on_scan_complete callback. Requires Sta or ApSta mode AND the STA
   /// must be disconnected (no scan-while-connected at v1).
   WifiStatus start_scan(const WifiScanConfig &config = {});
+
+  /// Select the strongest visible saved SSID; ties prefer the newest saved entry.
+  /// Clears ssid when no match exists. Safe to call from the scan callback.
+  bool select_saved_network(const WifiScanEntry *results, uint16_t count, char (&ssid)[33]) const;
 
   // -- AP Operations --
 

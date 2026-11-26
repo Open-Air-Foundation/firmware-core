@@ -301,6 +301,41 @@ WifiStatus WifiManager::connect(const WifiStaConfig &config) {
   return WifiStatus::Ok;
 }
 
+WifiStatus WifiManager::connect_saved_network(const char *ssid, const WifiStaConfig &config) {
+  if (ssid == nullptr || ssid[0] == '\0') {
+    return WifiStatus::InvalidArgument;
+  }
+  WifiCredential saved[WIFI_MAX_SAVED_NETWORKS];
+  const auto count = _creds.load_all(saved, WIFI_MAX_SAVED_NETWORKS);
+  for (uint8_t i = 0; i < count; ++i) {
+    if (std::strcmp(saved[i].ssid, ssid) == 0) {
+      WifiStaConfig selected = config;
+      std::memcpy(selected.ssid, saved[i].ssid, sizeof(selected.ssid));
+      std::memcpy(selected.password, saved[i].password, sizeof(selected.password));
+      return connect(selected);
+    }
+  }
+  return WifiStatus::NotFound;
+}
+
+bool WifiManager::select_saved_network(const WifiScanEntry *results, uint16_t count,
+                                       char (&ssid)[33]) const {
+  ssid[0] = '\0';
+  char saved[WIFI_MAX_SAVED_NETWORKS][33];
+  const auto saved_count = list_networks(saved, WIFI_MAX_SAVED_NETWORKS);
+  int8_t best_rssi = 0;
+  for (uint8_t i = 0; i < saved_count; ++i) {
+    for (uint16_t j = 0; j < count; ++j) {
+      if (std::strcmp(saved[i], results[j].ssid) == 0 &&
+          (ssid[0] == '\0' || results[j].rssi > best_rssi)) {
+        best_rssi = results[j].rssi;
+        std::memcpy(ssid, saved[i], sizeof(ssid));
+      }
+    }
+  }
+  return ssid[0] != '\0';
+}
+
 WifiStatus WifiManager::disconnect() {
   _disconnect_requested = true;
   _hal.cancel_retry_timer();
@@ -635,9 +670,11 @@ WifiStatus WifiManager::_start_auto_connect(const WifiStaConfig &config) {
   // More than one saved network: scan now, rank at scan-complete.
   AG_LOGI(TAG, "auto-connect: %u saved networks, scanning to rank", count);
   _auto_scan_pending = true;
+  _sta_state = WifiStaState::Connecting;
   const WifiScanConfig scan_cfg; // show_hidden = false
   if (_hal.start_scan(scan_cfg) != WifiStatus::Ok) {
     _auto_scan_pending = false;
+    _sta_state = WifiStaState::Disconnected;
     return WifiStatus::Failed;
   }
   return WifiStatus::Ok;

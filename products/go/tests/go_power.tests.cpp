@@ -465,6 +465,27 @@ TEST_CASE("request_system_power_reset: unavailable charger and reset failures",
 TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
   MockBmsDevice mock_bms;
 
+  SECTION("Wi-Fi fallback permits sleep while preserving interaction and tracking gates") {
+    PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+    GoSettings settings{};
+    settings.wifi_enabled = true;
+    settings.idle_interval_seconds = 300;
+    for (auto gps : {GpsMode::AlwaysOff, GpsMode::AlwaysOn, GpsMode::OnWhenTracking}) {
+      settings.gps_mode = gps;
+      const auto idle =
+          svc.decide_sleep(settings, LockState::Locked, TrackingState::Idle, 30000, true);
+      CHECK(idle.type == PowerService::SleepType::Deep);
+      CHECK(idle.duration_ms == 270000);
+      CHECK(
+          svc.decide_sleep(settings, LockState::Unlocked, TrackingState::Idle, 30000, true).type ==
+          PowerService::SleepType::None);
+      for (auto tracking : {TrackingState::Recording, TrackingState::Paused}) {
+        CHECK(svc.decide_sleep(settings, LockState::Locked, tracking, 30000, true).type ==
+              PowerService::SleepType::None);
+      }
+    }
+  }
+
   SECTION("Wi-Fi keeps Idle awake") {
     PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 

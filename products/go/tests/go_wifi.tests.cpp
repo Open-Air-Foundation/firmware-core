@@ -83,7 +83,10 @@ public:
     return WifiStatus::Ok;
   }
 
-  WifiStatus start_scan(const WifiScanConfig &) override { return WifiStatus::Ok; }
+  WifiStatus start_scan(const WifiScanConfig &) override {
+    ++scan_calls;
+    return WifiStatus::Ok;
+  }
   WifiStatus start_ap(const WifiApConfig &) override { return WifiStatus::Ok; }
   WifiStatus stop_ap() override { return WifiStatus::Ok; }
 
@@ -143,6 +146,7 @@ public:
 
   // Observables
   int connect_calls = 0;
+  int scan_calls = 0;
   WifiStatus connect_status = WifiStatus::Ok;
   int disconnect_calls = 0;
   int set_static_ip_calls = 0;
@@ -431,7 +435,7 @@ TEST_CASE("connect_with_saved_credentials clears static IP when nullptr",
 }
 
 TEST_CASE("connect_with_saved_credentials with no saved networks posts WifiDisconnected, "
-          "no deadline",
+          "bounded delivery",
           "[go_wifi][saved][disconnect]") {
   Fixture f; // store empty
 
@@ -439,7 +443,7 @@ TEST_CASE("connect_with_saved_credentials with no saved networks posts WifiDisco
 
   // WifiManager::connect() returned NotFound — no driver call.
   CHECK(f.hal.connect_calls == 0);
-  CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 30000);
 
   const Event *evt = f.rtos.first_event(EventType::WifiDisconnected);
   REQUIRE(evt != nullptr);
@@ -495,10 +499,8 @@ TEST_CASE("factory startup keeps its deadline after an immediate driver failure"
   f.svc.tick(15999);
   CHECK(f.rtos.captured.empty());
   f.svc.tick(16000);
-  const auto *event = f.rtos.first_event(EventType::WifiDisconnected);
+  const auto *event = f.rtos.first_event(EventType::WifiConnectionTimeout);
   REQUIRE(event != nullptr);
-  CHECK(event->wifi_disconnect_reason ==
-        static_cast<uint8_t>(WifiDisconnectReason::connection_lost));
   CHECK_FALSE(f.svc.is_connecting());
   CHECK(f.hal.connect_calls == 1);
 }
@@ -596,8 +598,7 @@ TEST_CASE("tick clears deadline after on_got_ip latches the pending flag", "[go_
   CHECK_FALSE(WifiServiceTestAccess::clear_pending(f.svc));
 }
 
-TEST_CASE("tick fires synthetic WifiDisconnected{connection_lost} on deadline expiry",
-          "[go_wifi][tick]") {
+TEST_CASE("tick fires WifiConnectionTimeout on deadline expiry", "[go_wifi][tick]") {
   Fixture f;
   f.rtos.set_now(0);
   f.svc.try_default_fallback_credentials(); // arms 15s deadline at t=0
@@ -605,12 +606,11 @@ TEST_CASE("tick fires synthetic WifiDisconnected{connection_lost} on deadline ex
   f.rtos.captured.clear();
 
   f.svc.tick(14999);
-  CHECK_FALSE(f.rtos.has_event(EventType::WifiDisconnected));
+  CHECK_FALSE(f.rtos.has_event(EventType::WifiConnectionTimeout));
 
   f.svc.tick(15000);
-  const Event *evt = f.rtos.first_event(EventType::WifiDisconnected);
+  const Event *evt = f.rtos.first_event(EventType::WifiConnectionTimeout);
   REQUIRE(evt != nullptr);
-  CHECK(evt->wifi_disconnect_reason == static_cast<uint8_t>(WifiDisconnectReason::connection_lost));
   CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
 }
 
@@ -633,7 +633,7 @@ TEST_CASE("connect timeout retries event delivery when the central queue is full
   f.rtos.accept_queue_sends = true;
   f.svc.tick(15001);
   REQUIRE(f.rtos.captured.size() == 1);
-  CHECK(f.rtos.captured.front().type == EventType::WifiDisconnected);
+  CHECK(f.rtos.captured.front().type == EventType::WifiConnectionTimeout);
   CHECK(f.svc.next_deadline_ms() == 0);
   f.svc.tick(15002);
   CHECK(f.rtos.captured.size() == 1);
@@ -687,13 +687,13 @@ TEST_CASE("tick fires the reconnect without resetting has_been_online", "[go_wif
   f.svc.tick(5999);
   CHECK(f.hal.connect_calls == connects_before);
 
-  // Due: re-issues the saved connect, no connect window, latch preserved.
+  // Due: re-issues the saved connect, original deadline and latch preserved.
   f.svc.tick(6000);
   CHECK(f.hal.connect_calls == connects_before + 1);
   CHECK(f.hal.last_ssid == "saved");
   CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
-  CHECK(WifiServiceTestAccess::deadline(f.svc) == 0); // runtime reconnect arms no window
-  CHECK(f.svc.has_been_online());                     // not reset
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 31000); // original window is not renewed
+  CHECK(f.svc.has_been_online());                         // not reset
 }
 
 TEST_CASE("tick reconnects a fallback-only session without saving credentials",
@@ -1567,4 +1567,67 @@ TEST_CASE("WifiService reuses cleanup worker across reconnect and shutdown",
     CHECK(WifiServiceTestAccess::worker(f.svc) == worker);
   }
   CHECK(f.rtos.notifications.size() == 3);
+}
+
+TEST_CASE("Runtime retries share one total connection deadline", "[go_wifi][fallback]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+  f.rtos.captured.clear();
+  f.rtos.set_now(1000);
+  f.hal.sta_disconnected_cb(/*WIFI_REASON_BEACON_TIMEOUT*/ 200);
+  REQUIRE(f.rtos.has_event(EventType::WifiDisconnected));
+  CHECK_FALSE(f.svc.is_online());
+  f.svc.schedule_reconnect();
+  REQUIRE(WifiServiceTestAccess::deadline(f.svc) == 31000);
+  for (uint32_t now : {6000u, 11000u, 16000u, 21000u, 26000u}) {
+    f.rtos.set_now(now);
+    f.svc.tick(now);
+    f.svc.schedule_reconnect();
+    CHECK(WifiServiceTestAccess::deadline(f.svc) == 31000);
+  }
+  const auto attempts = f.hal.connect_calls;
+  f.rtos.set_now(31000);
+  f.svc.tick(31000);
+  REQUIRE(f.rtos.has_event(EventType::WifiConnectionTimeout));
+  CHECK(f.hal.connect_calls == attempts);
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+  f.rtos.captured.clear();
+  f.svc.tick(32000);
+  CHECK_FALSE(f.rtos.has_event(EventType::WifiConnectionTimeout));
+}
+
+TEST_CASE("Connection timers keep their ordering across clock wrap", "[go_wifi][fallback]") {
+  Fixture f;
+  f.seed_network();
+  const uint32_t start = UINT32_MAX - 9999;
+  f.rtos.set_now(start);
+  f.svc.schedule_reconnect();
+  CHECK(f.svc.next_deadline_ms() == start + 5000);
+  f.rtos.advance(5000);
+  f.svc.tick(static_cast<uint32_t>(f.rtos.now_ms));
+  CHECK(f.hal.connect_calls == 1);
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 20000);
+  f.svc.tick(19999);
+  CHECK_FALSE(f.rtos.has_event(EventType::WifiConnectionTimeout));
+  f.svc.tick(20000);
+  CHECK(f.rtos.has_event(EventType::WifiConnectionTimeout));
+}
+
+TEST_CASE("A wake-selected SSID connects directly with a fresh deadline", "[go_wifi][fallback]") {
+  Fixture f;
+  f.seed_network();
+  f.wifi.add_network("other", "otherpw");
+  f.rtos.set_now(45000); // Scan and boot work have already elapsed.
+  REQUIRE(f.svc.resume_station(nullptr, "saved"));
+  CHECK(f.hal.last_ssid == "saved");
+  CHECK(f.hal.last_password == "pw");
+  CHECK(f.hal.scan_calls == 0);
+  CHECK(f.hal.connect_calls == 1);
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 75000);
+  f.svc.tick(74999);
+  CHECK_FALSE(f.rtos.has_event(EventType::WifiConnectionTimeout));
+  f.svc.tick(75000);
+  CHECK(f.rtos.has_event(EventType::WifiConnectionTimeout));
 }

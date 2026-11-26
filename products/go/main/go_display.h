@@ -319,7 +319,9 @@ public:
   /// first job.  Returns in ~10 ms without waiting for the e-paper refresh.
   /// The worker holds the SPI bus for the duration (~3 s), naturally
   /// serializing any other SPI device (NAND) without explicit coordination.
-  bool init(const DisplayValues &initial, bool defer_refresh = false);
+  /// skip_initial_refresh preserves the physical image until the first update.
+  bool init(const DisplayValues &initial, bool defer_refresh = false,
+            bool skip_initial_refresh = false);
 
   /// Submit a new frame for display.
   /// Renders into framebuffer (fast), then signals worker task.
@@ -373,6 +375,7 @@ private:
   RefreshMode _pending_mode = RefreshMode::Full;
   bool _pending_full_canvas_partial = false;
   bool _menu_exited = false;
+  bool _initial_refresh_pending = false;
 
   // Worker task
   RtosTaskHandle _task_handle = nullptr;
@@ -434,10 +437,12 @@ public:
 
   explicit DisplayService(const Config &) {}
 
-  bool init(const DisplayValues &values, bool defer_refresh = false) {
+  bool init(const DisplayValues &values, bool defer_refresh = false,
+            bool skip_initial_refresh = false) {
     ++spy_init_count;
     spy_last_screen = values.screen;
     spy_last_init_deferred = defer_refresh;
+    spy_last_init_skipped = skip_initial_refresh;
     if (spy_on_init != nullptr)
       spy_on_init(values);
     RTOS::delay_ms(spy_init_delay_ms);
@@ -475,6 +480,7 @@ public:
   inline static uint32_t spy_flush_count = 0;
   inline static Screen spy_last_screen = Screen::Home;
   inline static bool spy_last_init_deferred = false;
+  inline static bool spy_last_init_skipped = false;
   inline static bool spy_last_update_wait = false;
   inline static bool spy_last_update_has_snackbar = false;
   inline static bool spy_last_update_locked = true;
