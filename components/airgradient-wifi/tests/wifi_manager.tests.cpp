@@ -1490,3 +1490,29 @@ TEST_CASE("explicit connect leaves the saved-network store untouched", "[wifi-ma
   REQUIRE(mgr.list_networks(out, WIFI_MAX_SAVED_NETWORKS) == 1);
   REQUIRE(std::string(out[0]) == "Saved");
 }
+
+TEST_CASE("Suspended station ignores queued link events and retry deadlines",
+          "[wifi-manager][handoff]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+  REQUIRE(mgr.connect(make_sta_config("Net")) == WifiStatus::Ok);
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+  REQUIRE(mgr.set_mode(WifiMode::Off) == WifiStatus::Ok);
+  int connected = 0;
+  int disconnected = 0;
+  mgr.set_on_got_ip([&](uint32_t) { ++connected; });
+  mgr.set_on_disconnected([&](WifiDisconnectReason) { ++disconnected; });
+  const auto attempts = hal.connect_calls;
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+  hal.sta_disconnected_cb(200);
+  hal.retry_due_cb();
+  hal.dhcp_timeout_cb();
+  CHECK(mgr.status_snapshot().sta_state == WifiStaState::Disconnected);
+  CHECK(connected == 0);
+  CHECK(disconnected == 0);
+  CHECK(hal.connect_calls == attempts);
+}

@@ -93,6 +93,10 @@ public:
   /// Return the current Wi-Fi operating mode.
   WifiMode get_mode() const;
 
+  /// Idempotent driver allocation and release, separate from radio mode.
+  WifiStatus initialize();
+  WifiStatus deinitialize();
+
   // -- STA Operations --
 
   /// Start a STA connection. Non-blocking. Requires Sta or ApSta mode
