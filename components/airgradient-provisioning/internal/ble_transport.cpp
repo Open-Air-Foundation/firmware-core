@@ -16,6 +16,7 @@
 #include "hal/ble_server.h"
 #include "provisioning_json.h"
 #include "scan_filter.h"
+#include "services/ble_device_information.h"
 
 namespace {
 
@@ -25,13 +26,6 @@ constexpr const char *TAG = "BleProv";
 constexpr const char *PROV_SERVICE_UUID = "acbcfea8-e541-4c40-9bfd-17820f16c95c";
 constexpr const char *CRED_STATUS_CHAR_UUID = "703fa252-3d2a-4da9-a05c-83b0d9cacb8e";
 constexpr const char *SCAN_CHAR_UUID = "467a080f-e50f-42c9-b9b2-a2ab14d82725";
-
-// GATT UUIDs — Device Information Service (standard BLE SIG)
-constexpr const char *DIS_UUID = "180A";
-constexpr const char *DIS_MODEL_UUID = "2A24";
-constexpr const char *DIS_SERIAL_UUID = "2A25";
-constexpr const char *DIS_FW_REV_UUID = "2A26";
-constexpr const char *DIS_MANUFACTURER_UUID = "2A29";
 
 constexpr const char *DEFAULT_MANUFACTURER = "AirGradient";
 
@@ -44,14 +38,6 @@ constexpr size_t BLE_NOTIFY_BUF_SIZE = 512;
 
 // Number of networks per BLE scan notification page (spec constant).
 constexpr size_t NETWORKS_PER_PAGE = 3;
-
-// Set a read-only DIS characteristic to a string value.
-void set_dis_value(AgBleCharacteristic *ch, const char *value) {
-  if (ch == nullptr || value == nullptr) {
-    return;
-  }
-  ch->set_value(reinterpret_cast<const uint8_t *>(value), std::strlen(value));
-}
 
 // ---------------------------------------------------------------------------
 // BLE JSON encode helpers (private to this translation unit)
@@ -283,28 +269,11 @@ bool BleTransport::_register_gatt(const ProvisioningBleConfig &config) {
   }
 
   // --- Device Information Service ---
-  AgBleGattService *dis = _ble->add_service(DIS_UUID);
-  if (dis == nullptr) {
-    AG_LOGE(TAG, "add DIS failed");
-    return false;
-  }
-
+  const DeviceInformation info{config.model_name, config.serial_number, config.firmware_version,
+                               DEFAULT_MANUFACTURER};
   constexpr uint16_t dis_props = AgBleProperty::READ | AgBleProperty::READ_ENC;
-
-  AgBleCharacteristic *model_ch = dis->add_characteristic(DIS_MODEL_UUID, dis_props);
-  set_dis_value(model_ch, config.model_name);
-
-  AgBleCharacteristic *serial_ch = dis->add_characteristic(DIS_SERIAL_UUID, dis_props);
-  set_dis_value(serial_ch, config.serial_number);
-
-  AgBleCharacteristic *fw_ch = dis->add_characteristic(DIS_FW_REV_UUID, dis_props);
-  set_dis_value(fw_ch, config.firmware_version);
-
-  AgBleCharacteristic *mfg_ch = dis->add_characteristic(DIS_MANUFACTURER_UUID, dis_props);
-  set_dis_value(mfg_ch, DEFAULT_MANUFACTURER);
-
-  if (!dis->start()) {
-    AG_LOGE(TAG, "DIS start failed");
+  if (!register_device_information(*_ble, info, dis_props)) {
+    AG_LOGE(TAG, "Device Information registration failed");
     return false;
   }
   AG_LOGD(TAG, "GATT services registered (Prov + DIS)");

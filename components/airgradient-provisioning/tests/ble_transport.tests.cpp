@@ -99,6 +99,20 @@ TEST_CASE("BleTransport: setup creates provisioning service and DIS", "[ble_tran
   MockBleGattService *dis = ble.find_service(DIS_UUID);
   REQUIRE(dis != nullptr);
   REQUIRE(dis->started);
+  REQUIRE(dis->characteristics.size() == 4);
+  const struct {
+    const char *uuid;
+    const char *value;
+  } identity[] = {
+      {"2A24", "I-9PSL"}, {"2A25", "AABBCCDD"}, {"2A26", "1.0.0"}, {"2A29", "AirGradient"}};
+  for (const auto &field : identity) {
+    auto *characteristic = dis->find_char(field.uuid);
+    REQUIRE(characteristic != nullptr);
+    REQUIRE(characteristic->last_value_str() == field.value);
+  }
+  for (const auto &characteristic : dis->characteristics) {
+    REQUIRE(characteristic.properties == (AgBleProperty::READ | AgBleProperty::READ_ENC));
+  }
 
   // Manufacturer data was set (2-byte company ID + payload).
   REQUIRE_FALSE(ble.last_mfg_data.empty());
@@ -106,6 +120,41 @@ TEST_CASE("BleTransport: setup creates provisioning service and DIS", "[ble_tran
   REQUIRE(ble.last_mfg_data[1] == 0xFF);
 
   transport.teardown();
+  REQUIRE(ble.deinit_count == 1);
+}
+
+TEST_CASE("BleTransport: missing identity fields remain empty", "[ble_transport]") {
+  MockBleServer ble;
+  BleTransport transport;
+  ProvisioningBleConfig config;
+
+  REQUIRE(transport.setup(ble, config));
+  auto *dis = ble.find_service(DIS_UUID);
+  REQUIRE(dis != nullptr);
+  REQUIRE(dis->started);
+  for (const char *uuid : {"2A24", "2A25", "2A26"}) {
+    auto *characteristic = dis->find_char(uuid);
+    REQUIRE(characteristic != nullptr);
+    REQUIRE(characteristic->last_value.empty());
+  }
+}
+
+TEST_CASE("BleTransport: incomplete device information prevents advertising", "[ble_transport]") {
+  class FailedDisService : public MockBleGattService {
+  public:
+    AgBleCharacteristic *add_characteristic(const char *, uint16_t) override { return nullptr; }
+  };
+  class FailedDisServer : public MockBleServer {
+  public:
+    AgBleGattService *add_service(const char *uuid) override {
+      return std::strcmp(uuid, DIS_UUID) == 0 ? &dis : MockBleServer::add_service(uuid);
+    }
+    FailedDisService dis;
+  } ble;
+  BleTransport transport;
+
+  REQUIRE_FALSE(transport.setup(ble, basic_ble_config()));
+  REQUIRE(ble.start_advertising_count == 0);
   REQUIRE(ble.deinit_count == 1);
 }
 
