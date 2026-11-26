@@ -171,7 +171,7 @@ TEST_CASE("Go local API initializes safe snapshots") {
   REQUIRE(config.pinned_chart.has_value());
   REQUIRE(config.cloud_connection.has_value());
   REQUIRE(config.configuration_control.has_value());
-  REQUIRE(config.measurement_interval_seconds.has_value());
+  REQUIRE(config.tracking_interval_seconds.has_value());
   REQUIRE(config.gps_mode.has_value());
   REQUIRE(config.back_led_brightness.has_value());
   CHECK(config.back_led_indicator == "aqi");
@@ -186,7 +186,9 @@ TEST_CASE("Go local API initializes safe snapshots") {
   CHECK(*config.pinned_chart == "pm25");
   CHECK(*config.cloud_connection);
   CHECK(*config.configuration_control == "both");
-  CHECK(*config.measurement_interval_seconds == TRACKING_INTERVAL_SECONDS_DEFAULT);
+  CHECK(*config.tracking_interval_seconds == TRACKING_INTERVAL_SECONDS_DEFAULT);
+  CHECK(config.idle_interval_seconds == IDLE_INTERVAL_SECONDS_DEFAULT);
+  CHECK_FALSE(config.measurement_interval_seconds.has_value());
   CHECK(*config.gps_mode == "tracking");
   CHECK(*config.back_led_brightness == static_cast<int>(LedBrightness::Off));
   CHECK(*config.touch_led_intensity == static_cast<int>(TouchLedIntensity::Off));
@@ -370,7 +372,7 @@ TEST_CASE("Go local API maps the supported active config subset") {
   CHECK(*config.altitude_unit == "ft");
   CHECK_FALSE(*config.cloud_connection);
   CHECK(*config.configuration_control == "local");
-  CHECK(config.measurement_interval_seconds == 30);
+  CHECK(config.tracking_interval_seconds == 30);
   CHECK(config.gps_mode == "always");
   CHECK(config.back_led_brightness == static_cast<int>(LedBrightness::Mid));
   CHECK(config.touch_led_intensity == static_cast<int>(TouchLedIntensity::Bright));
@@ -550,7 +552,7 @@ TEST_CASE("Go local API translates one atomic supported update") {
   partial.altitude_unit = "ft";
   partial.cloud_connection = false;
   partial.configuration_control = "local";
-  partial.measurement_interval_seconds = 30;
+  partial.tracking_interval_seconds = 30;
   partial.gps_mode = "off";
   partial.back_led_brightness = 2;
   partial.touch_led_intensity = 2;
@@ -570,10 +572,9 @@ TEST_CASE("Go local API translates one atomic supported update") {
       field_mask(GoConfigField::AltitudeUnit) | field_mask(GoConfigField::CloudConnection) |
       field_mask(GoConfigField::ConfigurationControl) | field_mask(GoConfigField::Pm25Correction) |
       field_mask(GoConfigField::TemperatureCorrection) |
-      field_mask(GoConfigField::HumidityCorrection) |
-      field_mask(GoConfigField::MeasurementInterval) | field_mask(GoConfigField::GpsMode) |
-      field_mask(GoConfigField::BackLedBrightness) | field_mask(GoConfigField::TouchLedIntensity) |
-      field_mask(GoConfigField::BuzzerEnabled);
+      field_mask(GoConfigField::HumidityCorrection) | field_mask(GoConfigField::TrackingInterval) |
+      field_mask(GoConfigField::GpsMode) | field_mask(GoConfigField::BackLedBrightness) |
+      field_mask(GoConfigField::TouchLedIntensity) | field_mask(GoConfigField::BuzzerEnabled);
   CHECK(request.config.update_mask == expected_mask);
   CHECK(request.config.pm_use_usaqi);
   CHECK(request.config.use_fahrenheit);
@@ -681,7 +682,7 @@ TEST_CASE("Go local API permits only exact control recovery from cloud control")
   recovery.corrections = Corrections{};
   require_status(fixture.service->submit_config(recovery), ConfigSubmitStatus::Forbidden);
   recovery.corrections.reset();
-  recovery.measurement_interval_seconds = 30;
+  recovery.tracking_interval_seconds = 30;
   require_status(fixture.service->submit_config(recovery), ConfigSubmitStatus::Forbidden);
 
   LocalServerConfig empty{};
@@ -874,12 +875,12 @@ TEST_CASE("Go local API rejects invalid interval, GPS mode, and output settings"
   fixture.service->set_access(ConfigAccess::ReadWrite);
 
   LocalServerConfig partial{};
-  partial.measurement_interval_seconds = TRACKING_INTERVAL_SECONDS_MIN - 1;
+  partial.tracking_interval_seconds = TRACKING_INTERVAL_SECONDS_MIN - 1;
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
-                 ConfigFieldId::MeasurementInterval);
-  partial.measurement_interval_seconds = TRACKING_INTERVAL_SECONDS_MAX + 1;
+                 ConfigFieldId::TrackingInterval);
+  partial.tracking_interval_seconds = TRACKING_INTERVAL_SECONDS_MAX + 1;
   require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::InvalidValue,
-                 ConfigFieldId::MeasurementInterval);
+                 ConfigFieldId::TrackingInterval);
 
   partial = LocalServerConfig{};
   partial.gps_mode = "sometimes";
@@ -1101,12 +1102,12 @@ TEST_CASE("Go local API rejects EPA and other fields in the same request") {
   CorrectionEntry epa{};
   epa.algorithm = "epa_2021";
   auto config = correction_config(epa, std::nullopt, std::nullopt);
-  config.measurement_interval_seconds = 17;
+  config.tracking_interval_seconds = 17;
   require_status(fixture.service->submit_config(config), ConfigSubmitStatus::InvalidValue,
                  ConfigFieldId::CorrectionsPm25);
   CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
   const auto active = fixture.service->get_config();
-  CHECK(active.measurement_interval_seconds == settings.tracking_interval_seconds);
+  CHECK(active.tracking_interval_seconds == settings.tracking_interval_seconds);
   REQUIRE(active.corrections->pm25->slr.has_value());
   CHECK(active.corrections->pm25->algorithm == "custom_via_pm25_raw");
   CHECK(*active.corrections->pm25->slr->scaling_factor == 1.2f);
@@ -1409,5 +1410,83 @@ TEST_CASE("Go local API indicator honors control policy and cannot ride a recove
     partial.back_led_indicator = "co2";
     require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
     CHECK(fixture.receive_request().config.back_led_indicator == BackLedIndicator::Co2);
+  }
+}
+
+TEST_CASE("Go local API intervals validate independently and publish only after activation") {
+  for (bool idle : {false, true}) {
+    for (int seconds : {-1, 0, 1, 17, 3600, 3601, std::numeric_limits<int>::max()}) {
+      CAPTURE(idle, seconds);
+      Fixture fixture;
+      GoSettings settings{};
+      settings.idle_interval_seconds = 900;
+      settings.tracking_interval_seconds = 30;
+      fixture.service->publish_config_snapshot(settings);
+      fixture.service->set_access(ConfigAccess::ReadWrite);
+      LocalServerConfig partial{};
+      if (idle) {
+        partial.idle_interval_seconds = seconds;
+      } else {
+        partial.tracking_interval_seconds = seconds;
+      }
+      const auto result = fixture.service->submit_config(partial);
+      if (seconds < 1 || seconds > 3600) {
+        require_status(result, ConfigSubmitStatus::InvalidValue,
+                       idle ? ConfigFieldId::IdleInterval : ConfigFieldId::TrackingInterval);
+        CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
+      } else {
+        require_status(result, ConfigSubmitStatus::Accepted);
+        const auto request = fixture.receive_request();
+        CHECK(request.config.update_mask ==
+              field_mask(idle ? GoConfigField::IdleInterval : GoConfigField::TrackingInterval));
+        if (idle) {
+          CHECK(request.config.idle_interval_seconds == seconds);
+        } else {
+          CHECK(request.config.tracking_interval_seconds == seconds);
+        }
+      }
+      const auto snapshot = fixture.service->get_config();
+      CHECK(snapshot.idle_interval_seconds == 900);
+      CHECK(snapshot.tracking_interval_seconds == 30);
+      CHECK_FALSE(snapshot.measurement_interval_seconds.has_value());
+    }
+  }
+}
+
+TEST_CASE("Go local API rejects legacy measurementInterval without partial admission") {
+  Fixture fixture;
+  fixture.service->set_access(ConfigAccess::ReadWrite);
+  LocalServerConfig partial{};
+  partial.measurement_interval_seconds = 17;
+  partial.idle_interval_seconds = 900;
+  partial.tracking_interval_seconds = 30;
+  partial.temperature_unit = "f";
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::NotSupported,
+                 ConfigFieldId::MeasurementInterval);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
+  Event event{};
+  CHECK_FALSE(RTOS::queue_receive(fixture.event_queue, &event, 0));
+  const auto snapshot = fixture.service->get_config();
+  CHECK(snapshot.idle_interval_seconds == IDLE_INTERVAL_SECONDS_DEFAULT);
+  CHECK(snapshot.tracking_interval_seconds == TRACKING_INTERVAL_SECONDS_DEFAULT);
+  CHECK(snapshot.temperature_unit == "c");
+}
+
+TEST_CASE("Go local API interval fields cannot bypass Cloud authority through control recovery") {
+  for (bool idle : {false, true}) {
+    Fixture fixture;
+    GoSettings settings{};
+    settings.configuration_control = ConfigurationControl::Cloud;
+    fixture.service->publish_config_snapshot(settings);
+    fixture.service->set_access(ConfigAccess::ReadWrite);
+    LocalServerConfig partial{};
+    partial.configuration_control = "both";
+    if (idle) {
+      partial.idle_interval_seconds = 900;
+    } else {
+      partial.tracking_interval_seconds = 17;
+    }
+    require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Forbidden);
+    CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
   }
 }

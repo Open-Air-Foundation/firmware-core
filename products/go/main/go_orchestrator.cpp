@@ -115,8 +115,7 @@ static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource sou
     candidate.pinned_chart = update.pinned_chart;
     has_update = true;
   }
-  if (has_go_config_field(update.update_mask, GoConfigField::MeasurementInterval) ||
-      has_go_config_field(update.update_mask, GoConfigField::TrackingInterval)) {
+  if (has_go_config_field(update.update_mask, GoConfigField::TrackingInterval)) {
     candidate.tracking_interval_seconds = update.tracking_interval_seconds;
     has_update = true;
   }

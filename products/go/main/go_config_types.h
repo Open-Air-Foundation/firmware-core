@@ -39,7 +39,7 @@ enum class GoConfigField : uint32_t {
   Co2AbcDays = 1U << 7,
   TvocLearningOffset = 1U << 8,
   NoxLearningOffset = 1U << 9,
-  MeasurementInterval = 1U << 10,
+  // Bit 10 is reserved (former MeasurementInterval).
   AltitudeUnit = 1U << 11,
   GpsMode = 1U << 12,
   // Bit 13 is reserved.

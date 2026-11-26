@@ -442,7 +442,7 @@ TEST_CASE("FETCH ignores EPA while retaining valid configuration fields",
   const FetchConfigEventPayload &payload = f.mock_rtos.last_event.fetch_config;
   REQUIRE(payload.result == static_cast<uint8_t>(AgClientResult::Ok));
   CHECK_FALSE(has_go_config_field(payload.update.update_mask, GoConfigField::Pm25Correction));
-  CHECK(has_go_config_field(payload.update.update_mask, GoConfigField::MeasurementInterval));
+  CHECK(has_go_config_field(payload.update.update_mask, GoConfigField::TrackingInterval));
   CHECK(has_go_config_field(payload.update.update_mask, GoConfigField::TemperatureCorrection));
   CHECK(payload.update.tracking_interval_seconds == 17);
   CHECK(payload.update.corrections.temperature.intercept == 2.0f);
@@ -596,7 +596,7 @@ TEST_CASE("FETCH parses supported root scalars and ignores local-only fields",
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::PmStandard));
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TemperatureUnit));
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::AltitudeUnit));
-  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::MeasurementInterval));
+  REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TrackingInterval));
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::GpsMode));
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::BackLedBrightness));
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TouchLedIntensity));
@@ -715,7 +715,7 @@ TEST_CASE("FETCH rejects malformed device settings independently",
 
   const GoConfigUpdate &update = f.mock_rtos.last_event.fetch_config.update;
   REQUIRE(has_go_config_field(update.update_mask, GoConfigField::TemperatureUnit));
-  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::MeasurementInterval));
+  REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::TrackingInterval));
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::GpsMode));
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::BackLedBrightness));
   REQUIRE_FALSE(has_go_config_field(update.update_mask, GoConfigField::TouchLedIntensity));

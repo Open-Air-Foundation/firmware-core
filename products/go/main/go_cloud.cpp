@@ -319,7 +319,7 @@ FetchConfigEventPayload parse_cloud_config(const char *buffer, size_t bytes) {
       parse_int_range(measurement_interval, JSON_MEASUREMENT_INTERVAL,
                       TRACKING_INTERVAL_SECONDS_MIN, TRACKING_INTERVAL_SECONDS_MAX,
                       update.tracking_interval_seconds)) {
-    update.update_mask |= static_cast<uint32_t>(GoConfigField::MeasurementInterval);
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::TrackingInterval);
   }
 
   const cJSON *gps_mode = cJSON_GetObjectItemCaseSensitive(root, JSON_GPS_MODE);

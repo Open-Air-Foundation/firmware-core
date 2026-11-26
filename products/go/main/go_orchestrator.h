@@ -262,10 +262,6 @@ private:
   static constexpr uint32_t MAX_REASONABLE_TIMEOUT_MS = 3600000;
   static constexpr uint32_t PM_RECOVERY_TIMEOUT_MS = 30000;
   static constexpr uint32_t BLE_COMMAND_RESULT_DELAY_MS = 200;
-  /// Settle window between pushing the op_mode Config delta and tearing down
-  /// the Portable BLE link, so the notification drains before disconnect.
-  /// Notifications are fire-and-forget; this covers a few connection intervals.
-  static constexpr uint32_t BLE_MODE_CHANGE_NOTIFY_SETTLE_MS = 200;
   /// Post-paint dwell before cutting power.  DisplayService::flush() already
   /// waits for e-paper completion; this intentionally slows final shutdown so
   /// the user sees the reason screen and BLE disconnect notice can drain.

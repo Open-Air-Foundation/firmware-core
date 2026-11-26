@@ -67,7 +67,9 @@ inline constexpr const char *BLE_KEY_DISC = "disc";
 // Config characteristic keys
 // ---------------------------------------------------------------------------
 
-inline constexpr const char *BLE_KEY_MEAS_INT = "meas_int";
+inline constexpr const char *BLE_KEY_IDLE_INT = "idle_int";
+inline constexpr const char *BLE_KEY_TRACKING_INT = "tracking_int";
+inline constexpr const char *BLE_KEY_WIFI = "wifi";
 inline constexpr const char *BLE_KEY_PM_INT = "pm_int";
 inline constexpr const char *BLE_KEY_OTHER_INT = "other_int";
 inline constexpr const char *BLE_KEY_DISP_INT = "disp_int";
@@ -77,7 +79,6 @@ inline constexpr const char *BLE_KEY_PM_AQI = "pm_aqi";
 inline constexpr const char *BLE_KEY_PINNED_CHART = "pchart";
 inline constexpr const char *BLE_KEY_GPS_MODE = "gps_mode";
 inline constexpr const char *BLE_KEY_AUTO_LOCK = "auto_lock";
-inline constexpr const char *BLE_KEY_OP_MODE = "op_mode";
 inline constexpr const char *BLE_KEY_BACK_LED = "bled";
 inline constexpr const char *BLE_KEY_BACK_LED_INDICATOR = "bledi";
 inline constexpr const char *BLE_KEY_TOUCH_LED = "tled";
@@ -196,14 +197,6 @@ inline constexpr const char *BLE_VAL_GPS_ALWAYS = "always";
 
 inline constexpr const char *BLE_VAL_BACK_LED_INDICATOR_AQI = "aqi";
 inline constexpr const char *BLE_VAL_BACK_LED_INDICATOR_CO2 = "co2";
-
-// ---------------------------------------------------------------------------
-// Operating mode string values
-// ---------------------------------------------------------------------------
-
-inline constexpr const char *BLE_VAL_MODE_PORTABLE = "portable";
-inline constexpr const char *BLE_VAL_MODE_STATIONARY = "stationary";
-inline constexpr const char *BLE_VAL_MODE_OFFLINE = "offline";
 
 // ---------------------------------------------------------------------------
 // BLE command string values

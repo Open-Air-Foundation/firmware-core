@@ -5381,8 +5381,8 @@ TEST_CASE("apply_settings_change: unrelated update preserves custom measurement 
   CHECK(A::settings(orch).tracking_interval_seconds == 17);
   CHECK(A::last_measurement_ms(orch) == 1000);
   const LocalServerConfig config = f.local_api.get_config();
-  REQUIRE(config.measurement_interval_seconds.has_value());
-  CHECK(*config.measurement_interval_seconds == 17);
+  REQUIRE(config.tracking_interval_seconds.has_value());
+  CHECK(*config.tracking_interval_seconds == 17);
 }
 
 TEST_CASE("apply_settings_change: reschedules timer when interval changes",
@@ -6155,7 +6155,7 @@ TEST_CASE("dispatch: cloud applies shared config fields and ignores policy field
       static_cast<uint32_t>(GoConfigField::Pm25Correction) |
       static_cast<uint32_t>(GoConfigField::TemperatureCorrection) |
       static_cast<uint32_t>(GoConfigField::HumidityCorrection) |
-      static_cast<uint32_t>(GoConfigField::MeasurementInterval) |
+      static_cast<uint32_t>(GoConfigField::TrackingInterval) |
       static_cast<uint32_t>(GoConfigField::GpsMode) |
       static_cast<uint32_t>(GoConfigField::BackLedBrightness) |
       static_cast<uint32_t>(GoConfigField::TouchLedIntensity) |
@@ -11129,7 +11129,7 @@ TEST_CASE("local custom measurement interval activates exactly and synchronizes 
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
 
   LocalServerConfig partial{};
-  partial.measurement_interval_seconds = 17;
+  partial.tracking_interval_seconds = 17;
   REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
 
   dispatch_next_local_request(f, orch);
@@ -11137,8 +11137,8 @@ TEST_CASE("local custom measurement interval activates exactly and synchronizes 
   CHECK(A::settings(orch).tracking_interval_seconds == 17);
   CHECK(A::last_measurement_ms(orch) == 9000);
   const LocalServerConfig config = f.local_api.get_config();
-  REQUIRE(config.measurement_interval_seconds.has_value());
-  CHECK(*config.measurement_interval_seconds == 17);
+  REQUIRE(config.tracking_interval_seconds.has_value());
+  CHECK(*config.tracking_interval_seconds == 17);
 
   GoSettings ui_settings{};
   f.ui_manager.apply_to_settings(ui_settings);
@@ -14427,5 +14427,108 @@ TEST_CASE("Silent tracking boot consumes intent before starting one new session"
   CHECK(DisplayService::spy_update_count ==
         display_updates + (test_spy::create_route_result ? 0 : 1));
   CHECK(f.stub_bms.reset_requests == 0);
+  CHECK(test_spy::wifi_resume_count == 0);
+}
+
+TEST_CASE("local interval updates preserve the other preference across tracking states",
+          "[Orchestrator][local-api][interval]") {
+  for (auto tracking : {TrackingState::Idle, TrackingState::Recording, TrackingState::Paused}) {
+    for (bool idle : {false, true}) {
+      CAPTURE(tracking, idle);
+      TestFixture f;
+      auto orch = f.make_orchestrator();
+      CP2_ALLOW_CONFIG_WRITES(f);
+      A::set_tracking_state(orch, tracking);
+      f.local_api.set_access(ConfigAccess::ReadWrite);
+      A::set_last_measurement_ms(orch, 1000);
+      ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(9000);
+      LocalServerConfig partial{};
+      if (idle) {
+        partial.idle_interval_seconds = 901;
+      } else {
+        partial.tracking_interval_seconds = 17;
+      }
+      REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+      CHECK(A::settings(orch).equals(f.settings));
+      dispatch_next_local_request(f, orch);
+      const auto &settings = A::settings(orch);
+      CHECK(settings.idle_interval_seconds == (idle ? 901 : f.settings.idle_interval_seconds));
+      CHECK(settings.tracking_interval_seconds ==
+            (idle ? f.settings.tracking_interval_seconds : 17));
+      const bool active_interval = idle == (tracking == TrackingState::Idle);
+      CHECK(A::last_measurement_ms(orch) == (active_interval ? 9000 : 1000));
+      const auto snapshot = f.local_api.get_config();
+      CHECK(snapshot.idle_interval_seconds == settings.idle_interval_seconds);
+      CHECK(snapshot.tracking_interval_seconds == settings.tracking_interval_seconds);
+      CHECK_FALSE(snapshot.measurement_interval_seconds.has_value());
+      GoSettings ui_settings{};
+      f.ui_manager.apply_to_settings(ui_settings);
+      CHECK(ui_settings.idle_interval_seconds == settings.idle_interval_seconds);
+      CHECK(ui_settings.tracking_interval_seconds == settings.tracking_interval_seconds);
+    }
+  }
+}
+
+TEST_CASE("local interval pair activates atomically only after successful persistence",
+          "[Orchestrator][local-api][interval]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  const bool save_ok = GENERATE(false, true);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit())
+      .RETURN(save_ok ? ConfigStoreResult::OK : ConfigStoreResult::ERROR);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  LocalServerConfig partial{};
+  partial.idle_interval_seconds = 901;
+  partial.tracking_interval_seconds = 17;
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  dispatch_next_local_request(f, orch);
+  CHECK(A::settings(orch).idle_interval_seconds ==
+        (save_ok ? 901 : f.settings.idle_interval_seconds));
+  CHECK(A::settings(orch).tracking_interval_seconds ==
+        (save_ok ? 17 : f.settings.tracking_interval_seconds));
+  const auto snapshot = f.local_api.get_config();
+  CHECK(snapshot.idle_interval_seconds == A::settings(orch).idle_interval_seconds);
+  CHECK(snapshot.tracking_interval_seconds == A::settings(orch).tracking_interval_seconds);
+}
+
+TEST_CASE("BLE preference activation publishes to UI and HTTP only after persistence",
+          "[Orchestrator][ble][config][interval]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  const bool save_ok = GENERATE(false, true);
+  GoSettings candidate = f.settings;
+  SECTION("Idle interval") { candidate.idle_interval_seconds = 901; }
+  SECTION("Tracking interval") { candidate.tracking_interval_seconds = 17; }
+  SECTION("Wi-Fi preference retains the connected BLE owner") { candidate.wifi_enabled = true; }
+  test_spy::ble_connected = true;
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result.op = BleConfigOp::Set;
+  test_spy::ble_config_decode_result.recognized_config_key_count = 1;
+  test_spy::ble_decode_updates_settings = true;
+  test_spy::ble_decoded_settings = candidate;
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit())
+      .RETURN(save_ok ? ConfigStoreResult::OK : ConfigStoreResult::ERROR);
+  Event event{};
+  event.type = EventType::BleConfigWrite;
+  A::dispatch(orch, event);
+  const auto &expected = save_ok ? candidate : f.settings;
+  CHECK(A::settings(orch).equals(expected));
+  const auto snapshot = f.local_api.get_config();
+  CHECK(snapshot.idle_interval_seconds == expected.idle_interval_seconds);
+  CHECK(snapshot.tracking_interval_seconds == expected.tracking_interval_seconds);
+  GoSettings ui_settings{};
+  f.ui_manager.apply_to_settings(ui_settings);
+  CHECK(ui_settings.idle_interval_seconds == expected.idle_interval_seconds);
+  CHECK(ui_settings.tracking_interval_seconds == expected.tracking_interval_seconds);
+  CHECK(ui_settings.wifi_enabled == expected.wifi_enabled);
+  CHECK(test_spy::ble_notify_config_called == save_ok);
   CHECK(test_spy::wifi_resume_count == 0);
 }

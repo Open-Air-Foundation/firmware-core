@@ -867,7 +867,7 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_config produces 17 keys with compact device config") {
+TEST_CASE("BLE: encode_config produces 19 keys with compact device config") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   auto settings = make_default_settings();
@@ -877,9 +877,13 @@ TEST_CASE("BLE: encode_config produces 17 keys with compact device config") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 17);
+  CHECK(entries.size() == 19);
 
-  CHECK(find_entry(entries, "meas_int") != nullptr);
+  CHECK(find_entry(entries, "tracking_int") != nullptr);
+  CHECK(find_entry(entries, "idle_int") != nullptr);
+  CHECK(find_entry(entries, "wifi") != nullptr);
+  CHECK(find_entry(entries, "meas_int") == nullptr);
+  CHECK(find_entry(entries, "normal_int") == nullptr);
   CHECK(find_entry(entries, "pm_int") == nullptr);
   CHECK(find_entry(entries, "other_int") == nullptr);
   CHECK(find_entry(entries, "disp_int") == nullptr);
@@ -924,7 +928,11 @@ TEST_CASE("BLE: encode_config values match settings") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(find_entry(entries, "meas_int")->uint_val == 30);
+  CHECK(find_entry(entries, "tracking_int")->uint_val == 30);
+  REQUIRE(find_entry(entries, "idle_int") != nullptr);
+  CHECK(find_entry(entries, "idle_int")->uint_val == s.idle_interval_seconds);
+  REQUIRE(find_entry(entries, "wifi") != nullptr);
+  CHECK(find_entry(entries, "wifi")->bool_val);
   CHECK(find_entry(entries, "pm_int") == nullptr);
   CHECK(find_entry(entries, "other_int") == nullptr);
   CHECK(find_entry(entries, "disp_int") == nullptr);
@@ -1011,10 +1019,10 @@ TEST_CASE("BLE: encode_config_delta single-field change yields 2-key map") {
   CHECK(len <= TEST_NOTIFY_BUDGET);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 2); // "type" + "meas_int"
+  CHECK(entries.size() == 2); // "type" + "tracking_int"
   CHECK(find_entry(entries, "type")->text_val == "config");
-  REQUIRE(find_entry(entries, "meas_int") != nullptr);
-  CHECK(find_entry(entries, "meas_int")->uint_val == cur.tracking_interval_seconds);
+  REQUIRE(find_entry(entries, "tracking_int") != nullptr);
+  CHECK(find_entry(entries, "tracking_int")->uint_val == cur.tracking_interval_seconds);
 }
 
 TEST_CASE("BLE: encode_config_delta correction change yields one nested field") {
@@ -1096,7 +1104,7 @@ TEST_CASE("BLE: notify_config sends altitude-unit-only changes") {
 
   const auto read_entries =
       decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 17);
+  CHECK(read_entries.size() == 19);
   CHECK(find_entry(read_entries, "alt_ft")->bool_val);
 
   const auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -1128,7 +1136,7 @@ TEST_CASE("BLE: notify_config sends delta and keeps READ as full snapshot") {
   REQUIRE(config_char.notify_count == 1);
 
   auto read_entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 17); // full snapshot, no "type"
+  CHECK(read_entries.size() == 19); // full snapshot, no "type"
   CHECK(find_entry(read_entries, "type") == nullptr);
 
   auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -1574,7 +1582,7 @@ static size_t encode_set_two_uints(uint8_t *buf, size_t sz, const char *key1, ui
 
 TEST_CASE("BLE: decode_config_write with known key has no unknown keys") {
   uint8_t buf[64];
-  size_t len = encode_set_uint(buf, sizeof(buf), "meas_int", 30);
+  size_t len = encode_set_uint(buf, sizeof(buf), "tracking_int", 30);
 
   GoSettings settings;
   auto result = BleService::decode_config_write(buf, len, settings);
@@ -1893,7 +1901,7 @@ TEST_CASE("BLE: decode_config_write rejects invalid requested config values") {
   size_t len = 0;
 
   SECTION("measurement interval") {
-    len = encode_set_uint(buf, sizeof(buf), "meas_int", TRACKING_INTERVAL_SECONDS_MIN - 1);
+    len = encode_set_uint(buf, sizeof(buf), "tracking_int", TRACKING_INTERVAL_SECONDS_MIN - 1);
   }
   SECTION("GPS mode") { len = encode_set_text(buf, sizeof(buf), "gps_mode", "sometimes"); }
   SECTION("back LED") {
@@ -2032,7 +2040,7 @@ TEST_CASE("BLE: decode_config_write treats removed dev_name as unknown") {
 
 TEST_CASE("BLE: decode_config_write with mixed known and unknown keys sets has_unknown_keys") {
   uint8_t buf[128];
-  size_t len = encode_set_two_uints(buf, sizeof(buf), "meas_int", 30, "bad_key", 42);
+  size_t len = encode_set_two_uints(buf, sizeof(buf), "tracking_int", 30, "bad_key", 42);
 
   GoSettings settings;
   auto result = BleService::decode_config_write(buf, len, settings);
@@ -2047,7 +2055,7 @@ TEST_CASE("BLE: decode_config_write with mixed known and unknown keys sets has_u
 
 TEST_CASE("BLE: decode_config_write counts a single recognized config key") {
   uint8_t buf[64];
-  size_t len = encode_set_uint(buf, sizeof(buf), "meas_int", 30);
+  size_t len = encode_set_uint(buf, sizeof(buf), "tracking_int", 30);
 
   GoSettings settings;
   auto result = BleService::decode_config_write(buf, len, settings);
@@ -2059,7 +2067,7 @@ TEST_CASE("BLE: decode_config_write counts a single recognized config key") {
 
 TEST_CASE("BLE: decode_config_write counts duplicate config-key occurrences") {
   uint8_t buf[128];
-  size_t len = encode_set_two_uints(buf, sizeof(buf), "meas_int", 30, "meas_int", 40);
+  size_t len = encode_set_two_uints(buf, sizeof(buf), "tracking_int", 30, "tracking_int", 40);
 
   GoSettings settings;
   auto result = BleService::decode_config_write(buf, len, settings);
@@ -3367,4 +3375,143 @@ TEST_CASE("BLE: decode_config_write decodes release_ble command") {
 
   CHECK(result.op == BleConfigOp::Command);
   CHECK(result.cmd == BleCommand::ReleaseBle);
+}
+
+TEST_CASE("BLE: interval writes update only their named preference and notify the same key") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+
+  for (const auto *key : {"idle_int", "tracking_int"}) {
+    for (uint64_t seconds : {1u, 17u, 900u, 3600u}) {
+      CAPTURE(key, seconds);
+      GoSettings previous{};
+      GoSettings settings = previous;
+      uint8_t buf[64]{};
+      const auto len = encode_set_uint(buf, sizeof(buf), key, seconds);
+      const auto result = BleService::decode_config_write(buf, len, settings);
+      REQUIRE(result.op == BleConfigOp::Set);
+      CHECK_FALSE(result.has_unknown_keys);
+      CHECK_FALSE(result.has_invalid_config_values);
+      CHECK(result.recognized_config_key_count == 1);
+      const bool idle = std::strcmp(key, "idle_int") == 0;
+      CHECK(settings.idle_interval_seconds == (idle ? seconds : previous.idle_interval_seconds));
+      CHECK(settings.tracking_interval_seconds ==
+            (idle ? previous.tracking_interval_seconds : seconds));
+      CHECK(has_go_config_field(result.requested_fields, idle ? GoConfigField::IdleInterval
+                                                              : GoConfigField::TrackingInterval));
+      svc.notify_config(previous, settings);
+      const auto delta = decode_cbor_map(config_char.last_notified_value.data(),
+                                         config_char.last_notified_value.size());
+      REQUIRE(delta.size() == 2);
+      CHECK(find_entry(delta, "type")->text_val == "config");
+      REQUIRE(find_entry(delta, key) != nullptr);
+      CHECK(find_entry(delta, key)->uint_val == seconds);
+    }
+  }
+}
+
+TEST_CASE("BLE: both intervals reject out-of-range and wrongly typed values") {
+  for (const auto *key : {"idle_int", "tracking_int"}) {
+    for (int kind = 0; kind < 6; ++kind) {
+      CAPTURE(key, kind);
+      uint8_t buf[64]{};
+      size_t len = 0;
+      switch (kind) {
+      case 0:
+        len = encode_set_uint(buf, sizeof(buf), key, 0);
+        break;
+      case 1:
+        len = encode_set_uint(buf, sizeof(buf), key, 3601);
+        break;
+      case 2:
+        len = encode_set_uint(buf, sizeof(buf), key, UINT64_MAX);
+        break;
+      case 3:
+        len = encode_set_int(buf, sizeof(buf), key, -1);
+        break;
+      case 4:
+        len = encode_set_bool(buf, sizeof(buf), key, true);
+        break;
+      case 5: {
+        CborEncoder encoder, map;
+        cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+        cbor_encoder_create_map(&encoder, &map, 2);
+        cbor_encode_text_stringz(&map, "op");
+        cbor_encode_text_stringz(&map, "set");
+        cbor_encode_text_stringz(&map, key);
+        cbor_encode_double(&map, 10.5);
+        cbor_encoder_close_container(&encoder, &map);
+        len = cbor_encoder_get_buffer_size(&encoder, buf);
+        break;
+      }
+      }
+      GoSettings settings{};
+      const GoSettings previous = settings;
+      const auto result = BleService::decode_config_write(buf, len, settings);
+      CHECK(result.has_invalid_config_values);
+      CHECK_FALSE(result.has_unknown_keys);
+      CHECK(settings.idle_interval_seconds == previous.idle_interval_seconds);
+      CHECK(settings.tracking_interval_seconds == previous.tracking_interval_seconds);
+      CHECK(settings.wifi_enabled == previous.wifi_enabled);
+    }
+  }
+}
+
+TEST_CASE("BLE: retired interval keys and mode commands are rejected") {
+  for (const auto *key : {"meas_int", "normal_int"}) {
+    uint8_t buf[64]{};
+    const auto len = encode_set_uint(buf, sizeof(buf), key, 60);
+    GoSettings settings{};
+    const GoSettings previous = settings;
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(result.has_unknown_keys);
+    CHECK(result.recognized_config_key_count == 0);
+    CHECK(settings.idle_interval_seconds == previous.idle_interval_seconds);
+    CHECK(settings.tracking_interval_seconds == previous.tracking_interval_seconds);
+    CHECK(settings.wifi_enabled == previous.wifi_enabled);
+  }
+  for (const auto *command : {"portable", "stationary", "offline", "set_mode"}) {
+    uint8_t buf[64]{};
+    const auto len = encode_cmd_cbor(buf, sizeof(buf), command);
+    GoSettings settings{};
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK(result.cmd == BleCommand::Unknown);
+  }
+}
+
+TEST_CASE("BLE: wifi preference accepts only booleans and shares the config registry") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic config_char;
+  BleServiceTestAccess::set_config_char(svc, &config_char);
+  BleServiceTestAccess::set_connected(svc, true);
+  for (bool enabled : {false, true}) {
+    GoSettings previous{};
+    previous.wifi_enabled = !enabled;
+    GoSettings settings = previous;
+    uint8_t buf[64]{};
+    const auto len = encode_set_bool(buf, sizeof(buf), "wifi", enabled);
+    const auto result = BleService::decode_config_write(buf, len, settings);
+    CHECK_FALSE(result.has_invalid_config_values);
+    CHECK_FALSE(result.has_unknown_keys);
+    CHECK(result.recognized_config_key_count == 1);
+    CHECK(settings.wifi_enabled == enabled);
+    CHECK(settings.idle_interval_seconds == previous.idle_interval_seconds);
+    CHECK(settings.tracking_interval_seconds == previous.tracking_interval_seconds);
+    svc.notify_config(previous, settings);
+    const auto delta = decode_cbor_map(config_char.last_notified_value.data(),
+                                       config_char.last_notified_value.size());
+    REQUIRE(delta.size() == 2);
+    CHECK(find_entry(delta, "type")->text_val == "config");
+    REQUIRE(find_entry(delta, "wifi") != nullptr);
+    CHECK(find_entry(delta, "wifi")->bool_val == enabled);
+  }
+  GoSettings settings{};
+  uint8_t buf[64]{};
+  const auto len = encode_set_uint(buf, sizeof(buf), "wifi", 1);
+  CHECK(BleService::decode_config_write(buf, len, settings).has_invalid_config_values);
+  CHECK_FALSE(settings.wifi_enabled);
 }

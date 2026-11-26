@@ -1841,7 +1841,13 @@ struct ConfigField {
 };
 
 // Per-field encode helpers — write only the value (the caller writes the key).
-static void enc_meas_int(CborEncoder &m, const GoSettings &s) {
+static void enc_idle_int(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_uint(&m, static_cast<uint64_t>(s.idle_interval_seconds));
+}
+static void enc_wifi(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_boolean(&m, s.wifi_enabled);
+}
+static void enc_tracking_int(CborEncoder &m, const GoSettings &s) {
   cbor_encode_uint(&m, static_cast<uint64_t>(s.tracking_interval_seconds));
 }
 static void enc_temp_f(CborEncoder &m, const GoSettings &s) {
@@ -1895,7 +1901,13 @@ static void enc_hum_correction(CborEncoder &m, const GoSettings &s) {
 }
 
 // Per-field difference predicates for delta encoding.
-static bool dif_meas_int(const GoSettings &a, const GoSettings &b) {
+static bool dif_idle_int(const GoSettings &a, const GoSettings &b) {
+  return a.idle_interval_seconds != b.idle_interval_seconds;
+}
+static bool dif_wifi(const GoSettings &a, const GoSettings &b) {
+  return a.wifi_enabled != b.wifi_enabled;
+}
+static bool dif_tracking_int(const GoSettings &a, const GoSettings &b) {
   return a.tracking_interval_seconds != b.tracking_interval_seconds;
 }
 static bool dif_temp_f(const GoSettings &a, const GoSettings &b) {
@@ -1955,7 +1967,9 @@ static bool dif_hum_correction(const GoSettings &a, const GoSettings &b) {
 }
 
 static const ConfigField CONFIG_FIELDS[] = {
-    {BLE_KEY_MEAS_INT, enc_meas_int, dif_meas_int},
+    {BLE_KEY_TRACKING_INT, enc_tracking_int, dif_tracking_int},
+    {BLE_KEY_IDLE_INT, enc_idle_int, dif_idle_int},
+    {BLE_KEY_WIFI, enc_wifi, dif_wifi},
     {BLE_KEY_TEMP_F, enc_temp_f, dif_temp_f},
     {BLE_KEY_ALT_FT, enc_alt_ft, dif_alt_ft},
     {BLE_KEY_PM_AQI, enc_pm_aqi, dif_pm_aqi},
@@ -2232,14 +2246,36 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     }
     // --- uint config fields ---
-    else if (key_is(BLE_KEY_MEAS_INT)) {
-      result.requested_fields |= static_cast<uint32_t>(GoConfigField::MeasurementInterval);
+    else if (key_is(BLE_KEY_TRACKING_INT)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::TrackingInterval);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
           v >= TRACKING_INTERVAL_SECONDS_MIN && v <= TRACKING_INTERVAL_SECONDS_MAX) {
         settings.tracking_interval_seconds = static_cast<int>(v);
+      } else {
+        result.has_invalid_config_values = true;
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_IDLE_INT)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::IdleInterval);
+      cbor_value_advance(&it);
+      result.recognized_config_key_count++;
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
+          v >= IDLE_INTERVAL_SECONDS_MIN && v <= IDLE_INTERVAL_SECONDS_MAX) {
+        settings.idle_interval_seconds = static_cast<int>(v);
+      } else {
+        result.has_invalid_config_values = true;
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_WIFI)) {
+      cbor_value_advance(&it);
+      result.recognized_config_key_count++;
+      bool v = false;
+      if (cbor_value_is_boolean(&it) && cbor_value_get_boolean(&it, &v) == CborNoError) {
+        settings.wifi_enabled = v;
       } else {
         result.has_invalid_config_values = true;
       }
