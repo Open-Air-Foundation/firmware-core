@@ -245,6 +245,7 @@ WifiStatus WifiManager::set_mode(WifiMode mode) {
   if (leaving_sta) {
     _hal.cancel_retry_timer();
     _hal.cancel_dhcp_timeout();
+    _swallow_next_disconnect = false;
     _stop_mdns_auto_if_running();
     _clear_auto_state();
     const WifiStaState prev = _sta_state;
@@ -349,6 +350,10 @@ WifiStatus WifiManager::disconnect() {
   WifiStatus status = WifiStatus::Ok;
   if (prev == WifiStaState::Connecting || prev == WifiStaState::Connected ||
       prev == WifiStaState::GotIp) {
+    if (prev == WifiStaState::Connected || prev == WifiStaState::GotIp) {
+      // A replacement connect can start before this link's disconnect event arrives.
+      _swallow_next_disconnect = true;
+    }
     status = _hal.disconnect_sta();
   }
   // Synthesise a RequestedByUser reason for the product-facing callback.

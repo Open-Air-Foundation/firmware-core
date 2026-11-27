@@ -63,12 +63,18 @@ public:
   WifiMode get_mode() const override { return _mode; }
 
   WifiStatus connect_sta(const char *ssid, const char *password) override {
+    if (call_log != nullptr) {
+      call_log->push_back("wifi_connect");
+    }
     ++connect_calls;
     last_ssid = ssid != nullptr ? ssid : "";
     last_password = password != nullptr ? password : "";
     return connect_status;
   }
   WifiStatus disconnect_sta() override {
+    if (call_log != nullptr) {
+      call_log->push_back("wifi_disconnect");
+    }
     ++disconnect_calls;
     return WifiStatus::Ok;
   }
@@ -1919,6 +1925,61 @@ TEST_CASE("attached credentials save only after success and keep GATT available"
     CHECK_FALSE(f.svc.has_saved_networks());
     CHECK(f.svc.next_deadline_ms() == 0);
   }
+  CHECK(f.svc.ble_provisioning_attached());
+  CHECK(ble.deinit_count == 0);
+}
+
+TEST_CASE("attached credentials replace a retained station without disconnecting BLE",
+          "[go_wifi][attached]") {
+  MockBleServer ble;
+  std::vector<std::string> calls;
+  Fixture f({}, &ble);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials(nullptr, true);
+  f.hal.got_ip_cb(0xC0A80164);
+  REQUIRE(f.svc.is_online());
+  REQUIRE(ble.init("Go"));
+  REQUIRE(f.svc.attach_ble_provisioning());
+  auto *credentials = ble.find_char(PROVISIONING_UUID, "703fa252-3d2a-4da9-a05c-83b0d9cacb8e");
+  REQUIRE(credentials != nullptr);
+  f.hal.call_log = &calls;
+  credentials->simulate_write(R"({"ssid":"NewWiFi","password":"secret12"})");
+  f.svc.handle_ble_provisioning_request(true);
+  REQUIRE(calls == std::vector<std::string>{"wifi_disconnect", "wifi_connect"});
+  CHECK(f.hal.last_ssid == "NewWiFi");
+  CHECK_FALSE(f.svc.is_online());
+  auto *manager = WifiServiceTestAccess::provisioning_manager(f.svc);
+  REQUIRE(manager->state() == ProvisioningState::Connecting);
+  f.rtos.captured.clear();
+
+  // The previous AP's disconnect arrives after the replacement attempt started.
+  f.hal.sta_disconnected_cb(8);
+  CHECK(manager->state() == ProvisioningState::Connecting);
+  CHECK(f.rtos.captured.empty());
+  CHECK(credentials->notify_count == 0);
+
+  SECTION("new network connects and is saved") {
+    f.hal.got_ip_cb(0xC0A80165);
+    CHECK(manager->state() == ProvisioningState::Connected);
+    CHECK(credentials->last_notified_value_str() == R"({"status":0})");
+    f.svc.finish_ble_provisioning();
+    CHECK(f.svc.is_online());
+    CHECK(f.svc.ip() == 0xC0A80165);
+    char ssids[WIFI_MAX_SAVED_NETWORKS][33]{};
+    REQUIRE(f.wifi.list_networks(ssids, WIFI_MAX_SAVED_NETWORKS) == 2);
+    CHECK(std::strcmp(ssids[0], "NewWiFi") == 0);
+  }
+  SECTION("new network authentication failure is reported") {
+    f.hal.sta_disconnected_cb(202);
+    CHECK(manager->state() == ProvisioningState::WaitingForCredentials);
+    CHECK(credentials->last_notified_value_str() == R"({"status":10})");
+    char ssids[WIFI_MAX_SAVED_NETWORKS][33]{};
+    REQUIRE(f.wifi.list_networks(ssids, WIFI_MAX_SAVED_NETWORKS) == 1);
+    CHECK(std::strcmp(ssids[0], "saved") == 0);
+    f.svc.finish_ble_provisioning();
+  }
+  CHECK(f.hal.connect_calls == 2);
+  CHECK(f.hal.disconnect_calls == 1);
   CHECK(f.svc.ble_provisioning_attached());
   CHECK(ble.deinit_count == 0);
 }

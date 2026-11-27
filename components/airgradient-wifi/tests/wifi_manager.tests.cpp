@@ -547,6 +547,57 @@ TEST_CASE("disconnect after got_ip stops mDNS and reports RequestedByUser",
 // Retry policy
 // ---------------------------------------------------------------------------
 
+TEST_CASE("disconnect echo cannot cancel a replacement connection", "[wifi-manager][connect]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  mgr.set_mode(WifiMode::Sta);
+  mgr.connect(make_sta_config("OldNet", 0));
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+  REQUIRE(mgr.disconnect() == WifiStatus::Ok);
+  int failures = 0;
+  mgr.set_on_disconnected([&](WifiDisconnectReason) { ++failures; });
+
+  SECTION("echo arrives before connecting") {
+    hal.sta_disconnected_cb(8);
+    REQUIRE(mgr.connect(make_sta_config("NewNet", 0)) == WifiStatus::Ok);
+  }
+  SECTION("echo arrives after connecting") {
+    REQUIRE(mgr.connect(make_sta_config("NewNet", 0)) == WifiStatus::Ok);
+    hal.sta_disconnected_cb(8);
+  }
+  CHECK(failures == 0);
+  CHECK(mgr.status_snapshot().sta_state == WifiStaState::Connecting);
+  CHECK(hal.connect_calls == 2);
+  CHECK(hal.disconnect_calls == 1);
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x02020202);
+  CHECK(mgr.status_snapshot().sta_state == WifiStaState::GotIp);
+  hal.sta_disconnected_cb(200);
+  CHECK(failures == 1);
+}
+
+TEST_CASE("leaving STA clears a pending disconnect echo", "[wifi-manager][connect]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  mgr.set_mode(WifiMode::Sta);
+  mgr.connect(make_sta_config("OldNet", 0));
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+  mgr.disconnect();
+  mgr.set_mode(WifiMode::Off);
+  hal.sta_disconnected_cb(8); // Ignored while STA is off.
+  mgr.set_mode(WifiMode::Sta);
+  mgr.connect(make_sta_config("NewNet", 0));
+  int failures = 0;
+  mgr.set_on_disconnected([&](WifiDisconnectReason) { ++failures; });
+  hal.sta_disconnected_cb(202);
+  CHECK(failures == 1);
+  CHECK(mgr.status_snapshot().sta_state == WifiStaState::Disconnected);
+}
+
 TEST_CASE("transient disconnect arms exponential retry timer", "[wifi-manager][retry]") {
   FakeWifiHal hal;
   FakeConfigStore backend;

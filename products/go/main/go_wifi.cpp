@@ -282,6 +282,7 @@ void WifiService::handle_ble_provisioning_request(bool allowed) {
   } else {
     _reset_deadline();
     _reconnect_at_ms = 0;
+    _wifi.disconnect();
     _online.store(false);
     _arm_deadline(_cfg.initial_connect_window_ms);
     if (!_prov->submit_credentials(request.data)) {
