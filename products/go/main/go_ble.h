@@ -195,7 +195,7 @@ public:
   void update_status(const PowerSnapshot &power, const GpsData &gps, uint32_t session_id,
                      TrackingState tracking_state);
 
-  /// Refresh the full Status snapshot AND push a `{tracking, session, trk, stop_reason}` delta
+  /// Refresh the full Status snapshot AND push a `{tracking, session, trk, stop}` delta
   /// NOTIFY. Use on urgent tracking transitions (start success, start failure,
   /// pause, resume, manual stop) so the client need not poll.
   void notify_tracking_status(const PowerSnapshot &power, const GpsData &gps, uint32_t session_id,
@@ -395,7 +395,7 @@ private:
                          time_t ts);
   size_t encode_status(uint8_t *buf, size_t buf_size, const PowerSnapshot &power,
                        const GpsData &gps, uint32_t session_id, TrackingState tracking_state);
-  /// Encode the Status transition delta (`{tracking, session, trk, stop_reason}`) for NOTIFY.
+  /// Encode the Status transition delta (`{tracking, session, trk, stop}`) for NOTIFY.
   /// Returns 0 on encoder overflow.
   size_t encode_status_transition(uint8_t *buf, size_t buf_size, uint32_t session_id,
                                   TrackingState tracking_state);

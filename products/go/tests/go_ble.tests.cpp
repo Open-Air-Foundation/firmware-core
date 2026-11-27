@@ -1260,7 +1260,7 @@ TEST_CASE("BLE: status transition delta and cmd_result are within budget") {
   size_t len = BleServiceTestAccess::encode_status_transition(svc, buf, sizeof(buf), 0xFFFFFFFFu,
                                                               TrackingState::Recording);
   REQUIRE(len > 0);
-  CHECK(len == 46); // Full-width session ID and stop_reason:none.
+  CHECK(len == 35); // Full-width session ID and one-byte integer stop reason.
   CHECK(len <= TEST_NOTIFY_BUDGET);
 
   auto entries = decode_cbor_map(buf, len);
@@ -3930,7 +3930,6 @@ TEST_CASE("BLE: stop reason is present in snapshots and deltas and survives reco
   BleServiceTestAccess::set_status_char(svc, &status);
   const TrackingStopReason reasons[] = {TrackingStopReason::None, TrackingStopReason::User,
                                         TrackingStopReason::Duration};
-  const char *labels[] = {"none", "user", "duration"};
   for (int i = 0; i < 3; ++i) {
     svc.set_tracking_stop_reason(reasons[i]);
     BleServiceTestAccess::set_connected(svc, false);
@@ -3939,8 +3938,10 @@ TEST_CASE("BLE: stop reason is present in snapshots and deltas and survives reco
     svc.notify_tracking_status(make_valid_power(), make_valid_gps(), 0, TrackingState::Idle);
     for (const auto &bytes : {status.last_value, status.last_notified_value}) {
       auto entries = decode_cbor_map(bytes.data(), bytes.size());
-      REQUIRE(find_entry(entries, "stop_reason") != nullptr);
-      CHECK(find_entry(entries, "stop_reason")->text_val == labels[i]);
+      REQUIRE(find_entry(entries, "stop") != nullptr);
+      CHECK(find_entry(entries, "stop")->type == CborIntegerType);
+      CHECK(find_entry(entries, "stop")->uint_val == static_cast<uint64_t>(i));
+      CHECK(find_entry(entries, "stop_reason") == nullptr);
       CHECK(bytes.size() <= TEST_NOTIFY_BUDGET);
     }
   }

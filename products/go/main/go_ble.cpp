@@ -71,7 +71,7 @@ static constexpr size_t CBOR_BUF_SIZE = 256;
 /// ceiling that Read-Long can serve, giving the snapshot room to grow.
 static constexpr size_t CONFIG_SNAPSHOT_BUF_SIZE = 512;
 
-/// Status delta buffer — fits tracking with stop reason (up to 50 B) and charging (~39 B).
+/// Status delta buffer — fits tracking with stop reason (up to 35 B) and charging (~39 B).
 static constexpr size_t STATUS_DELTA_BUF_SIZE = 64;
 
 // NOTIFY single-PDU budget note: every Config/Status notification is bounded at
@@ -899,7 +899,7 @@ void BleService::notify_tracking_status(const PowerSnapshot &power, const GpsDat
     return;
   }
 
-  // NOTIFY carries the tracking transition delta ({tracking, session, trk, stop_reason}).
+  // NOTIFY carries the tracking transition delta ({tracking, session, trk, stop}).
   uint8_t delta[STATUS_DELTA_BUF_SIZE];
   size_t len = encode_status_transition(delta, sizeof(delta), session_id, tracking_state);
   if (len == 0) {
@@ -1519,17 +1519,6 @@ size_t BleService::encode_measures(uint8_t *buf, size_t buf_size, const Measures
 // CBOR encoding: Status
 // ---------------------------------------------------------------------------
 
-static const char *tracking_stop_reason_text(TrackingStopReason reason) {
-  switch (reason) {
-  case TrackingStopReason::User:
-    return "user";
-  case TrackingStopReason::Duration:
-    return "duration";
-  default:
-    return "none";
-  }
-}
-
 size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnapshot &power,
                                  const GpsData &gps, uint32_t session_id,
                                  TrackingState tracking_state) {
@@ -1569,7 +1558,7 @@ size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnaps
   cbor_encode_text_stringz(&map, BLE_KEY_TRACKING_STATE);
   cbor_encode_uint(&map, static_cast<uint8_t>(tracking_state));
   cbor_encode_text_stringz(&map, BLE_KEY_STOP_REASON);
-  cbor_encode_text_stringz(&map, tracking_stop_reason_text(_stop_reason));
+  cbor_encode_uint(&map, static_cast<uint8_t>(_stop_reason));
 
   cbor_encode_text_stringz(&map, BLE_KEY_FLASH_KB);
   cbor_encode_uint(&map, _storage.total_capacity_kb());
@@ -1605,7 +1594,7 @@ size_t BleService::encode_status_transition(uint8_t *buf, size_t buf_size, uint3
   cbor_encode_text_stringz(&map, BLE_KEY_TRACKING_STATE);
   cbor_encode_uint(&map, static_cast<uint8_t>(tracking_state));
   cbor_encode_text_stringz(&map, BLE_KEY_STOP_REASON);
-  cbor_encode_text_stringz(&map, tracking_stop_reason_text(_stop_reason));
+  cbor_encode_uint(&map, static_cast<uint8_t>(_stop_reason));
 
   cbor_encoder_close_container(&encoder, &map);
 
