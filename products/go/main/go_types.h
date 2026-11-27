@@ -20,13 +20,7 @@ inline constexpr bool is_chart_metric_valid(int value) {
   return value >= static_cast<int>(Metric::None) && value <= static_cast<int>(Metric::Altitude);
 }
 
-// --- Operating mode and behavior ---
-
-enum class OperatingMode : uint8_t {
-  Portable,
-  Stationary,
-  Offline,
-};
+// --- Runtime behavior ---
 
 enum class Behavior : uint8_t {
   Tracking,
@@ -89,7 +83,7 @@ enum class InputType : uint8_t {
 //
 // Saved to RTC memory before deep sleep; restored on wake to resume application
 // state without full re-initialization. Defaults represent a safe starting
-// point for a fresh power-on (Portable, Idle, Locked).
+// point for a fresh power-on (Idle, Locked).
 
 enum class RtcAppFlag : uint32_t {
   GpsEnabled = 1u << 0,
@@ -99,7 +93,6 @@ enum class RtcAppFlag : uint32_t {
 };
 
 struct RtcAppState {
-  OperatingMode mode = OperatingMode::Portable;
   Behavior behavior = Behavior::Idle;
   LockState lock_state = LockState::Locked;
   TrackingState tracking_state = TrackingState::Idle;
@@ -134,7 +127,12 @@ struct MeasuresAGo;
 // work and pick up where boot left off.  Default-initialized values represent
 // a fresh power-on boot where nothing has been done yet.
 
+enum class BootWifiState : uint8_t { Off, NetworkFound };
+
 struct BootHandoff {
+  bool tracking_restart = false; ///< Silent boot for a one-shot tracking start after BMS reset
+  BootWifiState wifi_state = BootWifiState::Off;
+  char wifi_ssid[33] = {}; ///< Selected saved network; credentials stay in WifiManager
   /// Display already shows a valid frame for the current state.
   /// When true, init() skips update_display() and sets state directly.
   bool display_painted = false;
@@ -143,6 +141,7 @@ struct BootHandoff {
   /// When true, the Orchestrator sets _first_measurement_done and
   /// skips the initial measurement request.
   bool measurement_completed = false;
+  uint32_t measurement_started_ms = 0; ///< Boot uptime; preserves cadence on promotion
 
   /// Suppress the first ButtonPower short-press event. Used when the
   /// wake press that triggered boot should not toggle lock state.

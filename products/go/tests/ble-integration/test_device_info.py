@@ -1,11 +1,11 @@
 """Tests for the standard Device Information Service (DIS, 0x180A).
 
-In Portable mode the device exposes DIS alongside the AGo data service. It
+The device exposes DIS alongside the AGo data service. It
 carries read-only UTF-8 identity strings: Model Number, Serial Number,
 Firmware Revision, and Manufacturer Name. The firmware version lives here
 (0x2A26) and is intentionally not duplicated in the Status characteristic.
 
-All DIS characteristics require an encrypted link; the bonded Portable
+All DIS characteristics require an encrypted link; the bonded BLE
 connection satisfies that.
 """
 
@@ -25,7 +25,7 @@ class TestDeviceInformation:
     """Verify the DIS service exposes valid device identity strings."""
 
     def test_dis_service_present(self, ago_client: BleakClient):
-        """The standard DIS service (0x180A) must be present in Portable mode."""
+        """The standard DIS service (0x180A) must be present on the data connection."""
         uuids = {s.uuid.lower() for s in ago_client.services}
         assert proto.DIS_SERVICE_UUID in uuids, (
             f"DIS service {proto.DIS_SERVICE_UUID} not found. Available: {uuids}"

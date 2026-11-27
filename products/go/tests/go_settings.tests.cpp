@@ -6,6 +6,7 @@
  */
 
 #include "go_settings.h"
+#include "go_runtime_policy.h"
 
 #include <cstddef>
 #include <limits>
@@ -139,10 +140,10 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
   FakeConfigStore store;
   GoSettings s = load_go_settings(store);
 
-  REQUIRE(s.measure_interval_seconds == 10);
-  REQUIRE(s.energy_saving_measure_interval_seconds == 300);
+  REQUIRE(s.tracking_interval_seconds == 10);
+  REQUIRE(s.idle_interval_seconds == 300);
   REQUIRE(s.gps_mode == GpsMode::OnWhenTracking);
-  REQUIRE(s.operating_mode == OperatingMode::Portable);
+  REQUIRE(s.wifi_enabled == false);
   REQUIRE(s.use_fahrenheit == false);
   REQUIRE(s.use_feet == false);
   REQUIRE(s.pm_use_usaqi == false);
@@ -170,54 +171,51 @@ TEST_CASE("load from empty store returns struct defaults", "[settings]") {
 
 TEST_CASE("energy saving interval migrates independently of the normal interval",
           "[settings][interval]") {
-  for (auto mode : {OperatingMode::Portable, OperatingMode::Stationary, OperatingMode::Offline}) {
+  for (int mode : {0, 1, 2}) {
     FakeConfigStore store;
     REQUIRE(store.set_int("mi", 17) == ConfigStoreResult::OK);
     REQUIRE(store.set_int("opm", static_cast<int>(mode)) == ConfigStoreResult::OK);
     auto settings = load_go_settings(store);
-    CHECK(settings.measure_interval_seconds == 17);
-    CHECK(settings.energy_saving_measure_interval_seconds == 300);
-    CHECK(settings.active_measure_interval_seconds() ==
-          (mode == OperatingMode::Offline ? 300 : 17));
+    CHECK(settings.tracking_interval_seconds == 17);
+    CHECK(settings.idle_interval_seconds == 300);
+    CHECK(settings.active_measure_interval_seconds() == 300);
     REQUIRE(save_go_settings(store, settings));
     CHECK(load_go_settings(store).equals(settings));
   }
 }
 
-TEST_CASE("energy saving interval preserves valid seconds across mode changes",
-          "[settings][interval]") {
-  for (int interval : {300, 301, 420, 900, 3599, 3600}) {
+TEST_CASE("Idle interval preserves valid seconds across Wi-Fi changes", "[settings][interval]") {
+  for (int interval : {1, 3, 10, 17, 30, 60, 299, 300, 301, 420, 900, 3599, 3600}) {
     CAPTURE(interval);
     FakeConfigStore store;
     GoSettings settings;
-    settings.measure_interval_seconds = 17;
-    settings.energy_saving_measure_interval_seconds = interval;
-    for (auto mode : {OperatingMode::Offline, OperatingMode::Portable, OperatingMode::Stationary}) {
-      settings.operating_mode = mode;
+    settings.tracking_interval_seconds = 17;
+    settings.idle_interval_seconds = interval;
+    for (bool wifi_enabled : {false, true}) {
+      settings.wifi_enabled = wifi_enabled;
       REQUIRE(save_go_settings(store, settings));
       auto loaded = load_go_settings(store);
       CHECK(loaded.equals(settings));
-      CHECK(loaded.active_measure_interval_seconds() ==
-            (mode == OperatingMode::Offline ? interval : 17));
+      CHECK(loaded.active_measure_interval_seconds() == interval);
     }
     auto changed = settings;
-    changed.energy_saving_measure_interval_seconds = interval == 300 ? 900 : 300;
+    changed.idle_interval_seconds = interval == 300 ? 900 : 300;
     CHECK_FALSE(changed.equals(settings));
   }
 }
 
-TEST_CASE("energy saving rejects out-of-range intervals and recovers invalid stored values",
+TEST_CASE("Idle rejects out-of-range intervals and recovers invalid stored values",
           "[settings][interval]") {
-  for (int interval : {-1, 0, 3, 10, 60, 299, 3601}) {
+  for (int interval : {-1, 0, 3601}) {
     CAPTURE(interval);
     FakeConfigStore store;
     GoSettings settings;
-    settings.energy_saving_measure_interval_seconds = interval;
+    settings.idle_interval_seconds = interval;
     CHECK_FALSE(is_go_settings_valid(settings));
     CHECK_FALSE(save_go_settings(store, settings));
     CHECK(store.write_attempt_count() == 0);
     REQUIRE(store.set_int("es_mi", interval) == ConfigStoreResult::OK);
-    CHECK(load_go_settings(store).energy_saving_measure_interval_seconds == 300);
+    CHECK(load_go_settings(store).idle_interval_seconds == 300);
   }
 }
 
@@ -263,9 +261,9 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
   FakeConfigStore store;
 
   GoSettings original;
-  original.measure_interval_seconds = 60;
+  original.tracking_interval_seconds = 60;
   original.gps_mode = GpsMode::AlwaysOn;
-  original.operating_mode = OperatingMode::Offline;
+  original.wifi_enabled = false;
   original.use_fahrenheit = true;
   original.use_feet = true;
   original.pm_use_usaqi = true;
@@ -280,9 +278,9 @@ TEST_CASE("save then load round-trips all fields", "[settings]") {
 
   GoSettings loaded = load_go_settings(store);
 
-  REQUIRE(loaded.measure_interval_seconds == original.measure_interval_seconds);
+  REQUIRE(loaded.tracking_interval_seconds == original.tracking_interval_seconds);
   REQUIRE(loaded.gps_mode == original.gps_mode);
-  REQUIRE(loaded.operating_mode == original.operating_mode);
+  REQUIRE(loaded.wifi_enabled == original.wifi_enabled);
   REQUIRE(loaded.use_fahrenheit == original.use_fahrenheit);
   REQUIRE(loaded.use_feet == original.use_feet);
   REQUIRE(loaded.pm_use_usaqi == original.pm_use_usaqi);
@@ -314,7 +312,8 @@ TEST_CASE("shared Go config fields and update model", "[settings][config]") {
   REQUIRE(static_cast<uint32_t>(GoConfigField::Co2AbcDays) == (1U << 7));
   REQUIRE(static_cast<uint32_t>(GoConfigField::TvocLearningOffset) == (1U << 8));
   REQUIRE(static_cast<uint32_t>(GoConfigField::NoxLearningOffset) == (1U << 9));
-  REQUIRE(static_cast<uint32_t>(GoConfigField::MeasurementInterval) == (1U << 10));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::IdleInterval) == (1U << 19));
+  REQUIRE(static_cast<uint32_t>(GoConfigField::TrackingInterval) == (1U << 20));
   REQUIRE(static_cast<uint32_t>(GoConfigField::AltitudeUnit) == (1U << 11));
   REQUIRE(static_cast<uint32_t>(GoConfigField::GpsMode) == (1U << 12));
   REQUIRE(static_cast<uint32_t>(GoConfigField::BackLedBrightness) == (1U << 14));
@@ -334,10 +333,10 @@ TEST_CASE("shared Go config fields and update model", "[settings][config]") {
 }
 
 TEST_CASE("shared Go config validation covers interface-managed fields", "[settings][config]") {
-  REQUIRE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MIN));
-  REQUIRE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MAX));
-  REQUIRE_FALSE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MIN - 1));
-  REQUIRE_FALSE(is_measure_interval_seconds_valid(MEASURE_INTERVAL_SECONDS_MAX + 1));
+  REQUIRE(is_tracking_interval_seconds_valid(TRACKING_INTERVAL_SECONDS_MIN));
+  REQUIRE(is_tracking_interval_seconds_valid(TRACKING_INTERVAL_SECONDS_MAX));
+  REQUIRE_FALSE(is_tracking_interval_seconds_valid(TRACKING_INTERVAL_SECONDS_MIN - 1));
+  REQUIRE_FALSE(is_tracking_interval_seconds_valid(TRACKING_INTERVAL_SECONDS_MAX + 1));
 
   REQUIRE(is_gps_mode_valid(static_cast<int>(GpsMode::AlwaysOff)));
   REQUIRE(is_gps_mode_valid(static_cast<int>(GpsMode::OnWhenTracking)));
@@ -695,41 +694,14 @@ TEST_CASE("round-trip preserves each GpsMode value", "[settings]") {
   }
 }
 
-TEST_CASE("round-trip preserves each OperatingMode value", "[settings]") {
+TEST_CASE("save rejects invalid tracking_interval_seconds", "[settings][validation]") {
   FakeConfigStore store;
   GoSettings s;
 
-  SECTION("Portable") {
-    s.operating_mode = OperatingMode::Portable;
-    REQUIRE(save_go_settings(store, s));
-    REQUIRE(load_go_settings(store).operating_mode == OperatingMode::Portable);
-  }
-
-  SECTION("Stationary") {
-    s.operating_mode = OperatingMode::Stationary;
-    REQUIRE(save_go_settings(store, s));
-    REQUIRE(load_go_settings(store).operating_mode == OperatingMode::Stationary);
-  }
-
-  SECTION("Offline") {
-    s.operating_mode = OperatingMode::Offline;
-    REQUIRE(save_go_settings(store, s));
-    REQUIRE(load_go_settings(store).operating_mode == OperatingMode::Offline);
-  }
-}
-
-// ============================================================================
-// Validation — save rejects out-of-range values
-// ============================================================================
-
-TEST_CASE("save rejects invalid measure_interval_seconds", "[settings][validation]") {
-  FakeConfigStore store;
-  GoSettings s;
-
-  s.measure_interval_seconds = 0;
+  s.tracking_interval_seconds = 0;
   REQUIRE_FALSE(save_go_settings(store, s));
 
-  s.measure_interval_seconds = 3601;
+  s.tracking_interval_seconds = 3601;
   REQUIRE_FALSE(save_go_settings(store, s));
 }
 
@@ -739,14 +711,6 @@ TEST_CASE("save rejects invalid gps_mode", "[settings][validation]") {
 
   // Force an out-of-range enum value
   s.gps_mode = static_cast<GpsMode>(3);
-  REQUIRE_FALSE(save_go_settings(store, s));
-}
-
-TEST_CASE("save rejects invalid operating_mode", "[settings][validation]") {
-  FakeConfigStore store;
-  GoSettings s;
-
-  s.operating_mode = static_cast<OperatingMode>(3);
   REQUIRE_FALSE(save_go_settings(store, s));
 }
 
@@ -821,9 +785,9 @@ TEST_CASE("load ignores invalid stored values", "[settings][validation]") {
   GoSettings loaded = load_go_settings(store);
 
   // All should fall back to defaults
-  REQUIRE(loaded.measure_interval_seconds == 10);
+  REQUIRE(loaded.tracking_interval_seconds == 10);
   REQUIRE(loaded.gps_mode == GpsMode::OnWhenTracking);
-  REQUIRE(loaded.operating_mode == OperatingMode::Portable);
+  REQUIRE(loaded.wifi_enabled == false);
   REQUIRE(loaded.auto_lock_seconds == 10);
 }
 
@@ -974,7 +938,7 @@ TEST_CASE("pinned chart persists every choice independently of measurement inter
   for (int value = 0; value <= static_cast<int>(Metric::Altitude); ++value) {
     CAPTURE(value);
     GoSettings settings{};
-    settings.measure_interval_seconds = 60;
+    settings.tracking_interval_seconds = 60;
     settings.pinned_chart = static_cast<Metric>(value);
     REQUIRE(save_go_settings(store, settings));
     CHECK(load_go_settings(store).pinned_chart == settings.pinned_chart);
@@ -1000,13 +964,13 @@ TEST_CASE("pinned chart rejects invalid settings and recovers corrupt persisted 
   CHECK(store.write_attempt_count() == 0);
 }
 
-TEST_CASE("Local Server defaults enabled regardless of legacy Wi-Fi power saving",
+TEST_CASE("Home Assistant defaults Off regardless of legacy Wi-Fi power saving",
           "[settings][local-server]") {
   FakeConfigStore store;
-  CHECK(load_go_settings(store).local_server_enabled);
+  CHECK_FALSE(load_go_settings(store).local_server_enabled);
   for (bool legacy_enabled : {false, true}) {
     REQUIRE(store.set_bool("wps", legacy_enabled) == ConfigStoreResult::OK);
-    CHECK(load_go_settings(store).local_server_enabled);
+    CHECK_FALSE(load_go_settings(store).local_server_enabled);
   }
 }
 
@@ -1070,4 +1034,86 @@ TEST_CASE("missing back LED indicator preserves existing brightness", "[settings
   const auto settings = load_go_settings(store);
   CHECK(settings.back_led_indicator == BackLedIndicator::Aqi);
   CHECK(settings.back_led_brightness == LedBrightness::Mid);
+}
+
+TEST_CASE("mode migration preserves numeric intervals and ignores every legacy mode",
+          "[settings][migration]") {
+  for (int legacy_mode : {0, 1, 2, 99}) {
+    FakeConfigStore store;
+    REQUIRE(store.set_int("opm", legacy_mode) == ConfigStoreResult::OK);
+    REQUIRE(store.set_int("mi", 17) == ConfigStoreResult::OK);
+    REQUIRE(store.set_int("es_mi", 901) == ConfigStoreResult::OK);
+    REQUIRE(store.set_int("gpm", static_cast<int>(GpsMode::AlwaysOn)) == ConfigStoreResult::OK);
+    auto settings = load_go_settings(store);
+    CHECK_FALSE(settings.wifi_enabled);
+    CHECK_FALSE(settings.local_server_enabled);
+    CHECK(settings.tracking_interval_seconds == 17);
+    CHECK(settings.idle_interval_seconds == 901);
+    CHECK(settings.gps_mode == GpsMode::AlwaysOn);
+    settings.wifi_enabled = true;
+    REQUIRE(save_go_settings(store, settings));
+    CHECK(load_go_settings(store).wifi_enabled);
+    int value = -1;
+    REQUIRE(store.get_int("opm", value) == ConfigStoreResult::OK);
+    CHECK(value == legacy_mode); // Retired key is never written.
+    REQUIRE(store.get_int("mi", value) == ConfigStoreResult::OK);
+    CHECK(value == 17);
+    REQUIRE(store.get_int("es_mi", value) == ConfigStoreResult::OK);
+    CHECK(value == 901);
+  }
+}
+
+TEST_CASE("Wi-Fi disable preserves explicit Home Assistant preference", "[settings][migration]") {
+  for (bool enabled : {false, true}) {
+    FakeConfigStore store;
+    REQUIRE(store.set_bool("lsrv", enabled) == ConfigStoreResult::OK);
+    auto settings = load_go_settings(store);
+    REQUIRE(settings.local_server_enabled == enabled);
+    settings.wifi_enabled = true;
+    REQUIRE(save_go_settings(store, settings));
+    settings.wifi_enabled = false;
+    REQUIRE(save_go_settings(store, settings));
+    CHECK(load_go_settings(store).local_server_enabled == enabled);
+  }
+}
+
+TEST_CASE("runtime policy separates cadence GPS sleep and correction selection",
+          "[settings][policy]") {
+  for (int interval : {1, 299, 300, 301, 3600}) {
+    for (auto tracking : {TrackingState::Idle, TrackingState::Recording, TrackingState::Paused}) {
+      for (bool wifi : {false, true}) {
+        for (bool fallback : {false, true}) {
+          for (auto gps : {GpsMode::AlwaysOff, GpsMode::OnWhenTracking, GpsMode::AlwaysOn}) {
+            CAPTURE(interval, tracking, wifi, fallback, gps);
+            GoSettings settings;
+            settings.idle_interval_seconds = interval;
+            settings.tracking_interval_seconds = 17;
+            settings.wifi_enabled = wifi;
+            settings.gps_mode = gps;
+            settings.corrections.temperature.algorithm = LinearCorrectionAlgorithm::Custom;
+            settings.corrections.humidity.algorithm = LinearCorrectionAlgorithm::Custom;
+            settings.corrections.pm25.algorithm = Pm25CorrectionAlgorithm::CustomViaPm25Raw;
+            const bool active = tracking != TrackingState::Idle;
+            const bool sleeps = !active && (!wifi || fallback);
+            const bool bypass = sleeps && interval >= 300;
+            GoRuntimePolicy policy{settings, tracking, fallback};
+            CHECK(policy.interval_seconds() == (active ? 17 : interval));
+            CHECK(policy.sleep_allowed() == sleeps);
+            CHECK(policy.bypass_temp_hum_corrections() == bypass);
+            CHECK(policy.wifi_allowed() == (wifi && !active));
+            CHECK(policy.gps_active() ==
+                  (gps == GpsMode::AlwaysOn || (gps == GpsMode::OnWhenTracking && active)));
+            const auto corrections =
+                effective_measurement_corrections(settings, tracking, fallback);
+            CHECK(corrections.temperature.algorithm ==
+                  (bypass ? LinearCorrectionAlgorithm::None : LinearCorrectionAlgorithm::Custom));
+            CHECK(corrections.humidity.algorithm == corrections.temperature.algorithm);
+            CHECK(corrections.pm25.algorithm == Pm25CorrectionAlgorithm::CustomViaPm25Raw);
+            CHECK(settings.corrections.temperature.algorithm == LinearCorrectionAlgorithm::Custom);
+            CHECK(settings.corrections.humidity.algorithm == LinearCorrectionAlgorithm::Custom);
+          }
+        }
+      }
+    }
+  }
 }

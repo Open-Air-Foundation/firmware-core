@@ -29,6 +29,7 @@
 #include "go_melody.h"
 #include "go_melody_sync.h"
 #include "go_power.h"
+#include "go_runtime_policy.h"
 #include "go_tracking_session.h"
 #include "go_type_helpers.hpp"
 #include "rtos.h"
@@ -36,10 +37,15 @@
 
 static constexpr const char *TAG = "Orchestrator";
 
-static constexpr uint32_t MAX_SHAKE_EVENT_AGE_MS = 500;
-static constexpr uint32_t MODE_RESET_CONFIRM_MS = 1000;
+static constexpr uint32_t BLE_CONNECTION_WINDOW_MS = 60000;
+static constexpr uint32_t CONNECTIVITY_HANDOFF_DELAY_MS = 3000;
+static constexpr uint32_t BLE_RELEASE_DRAIN_MS = 200;
+static constexpr uint32_t CONNECTIVITY_RETRY_MS = 1000;
+static constexpr uint32_t CONNECTIVITY_POLL_MS = 50;
 
-// Portable BLE is_ble_active() start-edge poll cadence (2 s), gated on an
+static constexpr uint32_t MAX_SHAKE_EVENT_AGE_MS = 500;
+
+// BLE is_ble_active() start-edge poll cadence (2 s), gated on an
 // authenticated client or a still-latched is_ble_active().
 static constexpr uint32_t OTA_BLE_POLL_INTERVAL_MS = 2000;
 
@@ -73,14 +79,6 @@ static void log_sensor_snapshot(const MeasuresAGo &d) {
           static_cast<double>(d.power.battery_voltage),
           static_cast<double>(d.power.charging_voltage), static_cast<double>(d.pressure.pressure),
           static_cast<double>(d.pressure.altitude));
-}
-
-// Map an operating-mode change leaving Portable to the BLE disconnect reason.
-// Only Stationary / Offline are reachable here (entering Portable never drops
-// a live BLE link).
-static BleDiscReason disc_reason_for_mode(OperatingMode new_mode) {
-  return new_mode == OperatingMode::Stationary ? BleDiscReason::OpStationary
-                                               : BleDiscReason::OpOffline;
 }
 
 // Map a shutdown (ship-mode) reason to the BLE disconnect reason.
@@ -117,8 +115,12 @@ static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource sou
     candidate.pinned_chart = update.pinned_chart;
     has_update = true;
   }
-  if (has_go_config_field(update.update_mask, GoConfigField::MeasurementInterval)) {
-    candidate.measure_interval_seconds = update.measure_interval_seconds;
+  if (has_go_config_field(update.update_mask, GoConfigField::TrackingInterval)) {
+    candidate.tracking_interval_seconds = update.tracking_interval_seconds;
+    has_update = true;
+  }
+  if (has_go_config_field(update.update_mask, GoConfigField::IdleInterval)) {
+    candidate.idle_interval_seconds = update.idle_interval_seconds;
     has_update = true;
   }
   if (has_go_config_field(update.update_mask, GoConfigField::GpsMode)) {
@@ -197,6 +199,7 @@ Orchestrator::Orchestrator(RtosQueueHandle event_queue, const Services &services
 // ---------------------------------------------------------------------------
 
 void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
+  _connectivity = ConnectivityState::Uninitialized;
   AG_LOGI(TAG,
           "init: wake_cause=%d display_painted=%d measurement_done=%d "
           "lock=%d",
@@ -204,27 +207,25 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
           static_cast<int>(handoff.measurement_completed),
           static_cast<int>(handoff.initial_lock_state));
 
-  // Mode always comes from persisted settings (NVS) — single source of truth
-  _mode = _settings.operating_mode;
+  // A reboot never resumes a tracking session; stored records remain intact.
+  _tracking_timing = {};
+  _tracking_state = TrackingState::Idle;
+  _tracking_session_id = 0;
+  _behavior = Behavior::Idle;
+  _gps_enabled = _settings.gps_mode != GpsMode::AlwaysOff;
 
-  // --- Restore RTC state for wake-from-sleep cases ---
-  _tracking_timing = TrackingTiming{};
-  if (cause != WakeCause::PowerOn && _mode != OperatingMode::Offline) {
-    RtcAppState state = _svc.power_service.load_state();
-    _behavior = tracking_session_active(state.tracking_state) ? Behavior::Tracking : Behavior::Idle;
-    _gps_enabled = state.has_flag(RtcAppFlag::GpsEnabled);
-    _tracking_state = state.tracking_state;
-    _tracking_session_id = state.tracking_session_id;
-    _tracking_timing = tracking_timing_for_state(state.tracking_timing, _tracking_state);
-  }
-
-  if (_mode == OperatingMode::Offline) {
-    _gps_enabled = false;
-  }
+  // Waking from the sleep cycle with Wi-Fi enabled implies prior fallback.
+  _wifi_fallback =
+      _settings.wifi_enabled && (cause == WakeCause::Timer || cause == WakeCause::Button);
+  _wifi_setup_pending = cause == WakeCause::PowerOn && !handoff.tracking_restart &&
+                        _settings.wifi_enabled && !_svc.wifi.has_saved_networks();
 
   // --- Apply initial lock state ---
   if (handoff.initial_lock_state == LockState::Unlocked) {
-    if (handoff.display_painted) {
+    if (handoff.tracking_restart) {
+      _lock_state = LockState::Unlocked;
+      _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+    } else if (handoff.display_painted) {
       // Display already shows unlocked UI — set state directly.
       // Do NOT call unlock() which would trigger update_display().
       _lock_state = LockState::Unlocked;
@@ -246,12 +247,14 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   bool has_raw_measures = handoff.fast_path_measures != nullptr;
   if (handoff.fast_path_measures != nullptr) {
     _raw_measures = *handoff.fast_path_measures;
+    _svc.cloud.update_measures_snapshot(_raw_measures);
   } else if (cause == WakeCause::Button) {
     has_raw_measures = _svc.storage_service.read_latest_cached_measurement(_raw_measures);
   }
   if (has_raw_measures) {
-    _corrected_measures =
-        apply_measurement_corrections(_raw_measures, effective_measurement_corrections(_settings));
+    _corrected_measures = apply_measurement_corrections(
+        _raw_measures,
+        effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
   } else if (handoff.display_snapshot != nullptr) {
     // The RTC snapshot contains presentation values, so it can seed the
     // corrected display view but must never become authoritative raw data.
@@ -270,6 +273,16 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     _first_measurement_done = true;
   }
 
+  if (handoff.tracking_restart) {
+    // Consume intent before starting: ordinary reboots must never resume a session.
+    if (save_pending_tracking_start(_config_store, false)) {
+      (void)begin_tracking_session();
+    } else {
+      AG_LOGE(TAG, "Unable to consume pending tracking start");
+      _svc.ui_manager.show_snackbar("Tracking start could not be saved");
+    }
+  }
+
   // Cold-boot splash gate: run_interactive seeds UIManager via show_info()
   // before this point, so detect the splash from the current screen rather
   // than handoff.display_painted (already flipped to true).
@@ -278,22 +291,6 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     _boot_splash_active = true;
   }
 
-  // --- Resume route if tracking was active before sleep ---
-  // BLE isn't up yet, so the snackbar is the only inline signal; clients
-  // observe the cleared state via Read on connect.
-  if (_tracking_state == TrackingState::Recording) {
-    if (!_svc.storage_service.resume_route(_tracking_session_id)) {
-      AG_LOGE(TAG, "init: resume_route failed for session %" PRIu32, _tracking_session_id);
-      _tracking_state = TrackingState::Idle;
-      _tracking_session_id = 0;
-      _tracking_timing = TrackingTiming{};
-      _behavior = Behavior::Idle;
-      _svc.ui_manager.show_snackbar("Tracking stopped — storage");
-    }
-  }
-
-  // Initialize UI state after reopen may have cleared tracking. A prepainted
-  // boot can skip rendering, so input must not depend on a prior display update.
   _svc.ui_manager.sync_tracking_state(_tracking_state);
 
   // --- LED brightness from settings ---
@@ -317,7 +314,7 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   }
 
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
-  _last_measurement_ms = now;
+  _last_measurement_ms = handoff.measurement_completed ? handoff.measurement_started_ms : now;
   _last_bms_poll_ms = now;
   _last_bms_status_poll_ms = now;
   _last_ext_wdt_ms = now;
@@ -328,17 +325,13 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   publish_local_snapshots();
   publish_local_wifi_snapshot();
 
-  init_ble_if_portable();
-  const uint32_t initial_gps_sleep_ms = is_gps_active() ? 0 : gps_inactive_sleep_ms(_mode);
+  const uint32_t initial_gps_sleep_ms = is_gps_active() ? 0 : gps_sleep_interval_ms();
   if (!_svc.gps_service.start(initial_gps_sleep_ms)) {
     AG_LOGE(TAG, "Failed to start GPS task");
   }
-  if (_settings.operating_mode == OperatingMode::Stationary) {
-    enter_stationary();
-  }
 
   // The first-use guide needs no readings. Open it once initialization is
-  // complete, while the sensor producer warms up. An active Stationary
+  // complete, while the sensor producer warms up. An active Wi-Fi setup
   // session owns its screen and must keep it.
   if (_boot_splash_active && !_settings.onboarding_done && !_setup_session_active &&
       _svc.ui_manager.current_screen() == Screen::Info) {
@@ -348,6 +341,14 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     AG_LOGI(TAG, "first-boot guide ready; first measurement pending");
     update_display(/*wait=*/true);
   }
+  _ble_window = BleWindow::Closed;
+  if (_connectivity == ConnectivityState::Uninitialized) {
+    _connectivity = ConnectivityState::Off;
+  }
+  if (handoff.wifi_state == BootWifiState::NetworkFound) {
+    reconcile_connectivity(handoff.wifi_ssid);
+  }
+  reconcile_runtime(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -426,46 +427,50 @@ void Orchestrator::refresh_tracking_status() {
 uint32_t Orchestrator::compute_queue_timeout_ms() const {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   uint32_t next = UINT32_MAX;
+  const auto until = [now](uint32_t deadline) {
+    return static_cast<int32_t>(deadline - now) <= 0 ? 0u : deadline - now;
+  };
 
   // Sensor measurement + BMS deadlines are paused while sensitive services
   // are paused (Provisioning / ProvisioningConfirm).  Their _last_*_ms
   // values stay frozen and are rebased to "now" on resume so the next
   // deadline lands a full interval into the future, not back-to-back to
   // catch up on missed cycles.
-  uint32_t interval_ms = static_cast<uint32_t>(_settings.active_measure_interval_seconds()) * 1000;
+  uint32_t interval_ms =
+      static_cast<uint32_t>(_settings.active_measure_interval_seconds(_tracking_state)) * 1000;
   if (!_provisioning_sensitive_services_paused) {
     // Sensor timer deadline
     if (!_measurement_pending && _pm_state == PmState::Ready) {
       uint32_t deadline = _last_measurement_ms + interval_ms;
-      uint32_t remaining = deadline - now;
+      uint32_t remaining = until(deadline);
       next = std::min(next, remaining);
     }
 
     // BMS full-telemetry deadline
-    uint32_t bms_remaining = (_last_bms_poll_ms + BMS_POLL_INTERVAL_MS) - now;
+    uint32_t bms_remaining = until((_last_bms_poll_ms + BMS_POLL_INTERVAL_MS));
     next = std::min(next, bms_remaining);
 
     // BMS fast charging-status deadline
-    uint32_t bms_status_remaining = (_last_bms_status_poll_ms + BMS_STATUS_POLL_INTERVAL_MS) - now;
+    uint32_t bms_status_remaining = until((_last_bms_status_poll_ms + BMS_STATUS_POLL_INTERVAL_MS));
     next = std::min(next, bms_status_remaining);
   }
 
   // Inactivity scheduling and execution share the same eligibility policy.
   if (auto_lock_allowed()) {
     uint32_t inact_interval = static_cast<uint32_t>(_settings.auto_lock_seconds) * 1000;
-    uint32_t inact_remaining = (_last_input_ms + inact_interval) - now;
+    uint32_t inact_remaining = until((_last_input_ms + inact_interval));
     next = std::min(next, inact_remaining);
   }
 
-  // PM pre-wake deadline (not Offline, interval above threshold, sensor
+  // PM pre-wake deadline (staying awake, interval above threshold, sensor
   // asleep, not in the sensitive-services pause).
   bool pm_sleep_eligible =
-      _mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval_ms);
+      !runtime_policy().sleep_allowed() && _svc.power_service.should_sleep_pm_sensor(interval_ms);
   if (pm_sleep_eligible && _pm_state == PmState::Asleep &&
       !_provisioning_sensitive_services_paused) {
     uint32_t measure_deadline = _last_measurement_ms + interval_ms;
     uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
-    uint32_t pm_remaining = prepare_deadline - now;
+    uint32_t pm_remaining = until(prepare_deadline);
     next = std::min(next, pm_remaining);
   }
 
@@ -473,7 +478,7 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
   // snackbars are suppressed on session screens, but explicitly skipped
   // here too so the orchestrator does not wake just to clear a no-op.
   if (_snackbar_refresh_deadline_ms != 0 && !_provisioning_sensitive_services_paused) {
-    uint32_t sb_remaining = _snackbar_refresh_deadline_ms - now;
+    uint32_t sb_remaining = until(_snackbar_refresh_deadline_ms);
     next = std::min(next, sb_remaining);
   }
 
@@ -482,35 +487,42 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
   // session path can leave `next == UINT32_MAX`, which the overdue clamp
   // below misinterprets as 0 and busy-spins the main loop, starving the
   // IDLE task and tripping the task WDT (~5 s).
-  uint32_t ext_wdt_remaining = (_last_ext_wdt_ms + EXT_WDT_INTERVAL_MS) - now;
+  uint32_t ext_wdt_remaining = until((_last_ext_wdt_ms + EXT_WDT_INTERVAL_MS));
   next = std::min(next, ext_wdt_remaining);
 
   // Accelerometer test poll deadline (only while its live screen is open).
   if (_svc.ui_manager.current_screen() == Screen::AccelTest) {
-    uint32_t accel_remaining = (_last_accel_poll_ms + ACCEL_TEST_POLL_INTERVAL_MS) - now;
+    uint32_t accel_remaining = until((_last_accel_poll_ms + ACCEL_TEST_POLL_INTERVAL_MS));
     next = std::min(next, accel_remaining);
+  }
+
+  if (_connectivity != ConnectivityState::Uninitialized) {
+    if (!wifi_cleanup_pending() &&
+        (_ble_window == BleWindow::Pending || _svc.ble_service.is_connected())) {
+      next = std::min(next, CONNECTIVITY_POLL_MS);
+    }
+    if (_ble_window == BleWindow::Open) {
+      next = std::min(next, until(_ble_window_deadline_ms));
+    }
+    if (connectivity_timer_active()) {
+      next = std::min(next, until(_connectivity_deadline_ms));
+    }
   }
 
   // Wi-Fi initial-connect / fallback deadline
   uint32_t wifi_deadline = _svc.wifi.next_deadline_ms();
   if (wifi_deadline != 0) {
-    next = std::min(next, wifi_deadline - now);
+    next = std::min(next, until(wifi_deadline));
   }
 
   if (_local_api_activation_retry_deadline_ms != 0) {
-    next = std::min(next, _local_api_activation_retry_deadline_ms - now);
-  }
-
-  // Portable provisioning radio-idle deadline
-  uint32_t prov_deadline = _svc.portable_provisioner.next_deadline_ms();
-  if (prov_deadline != 0) {
-    next = std::min(next, prov_deadline - now);
+    next = std::min(next, until(_local_api_activation_retry_deadline_ms));
   }
 
   // Wi-Fi checks are scheduled by cloud. Only BLE start-edge polling lives here.
-  if (_mode == OperatingMode::Portable &&
+  if (_svc.ble_service.is_initialized() &&
       (_svc.ble_service.is_authenticated() || _svc.ota.is_ble_active())) {
-    const uint32_t ota_remaining = (_last_ota_check_ms + OTA_BLE_POLL_INTERVAL_MS) - now;
+    const uint32_t ota_remaining = until((_last_ota_check_ms + OTA_BLE_POLL_INTERVAL_MS));
     next = std::min(next, ota_remaining);
   }
 
@@ -538,7 +550,8 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
 void Orchestrator::check_timers() {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
 
-  uint32_t interval = static_cast<uint32_t>(_settings.active_measure_interval_seconds()) * 1000;
+  uint32_t interval =
+      static_cast<uint32_t>(_settings.active_measure_interval_seconds(_tracking_state)) * 1000;
 
   // The following timers are all skipped while sensitive services are
   // paused (Provisioning / ProvisioningConfirm).  Skipping the firing
@@ -548,7 +561,7 @@ void Orchestrator::check_timers() {
   if (!_provisioning_sensitive_services_paused) {
     // --- PM pre-wake timer (fires warmup_duration before next measurement) ---
     bool pm_sleep_eligible =
-        _mode != OperatingMode::Offline && _svc.power_service.should_sleep_pm_sensor(interval);
+        !runtime_policy().sleep_allowed() && _svc.power_service.should_sleep_pm_sensor(interval);
     if (pm_sleep_eligible && _pm_state == PmState::Asleep) {
       uint32_t measure_deadline = _last_measurement_ms + interval;
       uint32_t prepare_deadline = measure_deadline - CONFIG_SENSOR_WARMUP_DURATION_MS;
@@ -615,6 +628,8 @@ void Orchestrator::check_timers() {
     poll_accel_test();
   }
 
+  reconcile_connectivity();
+
   // --- Wi-Fi service tick (clears expired deadline / fires synthetic disco) ---
   _svc.wifi.tick(now);
 
@@ -624,11 +639,8 @@ void Orchestrator::check_timers() {
     (void)activate_local_endpoint();
   }
 
-  // --- Portable provisioning radio-idle tick (drops the radio on timeout) ---
-  _svc.portable_provisioner.tick(now);
-
   // BLE transfers still run synchronously from their start-edge poll.
-  if (_mode == OperatingMode::Portable &&
+  if (_svc.ble_service.is_initialized() &&
       (_svc.ble_service.is_authenticated() || _svc.ota.is_ble_active())) {
     if ((now - _last_ota_check_ms) >= OTA_BLE_POLL_INTERVAL_MS) {
       _last_ota_check_ms = now;
@@ -710,21 +722,21 @@ void Orchestrator::on_bms_status_timer() {
 
 void Orchestrator::on_inactivity_timeout() {
   if (auto_lock_allowed()) {
-    lock();
+    lock(/*automatic=*/true);
   }
 }
 
 void Orchestrator::reschedule_sensor_timer(const GoSettings &previous_settings) {
-  if (previous_settings.active_measure_interval_seconds() ==
-      _settings.active_measure_interval_seconds()) {
+  if (previous_settings.active_measure_interval_seconds(_tracking_state) ==
+      _settings.active_measure_interval_seconds(_tracking_state)) {
     return;
   }
   _last_measurement_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
   // Reconcile PM state with the new interval.
   uint32_t new_interval_ms =
-      static_cast<uint32_t>(_settings.active_measure_interval_seconds()) * 1000;
-  if (_mode != OperatingMode::Offline &&
+      static_cast<uint32_t>(_settings.active_measure_interval_seconds(_tracking_state)) * 1000;
+  if (!runtime_policy().sleep_allowed() &&
       _svc.power_service.should_sleep_pm_sensor(new_interval_ms)) {
     if (!_measurement_pending && !_refresh_pending && !_periph.active &&
         _pm_state == PmState::Ready) {
@@ -810,9 +822,6 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::UserStopTracking:
     stop_tracking();
     break;
-  case EventType::UserChangeMode:
-    change_mode(event.mode_change);
-    break;
   case EventType::UserToggleGps:
     _gps_enabled = event.gps_enabled;
     break;
@@ -844,12 +853,35 @@ void Orchestrator::dispatch(const Event &event) {
     on_wifi_disconnected(static_cast<WifiDisconnectReason>(event.wifi_disconnect_reason));
     break;
 
+  case EventType::WifiConnectionTimeout:
+    if (_manufacturing_mode) {
+      on_wifi_disconnected(WifiDisconnectReason::connection_lost);
+    } else if (_bring_up_pending && _setup_session_active) {
+      enter_provisioning_page(_svc.ble_service.is_initialized() ? ProvisioningTransport::BleAttached
+                                                                : ProvisioningTransport::BleOnly);
+    } else if (wifi_connection_allowed()) {
+      enter_wifi_fallback();
+    }
+    break;
+
+  case EventType::WifiSuspendComplete:
+    on_wifi_suspend_complete(event.wifi_suspend_ok);
+    break;
+
   case EventType::ProvisioningStateChanged:
     on_provisioning_state_changed(event.prov);
     break;
 
-  case EventType::PortableProvRequest:
-    _svc.portable_provisioner.handle_pending_request();
+  case EventType::BleProvisioningRequest:
+    _svc.wifi.handle_ble_provisioning_request(ble_provisioning_allowed());
+    break;
+  case EventType::BleProvisioningScanComplete:
+    _svc.wifi.finish_ble_provisioning();
+    reconcile_connectivity();
+    break;
+
+  case EventType::CloudStopped:
+    on_cloud_stopped();
     break;
 
   case EventType::WifiOtaAvailable:
@@ -1079,8 +1111,8 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
   _raw_measures.power.battery_voltage = _latest_power.battery_voltage;
   _raw_measures.power.charging_voltage = _latest_power.charging_voltage;
   _raw_measures.power.battery_percentage = _latest_power.battery_percentage;
-  _corrected_measures =
-      apply_measurement_corrections(_raw_measures, effective_measurement_corrections(_settings));
+  _corrected_measures = apply_measurement_corrections(
+      _raw_measures, effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
   _svc.local_api.publish_measurement_snapshot(_corrected_measures);
   AG_LOGI(TAG,
           "Measurement corrections: temp %.2f -> %.2f, humidity %.2f -> %.2f, "
@@ -1119,7 +1151,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
   }
 
   // Onboarded devices keep the splash until readings arrive. Fresh devices
-  // already left it for the guide in init(). Stationary owns its Info -> Home
+  // already left it for the guide in init(). Wi-Fi setup owns its Info -> Home
   // transition, so a measurement must not replace that session's screen.
   if (_boot_splash_active) {
     _boot_splash_active = false;
@@ -1130,7 +1162,7 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
 
   log_sensor_snapshot(_raw_measures);
 
-  // Unconditional — snapshot is ready for the next Stationary arm.
+  // Unconditional — snapshot is ready for the next Cloud arm.
   _svc.cloud.update_measures_snapshot(_raw_measures);
 
   if (origin == MeasurementOrigin::Scheduled) {
@@ -1177,11 +1209,12 @@ void Orchestrator::sleep_pm_if_idle() {
   }
 
   // The producer sleeps PM before PmSensorAsleep lets us isolate the bus.
-  uint32_t interval_ms = static_cast<uint32_t>(_settings.active_measure_interval_seconds()) * 1000;
+  uint32_t interval_ms =
+      static_cast<uint32_t>(_settings.active_measure_interval_seconds(_tracking_state)) * 1000;
   const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   const int32_t until_regular = static_cast<int32_t>(_last_measurement_ms + interval_ms - now);
   const uint32_t remaining_ms = until_regular > 0 ? static_cast<uint32_t>(until_regular) : 0;
-  if (_pm_state == PmState::Ready && _mode != OperatingMode::Offline &&
+  if (_pm_state == PmState::Ready && !runtime_policy().sleep_allowed() &&
       _svc.power_service.should_sleep_pm_sensor(remaining_ms)) {
     _svc.sensor_producer.request_pm_sleep();
     _pm_state = PmState::Sleeping;
@@ -1334,8 +1367,8 @@ void Orchestrator::on_pm_event(EventType type) {
     _pm_state = PmState::Asleep;
     _svc.power_service.set_pm_power(false);
     const uint32_t interval =
-        static_cast<uint32_t>(_settings.active_measure_interval_seconds()) * 1000;
-    if (_periph.active || _mode == OperatingMode::Offline ||
+        static_cast<uint32_t>(_settings.active_measure_interval_seconds(_tracking_state)) * 1000;
+    if (_periph.active || runtime_policy().sleep_allowed() ||
         !_svc.power_service.should_sleep_pm_sensor(interval)) {
       prepare_pm();
     }
@@ -1437,7 +1470,7 @@ void Orchestrator::on_input(const InputEventData &input) {
   }
 
   // Manufacturing: boot short-press before onboarding skips the guide and
-  // enters Stationary ephemerally. Repeated presses leave the session alone.
+  // enables Wi-Fi ephemerally. Repeated presses leave the session alone.
   if (input.source == InputSource::ButtonBoot && input.type == InputType::ShortPress &&
       !_settings.onboarding_done) {
     if (!_manufacturing_mode) {
@@ -1490,9 +1523,6 @@ void Orchestrator::on_input(const InputEventData &input) {
   case UIAction::StopTracking:
     stop_tracking();
     break;
-  case UIAction::ChangeMode:
-    change_mode(result.new_mode);
-    break;
   case UIAction::SettingsChanged:
     apply_settings_change();
     break;
@@ -1524,6 +1554,7 @@ void Orchestrator::on_input(const InputEventData &input) {
     // Menu held on the first-boot guide: persist the flag and leave to Home.
     if (mark_onboarding_done()) {
       leave_session_to_home();
+      reconcile_connectivity();
     } else {
       AG_LOGW(TAG, "onboarding acknowledgement rejected: settings save failed");
     }
@@ -1552,11 +1583,11 @@ void Orchestrator::on_input(const InputEventData &input) {
     start_accel_test();
     break;
   case UIAction::ConfirmCancelProvisioning:
-    // Cancel-setup confirmed — drop back to Portable via the session
+    // Cancel-setup confirmed — disable Wi-Fi via the session
     // leave path so battery / clocks / snackbar state are all restored
     // cleanly.  The helper does its own update_display + flush, so we
     // return before the catch-all tail render below.
-    leave_session_to_portable();
+    cancel_wifi_setup();
     return;
   case UIAction::ConfirmSwitchProvisioningTransport:
     // Latch the transient "Switching to ..." state on the page first so
@@ -1568,7 +1599,13 @@ void Orchestrator::on_input(const InputEventData &input) {
     _svc.ui_manager.set_provisioning_ui_state(ProvisioningUiState::SwitchingTransport);
     update_display(/*wait=*/true);
     _svc.display_service.flush();
-    _svc.wifi.switch_provisioning_transport();
+    if (_svc.wifi.ble_provisioning_attached()) {
+      stop_ble();
+      _connectivity = ConnectivityState::Wifi;
+      _svc.wifi.start_provisioning(ProvisioningTransport::WifiOnly);
+    } else {
+      _svc.wifi.switch_provisioning_transport();
+    }
     return;
   case UIAction::None:
     break;
@@ -1604,10 +1641,20 @@ void Orchestrator::on_input(const InputEventData &input) {
 // State transitions
 // ---------------------------------------------------------------------------
 
-void Orchestrator::lock() {
+void Orchestrator::lock(bool automatic) {
   AG_LOGI(TAG, "lock");
   _svc.ui_manager.show_snackbar("Locked");
+  if (automatic && _lock_state == LockState::Unlocked) {
+    _ble_window = BleWindow::Pending;
+  }
   _lock_state = LockState::Locked;
+  if (!automatic && !_svc.ble_service.is_connected()) {
+    _ble_window = BleWindow::Closed;
+    if (_connectivity == ConnectivityState::DelayToBle) {
+      _connectivity = ConnectivityState::Wifi;
+    }
+  }
+  reconcile_connectivity();
   _svc.ui_manager.reset_to_home();
   update_display(/*wait=*/true);
 }
@@ -1616,26 +1663,50 @@ void Orchestrator::unlock() {
   AG_LOGI(TAG, "unlock");
   _svc.ui_manager.show_snackbar("Unlocked");
   _lock_state = LockState::Unlocked;
+  _ble_window = BleWindow::Closed;
+  if (_connectivity == ConnectivityState::DelayToBle) {
+    _connectivity = ConnectivityState::Wifi;
+  } else if (_connectivity == ConnectivityState::DelayToWifi || releasing_ble()) {
+    _connectivity = ConnectivityState::Ble;
+  }
+  reconcile_connectivity();
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
   // Preserve the lock-icon change even if persistent progress owns the snackbar.
   _display_feedback_pending = true;
   update_display();
 }
 
-bool Orchestrator::start_tracking() {
-  if (_mode != OperatingMode::Portable) {
+bool Orchestrator::restart_for_tracking_if_needed() {
+  // The caller stops the GPS worker before inspecting the receiver deadline.
+  const uint32_t remaining_ms = _svc.gps_service.sleep_remaining_ms();
+  if (remaining_ms <= GPS_RESET_THRESHOLD_MS) {
+    return true;
+  }
+
+  if (save_pending_tracking_start(_config_store, true)) {
+    _svc.storage_service.backup_cache();
+    _svc.display_service.flush();
+    AG_LOGI(TAG, "GPS wake in %lu ms: requesting silent tracking restart",
+            static_cast<unsigned long>(remaining_ms));
+    if (_svc.power_service.request_system_power_reset()) {
+      RTOS::delay_ms(GPS_RESET_CONFIRM_MS);
+    }
+  }
+
+  // A successful power cycle never reaches here.
+  AG_LOGW(TAG, "System still running; starting tracking and waiting for GPS");
+  if (!save_pending_tracking_start(_config_store, false)) {
+    _svc.ui_manager.show_snackbar("Tracking start could not be saved");
+    update_display();
     return false;
   }
-  if (tracking_session_active(_tracking_state)) {
-    return false; // caller treats as "already tracking"
-  }
+  return true;
+}
 
-  AG_LOGI(TAG, "start_tracking");
-
-  const bool starting_gps = !is_gps_active() && _settings.gps_mode != GpsMode::AlwaysOff;
+bool Orchestrator::begin_tracking_session() {
   const uint32_t session_id = generate_tracking_session_id(_svc.storage_service);
   if (session_id == 0 || !_svc.storage_service.create_route(session_id)) {
-    AG_LOGE(TAG, "start_tracking: failed to open route (session=%" PRIu32 ")", session_id);
+    AG_LOGE(TAG, "begin_tracking_session: failed to open route (session=%" PRIu32 ")", session_id);
     _svc.ui_manager.show_snackbar("Storage error — can't track");
     update_display();
     _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps,
@@ -1644,6 +1715,9 @@ bool Orchestrator::start_tracking() {
     return false;
   }
 
+  if (releasing_ble()) {
+    _connectivity = ConnectivityState::Ble;
+  }
   _tracking_session_id = session_id;
   _tracking_state = TrackingState::Recording;
   _behavior = Behavior::Tracking;
@@ -1651,9 +1725,46 @@ bool Orchestrator::start_tracking() {
                              tracking_seconds_from_ms(RTOS::get_retained_time_ms()))) {
     _tracking_timing = TrackingTiming{};
   }
+  return true;
+}
 
+bool Orchestrator::start_tracking() {
+  if (_setup_session_active || _svc.wifi.is_provisioning() || _svc.ota.is_ble_active() ||
+      _ota_committed) {
+    return false;
+  }
+  if (tracking_session_active(_tracking_state)) {
+    return false; // caller treats as "already tracking"
+  }
+
+  AG_LOGI(TAG, "start_tracking");
+  const bool starting_gps = !is_gps_active() && _settings.gps_mode != GpsMode::AlwaysOff;
+  const bool gps_stopped = starting_gps && !_provisioning_sensitive_services_paused;
+  if (gps_stopped) {
+    // Finish any in-flight sleep command before inspecting its deadline.
+    _svc.gps_service.stop();
+    if (!restart_for_tracking_if_needed()) {
+      (void)_svc.gps_service.start(gps_sleep_interval_ms());
+      return false;
+    }
+  }
+
+  if (!begin_tracking_session()) {
+    if (gps_stopped) {
+      (void)_svc.gps_service.start(gps_sleep_interval_ms());
+    }
+    return false;
+  }
+
+  reconcile_runtime(true);
   if (starting_gps) {
-    activate_gps();
+    if (gps_stopped) {
+      if (!_svc.gps_service.start()) {
+        AG_LOGE(TAG, "Failed to restart GPS acquisition task");
+      }
+    } else {
+      activate_gps();
+    }
   }
 
   char msg[48];
@@ -1690,7 +1801,8 @@ bool Orchestrator::pause_tracking() {
 }
 
 bool Orchestrator::resume_tracking() {
-  if (_mode != OperatingMode::Portable) {
+  if (_setup_session_active || _svc.wifi.is_provisioning() || _svc.ota.is_ble_active() ||
+      _ota_committed) {
     return false;
   }
   if (_tracking_state == TrackingState::Recording) {
@@ -1732,6 +1844,7 @@ void Orchestrator::stop_tracking() {
   _tracking_session_id = 0;
   _tracking_timing = TrackingTiming{};
   _behavior = Behavior::Idle;
+  reconcile_runtime(true);
 
   if (was_gps_active && !is_gps_active()) {
     deactivate_gps();
@@ -1756,12 +1869,15 @@ bool Orchestrator::mark_onboarding_done() {
 }
 
 void Orchestrator::enter_manufacturing_mode() {
-  AG_LOGI(TAG, "enter_manufacturing_mode: skip onboarding, Stationary (ephemeral)");
+  AG_LOGI(TAG, "enter_manufacturing_mode: skip onboarding, Wi-Fi (ephemeral)");
   _manufacturing_mode = true;
+  if (!is_gps_active()) {
+    deactivate_gps();
+  }
   if (!_svc.serial_command.start()) {
     AG_LOGE(TAG, "failed to start serial command service");
   }
-  change_mode(OperatingMode::Stationary, /*persist=*/false);
+  reconcile_runtime(false);
 }
 
 void Orchestrator::arm_fg_learning() {
@@ -1967,9 +2083,7 @@ void Orchestrator::finish_peripheral_test() {
 // ---------------------------------------------------------------------------
 
 void Orchestrator::start_gps_test() {
-  if (_mode == OperatingMode::Offline) {
-    return;
-  }
+
   AG_LOGI(TAG, "gps test: start");
   _gps_test_entry_ms = static_cast<uint32_t>(RTOS::get_time_ms());
   _gps_ttff_ms = GPS_TTFF_PENDING;
@@ -1985,9 +2099,7 @@ void Orchestrator::start_gps_test() {
 }
 
 void Orchestrator::trigger_gps_test() {
-  if (_mode == OperatingMode::Offline) {
-    return;
-  }
+
   const Screen current_screen = _svc.ui_manager.current_screen();
   if (current_screen == Screen::PeripheralTest || current_screen == Screen::AccelTest) {
     AG_LOGW(TAG, "GPS test trigger ignored: another hardware test is active");
@@ -2082,99 +2194,9 @@ void Orchestrator::finish_accel_test() {
   update_back_led_indicator();
 }
 
-void Orchestrator::change_mode(OperatingMode new_mode, bool persist) {
-  const OperatingMode old_mode = _mode;
-  AG_LOGI(TAG, "change_mode: %d -> %d (persist=%d)", static_cast<int>(old_mode),
-          static_cast<int>(new_mode), persist);
-  GoSettings candidate = _settings;
-  candidate.operating_mode = new_mode;
-  if (persist) {
-    candidate.onboarding_done = true; // A persisted mode change implies engagement.
-  }
-  if (!activate_settings_candidate(candidate, persist)) {
-    AG_LOGW(TAG, "mode change rejected: invalid candidate or settings save failed");
-    _svc.ui_manager.sync_settings(_settings);
-    request_background_display_update();
-  }
-}
-
-void Orchestrator::apply_mode_transition(OperatingMode old_mode, OperatingMode new_mode,
-                                         bool persisted) {
-  log_heap(TAG, "mode.change:enter");
-
-  // Two-phase: tear down outgoing mode, then bring up incoming.
-  if (old_mode == OperatingMode::Portable && new_mode != OperatingMode::Portable) {
-    // BLE is only up in Portable. Tell a connected client the link is dropping
-    // (and why) and let the notice drain before teardown — notifications are
-    // fire-and-forget (no completion signal), so a brief settle covers a few
-    // connection intervals. Covers UI-, event-, and BLE-initiated mode changes.
-    if (_svc.ble_service.is_connected()) {
-      _svc.ble_service.notify_disconnect(disc_reason_for_mode(new_mode));
-      RTOS::delay_ms(BLE_MODE_CHANGE_NOTIFY_SETTLE_MS);
-    }
-    _svc.ui_manager.dismiss_pairing_passkey();
-    // Drop the OTA observer + GATT registration before the server is released
-    // (idempotent; no-op if OTA was never registered).
-    _svc.ble_service.set_disconnect_observer(nullptr);
-    _svc.ota.teardown_ble();
-    // Mandatory order: release the server before BleService deinitialises it.
-    _svc.portable_provisioner.stop();
-    _svc.ble_service.deinit();
-  }
-  if (old_mode == OperatingMode::Stationary && new_mode != OperatingMode::Stationary) {
-    _svc.local_api.set_access(ConfigAccess::Disabled);
-    discard_local_requests("leaving Stationary");
-    _local_api_activation_retry_deadline_ms = 0;
-    // Cloud before Wi-Fi: drain in-flight HTTP while socket is alive.
-    _svc.cloud.disarm();
-    _svc.cloud.stop();
-    _svc.wifi.shutdown();
-    _svc.local_api.publish_wifi_rssi(std::nullopt);
-    resume_provisioning_sensitive_services();
-    _cloud_first_post_pending = false;
-  }
-  log_heap(TAG, "mode.change:after-teardown");
-
-  if (persisted && (old_mode == OperatingMode::Offline || new_mode == OperatingMode::Offline)) {
-    _svc.storage_service.backup_cache();
-    _svc.ui_manager.show_snackbar("Mode changed");
-    update_display(/*wait=*/true);
-    _svc.display_service.flush();
-    AG_LOGI(TAG, "Energy Saving transition: requesting system power reset");
-    if (_svc.power_service.request_system_power_reset()) {
-      RTOS::delay_ms(MODE_RESET_CONFIRM_MS); // A successful power cut does not return.
-    }
-    AG_LOGW(TAG, "System still running after mode-change reset request");
-  }
-
-  if (new_mode == OperatingMode::Portable && old_mode != OperatingMode::Portable) {
-    init_ble_if_portable();
-  }
-
-  // Wake PM if it is asleep — covers mode changes away from Portable
-  // while PM was slept/isolated. Must fire before the
-  // Stationary early-return below so Stationary entry restores PM after a
-  // prior Portable session may have slept it.
-  prepare_pm();
-
-  if (new_mode == OperatingMode::Stationary && old_mode != OperatingMode::Stationary) {
-    // enter_stationary() renders its Info or Provisioning page itself.
-    // Skip the generic "Mode changed" snackbar and display update.
-    enter_stationary();
-    return;
-  }
-
-  _svc.ui_manager.show_snackbar("Mode changed");
-  update_display();
-  log_heap(TAG, "mode.change:after-bringup");
-}
-
 void Orchestrator::apply_settings_change() {
   GoSettings candidate = _settings;
   _svc.ui_manager.apply_to_settings(candidate);
-  if (candidate.operating_mode != _settings.operating_mode) {
-    candidate.onboarding_done = true;
-  }
   if (!activate_settings_candidate(candidate)) {
     AG_LOGW(TAG, "UI settings update rejected: invalid candidate or settings save failed");
     _svc.ui_manager.sync_settings(_settings);
@@ -2185,11 +2207,10 @@ void Orchestrator::apply_settings_change() {
 bool Orchestrator::activate_settings_candidate(const GoSettings &candidate, bool persist,
                                                bool force_persist) {
   const bool settings_changed = !candidate.equals(_settings);
-  const OperatingMode previous_mode = _mode;
   if (!is_go_settings_valid(candidate)) {
     return false;
   }
-  if (!settings_changed && candidate.operating_mode == previous_mode && !force_persist) {
+  if (!settings_changed && !force_persist) {
     return true;
   }
   if (persist && (settings_changed || force_persist) &&
@@ -2197,45 +2218,33 @@ bool Orchestrator::activate_settings_candidate(const GoSettings &candidate, bool
     return false;
   }
 
-  if (!settings_changed && candidate.operating_mode == previous_mode) {
+  if (!settings_changed) {
     publish_local_snapshots();
     return true;
   }
 
   const GoSettings previous_settings = _settings;
   _settings = candidate;
-  _mode = _settings.operating_mode;
-  apply_settings_runtime_delta(previous_settings, previous_mode, persist);
+  apply_settings_runtime_delta(previous_settings);
   publish_local_snapshots();
   return true;
 }
 
-void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_settings,
-                                                OperatingMode previous_mode, bool persisted) {
-  const bool mode_changing = previous_mode != _settings.operating_mode;
-
-  // Rendering reads UI-owned display preferences, including the intermediate
-  // frame submitted by stop_tracking() during a mode change.
+void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_settings) {
+  const bool was_wifi_fallback = _wifi_fallback;
+  if (previous_settings.wifi_enabled != _settings.wifi_enabled) {
+    _wifi_fallback = false;
+    _wifi_setup_pending = _settings.wifi_enabled && (!tracking_session_active(_tracking_state) ||
+                                                     !_svc.wifi.has_saved_networks());
+  }
+  // Rendering reads UI-owned display preferences.
   _svc.ui_manager.sync_settings(_settings);
 
   if (!previous_settings.onboarding_done && _settings.onboarding_done && !_manufacturing_mode) {
     _svc.serial_command.stop_receiving();
   }
 
-  const bool was_gps_active = previous_mode != OperatingMode::Offline &&
-                              (previous_settings.gps_mode == GpsMode::AlwaysOn ||
-                               (previous_settings.gps_mode == GpsMode::OnWhenTracking &&
-                                tracking_session_active(_tracking_state)));
-
-  if (mode_changing && _mode != OperatingMode::Portable) {
-    stop_tracking();
-  }
-  if (mode_changing && _mode == OperatingMode::Offline) {
-    if (_svc.ui_manager.current_screen() == Screen::GpsTest) {
-      _svc.ui_manager.reset_to_home();
-      finish_gps_test();
-    }
-  }
+  const bool was_gps_active = GoRuntimePolicy{previous_settings, _tracking_state}.gps_active();
 
   reschedule_sensor_timer(previous_settings);
 
@@ -2245,15 +2254,16 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
   } else if (!is_gps_active_now && _svc.ui_manager.current_screen() != Screen::GpsTest) {
     deactivate_gps();
   }
-  _gps_enabled = _mode != OperatingMode::Offline && _settings.gps_mode != GpsMode::AlwaysOff;
+  _gps_enabled = _settings.gps_mode != GpsMode::AlwaysOff;
 
-  // Recompute before the mode transition renders, even without a new sensor sample.
-  const bool corrected_measures_changed =
-      mode_changing ||
-      !measurement_corrections_equal(previous_settings.corrections, _settings.corrections);
+  // Recompute before runtime reconciliation renders, even without a new sensor sample.
+  const bool corrected_measures_changed = !measurement_corrections_equal(
+      effective_measurement_corrections(previous_settings, _tracking_state, was_wifi_fallback),
+      effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
   if (corrected_measures_changed) {
-    _corrected_measures =
-        apply_measurement_corrections(_raw_measures, effective_measurement_corrections(_settings));
+    _corrected_measures = apply_measurement_corrections(
+        _raw_measures,
+        effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
   }
   if ((corrected_measures_changed ||
        previous_settings.back_led_indicator != _settings.back_led_indicator) &&
@@ -2273,7 +2283,7 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
   if (previous_settings.disable_cloud != _settings.disable_cloud) {
     _svc.cloud.set_disable_cloud(_settings.disable_cloud);
   }
-  if (!mode_changing && _mode == OperatingMode::Stationary &&
+  if (wifi_services_allowed() &&
       previous_settings.local_server_enabled != _settings.local_server_enabled) {
     _svc.wifi.set_power_save_enabled(_manufacturing_mode || !_settings.local_server_enabled);
     (void)activate_local_endpoint();
@@ -2291,15 +2301,18 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
                                                            _settings.nox_learning_offset);
   }
 
-  if (!mode_changing && _svc.ble_service.is_connected()) {
+  if (_svc.ble_service.is_connected()) {
     _svc.ble_service.notify_config(previous_settings, _settings);
   }
 
-  if (mode_changing) {
-    apply_mode_transition(previous_mode, _settings.operating_mode, persisted);
-  } else {
-    request_background_display_update();
+  if (previous_settings.wifi_enabled && !_settings.wifi_enabled) {
+    _svc.wifi.stop_provisioning();
+    if (_bring_up_pending || _provisioning_sensitive_services_paused) {
+      leave_session_to_home();
+    }
   }
+  reconcile_runtime(false);
+  request_background_display_update();
 }
 
 bool Orchestrator::clear_data() {
@@ -2450,6 +2463,9 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
 // ---------------------------------------------------------------------------
 
 void Orchestrator::on_ble_connected() {
+  if (!_svc.ble_service.is_initialized() || !_svc.ble_service.is_connected()) {
+    return;
+  }
   AG_LOGI(TAG, "BLE client connected");
 
   // Dismiss pairing passkey screen if it was showing
@@ -2460,19 +2476,29 @@ void Orchestrator::on_ble_connected() {
   _svc.ble_service.update_status(_latest_power, _latest_gps, _tracking_session_id, _tracking_state);
   _svc.ble_service.update_config(_settings);
 
+  reconcile_connectivity();
   request_background_display_update(/*wait=*/true);
 }
 
 void Orchestrator::on_ble_disconnected() {
+  if (_svc.ble_service.is_connected()) {
+    return;
+  }
   AG_LOGI(TAG, "BLE client disconnected");
-  // The provisioner has no transport disconnect callback; forward so it
-  // drops the radio.
-  _svc.portable_provisioner.on_ble_disconnected();
   _svc.ui_manager.dismiss_pairing_passkey();
+  if (_setup_session_active && _provisioning_sensitive_services_paused &&
+      _svc.wifi.ble_provisioning_attached()) {
+    _svc.ui_manager.open_provisioning(ProvisioningTransport::BleAttached);
+    update_display(/*wait=*/true);
+  }
+  reconcile_connectivity();
   request_background_display_update(/*wait=*/true);
 }
 
 void Orchestrator::on_ble_auth_complete(bool success) {
+  if (!_svc.ble_service.is_initialized() || !_svc.ble_service.is_connected()) {
+    return;
+  }
   AG_LOGI(TAG, "BLE auth complete: %s", success ? "OK" : "FAILED");
 
   // Only an encrypted pairing counts as engagement; a failed/empty-PIN attempt
@@ -2481,9 +2507,16 @@ void Orchestrator::on_ble_auth_complete(bool success) {
   // after the onboarding latch is persisted and activated.
   const bool onboarding_saved = !success || mark_onboarding_done();
 
+  if (_setup_session_active && _provisioning_sensitive_services_paused &&
+      _svc.wifi.ble_provisioning_attached()) {
+    _svc.ui_manager.open_provisioning(ProvisioningTransport::BleAttached);
+    update_display(/*wait=*/true);
+    return;
+  }
   if (_setup_session_active) {
     if (success && onboarding_saved) {
       leave_session_to_home();
+      reconcile_connectivity();
     } else {
       // Back to the first-boot guide (session is boot-originated); keep the
       // session so a retry can succeed or a Menu hold can dismiss.
@@ -2515,6 +2548,12 @@ void Orchestrator::on_ble_config_write() {
   // paths rely on this call to keep READ returning the config snapshot.
   _svc.ble_service.update_config(_settings);
 
+  if (releasing_ble()) {
+    _svc.ble_service.notify_command_result(
+        result.op == BleConfigOp::Set ? BleCommand::Set : result.cmd, false, BLE_VAL_ERR_BUSY);
+    return;
+  }
+
   // Reject before adopting any value: unknown key, invalid value, multiple
   // fields (NOTIFY deltas allow one field), then unsupported board hardware.
   if (result.op == BleConfigOp::Set && result.has_unknown_keys) {
@@ -2542,9 +2581,6 @@ void Orchestrator::on_ble_config_write() {
       return;
     }
     AG_LOGI(TAG, "BLE config set");
-    if (temp.operating_mode != _settings.operating_mode) {
-      temp.onboarding_done = true;
-    }
     if (!is_go_settings_valid(temp)) {
       AG_LOGW(TAG, "BLE config set rejected: invalid complete candidate");
       _svc.ble_service.notify_command_result(BleCommand::Set, false,
@@ -2618,6 +2654,9 @@ void Orchestrator::on_ble_config_write() {
       _svc.ble_service.notify_command_result(result.cmd, ok,
                                              ok ? nullptr : BLE_VAL_ERR_FLASH_ERROR);
     } break;
+    case BleCommand::ReleaseBle:
+      request_ble_release();
+      break;
     case BleCommand::SetAiding: {
       const bool has_time = has_aiding_time(result.aiding);
       const bool has_data = has_aiding_position(result.aiding) || has_time;
@@ -2654,11 +2693,15 @@ void Orchestrator::on_ble_history_write() {
     return;
   }
 
+  if (releasing_ble()) {
+    _svc.ble_service.notify_history_error(BLE_VAL_ERR_BUSY);
+    return;
+  }
   BleHistoryDecodeResult result = BleService::decode_history_write(buf, len);
 
   // Reject the blocking export reads while the provisioning radio is active
   // so provisioning notifies aren't starved; control/cleanup ops still run.
-  if (_svc.portable_provisioner.is_radio_active() &&
+  if ((_svc.wifi.is_provisioning() || _setup_session_active) &&
       (result.op == BleHistoryOp::List || result.op == BleHistoryOp::Start ||
        result.op == BleHistoryOp::Fill)) {
     AG_LOGW(TAG, "history export rejected — provisioning radio active");
@@ -2697,6 +2740,7 @@ void Orchestrator::on_ble_history_write() {
     AG_LOGW(TAG, "BLE history write: invalid CBOR");
     break;
   }
+  reconcile_connectivity();
 }
 
 void Orchestrator::on_ble_pairing_request(uint32_t passkey) {
@@ -2707,28 +2751,33 @@ void Orchestrator::on_ble_pairing_request(uint32_t passkey) {
   update_display(/*wait=*/true);
 }
 
-void Orchestrator::init_ble_if_portable() {
-  if (_mode != OperatingMode::Portable) {
+void Orchestrator::init_ble_if_available() {
+  if (!ble_needed() || wifi_cleanup_pending() || wifi_active() || _svc.wifi.is_provisioning()) {
     return;
   }
-
+  if (!_svc.ble_service.set_connectable(true)) {
+    stop_ble();
+    return;
+  }
   if (_svc.ble_service.is_initialized()) {
     return; // already running
   }
 
   log_heap(TAG, "ble.init:pre");
-  // Two-phase init so the provisioner can register prov + DIS before
-  // advertising (all GATT services must be registered first).
-  if (!_svc.ble_service.init_stack_and_register(_serial)) {
+  // Register data + Device Information, then OTA before advertising.
+  if (!_svc.ble_service.init_stack_and_register(_serial, STATIONARY_AGO_MODEL_CODE,
+                                                _svc.board.firmware_version())) {
     AG_LOGE(TAG, "BLE stack init/register failed");
     return;
   }
-  if (!_svc.portable_provisioner.attach()) {
-    AG_LOGW(TAG, "portable provisioner attach failed — advertising data service only");
+  if (!_svc.wifi.attach_ble_provisioning()) {
+    AG_LOGE(TAG, "provisioning registration failed");
+    _svc.ble_service.deinit();
+    return;
   }
 
   // Co-register OTA between the register phase and advertising. Non-fatal on
-  // failure (mirrors attach()): drop any partial registration, advertise without OTA.
+  // failure: drop any partial registration, advertise without OTA.
   bool ota_ready = _svc.ota.setup_ble();
   if (!ota_ready) {
     AG_LOGW(TAG, "OTA setup failed — advertising without OTA");
@@ -2747,22 +2796,31 @@ void Orchestrator::init_ble_if_portable() {
       _svc.ble_service.set_disconnect_observer(nullptr);
       _svc.ota.teardown_ble();
     }
-    _svc.portable_provisioner.stop(); // release the (now deinit'd) server
+    _svc.wifi.detach_ble_provisioning();
+    _svc.ble_service.deinit();
   }
   log_heap(TAG, "ble.init:post");
 }
 
 // ---------------------------------------------------------------------------
-// Stationary Wi-Fi
+// Wi-Fi
 // ---------------------------------------------------------------------------
 
-void Orchestrator::enter_stationary() {
-  log_heap(TAG, "wifi.enter-stationary:enter");
-  // Idempotent — cheap no-op on warm Stationary re-entry. Portable-only
-  // boots never reach this line.
+void Orchestrator::enter_wifi() {
+  if (tracking_session_active(_tracking_state) || wifi_cleanup_pending()) {
+    return;
+  }
+  _wifi_setup_pending = false;
+  if (_manufacturing_mode) {
+    stop_ble();
+  }
+  const bool attached = _svc.ble_service.is_initialized();
+  _connectivity = attached ? ConnectivityState::Ble : ConnectivityState::Wifi;
+  log_heap(TAG, "wifi.enter:enter");
+  // Initialize lazily when Wi-Fi is requested. Re-entry is idempotent.
   _svc.board.init_wifi_subsystem();
   _svc.wifi.set_power_save_enabled(_manufacturing_mode || !_settings.local_server_enabled);
-  log_heap(TAG, "wifi.enter-stationary:after-init");
+  log_heap(TAG, "wifi.enter:after-init");
 
   // Silent unlock + snackbar clear.  Required so a cold-boot Locked
   // device can interact with the session screens (Info / Provisioning),
@@ -2783,17 +2841,18 @@ void Orchestrator::enter_stationary() {
                                       ConfigurationControl::Local);
 
   if (_manufacturing_mode) {
-    AG_LOGI(TAG, "stationary: manufacturing — trying default Wi-Fi");
+    AG_LOGI(TAG, "wifi: manufacturing — trying default Wi-Fi");
     _svc.ui_manager.show_info("Trying default Wi-Fi...");
     _svc.wifi.try_default_fallback_credentials();
   } else if (_svc.wifi.has_saved_networks()) {
     const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
-    AG_LOGI(TAG, "stationary: saved credentials %s static IP", ip != nullptr ? "with" : "without");
+    AG_LOGI(TAG, "wifi: saved credentials %s static IP", ip != nullptr ? "with" : "without");
     _svc.ui_manager.show_info("Connecting to saved Wi-Fi...");
-    _svc.wifi.connect_with_saved_credentials(ip);
+    _svc.wifi.connect_with_saved_credentials(ip, /*retain_for_ble=*/attached);
   } else {
-    AG_LOGI(TAG, "stationary: no credentials — opening provisioning");
-    enter_provisioning_page(ProvisioningTransport::BleOnly);
+    AG_LOGI(TAG, "wifi: no credentials — opening provisioning");
+    enter_provisioning_page(attached ? ProvisioningTransport::BleAttached
+                                     : ProvisioningTransport::BleOnly);
     return;
   }
 
@@ -2816,8 +2875,8 @@ void Orchestrator::begin_session_if_needed() {
   _lock_state = LockState::Unlocked;
   _last_input_ms = static_cast<uint32_t>(RTOS::get_time_ms());
 
-  // Clear any pending snackbar so a leftover "Mode changed", "Locked",
-  // "Unlocked", or stale "Wi-Fi connected" cannot leak onto the session
+  // Clear any pending snackbar so a leftover "Locked", "Unlocked",
+  // or stale "Wi-Fi connected" cannot leak onto the session
   // screens or fire when the device eventually returns to Home.
   _svc.ui_manager.show_snackbar(nullptr);
   _snackbar_refresh_deadline_ms = 0;
@@ -2825,6 +2884,17 @@ void Orchestrator::begin_session_if_needed() {
 }
 
 void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
+  if (tracking_session_active(_tracking_state) || wifi_cleanup_pending() || releasing_ble() ||
+      _svc.ota.is_ble_active() || _ota_committed) {
+    return;
+  }
+  if (transport == ProvisioningTransport::BleAttached) {
+    _connectivity = ConnectivityState::Ble;
+  } else {
+    stop_ble();
+    _connectivity = ConnectivityState::Wifi;
+  }
+  _wifi_setup_pending = false;
   AG_LOGI(TAG, "enter_provisioning_page: transport=%u", static_cast<unsigned>(transport));
   _local_api_activation_retry_deadline_ms = 0;
   _svc.local_api.set_access(ConfigAccess::Disabled);
@@ -2883,41 +2953,50 @@ void Orchestrator::leave_session_to_home() {
   _svc.display_service.flush(); // paint completes before caller returns
 }
 
-void Orchestrator::leave_session_to_portable() {
-  AG_LOGI(TAG, "leave_session_to_portable");
+void Orchestrator::cancel_wifi_setup() {
+  AG_LOGI(TAG, "cancel_wifi_setup");
   _svc.ui_manager.set_provisioning_connected(0);
-  // reset_to_home() first so change_mode()'s update_display() and the
-  // subsequent explicit render below both build values against
-  // Screen::Home (change_mode does not change the UI screen on its own).
+  // Render Home after the setup transport has been released.
   _svc.ui_manager.reset_to_home();
   _bring_up_pending = false;
   _latest_power =
       _svc.power_service.poll_bms(_first_measurement_done && !_raw_measures.pm_a.is_pm_25_valid());
 
-  // Keep _setup_session_active = true through change_mode() so any
+  // Keep _setup_session_active = true through runtime reconciliation so any
   // background-render path that fires mid-teardown (resume's immediate
-  // measurement, a stray BLE event during init_ble_if_portable()) still
+  // measurement, a stray BLE event during init_ble_if_available()) still
   // no-ops through the suppression gate.
-  change_mode(OperatingMode::Portable);
-  rebase_periodic_clocks();
-
-  _setup_session_active = false; // gate cleared after teardown completes
-  update_display(/*wait=*/true); // rescues any drop from change_mode's render
+  GoSettings candidate = _settings;
+  candidate.wifi_enabled = false;
+  if (!activate_settings_candidate(candidate)) {
+    _svc.ui_manager.show_snackbar("Settings save failed");
+    return;
+  }
+  if (_setup_session_active) {
+    _svc.wifi.stop_provisioning();
+    leave_session_to_home();
+  }
+  reconcile_connectivity();
+  update_display(/*wait=*/true); // Ensure the Home frame is painted.
   _svc.display_service.flush();  // paint completes before caller returns
 }
 
 void Orchestrator::on_wifi_connected(uint32_t ip) {
   AG_LOGI(TAG, "wifi connected: ip=0x%08x", static_cast<unsigned>(ip));
-  if (_mode != OperatingMode::Stationary) {
-    return; // ignore stray late events on non-Stationary modes
+  if (!wifi_connection_allowed()) {
+    return; // Ignore stale events after the station is stopped or no longer wanted.
   }
   if (_svc.wifi.is_provisioning()) {
     return; // provisioning owns the shared listener until its Connected handoff
   }
-  activate_local_endpoint();
+
+  _wifi_fallback = false;
+  _corrected_measures = apply_measurement_corrections(
+      _raw_measures, effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
+  _svc.local_api.publish_measurement_snapshot(_corrected_measures);
 
   if (_bring_up_pending) {
-    // Initial Stationary bring-up STA success: show "Connected!\n<ip>"
+    // Initial Wi-Fi bring-up STA success: show "Connected!\n<ip>"
     // on Screen::Info, hold STA_RESULT_HOLD_MS post-paint, then leave
     // the session to Home unlocked.  No snackbar — the on-page text
     // already conveys success.
@@ -2933,13 +3012,23 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
     RTOS::delay_ms(STA_RESULT_HOLD_MS);
 
     leave_session_to_home();
-  } else if (!_setup_session_active && _svc.ui_manager.current_screen() == Screen::Home) {
+  } else if (wifi_services_allowed() && !_setup_session_active &&
+             _svc.ui_manager.current_screen() == Screen::Home) {
     // Post-online reconnect on Home — keep the existing snackbar.
     AG_LOGI(TAG, "wifi reconnected");
     _svc.ui_manager.show_snackbar("Wi-Fi connected");
     update_display();
   }
-  // Cloud arm: unconditional on every Stationary IP transition.
+  reconcile_connectivity();
+  if (!wifi_services_allowed()) {
+    return;
+  }
+  start_wifi_services();
+}
+
+void Orchestrator::start_wifi_services() {
+  activate_local_endpoint();
+  // Arm after IP acquisition or return from BLE ownership with a retained station.
   // start() is idempotent (no-op on reconnect, heap-claim on first call).
   _svc.cloud.set_disable_cloud(_settings.disable_cloud);
   _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
@@ -2950,13 +3039,13 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
   }
   _svc.cloud.arm(_cloud_first_post_pending);
   _cloud_first_post_pending = false;
-  log_heap(TAG, "wifi.connected:after-cloud-start");
+  log_heap(TAG, "wifi.services:after-cloud-start");
 }
 
 void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   AG_LOGI(TAG, "wifi disconnected: %s", wifi_disconnect_reason_to_string(reason));
   log_heap(TAG, "wifi.disconnected:enter");
-  if (_mode != OperatingMode::Stationary) {
+  if (!wifi_connection_allowed()) {
     return;
   }
   _local_api_activation_retry_deadline_ms = 0;
@@ -2967,11 +3056,18 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
     _svc.cloud.disarm();
   }
 
-  // Runtime (already online this entry): never provision, never give up —
-  // reconnect on any reason except our own teardown (requested_by_user).
-  if (_svc.wifi.has_been_online()) {
-    if (reason != WifiDisconnectReason::requested_by_user) {
-      AG_LOGI(TAG, "runtime link lost; scheduling reconnect");
+  if (!_manufacturing_mode) {
+    if (reason == WifiDisconnectReason::requested_by_user) {
+      return;
+    }
+    if (_bring_up_pending && _setup_session_active) {
+      enter_provisioning_page(_svc.ble_service.is_initialized() ? ProvisioningTransport::BleAttached
+                                                                : ProvisioningTransport::BleOnly);
+      return;
+    }
+    if (_wifi_fallback || !_svc.wifi.has_been_online()) {
+      enter_wifi_fallback();
+    } else {
       const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
       _svc.wifi.schedule_reconnect(ip);
       update_display();
@@ -2979,56 +3075,28 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
     return;
   }
 
-  if (_manufacturing_mode) {
-    // Early failures leave the bounded factory attempt armed. Only its expiry
-    // ends the session; a successful IP routes through runtime policy above.
-    if (reason == WifiDisconnectReason::requested_by_user || _svc.wifi.is_connecting()) {
-      return;
+  if (_svc.wifi.has_been_online()) {
+    if (reason != WifiDisconnectReason::requested_by_user) {
+      const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
+      _svc.wifi.schedule_reconnect(ip);
+      update_display();
     }
-    AG_LOGW(TAG, "manufacturing Wi-Fi timed out; showing failure before reboot");
-    _bring_up_pending = false;
-    _svc.wifi.shutdown();
-    _svc.ui_manager.show_info("Wi-Fi connection failed");
-    update_display(/*wait=*/true);
-    _svc.display_service.flush();
-    RTOS::delay_ms(STA_RESULT_HOLD_MS);
-    reboot();
     return;
   }
 
-  // Normal bring-up (before first IP): provisioning is the fallback. Connectivity
-  // reasons reach here only after the WifiManager retry budget / connect
-  // window are spent; auth_failed routes here immediately (bad creds).
-  // ap_disconnected / handshake_failed / unknown stay — the window
-  // synthesizes connection_lost on expiry. requested_by_user is ignored.
-  bool open_provisioning = false;
-  switch (reason) {
-  case WifiDisconnectReason::auth_failed:
-  case WifiDisconnectReason::no_ap_found:
-  case WifiDisconnectReason::assoc_failed:
-  case WifiDisconnectReason::dhcp_failed:
-  case WifiDisconnectReason::connection_lost:
-    open_provisioning = true;
-    break;
-  case WifiDisconnectReason::ap_disconnected:
-  case WifiDisconnectReason::handshake_failed:
-  case WifiDisconnectReason::unknown:
-  case WifiDisconnectReason::requested_by_user:
-    break;
+  // Early failures leave the bounded factory attempt armed. Only its expiry
+  // ends the session; a successful IP routes through runtime policy above.
+  if (reason == WifiDisconnectReason::requested_by_user || _svc.wifi.is_connecting()) {
+    return;
   }
-
-  if (open_provisioning) {
-    // Surface the failure + reason on Screen::Info before handing off to
-    // provisioning, so the user sees why the saved connect failed.
-    char buf[48];
-    std::snprintf(buf, sizeof(buf), "Wi-Fi failed\n%s", wifi_failure_text(reason));
-    _svc.ui_manager.show_info(buf);
-    update_display(/*wait=*/true);
-    _svc.display_service.flush();
-    RTOS::delay_ms(STA_RESULT_HOLD_MS);
-
-    enter_provisioning_page(ProvisioningTransport::BleOnly);
-  }
+  AG_LOGW(TAG, "manufacturing Wi-Fi timed out; showing failure before reboot");
+  _bring_up_pending = false;
+  _svc.wifi.shutdown();
+  _svc.ui_manager.show_info("Wi-Fi connection failed");
+  update_display(/*wait=*/true);
+  _svc.display_service.flush();
+  RTOS::delay_ms(STA_RESULT_HOLD_MS);
+  reboot();
 }
 
 void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload &payload) {
@@ -3036,33 +3104,34 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
   AG_LOGI(TAG, "provisioning event=%u transport=%u", static_cast<unsigned>(event),
           payload.transport);
 
-  // Portable attached provisioning is silent (no on-device UI). Only
-  // Connected needs action: persist metadata, then verify-then-drop.
-  if (static_cast<ProvisioningTransport>(payload.transport) == ProvisioningTransport::BleAttached) {
-    switch (event) {
-    case ProvisioningEvent::Connected:
-      // Creds saved by ProvisioningManager on got-IP; persist product metadata.
-      {
-        GoSettings candidate = _settings;
-        candidate.disable_cloud = payload.disable_cloud;
-        candidate.static_ip = payload.static_ip;
-        if (payload.disable_cloud &&
-            _settings.configuration_control == ConfigurationControl::Cloud) {
-          candidate.configuration_control = ConfigurationControl::Local;
-        }
-        if (!activate_settings_candidate(candidate)) {
-          AG_LOGW(TAG, "attached provisioning metadata save failed");
-        }
+  const bool attached =
+      static_cast<ProvisioningTransport>(payload.transport) == ProvisioningTransport::BleAttached;
+  if (attached && !_svc.wifi.ble_provisioning_attached()) {
+    return;
+  }
+  if (attached && event == ProvisioningEvent::Stopped) {
+    return; // GATT teardown is not cancellation of an on-device setup session.
+  }
+  // Onboarding also owns a setup session, but only Wi-Fi setup pauses services.
+  if (attached && (!_setup_session_active || !_provisioning_sensitive_services_paused)) {
+    if (event == ProvisioningEvent::Connected) {
+      GoSettings candidate = _settings;
+      candidate.disable_cloud = payload.disable_cloud;
+      candidate.static_ip = payload.static_ip;
+      if (payload.disable_cloud && _settings.configuration_control == ConfigurationControl::Cloud) {
+        candidate.configuration_control = ConfigurationControl::Local;
       }
-      _svc.portable_provisioner.on_connected();
-      break;
-    case ProvisioningEvent::ConnectFailed:
-      // Nothing to persist; manager stays listening, radio up for retry.
-      break;
-    case ProvisioningEvent::Started:
-    case ProvisioningEvent::Connecting:
-    case ProvisioningEvent::Stopped:
-      break;
+      if (!activate_settings_candidate(candidate)) {
+        AG_LOGW(TAG, "attached provisioning metadata save failed");
+      }
+      _wifi_fallback = false;
+      _svc.wifi.finish_ble_provisioning();
+      on_wifi_connected(payload.ip);
+      reconcile_connectivity();
+    } else if (event == ProvisioningEvent::ConnectFailed) {
+      _svc.wifi.finish_ble_provisioning();
+      on_wifi_disconnected(WifiDisconnectReason::connection_lost);
+      reconcile_connectivity();
     }
     return;
   }
@@ -3082,11 +3151,18 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     break;
 
   case ProvisioningEvent::ConnectFailed:
+    if (attached) {
+      _svc.wifi.finish_ble_provisioning();
+    }
     _svc.ui_manager.set_provisioning_ui_state(ProvisioningUiState::ConnectFailed);
     update_display();
     break;
 
   case ProvisioningEvent::Connected: {
+    _wifi_fallback = false;
+    _corrected_measures = apply_measurement_corrections(
+        _raw_measures,
+        effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
     GoSettings candidate = _settings;
     candidate.disable_cloud = payload.disable_cloud;
     candidate.static_ip = payload.static_ip;
@@ -3111,43 +3187,32 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     // blocks for POST_CONNECT_HOLD_MS (~1.5 s) when called after
     // Connected, which doubles as the on-page hold now that the success
     // page is actually visible.  No snackbar — the page already shows it.
-    const bool restart_after_portal = _mode == OperatingMode::Stationary && payload.portal_used &&
-                                      settings_saved && _svc.wifi.is_online();
-    _svc.wifi.stop_provisioning(/*stop_http_server=*/restart_after_portal);
-    if (restart_after_portal) {
-      AG_LOGI(TAG, "Portal provisioning complete; restarting to recover heap");
-      reboot();
-      break;
+    if (attached) {
+      RTOS::delay_ms(STA_RESULT_HOLD_MS);
     }
-    (void)activate_local_endpoint();
-
+    _svc.wifi.stop_provisioning();
     leave_session_to_home();
-
-    // Provisioning heap freed above; safe to claim cloud task stack now.
-    _svc.cloud.set_disable_cloud(_settings.disable_cloud);
-    _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
-                                        ConfigurationControl::Local);
-    if (!_svc.cloud.start()) {
-      AG_LOGE(TAG, "cloud.start() failed; cloud transport offline");
-      break;
+    if (!attached) {
+      _connectivity = ConnectivityState::DelayToBle;
+      _connectivity_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms());
     }
-    _svc.cloud.arm(/*fire_now=*/true);
+    reconcile_connectivity();
     break;
   }
 
   case ProvisioningEvent::Stopped:
     // User abort, timeout, or transport-switch start failure. With no
-    // prior online state, fall back to Portable so the device is never
+    // prior online state, disable Wi-Fi so the device is never
     // stranded on the Provisioning screen with no active transport.
     if (!_svc.wifi.has_been_online()) {
-      leave_session_to_portable();
+      cancel_wifi_setup();
     }
     break;
   }
 }
 
 bool Orchestrator::activate_local_endpoint() {
-  if (_mode != OperatingMode::Stationary || _svc.wifi.is_provisioning()) {
+  if (!wifi_services_allowed() || _svc.wifi.is_provisioning()) {
     _local_api_activation_retry_deadline_ms = 0;
     return false;
   }
@@ -3190,7 +3255,7 @@ void Orchestrator::publish_local_snapshots() {
 }
 
 void Orchestrator::publish_local_wifi_snapshot() {
-  if (_mode != OperatingMode::Stationary || !_svc.wifi.is_online()) {
+  if (!_svc.wifi.is_online()) {
     _svc.local_api.publish_wifi_rssi(std::nullopt);
     return;
   }
@@ -3234,7 +3299,7 @@ void Orchestrator::resume_provisioning_sensitive_services() {
   const bool gps_active = is_gps_active() || (_manufacturing_mode &&
                                               _svc.ui_manager.current_screen() == Screen::GpsTest);
   if (!_manufacturing_mode || gps_active) {
-    const uint32_t initial_gps_sleep_ms = gps_active ? 0 : gps_inactive_sleep_ms(_mode);
+    const uint32_t initial_gps_sleep_ms = gps_active ? 0 : gps_sleep_interval_ms();
     if (!_svc.gps_service.start(initial_gps_sleep_ms)) {
       AG_LOGE(TAG, "Failed to restart GPS task after provisioning");
     }
@@ -3251,13 +3316,13 @@ void Orchestrator::resume_provisioning_sensitive_services() {
 // ---------------------------------------------------------------------------
 
 bool Orchestrator::wifi_ota_allowed() const {
-  return _mode == OperatingMode::Stationary && _svc.wifi.is_online() && !_setup_session_active &&
+  return wifi_services_allowed() && _svc.wifi.is_online() && !_setup_session_active &&
          !_settings.disable_cloud;
 }
 
 void Orchestrator::on_wifi_ota_available() {
   if (!wifi_ota_allowed()) {
-    if (_mode == OperatingMode::Stationary && _svc.wifi.is_online()) {
+    if (wifi_services_allowed() && _svc.wifi.is_online()) {
       _svc.cloud.arm(/*fire_now=*/false);
     }
     return;
@@ -3275,7 +3340,7 @@ void Orchestrator::on_wifi_ota_available() {
 void Orchestrator::enter_ota() {
   AG_LOGI(TAG, "enter_ota: quiescing services for OTA");
   log_heap(TAG, "ota.commit:enter");
-  if (_mode == OperatingMode::Stationary) {
+  if (wifi_active()) {
     _local_api_access_before_ota = _svc.local_api.access();
     _local_api_access_gated_for_ota = true;
     if (_local_api_access_before_ota == ConfigAccess::ReadWrite) {
@@ -3287,10 +3352,10 @@ void Orchestrator::enter_ota() {
 
   // Disarm cloud (parks the task, heap kept; resume is a plain arm()). Not
   // stop() — avoids heap churn for no real gain. See docs/cloud_service.md.
-  if (_mode == OperatingMode::Stationary) {
+  if (wifi_active()) {
     _svc.cloud.disarm();
   }
-  // Portable BLE traffic is suppressed implicitly (loop blocked).
+  // BLE traffic is suppressed implicitly (loop blocked).
 
   _svc.power_service.reset_ext_watchdog(); // cover the gap to the first tick
   log_heap(TAG, "ota.commit:exit");
@@ -3356,7 +3421,7 @@ void Orchestrator::exit_ota(const char *snackbar) {
     }
 
     // Cloud was only disarmed; re-arm when still online (no start() needed).
-    if (_mode == OperatingMode::Stationary && _svc.wifi.is_online()) {
+    if (wifi_services_allowed() && _svc.wifi.is_online()) {
       _svc.cloud.arm(/*fire_now=*/false);
     }
 
@@ -3370,7 +3435,7 @@ void Orchestrator::exit_ota(const char *snackbar) {
     // buffered events are real user intent, not OTA debris.
     resume_provisioning_sensitive_services(); // guarded no-op
 
-    if (_mode == OperatingMode::Stationary && _svc.wifi.is_online()) {
+    if (wifi_services_allowed() && _svc.wifi.is_online()) {
       _svc.cloud.arm(/*fire_now=*/false); // re-arm (only disarmed)
     }
 
@@ -3380,6 +3445,7 @@ void Orchestrator::exit_ota(const char *snackbar) {
       update_display(/*wait=*/true);
     }
   }
+  reconcile_connectivity();
   log_heap(TAG, "ota.finish:exit");
 }
 
@@ -3459,7 +3525,8 @@ BuildContext Orchestrator::build_context() const {
 
   // Read chart data cache
   uint16_t cache_count = _svc.storage_service.read_cache(_cache_buf, UI_CHART_BUF_SIZE);
-  const auto corrections = effective_measurement_corrections(_settings);
+  const auto corrections =
+      effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback);
   for (uint16_t i = 0; i < cache_count; ++i) {
     _cache_buf[i] = apply_measurement_corrections(_cache_buf[i], corrections);
   }
@@ -3498,12 +3565,13 @@ BuildContext Orchestrator::build_context() const {
           },
       .connectivity =
           {
-              .ble_enabled = (_mode == OperatingMode::Portable),
+              .ble_enabled = (_svc.ble_service.is_initialized()),
               // "connected" icon = usable (encrypted) link, not merely GAP-linked.
               .ble_connected = _svc.ble_service.is_authenticated(),
-              // Icon shown for the whole Stationary session; glyph reflects link state.
-              .wifi_enabled = (_mode == OperatingMode::Stationary),
-              .wifi_connected = (_mode == OperatingMode::Stationary) && _svc.wifi.is_online(),
+              // Icon reflects the saved preference; glyph reflects link state.
+              .wifi_enabled = (_settings.wifi_enabled || _manufacturing_mode),
+              .wifi_connected =
+                  (_settings.wifi_enabled || _manufacturing_mode) && _svc.wifi.is_online(),
               .gps_enabled = is_gps_active(),
               .gps_fix = is_fix_valid(_latest_gps.fix),
           },
@@ -3544,14 +3612,24 @@ void Orchestrator::try_enter_sleep() {
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   uint32_t awake_ms = now - _last_measurement_ms;
 
-  auto decision = _svc.power_service.decide_sleep(_settings, _lock_state, _mode, awake_ms);
+  if (wifi_cleanup_pending() || connectivity_timer_active() || ble_needed() || wifi_active() ||
+      _measurement_pending || _setup_session_active || _boot_splash_active || _manufacturing_mode ||
+      _svc.ble_service.is_connected() || _svc.ota.is_ble_active() || _ota_committed ||
+      _svc.ui_manager.is_hardware_test_screen()) {
+    return;
+  }
+  auto decision = _svc.power_service.decide_sleep(_settings, _lock_state, _tracking_state, awake_ms,
+                                                  _wifi_fallback);
 
   if (decision.type == PowerService::SleepType::None) {
     return;
   }
 
   // decision.type == Deep
+  uint64_t wake_at = RTOS::get_retained_time_ms() + decision.duration_ms;
   prepare_for_sleep(decision.duration_ms);
+  const uint64_t now_retained = RTOS::get_retained_time_ms();
+  decision.duration_ms = wake_at > now_retained ? static_cast<uint32_t>(wake_at - now_retained) : 1;
   AG_LOGI(TAG, "entering deep sleep (%lu ms)", static_cast<unsigned long>(decision.duration_ms));
   _svc.power_service.enter_sleep(decision.duration_ms);
   // Never returns — CPU reboots on wake.
@@ -3580,7 +3658,7 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
 
   const bool hold_pm_sensor = _svc.power_service.should_hold_pm_sensor(sleep_duration_ms);
 
-  _svc.ble_service.deinit();
+  stop_ble();
   _svc.sensor_producer.stop(/*sleep_pm=*/!hold_pm_sensor);
 
   // Stop UART ownership first. Active receivers stay powered through MCU sleep.
@@ -3594,14 +3672,13 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   // driver_hw_init_full() exits deep sleep on next init() via hardware reset.
   _svc.display_service.deep_sleep();
 
-  // Flush + close the route file before the CPU reboots; resume_route()
-  // truncates any torn tail and continues the session on next wake.
+  // Flush and close storage before the CPU reboots.
   _svc.storage_service.end_route();
 
   _svc.storage_service.backup_cache();
 
   if (!is_gps_active()) {
-    (void)_svc.gps_service.request_sleep(gps_inactive_sleep_ms(_mode));
+    (void)_svc.gps_service.request_sleep(gps_sleep_interval_ms());
   }
 
   // Persist RTC state with the warm-sensor flag for the next wake cycle.
@@ -3642,22 +3719,13 @@ void Orchestrator::deactivate_gps() {
     return;
   }
   if (!_provisioning_sensitive_services_paused &&
-      !_svc.gps_service.maintain_sleep(gps_inactive_sleep_ms(_mode))) {
+      !_svc.gps_service.maintain_sleep(gps_sleep_interval_ms())) {
     AG_LOGE(TAG, "GPS sleep maintenance request rejected: task is stopped");
   }
   _latest_gps = GpsData{};
 }
 
-bool Orchestrator::is_gps_active() const {
-  if (_mode == OperatingMode::Offline || _settings.gps_mode == GpsMode::AlwaysOff) {
-    return false;
-  }
-  if (_settings.gps_mode == GpsMode::AlwaysOn) {
-    return true;
-  }
-  // GpsMode::OnWhenTracking
-  return tracking_session_active(_tracking_state);
-}
+bool Orchestrator::is_gps_active() const { return runtime_policy().gps_active(); }
 
 bool Orchestrator::is_recording() const {
   return _tracking_state == TrackingState::Recording && _svc.storage_service.is_route_active();
@@ -3665,7 +3733,6 @@ bool Orchestrator::is_recording() const {
 
 RtcAppState Orchestrator::snapshot_state() const {
   RtcAppState state{
-      .mode = _mode,
       .behavior = _behavior,
       .lock_state = _lock_state,
       .tracking_state = _tracking_state,
@@ -3676,4 +3743,469 @@ RtcAppState Orchestrator::snapshot_state() const {
   };
   state.set_flag(RtcAppFlag::GpsEnabled, _gps_enabled);
   return state;
+}
+
+GoRuntimePolicy Orchestrator::runtime_policy() const {
+  return {_settings, _tracking_state, _wifi_fallback};
+}
+
+uint32_t Orchestrator::gps_sleep_interval_ms() const {
+  return static_cast<uint32_t>(runtime_policy().interval_seconds()) * 1000;
+}
+
+void Orchestrator::stop_ble() {
+  _svc.ble_service.set_disconnect_observer(nullptr);
+  _svc.ota.teardown_ble();
+  _svc.wifi.detach_ble_provisioning();
+  _svc.ble_service.deinit();
+}
+
+void Orchestrator::reconcile_runtime(bool reset_cadence) {
+  _svc.ui_manager.sync_tracking_state(_tracking_state);
+  if (reset_cadence) {
+    _corrected_measures = apply_measurement_corrections(
+        _raw_measures,
+        effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
+    _last_measurement_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+    prepare_pm();
+    start_measurement(MeasurementOrigin::Scheduled);
+  }
+
+  if (_manufacturing_mode && !wifi_active()) {
+    enter_wifi();
+  } else {
+    reconcile_connectivity();
+  }
+}
+
+bool Orchestrator::wifi_active() const {
+  return _connectivity == ConnectivityState::Wifi || _connectivity == ConnectivityState::DelayToBle;
+}
+
+bool Orchestrator::wifi_cleanup_pending() const {
+  return _connectivity == ConnectivityState::PreparingForBle ||
+         _connectivity == ConnectivityState::PreparingForOff ||
+         _connectivity == ConnectivityState::RetryCleanupForBle ||
+         _connectivity == ConnectivityState::RetryCleanupForOff;
+}
+
+bool Orchestrator::connectivity_timer_active() const {
+  switch (_connectivity) {
+  case ConnectivityState::DelayToBle:
+  case ConnectivityState::DelayToWifi:
+  case ConnectivityState::ReleaseBle:
+  case ConnectivityState::RetryCleanupForBle:
+  case ConnectivityState::RetryCleanupForOff:
+  case ConnectivityState::RetryBle:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool Orchestrator::releasing_ble() const { return _connectivity == ConnectivityState::ReleaseBle; }
+
+bool Orchestrator::ble_needed() const {
+  if (tracking_session_active(_tracking_state)) {
+    return true;
+  }
+  if (_lock_state == LockState::Unlocked) {
+    return true;
+  }
+  if (_ble_window != BleWindow::Closed) {
+    return true;
+  }
+  if (_svc.ble_service.is_authenticated() || _svc.ble_service.is_connected()) {
+    return true;
+  }
+  if (_svc.ble_service.export_active()) {
+    return true;
+  }
+  return _svc.ota.is_ble_active();
+}
+
+bool Orchestrator::wifi_connection_allowed() const {
+  if (_shutting_down) {
+    return false;
+  }
+  if (_svc.wifi.is_suspended()) {
+    return false;
+  }
+  if (!wifi_active() && !wifi_cleanup_pending() && !_svc.wifi.station_retained()) {
+    return false;
+  }
+  if (_manufacturing_mode) {
+    return true;
+  }
+  if (!_settings.wifi_enabled) {
+    return false;
+  }
+  if (tracking_session_active(_tracking_state)) {
+    return false;
+  }
+  // A wake-selected connection can clear fallback once it obtains an IP.
+  if (_wifi_fallback && !wifi_active()) {
+    return false;
+  }
+  return true;
+}
+
+bool Orchestrator::wifi_services_allowed() const {
+  if (!wifi_active()) {
+    return false;
+  }
+  if (_svc.wifi.is_provisioning()) {
+    return false;
+  }
+  if (_manufacturing_mode) {
+    return true;
+  }
+  if (!_settings.wifi_enabled) {
+    return false;
+  }
+  if (tracking_session_active(_tracking_state)) {
+    return false;
+  }
+  if (_bring_up_pending) {
+    return true;
+  }
+  if (_connectivity == ConnectivityState::DelayToBle) {
+    return true;
+  }
+  return !ble_needed();
+}
+
+bool Orchestrator::ble_provisioning_allowed() const {
+  if (!_settings.wifi_enabled || tracking_session_active(_tracking_state)) {
+    return false;
+  }
+  if (!_svc.ble_service.is_authenticated() || releasing_ble()) {
+    return false;
+  }
+  if (wifi_cleanup_pending() || _bring_up_pending || _svc.wifi.is_connecting()) {
+    return false;
+  }
+  if (_svc.ble_service.export_active()) {
+    return false;
+  }
+  if (_svc.ota.is_ble_active() || _ota_committed) {
+    return false;
+  }
+  return true;
+}
+
+bool Orchestrator::connectivity_paused() const {
+  if (_connectivity == ConnectivityState::Uninitialized) {
+    return true;
+  }
+  if (_shutting_down) {
+    return true;
+  }
+  if (_ota_committed) {
+    return true;
+  }
+  if (_svc.wifi.is_provisioning()) {
+    return true;
+  }
+  if (_bring_up_pending || _provisioning_sensitive_services_paused) {
+    return true;
+  }
+  if (_manufacturing_mode) {
+    return true;
+  }
+  return _svc.ota.is_ble_active();
+}
+
+void Orchestrator::reconcile_ble_window() {
+  if (_lock_state == LockState::Unlocked || _svc.ble_service.is_connected() ||
+      tracking_session_active(_tracking_state)) {
+    _ble_window = BleWindow::Closed;
+    return;
+  }
+
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  if (_ble_window == BleWindow::Pending && _connectivity == ConnectivityState::Ble &&
+      _svc.ble_service.is_initialized()) {
+    _ble_window = BleWindow::Open;
+    _ble_window_deadline_ms = now + BLE_CONNECTION_WINDOW_MS;
+  }
+  if (_ble_window == BleWindow::Open && static_cast<int32_t>(now - _ble_window_deadline_ms) >= 0) {
+    _ble_window = BleWindow::Closed;
+  }
+}
+
+void Orchestrator::reconcile_connectivity(const char *saved_ssid) {
+  // Window bookkeeping continues while provisioning or OTA pauses handoffs.
+  reconcile_ble_window();
+  if (connectivity_paused()) {
+    return;
+  }
+
+  if (_wifi_setup_pending && !tracking_session_active(_tracking_state) &&
+      (_connectivity == ConnectivityState::Off || ble_needed()) && !wifi_cleanup_pending() &&
+      !releasing_ble() && !_svc.ble_service.export_active()) {
+    prepare_pm();
+    enter_wifi();
+    return;
+  }
+
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  const auto due = [now](uint32_t deadline) { return static_cast<int32_t>(now - deadline) >= 0; };
+  // BLE takes priority over the saved Wi-Fi preference.
+  const bool need_ble = ble_needed();
+  const bool tracking = tracking_session_active(_tracking_state);
+  switch (_connectivity) {
+  case ConnectivityState::Uninitialized:
+    return;
+
+  case ConnectivityState::Wifi:
+    if (!need_ble && _settings.wifi_enabled) {
+      return;
+    }
+    if (need_ble && !tracking && _settings.wifi_enabled) {
+      _connectivity = ConnectivityState::DelayToBle;
+      _connectivity_deadline_ms = now + CONNECTIVITY_HANDOFF_DELAY_MS;
+      return;
+    }
+    start_wifi_cleanup(need_ble || _svc.ble_service.is_initialized());
+    return;
+
+  case ConnectivityState::DelayToBle:
+    if (!need_ble && _settings.wifi_enabled) {
+      _connectivity = ConnectivityState::Wifi;
+      return;
+    }
+    if (need_ble && !tracking && _settings.wifi_enabled && !due(_connectivity_deadline_ms)) {
+      return;
+    }
+    start_wifi_cleanup(need_ble || _svc.ble_service.is_initialized());
+    return;
+
+  case ConnectivityState::PreparingForOff:
+    if (need_ble) {
+      _connectivity = ConnectivityState::PreparingForBle;
+    }
+    return; // CloudStopped and WifiSuspendComplete advance cleanup.
+
+  case ConnectivityState::PreparingForBle:
+    return;
+
+  case ConnectivityState::RetryCleanupForOff:
+  case ConnectivityState::RetryCleanupForBle:
+    continue_wifi_cleanup();
+    return;
+
+  case ConnectivityState::Off:
+    break;
+
+  case ConnectivityState::Ble:
+  case ConnectivityState::RetryBle:
+    if (!need_ble) {
+      begin_ble_return();
+      return;
+    }
+    if (_connectivity == ConnectivityState::RetryBle && !due(_connectivity_deadline_ms) &&
+        !(tracking && !_svc.wifi.driver_released())) {
+      return;
+    }
+    activate_ble();
+    return;
+
+  case ConnectivityState::DelayToWifi:
+    if (need_ble) {
+      activate_ble();
+      return;
+    }
+    if (!due(_connectivity_deadline_ms)) {
+      return;
+    }
+    stop_ble();
+    _connectivity = ConnectivityState::Off;
+    break;
+
+  case ConnectivityState::ReleaseBle:
+    if (!due(_connectivity_deadline_ms)) {
+      return;
+    }
+    stop_ble();
+    _connectivity = ConnectivityState::Off;
+    break;
+  }
+
+  // Ownership is now Off; a station retained during BLE may still be connected.
+  if (_svc.wifi.station_retained() && (!_settings.wifi_enabled || _wifi_fallback)) {
+    start_wifi_cleanup(ble_needed());
+    return;
+  }
+  // Reevaluate BLE after any explicit release.
+  if (ble_needed()) {
+    activate_ble();
+    return;
+  }
+  if (_svc.ble_service.is_initialized()) {
+    begin_ble_return();
+    return;
+  }
+  // Giving up remains in effect until Wi-Fi is explicitly re-enabled or boot
+  // supplies a visible saved network. Measurements never restart connectivity.
+  if (!_settings.wifi_enabled || (_wifi_fallback && saved_ssid == nullptr)) {
+    return;
+  }
+  prepare_pm();
+  if (_wifi_setup_pending) {
+    enter_wifi();
+    return;
+  }
+  if (!_svc.wifi.has_saved_networks()) {
+    enter_wifi_fallback();
+    return;
+  }
+  resume_wifi(saved_ssid);
+}
+
+void Orchestrator::start_wifi_cleanup(bool for_ble) {
+  _connectivity = for_ble ? ConnectivityState::PreparingForBle : ConnectivityState::PreparingForOff;
+  _local_api_activation_retry_deadline_ms = 0;
+  _svc.local_api.set_access(ConfigAccess::Disabled);
+  // Keep already accepted local requests queued while Cloud drains HTTP.
+  _svc.cloud.request_stop();
+  continue_wifi_cleanup();
+}
+
+void Orchestrator::continue_wifi_cleanup() {
+  if (connectivity_paused()) {
+    return;
+  }
+  // Once BLE claims cleanup, retain its return delay even if the user locks.
+  if (ble_needed()) {
+    if (_connectivity == ConnectivityState::PreparingForOff) {
+      _connectivity = ConnectivityState::PreparingForBle;
+    } else if (_connectivity == ConnectivityState::RetryCleanupForOff) {
+      _connectivity = ConnectivityState::RetryCleanupForBle;
+    }
+  }
+  if (_svc.cloud.stop_pending() || _svc.wifi.suspension_pending()) {
+    return;
+  }
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  if (connectivity_timer_active() && static_cast<int32_t>(now - _connectivity_deadline_ms) < 0) {
+    return;
+  }
+  const bool for_ble = _connectivity == ConnectivityState::PreparingForBle ||
+                       _connectivity == ConnectivityState::RetryCleanupForBle;
+  _connectivity = for_ble ? ConnectivityState::PreparingForBle : ConnectivityState::PreparingForOff;
+  WifiService::SuspendMode mode = WifiService::SuspendMode::StopWifi;
+  if (tracking_session_active(_tracking_state)) {
+    mode = WifiService::SuspendMode::ReleaseDriver;
+  } else if (for_ble && _settings.wifi_enabled && !_wifi_fallback) {
+    mode = WifiService::SuspendMode::Services;
+  }
+  if (!_svc.wifi.request_suspend(mode)) {
+    _connectivity =
+        for_ble ? ConnectivityState::RetryCleanupForBle : ConnectivityState::RetryCleanupForOff;
+    _connectivity_deadline_ms = now + CONNECTIVITY_RETRY_MS;
+  }
+}
+
+void Orchestrator::activate_ble() {
+  if (_svc.wifi.station_retained() && (!_settings.wifi_enabled || _wifi_fallback)) {
+    start_wifi_cleanup(true);
+    return;
+  }
+  if (tracking_session_active(_tracking_state) && !_svc.wifi.driver_released()) {
+    start_wifi_cleanup(true);
+    return;
+  }
+  _connectivity = ConnectivityState::Ble;
+  init_ble_if_available();
+  if (!_svc.ble_service.is_initialized()) {
+    _connectivity = ConnectivityState::RetryBle;
+    _connectivity_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + CONNECTIVITY_RETRY_MS;
+    return;
+  }
+  reconcile_ble_window();
+}
+
+void Orchestrator::begin_ble_return() {
+  if (!_svc.ble_service.set_connectable(false)) {
+    stop_ble();
+  }
+  _connectivity = ConnectivityState::DelayToWifi;
+  _connectivity_deadline_ms =
+      static_cast<uint32_t>(RTOS::get_time_ms()) + CONNECTIVITY_HANDOFF_DELAY_MS;
+}
+
+void Orchestrator::resume_wifi(const char *saved_ssid) {
+  _connectivity = ConnectivityState::Wifi;
+  _svc.wifi.set_power_save_enabled(!_settings.local_server_enabled);
+  const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
+  if (!_svc.wifi.resume_station(ip, saved_ssid)) {
+    enter_wifi_fallback();
+    return;
+  }
+  _cloud_first_post_pending = true;
+  if (_svc.wifi.is_online()) {
+    start_wifi_services();
+  }
+}
+
+void Orchestrator::enter_wifi_fallback() {
+  _wifi_fallback = _settings.wifi_enabled;
+  _bring_up_pending = false;
+  _corrected_measures = apply_measurement_corrections(
+      _raw_measures, effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
+  if (!wifi_cleanup_pending() && !releasing_ble() &&
+      (wifi_active() || _svc.wifi.station_retained())) {
+    start_wifi_cleanup(ble_needed());
+  }
+  request_background_display_update();
+}
+
+void Orchestrator::on_cloud_stopped() {
+  if (!_svc.cloud.stop_pending()) {
+    return;
+  }
+  _svc.cloud.complete_stop();
+  if (wifi_cleanup_pending()) {
+    continue_wifi_cleanup();
+  }
+}
+
+void Orchestrator::on_wifi_suspend_complete(bool success) {
+  if (!_svc.wifi.suspension_pending()) {
+    return;
+  }
+  _svc.wifi.complete_suspend(success);
+  if (!wifi_cleanup_pending()) {
+    return;
+  }
+  const bool to_ble = _connectivity == ConnectivityState::PreparingForBle;
+  if (!success) {
+    _connectivity =
+        to_ble ? ConnectivityState::RetryCleanupForBle : ConnectivityState::RetryCleanupForOff;
+    _connectivity_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + CONNECTIVITY_RETRY_MS;
+    return;
+  }
+  _connectivity = to_ble ? ConnectivityState::Ble : ConnectivityState::Off;
+  publish_local_wifi_snapshot();
+  // Reevaluate current intent, including a tracking start during ordinary suspension.
+  reconcile_connectivity();
+}
+
+void Orchestrator::request_ble_release() {
+  if (!_svc.ble_service.is_authenticated() || tracking_session_active(_tracking_state) ||
+      _svc.ble_service.export_active() || _svc.ota.is_ble_active() || _ota_committed ||
+      _setup_session_active || _svc.wifi.is_provisioning() || releasing_ble()) {
+    _svc.ble_service.notify_command_result(BleCommand::ReleaseBle, false, BLE_VAL_ERR_BUSY);
+    return;
+  }
+  _svc.ble_service.notify_command_result(BleCommand::ReleaseBle, true);
+  _connectivity = ConnectivityState::ReleaseBle;
+  _connectivity_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + BLE_RELEASE_DRAIN_MS;
+  _ble_window = BleWindow::Closed;
+  _svc.ble_service.set_connectable(false);
+  _lock_state = LockState::Locked;
+  _svc.ui_manager.show_snackbar("Locked");
+  _svc.ui_manager.reset_to_home();
+  update_display(/*wait=*/true);
 }

@@ -37,15 +37,19 @@ enum class EventType : uint8_t {
   BleAuthComplete,   // payload: bool ble_auth_ok (link encrypted/authenticated)
 
   // --- Wi-Fi events ---
-  WifiConnected,            // payload: uint32_t wifi_ip (network byte order)
-  WifiDisconnected,         // payload: uint8_t wifi_disconnect_reason
-  ProvisioningStateChanged, // payload: ProvisioningEventPayload prov
-  PortableProvRequest,      // no payload (parsed request in provisioner buffer)
+  WifiConnected,               // payload: uint32_t wifi_ip (network byte order)
+  WifiDisconnected,            // payload: uint8_t wifi_disconnect_reason
+  WifiConnectionTimeout,       // no payload; whole initial/reconnect window expired
+  WifiSuspendComplete,         // payload: bool wifi_suspend_ok
+  ProvisioningStateChanged,    // payload: ProvisioningEventPayload prov
+  BleProvisioningRequest,      // no payload (parsed request in WifiService)
+  BleProvisioningScanComplete, // no payload; attached scan notifications have been queued
 
   // --- Cloud transport events ---
   PostMeasuresResult, // payload: uint8_t cloud_result (AgClientResult)
   FetchConfigResult,  // payload: FetchConfigEventPayload fetch_config
   WifiOtaAvailable,   // no payload
+  CloudStopped,       // no payload (worker drained; reclaim before Wi-Fi cleanup)
 
   // --- Local API events ---
   LocalApiRequestReady, // payload: uint32_t local_api_epoch
@@ -63,7 +67,6 @@ enum class EventType : uint8_t {
   UserPauseTracking,
   UserResumeTracking,
   UserStopTracking, // no payload
-  UserChangeMode,   // payload: OperatingMode
   UserToggleGps,    // payload: bool
   SettingsChanged,  // no payload
   ClearData,        // no payload
@@ -121,7 +124,6 @@ struct Event {
     GpsData gps_data;                        // GpsFixUpdate (~68 bytes)
     InputEventData input;                    // InputPress (2 bytes)
     uint32_t shake_detected_ms;              // ShakeDetected
-    OperatingMode mode_change;               // UserChangeMode (1 byte)
     WakeEventData wake;                      // WakeFromSleep (1 byte)
     bool gps_enabled;                        // UserToggleGps (1 byte)
     bool ble_auth_ok;                        // BleAuthComplete (1 byte, link encrypted)
@@ -133,6 +135,7 @@ struct Event {
     SensorTestResults sensor_test_results;   // SensorTestDone (5 bools)
     uint32_t wifi_ip;                        // WifiConnected (network byte order)
     uint8_t wifi_disconnect_reason;          // WifiDisconnected (WifiDisconnectReason)
+    bool wifi_suspend_ok;                    // WifiSuspendComplete
     ProvisioningEventPayload prov;           // ProvisioningStateChanged
     CloudResultByte cloud_result;            // PostMeasuresResult (AgClientResult byte)
     FetchConfigEventPayload fetch_config;    // FetchConfigResult

@@ -475,3 +475,43 @@ TEST_CASE("config back LED indicator rejects unknown choices and incorrect types
     CHECK(std::string(config_json::config_field_wire_key(result.field)) == "backLedIndicator");
   }
 }
+
+TEST_CASE("config intervals preserve distinct fields and optional serialization",
+          "[config][interval]") {
+  LocalServerConfig config;
+  REQUIRE(parse(R"({"idleInterval":900,"trackingInterval":17})", config).status ==
+          config_json::ParseStatus::Ok);
+  CHECK(config.idle_interval_seconds == 900);
+  CHECK(config.tracking_interval_seconds == 17);
+  CHECK_FALSE(config.measurement_interval_seconds.has_value());
+  char buf[256]{};
+  REQUIRE(config_json::serialize(config, buf, sizeof(buf)) > 0);
+  cJSON *root = cJSON_Parse(buf);
+  REQUIRE(root != nullptr);
+  CHECK(cJSON_GetObjectItem(root, "idleInterval")->valueint == 900);
+  CHECK(cJSON_GetObjectItem(root, "trackingInterval")->valueint == 17);
+  CHECK_FALSE(cJSON_HasObjectItem(root, "measurementInterval"));
+  cJSON_Delete(root);
+
+  config = {};
+  REQUIRE(parse(R"({"measurementInterval":30})", config).status == config_json::ParseStatus::Ok);
+  CHECK(config.measurement_interval_seconds == 30);
+  CHECK_FALSE(config.idle_interval_seconds.has_value());
+  CHECK_FALSE(config.tracking_interval_seconds.has_value());
+}
+
+TEST_CASE("config intervals reject non-integer values with the matching wire field",
+          "[config][interval]") {
+  for (const auto *key : {"idleInterval", "trackingInterval"}) {
+    const auto field = std::strcmp(key, "idleInterval") == 0 ? ConfigFieldId::IdleInterval
+                                                             : ConfigFieldId::TrackingInterval;
+    CHECK(std::string(config_json::config_field_wire_key(field)) == key);
+    for (const auto *value : {"10.5", "true", "null", "\"30\"", "[]", "{}"}) {
+      CAPTURE(key, value);
+      LocalServerConfig config;
+      const auto result = parse(std::string("{\"") + key + "\":" + value + "}", config);
+      CHECK(result.status == config_json::ParseStatus::InvalidValue);
+      CHECK(result.field == field);
+    }
+  }
+}

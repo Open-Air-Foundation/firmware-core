@@ -2,8 +2,8 @@
 
 Current protocol reference for mobile app developers integrating with the
 AirGradient Go (AGo) BLE peripheral. Covers discovery, pairing, GATT
-operations, payload decoding, Offline measurement broadcasts, and the history
-download protocol.
+operations, payload decoding, sleep-cycle measurement broadcasts, history
+downloads, Wi-Fi provisioning, and firmware updates.
 
 ---
 
@@ -18,8 +18,8 @@ download protocol.
 7. [Config Characteristic](#7-config-characteristic)
 8. [History Characteristic](#8-history-characteristic)
 9. [Device Information Service](#9-device-information-service)
-10. [Wi-Fi Provisioning (Portable)](#10-wi-fi-provisioning-portable)
-11. [Firmware Update (OTA, Portable)](#11-firmware-update-ota-portable)
+10. [Wi-Fi Provisioning](#10-wi-fi-provisioning)
+11. [Firmware Update (OTA)](#11-firmware-update-ota)
 12. [MTU Considerations](#12-mtu-considerations)
 13. [Error Reference](#13-error-reference)
 14. [Appendix: RoutePointWire Binary Format](#appendix-routepointwire-binary-format)
@@ -30,12 +30,12 @@ download protocol.
 
 ## 1. Discovery and Connection
 
-### Offline Measurement Broadcasts
+### Sleep-Cycle Measurement Broadcasts
 
-Offline timer wakes broadcast public, unencrypted measurements without a
-connection, pairing, or bonding. The same payload repeats at a configured
-50 ms interval during display refresh, then BLE shuts down. Reception on every
-wakeup is not guaranteed.
+Eligible timer wakes broadcast public, unencrypted measurements without a
+connection, pairing, or bonding while Idle with Wi-Fi disabled or unavailable.
+The same payload repeats at a configured 50 ms interval during display refresh,
+then BLE shuts down. Reception on every wakeup is not guaranteed.
 
 Filter by **service UUID `992f1fe6-4519-4d4f-8ca7-546d36126ee8`**, then read
 manufacturer data for company ID `0xFFFF` (a testing placeholder to replace
@@ -46,7 +46,7 @@ advertising payload, with no Flags, local name, or scan response:
 
 | Field | Type | Bytes Including Length/Type |
 |---|---|---|
-| Complete List of 128-bit Service UUIDs | `0x07` | 18: header + Offline UUID |
+| Complete List of 128-bit Service UUIDs | `0x07` | 18: header + broadcast UUID |
 | Manufacturer Specific Data | `0xFF` | 13: header + 2-byte little-endian company ID + 9-byte payload |
 
 For normal iOS background scanning, enable `bluetooth-central` and scan for
@@ -93,7 +93,19 @@ uv run --with bleak python scripts/ago_listen_measurements.py
 ```
 
 Stop with Ctrl+C. Optional `--address` filters by Bluetooth address or macOS
-device UUID. The connection and GATT sections below describe Portable mode.
+device UUID. These broadcasts do not open a connectable BLE window. The
+connection and GATT sections below describe connecting to Go over BLE.
+
+### When You Can Connect
+
+- Go is connectable while unlocked or tracking (Recording or Paused).
+  Advertising may take a few seconds to appear after unlocking.
+- Auto-lock without a client allows another **60 seconds** to connect, starting
+  once BLE is ready. Manual lock does not grant this window.
+- Locking preserves an existing connection; there is no idle-client timeout.
+- Disconnecting does not open another window. To reconnect to an idle, locked
+  Go, unlock it again.
+- Use [`release_ble`](#release-ble) when finished to lock Go and release the link.
 
 ### Advertised Name
 
@@ -127,7 +139,7 @@ The complete local name is placed in the scan response data.
   space).
 - The device supports a single concurrent connection. While a client is
   connected, the device stops advertising. Advertising resumes after
-  disconnect.
+  disconnect only while BLE remains available under the policy above.
 
 ### Connection Parameters
 
@@ -140,7 +152,9 @@ initiate connections.
 
 ### Pairing Model
 
-The device uses **Passkey Entry** pairing with **Display Only** IO capability.
+The Go data service connection, including its provisioning service, uses
+**Passkey Entry** pairing with **Display Only** IO capability. Standalone Wi-Fi
+setup uses the security described in [§10](#10-wi-fi-provisioning).
 The device generates and displays a 6-digit numeric passkey (000000–999999)
 on its e-paper screen. The user must enter this passkey on the phone to
 complete pairing.
@@ -182,8 +196,8 @@ lists the characteristic access requirements:
 | Credentials/Status (provisioning) | Encrypted | Encrypted | Yes |
 | Device Information (DIS) | Encrypted | — | — |
 
-Complete Portable pairing before reading, writing, or subscribing. Subscribe
-to the relevant notifications before sending requests.
+Complete passkey pairing on the Go data service connection before reading, writing,
+or subscribing. Subscribe to the relevant notifications before sending requests.
 
 ### Development Builds
 
@@ -216,11 +230,9 @@ is the characteristic index (1–4).
 The Measures characteristic requires authentication for reads and also supports
 notifications. Complete pairing before reading or subscribing.
 
-### Additional Services (Portable Mode)
+### Additional Services
 
-In Portable mode the bonded link also exposes three more services — alongside
-the AGo data service above — for Wi-Fi provisioning, firmware update, and device
-identity:
+The bonded connection exposes these alongside the AGo data service:
 
 | Service | UUID | Purpose |
 |---|---|---|
@@ -228,9 +240,8 @@ identity:
 | AirGradient OTA | `ab9a0001-1e3c-4f5a-9b6d-0a1b2c3d4e5f` | Firmware update push (§11) |
 | Device Information (DIS) | `0x180A` | Model / Serial / Firmware / Manufacturer (§9) |
 
-These service UUIDs are not added to the advertising payload (the client is already
-connected on the bonded link); discover them via GATT service discovery after
-connecting.
+These service UUIDs are not added to the advertising payload; discover them via
+GATT service discovery after connecting.
 
 ---
 
@@ -303,8 +314,9 @@ Complete pairing before reading or subscribing. If the client reads or enables
 notifications before pairing, the BLE stack may trigger the passkey pairing
 flow automatically.
 
-Notifications are only sent while the device is in **Portable** operating
-mode and the BLE client is connected.
+Notifications are sent to a connected BLE client when measurements complete.
+Idle uses `idle_int`; Recording and Paused use `tracking_int`. Locking controls
+does not stop notifications to an existing client.
 
 Measures contain the device's raw sensor values. The correction settings in the
 Config characteristic do not alter Measures reads or notifications; clients may
@@ -421,25 +433,23 @@ sending the relevant state fields. The **Read** value remains the full 10-key sn
 
 | Event | NOTIFY? | Payload Reflects |
 |---|---|---|
-| `start_tracking` succeeded | Yes | `tracking: true`, `session: N`, `trk: 1` |
+| `start_tracking` succeeded without restart | Yes | `tracking: true`, `session: N`, `trk: 1` |
 | `start_tracking` failed at storage open | Yes | `tracking: false`, `session: 0`, `trk: 0` |
 | `pause_tracking` from Recording | Yes, including sync/close failure | `tracking: true`, same `session: N`, `trk: 2` |
 | `resume_tracking` from Paused succeeded | Yes | `tracking: true`, same `session: N`, `trk: 1` |
 | `stop_tracking` from Recording or Paused | Yes | `tracking: false`, `session: 0`, `trk: 0` |
 | Charging transition (plug in / unplug / charge complete) | Yes | `charging`, `bat_pct`, `bat_v` |
-| Device about to drop the link (shutdown / leaving Portable) | Yes | `disc` |
-| Resume-after-sleep failed in firmware init | No | BLE is not up yet; client picks it up via Read on the next connect |
+| Device about to shut down | Yes | `disc` |
+| Silent tracking-start restart | No guaranteed pre-reset result | Reconnect and Read Status to learn whether the new session started |
 | Periodic BMS / GPS refresh (no charging change) | No | — |
 
 #### Disconnect Notice (`disc`)
 
-Before the device tears down the BLE link, it pushes a single-key
-`{"disc": <text>}` notice so the client can treat the imminent disconnect as
-**expected** rather than an error. BLE is only available in Portable mode, so a
-`disc` notice always means the link is about to go away — either the device is
-shutting down or it is leaving Portable mode. After it, expect a disconnect (and,
-for a mode change, no reconnect on the AGo service until the device is Portable
-again).
+Before shutdown, Go pushes a single-key `{"disc": <text>}` notice so the client
+can treat the imminent disconnect as expected. This is not a notification for
+every disconnect: accepted `release_ble`, setup transport changes, firmware updates
+and a silent tracking-start restart can drop the connection without a Status
+`disc` notice. Use the relevant command result and re-read state after reconnecting.
 
 `disc` is **NOTIFY-only** — it never appears in the Status Read snapshot.
 Delivery is best-effort; if the device disconnects without a `disc` (lost
@@ -450,8 +460,6 @@ notification), treat the disconnect itself as the signal.
 | `"overheat"` | Safety shutdown — battery temperature outside the discharge range, hot or cold. This legacy value is shared by both temperature shutdown reasons |
 | `"low_batt"` | Safety shutdown — battery over-discharge (critically low) |
 | `"user"` | User-initiated shutdown (long-press power) |
-| `"op_stationary"` | Operating mode changing to Stationary |
-| `"op_offline"` | Operating mode changing to Offline |
 
 #### Read Is Authoritative
 
@@ -463,7 +471,8 @@ before relying on subsequent notifies to learn the current state.
 #### Tracking Commands and Notifications
 
 When a BLE command starts, pauses, resumes, or stops a session and changes its
-state, it produces **two** notifications on different characteristics:
+state without restarting Go, it produces **two** notifications on different
+characteristics:
 
 1. **Status NOTIFY** (this characteristic) — broadcasts the state change
    (`tracking`, `session`, `trk`).
@@ -471,7 +480,9 @@ state, it produces **two** notifications on different characteristics:
    command, carrying `ok` and optionally `err`.
 
 The two are distinct protocol events on distinct characteristics, not
-redundant transport. Handle them in their own listeners.
+redundant transport. Handle them in their own listeners. A Start that requires
+a [silent GPS restart](#tracking-start-and-gps-restart) can disconnect before
+either notification; reconnect and Read Status instead of blindly retrying Start.
 
 Repeated Pause while already Paused and Resume while already Recording return
 `ok: true` without another Status notification. Resume failure keeps the session
@@ -584,18 +595,19 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (18-Key CBOR Map)
+#### Payload (19-Key CBOR Map)
 
 | Key | Type | Description |
 |---|---|---|
-| `"meas_int"` | uint | Measurement interval in seconds (1–3600). All sensors measured together at this cadence. |
+| `"idle_int"` | uint | Idle Interval: 1–3600 seconds; default 300. Used without an active tracking session. |
+| `"tracking_int"` | uint | Tracking Interval: 1–3600 seconds; default 10. Used in Recording and Paused. |
+| `"wifi"` | bool | Saved Wi-Fi preference; default `false`. Does not report current connection state. |
 | `"temp_f"` | bool | `true` = Fahrenheit, `false` = Celsius |
 | `"alt_ft"` | bool | `true` = feet, `false` = meters |
 | `"pm_aqi"` | bool | `true` = US AQI for PM, `false` = raw ug/m3 |
 | `"pchart"` | uint | Pinned Chart: 0=None, 1=PM2.5, 2=CO2, 3=Temperature, 4=Humidity, 5=TVOC, 6=NOx, 7=Pressure, 8=Altitude |
 | `"gps_mode"` | text | GPS mode (see table below) |
 | `"auto_lock"` | uint | Auto-lock timeout (seconds) |
-| `"op_mode"` | text | Operating mode (see table below) |
 | `"bledi"` | text | Back LED indicator: `"aqi"` (default) or `"co2"` |
 | `"bled"` | uint | Back LED brightness: 0=Off, 1=Dim, 2=Mid, 3=Bright |
 | `"tled"` | uint | Touch LED intensity: 0=Off, 1=Dim, 2=Bright |
@@ -610,7 +622,9 @@ Read the characteristic to receive the full device configuration.
 `temp_f`, `alt_ft`, and `pm_aqi` affect device presentation only. They do not
 change the units in Measures. `pchart` selects the Home chart; its default is
 PM2.5 (1). Temperature/Humidity remain selectable below a five-minute interval,
-but Home shows “Not available” until the interval permits them.
+but Home shows “Not available” until the active interval permits them. Both
+interval fields always refer to their named preferences, regardless of current
+tracking state. Updating one does not change the other.
 
 Correction maps contain schema version `s` and a positional value array `v`.
 Schema version 1 uses `[algorithm, scale, intercept]` for temperature and
@@ -633,26 +647,29 @@ with unchanged coefficients. Writing this group back selects custom; omit
 |---|---|
 | `"off"` | GPS always off |
 | `"tracking"` | GPS on while a session is Recording or Paused |
-| `"always"` | GPS always on |
+| `"always"` | GPS stays active regardless of tracking state, including during Go's sleep cycles |
 
-#### Operating Mode Values
+#### Compatibility With Earlier Clients
 
-| Value | Meaning |
-|---|---|
-| `"portable"` | Portable mode (connectable BLE; battery or USB power) |
-| `"stationary"` | Stationary mode (Wi-Fi; connectivity depends on setup and network availability) |
-| `"offline"` | Energy Saving mode (brief measurement broadcasts; no connectable BLE or Wi-Fi) |
+Operating modes are no longer selectable. `op_mode` and `meas_int` are absent
+from Config reads and notifications. A `set` containing either key returns:
 
-Offline appears as **Energy Saving** on the display. Keep using `"offline"`
-for `op_mode` and `"op_offline"` for disconnect notices.
+```json
+{"type":"cmd_result","cmd":"set","ok":false,"err":"unknown_config_key"}
+```
+
+The entire write is rejected without changing settings. Use `idle_int` and
+`tracking_int` for intervals. There is no direct replacement for `op_mode`:
+Wi-Fi preference and tracking commands are independent.
 
 #### Example
 
 ```json
 {
-  "meas_int": 10, "temp_f": false, "alt_ft": false,
+  "idle_int": 300, "tracking_int": 10, "wifi": false,
+  "temp_f": false, "alt_ft": false,
   "pm_aqi": false, "pchart": 1, "gps_mode": "tracking",
-  "auto_lock": 60, "op_mode": "portable",
+  "auto_lock": 60,
   "bledi": "aqi", "bled": 3, "tled": 2, "buz": true,
   "abc": 7, "tlo": 12, "nlo": 12,
   "pm25_corr": {"s": 1, "v": [2, 1.08, -0.2, 0]},
@@ -669,7 +686,7 @@ Write a CBOR map to update device configuration. Include `"op": "set"` and
 #### Format
 
 ```json
-{"op": "set", "meas_int": 30}
+{"op": "set", "tracking_int": 30}
 ```
 
 The `"op"` key is required. The Read payload defines the config keys; board
@@ -695,14 +712,15 @@ silently ignored for backward compatibility. They do not modify any setting.
 
 | Key | Expected Type | Notes |
 |---|---|---|
-| `"meas_int"` | uint | 1–3600 seconds |
+| `"idle_int"` | uint | 1–3600 seconds; affects Idle cadence only |
+| `"tracking_int"` | uint | 1–3600 seconds; affects Recording/Paused cadence only |
+| `"wifi"` | bool | Enable/disable the saved Wi-Fi preference; credentials are preserved |
 | `"temp_f"` | bool | |
 | `"alt_ft"` | bool | Altitude display unit: `true` = feet |
 | `"pm_aqi"` | bool | |
 | `"pchart"` | uint | 0–8, using the Read payload metric IDs |
 | `"gps_mode"` | text | `"off"`, `"tracking"`, or `"always"` |
 | `"auto_lock"` | uint | 0 (disabled), 10, 30, or 60 seconds |
-| `"op_mode"` | text | `"portable"`, `"stationary"`, or `"offline"` |
 | `"bledi"` | text | `"aqi"` or `"co2"` |
 | `"bled"` | uint | 0–3 (back LED brightness) |
 | `"tled"` | uint | 0–2 (touch LED intensity; writes supported on V1 only) |
@@ -738,7 +756,7 @@ After applying the config change, the device sends a **Config notification**
 
 The write is rejected before any value is applied if it contains an
 **unrecognized config key** (`unknown_config_key`, checked first), an invalid
-interval, GPS mode, LED, buzzer, ABC, learning-offset, or correction value
+interval, Wi-Fi, GPS mode, LED, buzzer, ABC, learning-offset, or correction value
 (`invalid_config_value`), or **more than one recognized config key**
 (`single_field_only`). After these checks, V2 rejects `tled` writes with
 `unsupported`, including writes of `0`. The field remains readable (default
@@ -758,20 +776,6 @@ reboot. Validation rejections apply nothing. Errors use a Config notification:
 Aiding keys (`lat`, `lon`, `alt`, `pos_acc`, `epoch`, `time_acc`) are valid only
 under `op:"cmd"` (`set_aiding`); under `op:"set"` they are rejected as
 `unknown_config_key`.
-
-#### Leaving Portable Mode Disconnects BLE
-
-Any change of the operating mode away from Portable tears down the Portable BLE
-link — whether **you** set `op_mode` to `"stationary"`/`"offline"`, or the user
-changes the mode **on the device** itself. In both cases the device announces the
-imminent disconnect with a **Status `disc` notice** (`"op_stationary"` or
-`"op_offline"` — see [§6 Disconnect notice](#disconnect-notice-disc)), waits a
-short settle window (~200 ms) so the notification can drain, then disconnects and
-switches mode. So an `op_mode` set is **not** confirmed with a Config delta;
-instead, watch for the `disc` notice on **Status** and treat the following
-disconnect as completion of the switch. Because notifications are best-effort,
-the `disc` may be missed. A disconnect alone leaves the outcome uncertain;
-confirm the mode on the device or through its newly available interface.
 
 ### 7.3 Write: Execute Command
 
@@ -794,10 +798,11 @@ Write a CBOR map to execute a device command.
 | `"stop_tracking"` | End the current route logging session |
 | `"pause_tracking"` | Stop route-point writes while retaining the current session |
 | `"resume_tracking"` | Resume recording into the retained session |
+| `"release_ble"` | Lock controls and disconnect BLE |
 | `"set_aiding"` | Inject A-GNSS aiding data (position and/or time) to speed up GPS fix |
 
 Tracking commands use the existing Config characteristic. Encode each JSON map
-below separately as CBOR; Start and Stop are unchanged from the legacy protocol:
+below separately as CBOR:
 
 ```json
 {"op": "cmd", "cmd": "start_tracking"}
@@ -818,8 +823,9 @@ the command pending until a `cmd_result` arrives; the GATT write response and
 progress notification are not completion signals.
 
 Other commands (`"start_tracking"`, `"stop_tracking"`, `"pause_tracking"`,
-`"resume_tracking"`, `"set_aiding"`) respond with a command result notification
-only (no progress notification).
+`"resume_tracking"`, `"release_ble"`, `"set_aiding"`) normally respond with a
+command result notification only (no progress notification). A successful
+tracking-start power reset can occur before its result is sent.
 
 **Notes**:
 
@@ -829,8 +835,9 @@ only (no progress notification).
 - `"start_tracking"` fails with `"err": "already_tracking"` if a tracking
   session is Recording or Paused, or with `"err": "flash_error"` if the storage
   layer cannot open the route file (NAND unmounted, session-id space
-  exhausted, or fsync failure on the empty file). The device additionally
-  surfaces this on-screen via a `"Storage error — can't track"` snackbar.
+  exhausted, or fsync failure on the empty file). The same `flash_error` is
+  also used when provisioning/setup or OTA blocks Start, or startup fails.
+  Read Status to reconcile a failed Start.
 - `"stop_tracking"`, `"pause_tracking"`, and `"resume_tracking"` fail with
   `"err": "not_tracking"` when Idle. Stop accepts both Recording and Paused.
 - Pause reports `"err": "flash_error"` if the final sync/close fails; it still
@@ -848,6 +855,36 @@ only (no progress notification).
   request ID nor an origin and can result from BLE, local HTTP, or UI
   calibration. Wait for a result before retrying, but do not assume it belongs
   to a particular BLE write.
+
+#### Tracking Start and GPS Restart
+
+`start_tracking` can restart Go to wake GPS, dropping BLE before its command
+result arrives. Bonds are retained. Reconnect, authenticate and Read Status:
+`trk: 1` confirms recording; `trk: 0` means tracking did not start. Check this
+before retrying the command.
+
+#### Release BLE
+
+Send this authenticated Config command when finished with the connection:
+
+```json
+{"op":"cmd","cmd":"release_ble"}
+```
+
+An accepted request queues:
+
+```json
+{"type":"cmd_result","cmd":"release_ble","ok":true}
+```
+
+Go locks controls and disconnects after allowing the result notification to
+send. Delivery is best-effort. The saved Wi-Fi preference is unchanged.
+
+Recording or Paused, an active History export, a Wi-Fi scan/credential operation,
+an on-device setup session, an active/committed update, or an already pending
+release rejects the command with `ok: false, err: "busy"`. While release is
+pending, new Config and History work is rejected with `busy`. Do not start OTA
+after requesting release.
 
 #### Set Aiding Payload
 
@@ -906,7 +943,7 @@ A Config NOTIFY is a **delta**, not the full snapshot: `"type": "config"` plus
 which normally changes one setting at a time) yields a 2-key map:
 
 ```json
-{"type": "config", "meas_int": 10}
+{"type": "config", "tracking_int": 10}
 ```
 
 Merge the changed key(s) into your local model. Production sends no Config
@@ -987,6 +1024,8 @@ description is available.
 
 | Error String | Command | Cause |
 |---|---|---|
+| `"busy"` | `release_ble` | Tracking, export, provisioning/setup or update prevents release, or release is already pending |
+| `"busy"` | Config writes | BLE release is pending |
 | `"invalid_config_value"` | `set` | Invalid field type, range, correction group, or complete settings candidate |
 | `"config_save_failed"` | `set` | Persistence failed; active settings were not replaced |
 | `"unsupported"` | `set` | Touch LED writes are unavailable on V2 |
@@ -995,7 +1034,7 @@ description is available.
 | `"clear_failed"` | `clear_data` | Route data erase did not complete fully |
 | `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |
 | `"already_tracking"` | `start_tracking` | Session was already Recording or Paused |
-| `"flash_error"` | `start_tracking`, `pause_tracking`, `resume_tracking` | Start could not create the route; Pause failed to sync/close; Resume could not reopen the route. Read `trk` to reconcile state. |
+| `"flash_error"` | `start_tracking`, `pause_tracking`, `resume_tracking` | Start was blocked or could not establish tracking; Pause failed to sync/close; Resume could not reopen the route. Read `trk` to reconcile state. |
 | `"not_tracking"` | `stop_tracking`, `pause_tracking`, `resume_tracking` | No tracking session was active |
 | `"no_aiding_data"` | `set_aiding` | No valid position or time data in the payload |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
@@ -1050,7 +1089,8 @@ All writes are CBOR maps with an `"op"` key.
 {"op": "list"}
 ```
 
-Request the list of stored route sessions. Can be sent at any time.
+Request the list of stored route sessions. Wait until provisioning/setup is
+idle and no BLE release is pending.
 
 #### Start Download
 
@@ -1248,7 +1288,7 @@ Sent when an operation fails.
 | `"flash_error"` | Flash storage read failed during streaming |
 | `"delete_failed"` | Flash storage delete failed |
 | `"session_active"` | Cannot delete the active tracking session |
-| `"busy"` | Provisioning Wi-Fi radio is active; export refused (see §10) |
+| `"busy"` | A provisioning operation or setup session blocks `list` / `start` / `fill`, or BLE release is pending (see §10) |
 
 ### 8.4 Download Protocol Flow
 
@@ -1343,7 +1383,8 @@ you the starting index. With 4 points per notification, a notification with
 ## 9. Device Information Service
 
 Standard BLE Device Information Service (`0x180A`) exposing read-only device
-identity. All characteristics are encrypted (require the bonded connection).
+identity. All characteristics require an encrypted connection: the
+passkey-paired link, or the standalone setup link described in §10.
 
 | Characteristic | UUID | Type | Value |
 |---|---|---|---|
@@ -1353,7 +1394,7 @@ identity. All characteristics are encrypted (require the bonded connection).
 | Manufacturer Name | `0x2A29` | UTF-8 | `"AirGradient"` |
 
 Read these once after connecting to identify the device. The same service is
-also present during standalone Stationary provisioning.
+also present during standalone Wi-Fi setup.
 
 The **Firmware Revision** characteristic (`0x2A26`) is the canonical source for
 the running firmware version; it is not duplicated in the Status characteristic
@@ -1361,16 +1402,12 @@ the running firmware version; it is not duplicated in the Status characteristic
 
 ---
 
-## 10. Wi-Fi Provisioning (Portable)
+## 10. Wi-Fi Provisioning
 
-Configure the device's Wi-Fi credentials over the **already-bonded Portable
-link** — no operating-mode switch and no re-pair. The device runs the standard
-AirGradient provisioning protocol (Wi-Fi scan, credential submit, live status)
-on a dedicated GATT service that sits alongside the data service.
-
-> The same provisioning service is also used standalone in Stationary mode
-> (over a Just Works connection); this section documents the Portable
-> bonded-link flow.
+The provisioning service is registered alongside the AGo data service.
+Use the same authenticated BLE connection to scan or add Wi-Fi credentials;
+no second pairing or BLE reconnect is needed. Successful provisioning retains
+both the BLE link and the new Wi-Fi connection.
 
 Provisioning payloads are **JSON** (UTF-8), not CBOR.
 
@@ -1385,27 +1422,45 @@ Provisioning payloads are **JSON** (UTF-8), not CBOR.
 | Wi-Fi Scan | `467a080f-e50f-42c9-b9b2-a2ab14d82725` | Write, Notify | Bidirectional |
 | Credentials/Status | `703fa252-3d2a-4da9-a05c-83b0d9cacb8e` | Read, Write, Notify | Bidirectional |
 
-Both characteristics are encrypted; on the Portable link the existing passkey
-bond satisfies that, so no extra pairing step is needed.
+Discover this service through GATT after connecting to the
+advertised AGo data service. The provisioning UUID is advertised only by
+standalone setup, described below.
 
-### Availability and the On-Demand Radio
+### Before Sending Requests
 
-- The provisioning service is present on **every Portable boot** and stays idle
-  until the client writes a scan or credentials request.
-- The Wi-Fi radio is **off by default**. A scan or credentials request powers
-  it up. A scan can take several seconds because Wi-Fi shares the antenna
-  with BLE.
-- Scan completion or a failed connection does not immediately turn Wi-Fi off.
-  Successful connection, BLE disconnect, or the roughly 90-second deadline
-  after the latest request drops the radio.
-- Wait for each operation before sending another. A newer pending scan or
-  credentials request can replace one the device has not consumed.
+- Enable the `wifi` preference and finish passkey authentication. Go must be
+  Idle; Recording and Paused reject provisioning requests.
+- Requests are rejected while another scan or connection attempt is active,
+  during connectivity changes, History export, OTA, or BLE release. A rejected
+  request reports `{"status":10}` on **Credentials/Status**, including when
+  the request was a scan. Subscribe to both characteristics before requesting.
+- With Wi-Fi already enabled, scan and credential requests do not open the
+  on-device setup screen. An app can add another network without opening setup.
+- Scan requests retain an existing Wi-Fi connection. Credential submissions
+  switch to the supplied network while keeping BLE connected.
+- Wait for each operation, including all scan pages, before sending another.
+  A newer pending request can replace one the device has not consumed.
+
+### Enabling Wi-Fi and On-Device Setup
+
+While Idle, send `{"op":"set","wifi":true}` as CBOR on Config to enable
+Wi-Fi. Changing Off to On attempts saved credentials, or opens setup if none
+exist or the attempt fails. Wait for any connection attempt to finish before
+requesting a scan or submitting credentials. The BLE connection is preserved.
+Setting `wifi: true` when already enabled does not retrigger setup.
+
+Standalone Wi-Fi setup advertises the provisioning UUID and uses **Just Works**
+pairing instead of a passkey. Only provisioning and Device Information are
+available on that connection. After successful standalone setup, reconnect to
+the AGo data service. Switching setup to the Wi-Fi portal disconnects BLE.
 
 ### 10.1 Wi-Fi Scan
 
 Write **any** non-empty value to the Wi-Fi Scan characteristic to trigger a
-scan. Results arrive as one or more **paginated** notifications on the same
-characteristic (3 networks per page).
+scan, for example UTF-8 `1` (hex `31`). Results arrive as one or more
+**paginated** notifications on the same characteristic (3 networks per page).
+Scanning is asynchronous and can take tens of seconds with BLE coexistence
+and both Wi-Fi bands.
 
 Page payload:
 
@@ -1458,7 +1513,7 @@ Write a JSON object to the Credentials/Status characteristic:
 |---|---|---|---|
 | `"ssid"` | text | Yes | Target network SSID |
 | `"password"` | text | No | 8–63 chars; omit or empty for an open network |
-| `"disableCloud"` | bool | No | Defaults to false; saved on connection when settings persistence succeeds. Suppresses subsequent cloud POST, Fetch, and Stationary update checks |
+| `"disableCloud"` | bool | No | Defaults to false; saved on connection when settings persistence succeeds. Suppresses subsequent cloud POST, Fetch, and Wi-Fi update checks |
 | `"staticIp"` | object | No | Supply all four sub-fields for a usable configuration; omit for DHCP |
 
 `"staticIp"` sub-fields (`"ip"`, `"netmask"`, `"gateway"`, `"dns"`) are dotted
@@ -1472,8 +1527,9 @@ metadata after a successful save.
 
 ### 10.3 Status Notifications
 
-After credentials are submitted, the device powers the radio, attempts a single
-STA connection, and notifies status on the Credentials/Status characteristic:
+After credentials are admitted on the Go data service connection, Go allows
+up to 30 seconds for the connection attempt; failures can be reported earlier.
+Results arrive on the Credentials/Status characteristic:
 
 ```json
 {"status": 0}
@@ -1482,44 +1538,36 @@ STA connection, and notifies status on the Credentials/Status characteristic:
 | Code | Meaning |
 |---|---|
 | `0` | `WIFI_CONNECTED` — Wi-Fi connection succeeded; see persistence warning below |
-| `10` | `WIFI_CONNECT_FAILED` — could not connect; re-prompt and retry |
+| `10` | `WIFI_CONNECT_FAILED` — connection failed/timed out, scan could not start, or the request was rejected by the admission rules |
 | `14` | `CREDENTIALS_NOT_SAVED` — connection succeeded but credential persistence failed; emitted before `0` |
 
-> Portable uses codes `0`, `10`, and the persistence warning `14`. The server-reachability
-> codes (`1`, `2`, `3`, `11`, `12`, `13`) defined for the provisioning service
-> are produced only during Stationary onboarding, where the device performs a
-> cloud check; Portable provisioning does not.
-
-### Verify-Then-Drop Behavior
+### After Connection
 
 `WIFI_CONNECTED` confirms a Wi-Fi connection, not cloud reachability. Credential
 saving is attempted first; retain a preceding `14` warning even when `0`
 follows. Status delivery is best-effort, and `0` is not an acknowledgement that
-Go's separate cloud/static-IP settings were persisted.
+Go's separate cloud/static-IP settings were persisted. Other server-reachability
+codes in the shared catalog are not part of this Go completion flow.
 
-After a successful connect the device drops Wi-Fi and **stays in Portable**.
-Successfully saved credentials are used on the next Stationary entry. The BLE
-provisioning service stays available for another scan or submission.
-
-A failed connect leaves the device listening; submit corrected credentials to
-retry.
+Successful connection retains Wi-Fi and BLE, and the provisioning service
+remains available. A failed connect leaves the device listening; submit
+corrected credentials to retry. Failed credentials are not saved.
 
 ### History Export Contention
 
-While the provisioning radio remains active, including after a scan, History export
-requests (`list` / `start` / `fill`) are rejected with
-`{"type": "error", "err": "busy"}`. Do not interleave a History download with
-provisioning; retry the export once provisioning is idle.
+History `list`, `start` and `fill` return `{"type":"error","err":"busy"}`
+while a scan/credential operation or on-device setup session is active.
+Retry after provisioning/setup finishes; Wi-Fi can remain connected.
 
 ### Flow
 
 ```mermaid
 sequenceDiagram
     participant Phone
-    participant Device as Go in Portable Mode
+    participant Device as Go
+    Note over Phone,Device: Authenticate, enable Wi-Fi and finish any saved-network attempt
     Phone->>Device: Subscribe to Scan and Credentials/Status
     Phone->>Device: Write Scan
-    Device->>Device: Power Wi-Fi and scan
     Device-->>Phone: JSON scan pages
     Phone->>Device: Write credentials JSON
     Device->>Device: Connect and attempt credential persistence
@@ -1527,8 +1575,7 @@ sequenceDiagram
         Device-->>Phone: Status 14
     end
     Device-->>Phone: Status 0 on connection
-    Device->>Device: Drop Wi-Fi and stay in Portable
-    Note over Phone,Device: Successfully saved credentials apply on next Stationary entry
+    Note over Phone,Device: BLE stays connected, Wi-Fi station is retained
 ```
 
 ### GATT Cache After an Upgrade
@@ -1540,13 +1587,11 @@ service discovery as proof of the current firmware's capabilities.
 
 ---
 
-## 11. Firmware Update (OTA, Portable)
+## 11. Firmware Update (OTA)
 
-Push a firmware image to the device over the **already-bonded Portable link**.
-The device exposes a dedicated OTA GATT service alongside the data service; the
-phone drives the whole transfer (the device only flashes what it receives). OTA
-over BLE is available **only in Portable mode** — in Stationary the device
-updates itself over Wi-Fi without phone involvement.
+Push a firmware image over the **authenticated BLE connection**.
+The device exposes a dedicated OTA service alongside the data service; the
+phone drives the transfer. Standalone Wi-Fi setup does not expose OTA.
 
 > The image is the raw application binary (`airgradient-go.bin`). It is written
 > to the passive OTA partition; the device reboots into it on success.
@@ -1680,7 +1725,7 @@ A mid-transfer **disconnect** ends the transfer as `TransportError` (not
 ```mermaid
 sequenceDiagram
     participant Phone
-    participant Device as Go in Portable Mode
+    participant Device as Go
     Phone->>Device: Subscribe to OTA Status
     Phone->>Device: Control start with total bytes
     Device->>Device: Validate and erase passive partition
@@ -1698,7 +1743,9 @@ sequenceDiagram
 
 ### 11.5 Constraints
 
-- **One transfer at a time**, Portable only.
+- **One transfer at a time**, on the authenticated BLE connection.
+- Do not start OTA after requesting `release_ble`.
+- Finish Wi-Fi provisioning and leave any on-device setup session before starting.
 - **Do not interleave** an OTA `start` with an active History export (§8) — the
   two share the device's single foreground task. Finish or abort the export
   first.
@@ -1738,7 +1785,7 @@ finish without a timeout.
 
 ### Required MTUs by Operation
 
-- **Config Read**: the full 18-key snapshot is bounded by a 512-byte
+- **Config Read**: the full 19-key snapshot is bounded by a 512-byte
   characteristic buffer. Use Read-Long / Read Blob and
   collect all fragments. Config Read does not require MTU 512, but it does
   require a client API that supports long reads.
@@ -1777,7 +1824,7 @@ errors and [Config Response](#response) for validation and persistence behavior.
 | `"flash_error"` | Storage read failed | Retry or skip session |
 | `"delete_failed"` | Flash delete failed | Retry or ignore |
 | `"session_active"` | Cannot delete the active tracking session | Stop tracking first via Config `"stop_tracking"` command, then retry |
-| `"busy"` | Provisioning Wi-Fi radio is active | Wait until the radio drops after successful connection or the idle deadline, then retry |
+| `"busy"` | Provisioning/setup blocks `list` / `start` / `fill`, or BLE release is pending | Wait for provisioning/setup to finish; if releasing BLE, reconnect when available |
 
 ### Connection Errors
 

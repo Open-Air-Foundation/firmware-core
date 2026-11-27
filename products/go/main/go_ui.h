@@ -33,7 +33,6 @@ enum class UIAction : uint8_t {
   StopTracking,
   PauseTracking,
   ResumeTracking,
-  ChangeMode,      ///< Accompanied by UIActionResult::new_mode.
   SettingsChanged, ///< UI Manager updated internal settings state.
   ClearData,
   CalibrateCo2,
@@ -89,7 +88,6 @@ enum class ProvisioningUiState : uint8_t {
 
 struct UIActionResult {
   UIAction action = UIAction::None;
-  OperatingMode new_mode = OperatingMode::Offline;
   uint8_t tag_index = 0;
   const char *tag_label = nullptr; ///< Points to static tag label string.
   MelodySelect melody = MelodySelect::Off;
@@ -312,9 +310,10 @@ private:
     AltitudeUnit,
     PmDisplay,
     PinnedChart,
-    MeasureInterval,
+    IdleInterval,
+    TrackingInterval,
     GpsMode,
-    Mode,
+    Wifi,
     AutoLock,
     BackLedBrightness,
     BackLedIndicator,
@@ -374,17 +373,16 @@ private:
   uint8_t _setting_altitude_unit = 0; // 0=m, 1=ft
   uint8_t _setting_pm_display = 0;    // 0=ug/m3, 1=USAQI
   Metric _setting_pinned_chart = Metric::Pm25;
-  int _setting_measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
-  int _setting_energy_saving_measure_interval_seconds =
-      ENERGY_SAVING_MEASURE_INTERVAL_SECONDS_DEFAULT;
+  int _setting_tracking_interval_seconds = TRACKING_INTERVAL_SECONDS_DEFAULT;
+  int _setting_idle_interval_seconds = IDLE_INTERVAL_SECONDS_DEFAULT;
   uint8_t _setting_gps_mode = 1; // 1="On When Tracking"
-  OperatingMode _setting_mode = OperatingMode::Portable;
-  uint8_t _setting_auto_lock = 0;           // 0="Off"
+  bool _setting_wifi = false;
+  uint8_t _setting_auto_lock = 1;           // 1="10 Seconds"
   uint8_t _setting_back_led_brightness = 0; // 0="Off"
   uint8_t _setting_back_led_indicator = 0;  // 0="AQI"
   uint8_t _setting_touch_led = 0;           // 0="Off"
   uint8_t _setting_buzzer_volume = 0;       // 0="Off"
-  uint8_t _setting_local_server = 1;        // 0="Disable", 1="Enable"
+  uint8_t _setting_local_server = 0;        // 0="Disable", 1="Enable"
   uint8_t _setting_melody = 0;              // 0="Off"
 
   // Snackbar
@@ -513,6 +511,7 @@ private:
   // --- Settings choice helpers ---
   const SettingId *group_items(Screen screen, uint8_t &count) const;
   int setting_measure_interval_seconds() const;
+  int editing_measure_interval_seconds(SettingId id) const;
   uint8_t setting_option_count(SettingId setting_id) const;
   uint8_t setting_current_option(SettingId setting_id) const;
   void apply_setting_choice(uint8_t option_index);

@@ -62,9 +62,9 @@ public:
   // Returns false on failure.
   bool setup(AgBleServer &ble, const ProvisioningBleConfig &config);
 
-  // Attached mode: register prov + DIS on an already-init'd, borrowed server.
+  // Attached mode: register provisioning on an initialized, borrowed server.
   // No init/set_security, no connect/disconnect callbacks, no advertising —
-  // the owner does all that and deinits later. Teardown via detach(), never
+  // the owner supplies Device Information and deinits later. Teardown via detach(), never
   // deinit. Returns false on registration failure.
   bool setup_on_server(AgBleServer &ble, const ProvisioningBleConfig &config);
 
@@ -95,7 +95,7 @@ public:
   ProvisioningTimer &pagination_timer() { return _page_timer; }
 
 private:
-  // Register prov + DIS (and write callbacks) on the assigned _ble. Shared by
+  // Register provisioning (plus DIS when owned) on the assigned _ble. Shared by
   // setup() / setup_on_server(); cleanup is the caller's (teardown/detach).
   bool _register_gatt(const ProvisioningBleConfig &config);
 

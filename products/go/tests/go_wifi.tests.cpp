@@ -42,8 +42,15 @@ constexpr int LOCAL_API_ROUTE_COUNT = 6;
 
 class FakeWifiHal : public WifiHal {
 public:
-  WifiStatus init() override { return WifiStatus::Ok; }
-  void deinit() override {}
+  uint32_t init_calls = 0;
+  uint32_t deinit_calls = 0;
+  WifiStatus init_status = WifiStatus::Ok;
+  WifiStatus stop_mdns_status = WifiStatus::Ok;
+  WifiStatus init() override {
+    ++init_calls;
+    return init_status;
+  }
+  void deinit() override { ++deinit_calls; }
 
   WifiStatus set_mode(WifiMode mode) override {
     _mode = mode;
@@ -56,12 +63,18 @@ public:
   WifiMode get_mode() const override { return _mode; }
 
   WifiStatus connect_sta(const char *ssid, const char *password) override {
+    if (call_log != nullptr) {
+      call_log->push_back("wifi_connect");
+    }
     ++connect_calls;
     last_ssid = ssid != nullptr ? ssid : "";
     last_password = password != nullptr ? password : "";
     return connect_status;
   }
   WifiStatus disconnect_sta() override {
+    if (call_log != nullptr) {
+      call_log->push_back("wifi_disconnect");
+    }
     ++disconnect_calls;
     return WifiStatus::Ok;
   }
@@ -76,7 +89,10 @@ public:
     return WifiStatus::Ok;
   }
 
-  WifiStatus start_scan(const WifiScanConfig &) override { return WifiStatus::Ok; }
+  WifiStatus start_scan(const WifiScanConfig &) override {
+    ++scan_calls;
+    return scan_status;
+  }
   WifiStatus start_ap(const WifiApConfig &) override { return WifiStatus::Ok; }
   WifiStatus stop_ap() override { return WifiStatus::Ok; }
 
@@ -115,7 +131,7 @@ public:
     if (call_log != nullptr) {
       call_log->push_back("mdns_stop");
     }
-    return WifiStatus::Ok;
+    return stop_mdns_status;
   }
 
   WifiStatus arm_dhcp_timeout(uint32_t) override { return WifiStatus::Ok; }
@@ -128,7 +144,7 @@ public:
     sta_disconnected_cb = std::move(cb);
   }
   void set_on_got_ip(WifiGotIpCallback cb) override { got_ip_cb = std::move(cb); }
-  void set_on_scan_complete(WifiScanCompleteCallback) override {}
+  void set_on_scan_complete(WifiScanCompleteCallback cb) override { scan_cb = std::move(cb); }
   void set_on_ap_client_joined(WifiApClientJoinedCallback) override {}
   void set_on_ap_client_left(WifiApClientLeftCallback) override {}
   void set_on_dhcp_timeout(std::function<void()>) override {}
@@ -136,6 +152,8 @@ public:
 
   // Observables
   int connect_calls = 0;
+  int scan_calls = 0;
+  WifiStatus scan_status = WifiStatus::Ok;
   WifiStatus connect_status = WifiStatus::Ok;
   int disconnect_calls = 0;
   int set_static_ip_calls = 0;
@@ -162,6 +180,7 @@ public:
   WifiConnectedCallback sta_connected_cb;
   std::function<void(int)> sta_disconnected_cb;
   WifiGotIpCallback got_ip_cb;
+  WifiScanCompleteCallback scan_cb;
 
 private:
   WifiMode _mode = WifiMode::Off;
@@ -272,6 +291,13 @@ public:
     return true;
   }
 
+  void task_notify_send_impl(RtosTaskHandle task, uint32_t value) override {
+    notified_tasks.push_back(task);
+    notifications.push_back(value);
+  }
+  std::vector<RtosTaskHandle> notified_tasks;
+  std::vector<uint32_t> notifications;
+
   void set_now(uint64_t ms) { now_ms = ms; }
   void advance(uint64_t ms) { now_ms += ms; }
   bool has_event(EventType t) const {
@@ -304,6 +330,16 @@ public:
 
 class WifiServiceTestAccess {
 public:
+  static RtosTaskHandle install_worker(WifiService &s) {
+    s._suspend_task = reinterpret_cast<RtosTaskHandle>(1);
+    s._suspend_done_sem.create();
+    return s._suspend_task;
+  }
+  static RtosTaskHandle worker(const WifiService &s) { return s._suspend_task; }
+  static void finish_suspend(WifiService &s,
+                             WifiService::SuspendMode mode = WifiService::SuspendMode::StopWifi) {
+    s._run_suspend(mode);
+  }
   static ProvisioningManager *provisioning_manager(const WifiService &s) { return s._prov; }
   static uint32_t deadline(const WifiService &s) { return s._initial_connect_deadline_ms; }
   static uint32_t reconnect_at(const WifiService &s) { return s._reconnect_at_ms; }
@@ -408,7 +444,7 @@ TEST_CASE("connect_with_saved_credentials clears static IP when nullptr",
 }
 
 TEST_CASE("connect_with_saved_credentials with no saved networks posts WifiDisconnected, "
-          "no deadline",
+          "bounded delivery",
           "[go_wifi][saved][disconnect]") {
   Fixture f; // store empty
 
@@ -416,7 +452,7 @@ TEST_CASE("connect_with_saved_credentials with no saved networks posts WifiDisco
 
   // WifiManager::connect() returned NotFound — no driver call.
   CHECK(f.hal.connect_calls == 0);
-  CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 30000);
 
   const Event *evt = f.rtos.first_event(EventType::WifiDisconnected);
   REQUIRE(evt != nullptr);
@@ -472,10 +508,8 @@ TEST_CASE("factory startup keeps its deadline after an immediate driver failure"
   f.svc.tick(15999);
   CHECK(f.rtos.captured.empty());
   f.svc.tick(16000);
-  const auto *event = f.rtos.first_event(EventType::WifiDisconnected);
+  const auto *event = f.rtos.first_event(EventType::WifiConnectionTimeout);
   REQUIRE(event != nullptr);
-  CHECK(event->wifi_disconnect_reason ==
-        static_cast<uint8_t>(WifiDisconnectReason::connection_lost));
   CHECK_FALSE(f.svc.is_connecting());
   CHECK(f.hal.connect_calls == 1);
 }
@@ -573,8 +607,7 @@ TEST_CASE("tick clears deadline after on_got_ip latches the pending flag", "[go_
   CHECK_FALSE(WifiServiceTestAccess::clear_pending(f.svc));
 }
 
-TEST_CASE("tick fires synthetic WifiDisconnected{connection_lost} on deadline expiry",
-          "[go_wifi][tick]") {
+TEST_CASE("tick fires WifiConnectionTimeout on deadline expiry", "[go_wifi][tick]") {
   Fixture f;
   f.rtos.set_now(0);
   f.svc.try_default_fallback_credentials(); // arms 15s deadline at t=0
@@ -582,12 +615,11 @@ TEST_CASE("tick fires synthetic WifiDisconnected{connection_lost} on deadline ex
   f.rtos.captured.clear();
 
   f.svc.tick(14999);
-  CHECK_FALSE(f.rtos.has_event(EventType::WifiDisconnected));
+  CHECK_FALSE(f.rtos.has_event(EventType::WifiConnectionTimeout));
 
   f.svc.tick(15000);
-  const Event *evt = f.rtos.first_event(EventType::WifiDisconnected);
+  const Event *evt = f.rtos.first_event(EventType::WifiConnectionTimeout);
   REQUIRE(evt != nullptr);
-  CHECK(evt->wifi_disconnect_reason == static_cast<uint8_t>(WifiDisconnectReason::connection_lost));
   CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
 }
 
@@ -610,7 +642,7 @@ TEST_CASE("connect timeout retries event delivery when the central queue is full
   f.rtos.accept_queue_sends = true;
   f.svc.tick(15001);
   REQUIRE(f.rtos.captured.size() == 1);
-  CHECK(f.rtos.captured.front().type == EventType::WifiDisconnected);
+  CHECK(f.rtos.captured.front().type == EventType::WifiConnectionTimeout);
   CHECK(f.svc.next_deadline_ms() == 0);
   f.svc.tick(15002);
   CHECK(f.rtos.captured.size() == 1);
@@ -664,13 +696,13 @@ TEST_CASE("tick fires the reconnect without resetting has_been_online", "[go_wif
   f.svc.tick(5999);
   CHECK(f.hal.connect_calls == connects_before);
 
-  // Due: re-issues the saved connect, no connect window, latch preserved.
+  // Due: re-issues the saved connect, original deadline and latch preserved.
   f.svc.tick(6000);
   CHECK(f.hal.connect_calls == connects_before + 1);
   CHECK(f.hal.last_ssid == "saved");
   CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
-  CHECK(WifiServiceTestAccess::deadline(f.svc) == 0); // runtime reconnect arms no window
-  CHECK(f.svc.has_been_online());                     // not reset
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 31000); // original window is not renewed
+  CHECK(f.svc.has_been_online());                         // not reset
 }
 
 TEST_CASE("tick reconnects a fallback-only session without saving credentials",
@@ -1387,4 +1419,586 @@ TEST_CASE("on_provisioning_event Started during a transport switch reports the d
   REQUIRE(evt != nullptr);
   CHECK(evt->prov.event == static_cast<uint8_t>(ProvisioningEvent::Started));
   CHECK(evt->prov.transport == static_cast<uint8_t>(ProvisioningTransport::WifiOnly));
+}
+
+TEST_CASE("WifiService handoff stops endpoints and retains driver and online history",
+          "[WifiService][handoff]") {
+  WifiService::Config config{};
+  config.serial_number = "TEST00";
+  config.firmware_version = "test";
+  config.model = "P-1PSG";
+  config.hostname = "airgradient-TEST00";
+  Fixture f(config);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x01020304);
+  REQUIRE(f.svc.has_been_online());
+  REQUIRE(f.svc.ensure_local_http());
+  REQUIRE(f.svc.ensure_local_mdns());
+  f.svc.schedule_reconnect();
+  const auto worker = WifiServiceTestAccess::install_worker(f.svc);
+  REQUIRE(f.svc.request_suspend(WifiService::SuspendMode::StopWifi));
+  CHECK(f.rtos.notified_tasks.back() == worker);
+  CHECK(f.svc.is_suspended());
+  CHECK(f.svc.suspension_pending());
+  CHECK_FALSE(f.svc.resume_station());
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 0);
+  f.hal.got_ip_cb(0x05060708);
+  CHECK_FALSE(f.svc.is_online());
+  WifiServiceTestAccess::finish_suspend(f.svc);
+  REQUIRE(f.rtos.captured.back().type == EventType::WifiSuspendComplete);
+  CHECK(f.rtos.captured.back().wifi_suspend_ok);
+  CHECK(f.rtos.last_queue_send_timeout_ms == UINT32_MAX);
+  CHECK(f.svc.suspension_pending());
+  f.svc.complete_suspend(f.rtos.captured.back().wifi_suspend_ok);
+  CHECK_FALSE(f.svc.suspension_pending());
+  CHECK(WifiServiceTestAccess::worker(f.svc) == worker);
+  CHECK_FALSE(WifiServiceTestAccess::local_http_active(f.svc));
+  CHECK(f.http.active_routes == 0);
+  CHECK(f.hal.get_mode() == WifiMode::Off);
+  CHECK(f.hal.deinit_calls == 0);
+  CHECK(f.svc.has_saved_networks());
+  CHECK(f.svc.has_been_online());
+  REQUIRE(f.svc.resume_station());
+  CHECK_FALSE(f.svc.is_suspended());
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 30000); // Every resumed attempt is bounded.
+  CHECK(f.hal.init_calls == 1);
+  CHECK(f.hal.get_mode() == WifiMode::Sta);
+}
+
+TEST_CASE("WifiService tracking upgrades suspension and reinitializes on return",
+          "[WifiService][handoff]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  const auto worker = WifiServiceTestAccess::install_worker(f.svc);
+  REQUIRE(f.svc.request_suspend(WifiService::SuspendMode::Services));
+  const auto suspend_notification = f.rtos.notifications.back();
+  REQUIRE(f.svc.request_suspend(
+      WifiService::SuspendMode::ReleaseDriver)); // Leave the pending request untouched.
+  CHECK(f.rtos.notifications.size() == 1);
+  WifiServiceTestAccess::finish_suspend(f.svc, WifiService::SuspendMode::Services);
+  REQUIRE(f.rtos.captured.back().wifi_suspend_ok);
+  f.svc.complete_suspend(f.rtos.captured.back().wifi_suspend_ok);
+  REQUIRE(f.svc.request_suspend(WifiService::SuspendMode::ReleaseDriver));
+  CHECK(f.rtos.notifications.back() != suspend_notification);
+  CHECK(f.rtos.notified_tasks.back() == worker);
+  WifiServiceTestAccess::finish_suspend(f.svc, WifiService::SuspendMode::ReleaseDriver);
+  REQUIRE(f.rtos.captured.back().wifi_suspend_ok);
+  CHECK(f.svc.suspension_pending());
+  CHECK_FALSE(f.svc.driver_released()); // Publish the final state only when the event is handled.
+  SECTION("completion after shutdown") {
+    f.svc.shutdown();
+    CHECK(f.svc.suspension_pending());
+    CHECK(WifiServiceTestAccess::worker(f.svc) == worker);
+  }
+  SECTION("ordinary completion") {}
+  f.svc.complete_suspend(f.rtos.captured.back().wifi_suspend_ok);
+  CHECK(f.svc.driver_released());
+  CHECK(f.hal.deinit_calls == 1);
+  CHECK(f.svc.has_saved_networks());
+  f.hal.init_status = WifiStatus::Failed;
+  CHECK_FALSE(f.svc.resume_station());
+  CHECK(f.svc.is_suspended());
+  CHECK(f.svc.driver_released());
+  f.hal.init_status = WifiStatus::Ok;
+  REQUIRE(f.svc.resume_station());
+  CHECK_FALSE(f.svc.driver_released());
+  // Never previously online: preserve the initial-failure provisioning policy.
+  CHECK(WifiServiceTestAccess::deadline(f.svc) != 0);
+}
+
+TEST_CASE("WifiService service suspension retains STA and resumes without reconnecting",
+          "[WifiService][handoff]") {
+  WifiService::Config config{};
+  config.serial_number = "TEST00";
+  config.firmware_version = "test";
+  config.model = "P-1PSG";
+  config.hostname = "airgradient-TEST00";
+  Fixture f(config);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x01020304);
+  f.svc.tick(0);
+  REQUIRE(f.svc.ensure_local_http());
+  REQUIRE(f.svc.ensure_local_mdns());
+  WifiServiceTestAccess::install_worker(f.svc);
+  const auto connects = f.hal.connect_calls;
+  const auto disconnects = f.hal.disconnect_calls;
+  REQUIRE(f.svc.request_suspend(WifiService::SuspendMode::Services));
+  CHECK(f.svc.is_online());
+  CHECK(f.svc.ip() == 0x01020304);
+  CHECK(f.svc.rssi() == -55);
+  CHECK_FALSE(f.svc.resume_station()); // Cleanup still owns the endpoints.
+  WifiServiceTestAccess::finish_suspend(f.svc, WifiService::SuspendMode::Services);
+  REQUIRE(f.rtos.captured.back().wifi_suspend_ok);
+  f.svc.complete_suspend(true);
+  CHECK(f.svc.station_retained());
+  CHECK(f.hal.get_mode() == WifiMode::Sta);
+  CHECK(f.hal.deinit_calls == 0);
+  CHECK_FALSE(WifiServiceTestAccess::local_http_active(f.svc));
+  CHECK(f.http.active_routes == 0);
+  CHECK(f.hal.stop_mdns_calls > 0);
+  REQUIRE(f.svc.resume_station());
+  CHECK_FALSE(f.svc.station_retained());
+  CHECK(f.svc.is_online());
+  CHECK(f.hal.connect_calls == connects);
+  CHECK(f.hal.disconnect_calls == disconnects);
+  CHECK(f.hal.init_calls == 0);
+  CHECK(f.svc.next_deadline_ms() == 0);
+}
+
+TEST_CASE("WifiService retained STA processes connection events and bounded retries",
+          "[WifiService][handoff][fallback]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x01020304);
+  f.svc.tick(0);
+  WifiServiceTestAccess::install_worker(f.svc);
+  REQUIRE(f.svc.request_suspend(WifiService::SuspendMode::Services));
+  // A disconnect during endpoint cleanup must not be discarded.
+  f.rtos.set_now(1000);
+  f.hal.sta_disconnected_cb(200);
+  REQUIRE_FALSE(f.svc.is_online());
+  REQUIRE(f.rtos.has_event(EventType::WifiDisconnected));
+  f.svc.schedule_reconnect();
+  REQUIRE(WifiServiceTestAccess::deadline(f.svc) == 31000);
+  WifiServiceTestAccess::finish_suspend(f.svc, WifiService::SuspendMode::Services);
+  f.svc.complete_suspend(true);
+  f.rtos.set_now(6000);
+  f.svc.tick(6000);
+  CHECK(f.svc.station_retained());
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 31000);
+  SECTION("recovery keeps endpoints suspended") {
+    f.hal.got_ip_cb(0x05060708);
+    f.svc.tick(6000);
+    CHECK(f.svc.is_online());
+    CHECK(f.svc.ip() == 0x05060708);
+    CHECK(f.svc.next_deadline_ms() == 0);
+    CHECK(f.svc.station_retained());
+    CHECK_FALSE(WifiServiceTestAccess::local_http_active(f.svc));
+  }
+  SECTION("failed retries expire at the original deadline") {
+    f.svc.schedule_reconnect();
+    f.svc.tick(31000);
+    CHECK(f.rtos.has_event(EventType::WifiConnectionTimeout));
+    CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+  }
+}
+
+TEST_CASE("WifiService service cleanup failure retains STA for retry or shutdown",
+          "[WifiService][handoff]") {
+  WifiService::Config config{};
+  config.serial_number = "TEST00";
+  config.firmware_version = "test";
+  config.model = "P-1PSG";
+  config.hostname = "airgradient-TEST00";
+  Fixture f(config);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x01020304);
+  REQUIRE(f.svc.ensure_local_http());
+  REQUIRE(f.svc.ensure_local_mdns());
+  WifiServiceTestAccess::install_worker(f.svc);
+  f.hal.stop_mdns_status = WifiStatus::Failed;
+  REQUIRE(f.svc.request_suspend(WifiService::SuspendMode::Services));
+  WifiServiceTestAccess::finish_suspend(f.svc, WifiService::SuspendMode::Services);
+  REQUIRE_FALSE(f.rtos.captured.back().wifi_suspend_ok);
+  f.svc.complete_suspend(false);
+  CHECK(f.svc.station_retained());
+  CHECK(f.svc.is_online());
+  f.hal.stop_mdns_status = WifiStatus::Ok;
+  REQUIRE(f.svc.request_suspend(WifiService::SuspendMode::Services));
+  WifiServiceTestAccess::finish_suspend(f.svc, WifiService::SuspendMode::Services);
+  REQUIRE(f.rtos.captured.back().wifi_suspend_ok);
+  SECTION("completion retains STA") {
+    f.svc.complete_suspend(true);
+    CHECK(f.svc.station_retained());
+    CHECK(f.svc.is_online());
+  }
+  SECTION("shutdown before completion acknowledgement stops STA") {
+    f.svc.shutdown();
+    f.svc.complete_suspend(true);
+    CHECK_FALSE(f.svc.station_retained());
+    CHECK_FALSE(f.svc.is_online());
+    CHECK(f.hal.get_mode() == WifiMode::Off);
+  }
+}
+
+TEST_CASE("WifiService cleanup failure cannot release ownership before retry succeeds",
+          "[WifiService][handoff]") {
+  WifiService::Config config{};
+  config.serial_number = "TEST00";
+  config.firmware_version = "test";
+  config.model = "P-1PSG";
+  config.hostname = "airgradient-TEST00";
+  Fixture f(config);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x01020304);
+  REQUIRE(f.svc.ensure_local_http());
+  REQUIRE(f.svc.ensure_local_mdns());
+  f.hal.stop_mdns_status = WifiStatus::Failed;
+  const auto worker = WifiServiceTestAccess::install_worker(f.svc);
+  REQUIRE(f.svc.request_suspend(WifiService::SuspendMode::ReleaseDriver));
+  WifiServiceTestAccess::finish_suspend(f.svc, WifiService::SuspendMode::ReleaseDriver);
+  REQUIRE(f.rtos.captured.back().type == EventType::WifiSuspendComplete);
+  CHECK_FALSE(f.rtos.captured.back().wifi_suspend_ok);
+  f.svc.complete_suspend(f.rtos.captured.back().wifi_suspend_ok);
+  CHECK_FALSE(f.svc.suspension_pending());
+  CHECK(f.svc.is_suspended());
+  const auto events_after_failure = f.rtos.captured.size();
+  f.hal.got_ip_cb(0x05060708);
+  f.svc.schedule_reconnect();
+  CHECK_FALSE(f.svc.is_online());
+  CHECK(f.rtos.captured.size() == events_after_failure);
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+  CHECK_FALSE(f.svc.driver_released());
+  CHECK(f.hal.deinit_calls == 0);
+  f.hal.stop_mdns_status = WifiStatus::Ok;
+  REQUIRE(f.svc.request_suspend(WifiService::SuspendMode::ReleaseDriver));
+  CHECK(f.rtos.notified_tasks.back() == worker);
+  WifiServiceTestAccess::finish_suspend(f.svc, WifiService::SuspendMode::ReleaseDriver);
+  CHECK(f.rtos.captured.back().wifi_suspend_ok);
+  f.svc.complete_suspend(f.rtos.captured.back().wifi_suspend_ok);
+  CHECK(f.svc.driver_released());
+  CHECK(f.hal.deinit_calls == 1);
+}
+
+TEST_CASE("WifiService cleanup worker allocation failure leaves Wi-Fi gated",
+          "[WifiService][handoff]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  // Native RTOS task creation fails; no completion is promised for a rejected request.
+  CHECK_FALSE(f.svc.request_suspend(WifiService::SuspendMode::StopWifi));
+  CHECK(f.svc.is_suspended());
+  CHECK_FALSE(f.svc.suspension_pending());
+  CHECK_FALSE(f.rtos.has_event(EventType::WifiSuspendComplete));
+}
+
+TEST_CASE("WifiService reuses cleanup worker across reconnect and shutdown",
+          "[WifiService][handoff]") {
+  Fixture f;
+  f.seed_network();
+  const auto worker = WifiServiceTestAccess::install_worker(f.svc);
+  for (int i = 0; i < 3; ++i) {
+    REQUIRE(f.svc.resume_station());
+    REQUIRE(f.svc.request_suspend(WifiService::SuspendMode::StopWifi));
+    CHECK(f.rtos.notified_tasks.back() == worker);
+    WifiServiceTestAccess::finish_suspend(f.svc);
+    REQUIRE(f.rtos.captured.back().wifi_suspend_ok);
+    f.svc.complete_suspend(f.rtos.captured.back().wifi_suspend_ok);
+    f.svc.shutdown();
+    CHECK(WifiServiceTestAccess::worker(f.svc) == worker);
+  }
+  CHECK(f.rtos.notifications.size() == 3);
+}
+
+TEST_CASE("Runtime retries share one total connection deadline", "[go_wifi][fallback]") {
+  Fixture f;
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0x0100A8C0);
+  f.rtos.captured.clear();
+  f.rtos.set_now(1000);
+  f.hal.sta_disconnected_cb(/*WIFI_REASON_BEACON_TIMEOUT*/ 200);
+  REQUIRE(f.rtos.has_event(EventType::WifiDisconnected));
+  CHECK_FALSE(f.svc.is_online());
+  f.svc.schedule_reconnect();
+  REQUIRE(WifiServiceTestAccess::deadline(f.svc) == 31000);
+  for (uint32_t now : {6000u, 11000u, 16000u, 21000u, 26000u}) {
+    f.rtos.set_now(now);
+    f.svc.tick(now);
+    f.svc.schedule_reconnect();
+    CHECK(WifiServiceTestAccess::deadline(f.svc) == 31000);
+  }
+  const auto attempts = f.hal.connect_calls;
+  f.rtos.set_now(31000);
+  f.svc.tick(31000);
+  REQUIRE(f.rtos.has_event(EventType::WifiConnectionTimeout));
+  CHECK(f.hal.connect_calls == attempts);
+  CHECK(WifiServiceTestAccess::reconnect_at(f.svc) == 0);
+  f.rtos.captured.clear();
+  f.svc.tick(32000);
+  CHECK_FALSE(f.rtos.has_event(EventType::WifiConnectionTimeout));
+}
+
+TEST_CASE("Connection timers keep their ordering across clock wrap", "[go_wifi][fallback]") {
+  Fixture f;
+  f.seed_network();
+  const uint32_t start = UINT32_MAX - 9999;
+  f.rtos.set_now(start);
+  f.svc.schedule_reconnect();
+  CHECK(f.svc.next_deadline_ms() == start + 5000);
+  f.rtos.advance(5000);
+  f.svc.tick(static_cast<uint32_t>(f.rtos.now_ms));
+  CHECK(f.hal.connect_calls == 1);
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 20000);
+  f.svc.tick(19999);
+  CHECK_FALSE(f.rtos.has_event(EventType::WifiConnectionTimeout));
+  f.svc.tick(20000);
+  CHECK(f.rtos.has_event(EventType::WifiConnectionTimeout));
+}
+
+TEST_CASE("A wake-selected SSID connects directly with a fresh deadline", "[go_wifi][fallback]") {
+  Fixture f;
+  f.seed_network();
+  f.wifi.add_network("other", "otherpw");
+  f.rtos.set_now(45000); // Scan and boot work have already elapsed.
+  REQUIRE(f.svc.resume_station(nullptr, "saved"));
+  CHECK(f.hal.last_ssid == "saved");
+  CHECK(f.hal.last_password == "pw");
+  CHECK(f.hal.scan_calls == 0);
+  CHECK(f.hal.connect_calls == 1);
+  CHECK(WifiServiceTestAccess::deadline(f.svc) == 75000);
+  f.svc.tick(74999);
+  CHECK_FALSE(f.rtos.has_event(EventType::WifiConnectionTimeout));
+  f.svc.tick(75000);
+  CHECK(f.rtos.has_event(EventType::WifiConnectionTimeout));
+}
+
+namespace {
+constexpr const char *PROVISIONING_UUID = "acbcfea8-e541-4c40-9bfd-17820f16c95c";
+}
+
+TEST_CASE("attached provisioning registration preserves the station and normal callbacks",
+          "[go_wifi][attached]") {
+  MockBleServer ble;
+  Fixture f({}, &ble);
+  REQUIRE(ble.init("Go"));
+  SECTION("Wi-Fi off") {
+    REQUIRE(f.svc.attach_ble_provisioning());
+    CHECK(f.hal.init_calls == 0);
+    CHECK(f.hal.connect_calls == 0);
+    CHECK(f.hal.scan_calls == 0);
+    CHECK(f.wifi.get_mode() == WifiMode::Off);
+  }
+  SECTION("normal station already connected") {
+    f.seed_network();
+    f.svc.connect_with_saved_credentials();
+    f.hal.got_ip_cb(0xC0A80164);
+    const int connects = f.hal.connect_calls;
+    const int disconnects = f.hal.disconnect_calls;
+    REQUIRE(f.svc.attach_ble_provisioning());
+    CHECK(f.svc.is_online());
+    CHECK(f.hal.connect_calls == connects);
+    CHECK(f.hal.disconnect_calls == disconnects);
+    f.svc.detach_ble_provisioning();
+    f.rtos.captured.clear();
+    f.hal.sta_disconnected_cb(200);
+    CHECK(f.rtos.first_event(EventType::WifiDisconnected) != nullptr);
+  }
+  CHECK(ble.init_count == 1);
+  CHECK(ble.deinit_count == 0);
+  CHECK(ble.find_service("180A") == nullptr);
+}
+
+TEST_CASE("attached scan is admitted by policy and finishes without dropping the station",
+          "[go_wifi][attached]") {
+  MockBleServer ble;
+  Fixture f({}, &ble);
+  REQUIRE(ble.init("Go"));
+  REQUIRE(f.svc.attach_ble_provisioning());
+  auto *scan = ble.find_char(PROVISIONING_UUID, "467a080f-e50f-42c9-b9b2-a2ab14d82725");
+  REQUIRE(scan != nullptr);
+  scan->simulate_write("1");
+  CHECK(f.hal.init_calls == 0); // NimBLE only queues the request.
+  REQUIRE(f.rtos.first_event(EventType::BleProvisioningRequest) != nullptr);
+  SECTION("rejected while disabled or busy") {
+    f.svc.handle_ble_provisioning_request(false);
+    CHECK(f.hal.scan_calls == 0);
+    CHECK(f.hal.init_calls == 0);
+    CHECK_FALSE(f.svc.is_provisioning());
+  }
+  SECTION("scan completes") {
+    f.svc.handle_ble_provisioning_request(true);
+    REQUIRE(f.hal.scan_calls == 1);
+    REQUIRE(f.svc.is_provisioning());
+    REQUIRE(f.hal.scan_cb);
+    f.hal.scan_cb(nullptr, 0);
+    REQUIRE(f.rtos.first_event(EventType::BleProvisioningScanComplete) != nullptr);
+    f.svc.finish_ble_provisioning();
+    CHECK_FALSE(f.svc.is_provisioning());
+    CHECK(f.wifi.get_mode() == WifiMode::Sta);
+    CHECK(f.hal.disconnect_calls == 0);
+  }
+  SECTION("driver rejects scan") {
+    f.hal.scan_status = WifiStatus::Failed;
+    f.svc.handle_ble_provisioning_request(true);
+    CHECK_FALSE(f.svc.is_provisioning());
+  }
+  CHECK(f.svc.ble_provisioning_attached());
+  CHECK(ble.deinit_count == 0);
+}
+
+TEST_CASE("attached BLE scan returns results while the station is retained",
+          "[go_wifi][attached]") {
+  MockBleServer ble;
+  Fixture f({}, &ble);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0xC0A80164);
+  WifiServiceTestAccess::install_worker(f.svc);
+  REQUIRE(f.svc.request_suspend(WifiService::SuspendMode::Services));
+  WifiServiceTestAccess::finish_suspend(f.svc, WifiService::SuspendMode::Services);
+  f.svc.complete_suspend(true);
+  REQUIRE(f.svc.station_retained());
+  REQUIRE(ble.init("Go"));
+  REQUIRE(f.svc.attach_ble_provisioning());
+  auto *scan = ble.find_char(PROVISIONING_UUID, "467a080f-e50f-42c9-b9b2-a2ab14d82725");
+  REQUIRE(scan != nullptr);
+  scan->simulate_write("1");
+  f.svc.handle_ble_provisioning_request(true);
+  REQUIRE(f.hal.scan_calls == 1);
+  REQUIRE(f.svc.is_provisioning());
+  f.hal.scan_cb(nullptr, 0);
+  REQUIRE(f.rtos.first_event(EventType::BleProvisioningScanComplete) != nullptr);
+  CHECK(scan->notify_count == 1);
+  CHECK(scan->last_notified_value_str() == R"({"found":0})");
+  f.svc.finish_ble_provisioning();
+  CHECK_FALSE(f.svc.is_provisioning());
+  CHECK(f.svc.is_online());
+  CHECK(f.svc.ip() == 0xC0A80164);
+  CHECK(f.hal.disconnect_calls == 0);
+  CHECK(f.hal.connect_calls == 1);
+  CHECK(ble.deinit_count == 0);
+}
+
+TEST_CASE("attached credentials save only after success and keep GATT available",
+          "[go_wifi][attached]") {
+  MockBleServer ble;
+  Fixture f({}, &ble);
+  REQUIRE(ble.init("Go"));
+  REQUIRE(f.svc.attach_ble_provisioning());
+  auto *credentials = ble.find_char(PROVISIONING_UUID, "703fa252-3d2a-4da9-a05c-83b0d9cacb8e");
+  REQUIRE(credentials != nullptr);
+  credentials->simulate_write(R"({"ssid":"NewWiFi","password":"secret12"})");
+  CHECK(f.hal.connect_calls == 0);
+  f.svc.handle_ble_provisioning_request(true);
+  REQUIRE(f.svc.is_provisioning());
+  REQUIRE(f.hal.connect_calls == 1);
+  CHECK(f.hal.last_ssid == "NewWiFi");
+  CHECK_FALSE(f.svc.has_saved_networks());
+  f.rtos.captured.clear();
+  SECTION("success retains the link and saves credentials") {
+    f.hal.got_ip_cb(0xC0A80164);
+    auto *event = f.rtos.first_event(EventType::ProvisioningStateChanged);
+    REQUIRE(event != nullptr);
+    CHECK(event->prov.event == static_cast<uint8_t>(ProvisioningEvent::Connected));
+    CHECK(f.svc.has_saved_networks());
+    f.svc.finish_ble_provisioning();
+    CHECK(f.svc.is_online());
+    CHECK(f.hal.disconnect_calls == 0);
+    CHECK(f.svc.next_deadline_ms() == 0);
+    // A subsequent network failure still reaches the normal retry policy.
+    f.rtos.captured.clear();
+    f.hal.sta_disconnected_cb(200);
+    CHECK(f.rtos.first_event(EventType::WifiDisconnected) != nullptr);
+  }
+  SECTION("failed credentials remain unsaved and allow another attempt") {
+    f.hal.sta_disconnected_cb(202);
+    auto *event = f.rtos.first_event(EventType::ProvisioningStateChanged);
+    REQUIRE(event != nullptr);
+    CHECK(event->prov.event == static_cast<uint8_t>(ProvisioningEvent::ConnectFailed));
+    CHECK_FALSE(f.svc.has_saved_networks());
+    f.svc.finish_ble_provisioning();
+    credentials->simulate_write(R"({"ssid":"OtherWiFi","password":"secret12"})");
+    f.svc.handle_ble_provisioning_request(true);
+    CHECK(f.hal.last_ssid == "OtherWiFi");
+    CHECK(f.svc.is_provisioning());
+  }
+  SECTION("missing driver result times out") {
+    f.svc.tick(WifiServiceTestAccess::deadline(f.svc));
+    auto *event = f.rtos.first_event(EventType::ProvisioningStateChanged);
+    REQUIRE(event != nullptr);
+    CHECK(event->prov.event == static_cast<uint8_t>(ProvisioningEvent::ConnectFailed));
+    CHECK_FALSE(f.svc.has_saved_networks());
+    f.svc.finish_ble_provisioning();
+    CHECK_FALSE(f.svc.is_provisioning());
+  }
+  SECTION("cancel retains the BLE service") {
+    f.svc.stop_provisioning();
+    CHECK_FALSE(f.svc.is_provisioning());
+    CHECK_FALSE(f.svc.has_saved_networks());
+    CHECK(f.svc.next_deadline_ms() == 0);
+  }
+  CHECK(f.svc.ble_provisioning_attached());
+  CHECK(ble.deinit_count == 0);
+}
+
+TEST_CASE("attached credentials replace a retained station without disconnecting BLE",
+          "[go_wifi][attached]") {
+  MockBleServer ble;
+  std::vector<std::string> calls;
+  Fixture f({}, &ble);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials(nullptr, true);
+  f.hal.got_ip_cb(0xC0A80164);
+  REQUIRE(f.svc.is_online());
+  REQUIRE(ble.init("Go"));
+  REQUIRE(f.svc.attach_ble_provisioning());
+  auto *credentials = ble.find_char(PROVISIONING_UUID, "703fa252-3d2a-4da9-a05c-83b0d9cacb8e");
+  REQUIRE(credentials != nullptr);
+  f.hal.call_log = &calls;
+  credentials->simulate_write(R"({"ssid":"NewWiFi","password":"secret12"})");
+  f.svc.handle_ble_provisioning_request(true);
+  REQUIRE(calls == std::vector<std::string>{"wifi_disconnect", "wifi_connect"});
+  CHECK(f.hal.last_ssid == "NewWiFi");
+  CHECK_FALSE(f.svc.is_online());
+  auto *manager = WifiServiceTestAccess::provisioning_manager(f.svc);
+  REQUIRE(manager->state() == ProvisioningState::Connecting);
+  f.rtos.captured.clear();
+
+  // The previous AP's disconnect arrives after the replacement attempt started.
+  f.hal.sta_disconnected_cb(8);
+  CHECK(manager->state() == ProvisioningState::Connecting);
+  CHECK(f.rtos.captured.empty());
+  CHECK(credentials->notify_count == 0);
+
+  SECTION("new network connects and is saved") {
+    f.hal.got_ip_cb(0xC0A80165);
+    CHECK(manager->state() == ProvisioningState::Connected);
+    CHECK(credentials->last_notified_value_str() == R"({"status":0})");
+    f.svc.finish_ble_provisioning();
+    CHECK(f.svc.is_online());
+    CHECK(f.svc.ip() == 0xC0A80165);
+    char ssids[WIFI_MAX_SAVED_NETWORKS][33]{};
+    REQUIRE(f.wifi.list_networks(ssids, WIFI_MAX_SAVED_NETWORKS) == 2);
+    CHECK(std::strcmp(ssids[0], "NewWiFi") == 0);
+  }
+  SECTION("new network authentication failure is reported") {
+    f.hal.sta_disconnected_cb(202);
+    CHECK(manager->state() == ProvisioningState::WaitingForCredentials);
+    CHECK(credentials->last_notified_value_str() == R"({"status":10})");
+    char ssids[WIFI_MAX_SAVED_NETWORKS][33]{};
+    REQUIRE(f.wifi.list_networks(ssids, WIFI_MAX_SAVED_NETWORKS) == 1);
+    CHECK(std::strcmp(ssids[0], "saved") == 0);
+    f.svc.finish_ble_provisioning();
+  }
+  CHECK(f.hal.connect_calls == 2);
+  CHECK(f.hal.disconnect_calls == 1);
+  CHECK(f.svc.ble_provisioning_attached());
+  CHECK(ble.deinit_count == 0);
+}
+
+TEST_CASE("opening attached setup cancels an old saved-network deadline", "[go_wifi][attached]") {
+  MockBleServer ble;
+  Fixture f({}, &ble);
+  REQUIRE(ble.init("Go"));
+  REQUIRE(f.svc.attach_ble_provisioning());
+  f.seed_network();
+  f.svc.connect_with_saved_credentials(nullptr, true);
+  REQUIRE(f.svc.next_deadline_ms() != 0);
+  f.svc.start_provisioning(ProvisioningTransport::BleAttached);
+  CHECK(f.svc.next_deadline_ms() == 0);
+  CHECK_FALSE(f.svc.is_connecting());
+  CHECK_FALSE(f.svc.is_provisioning());
+  CHECK(f.svc.station_retained());
+  f.rtos.captured.clear();
+  f.svc.tick(60'000);
+  CHECK(f.rtos.first_event(EventType::WifiConnectionTimeout) == nullptr);
+  CHECK(ble.deinit_count == 0);
 }

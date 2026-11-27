@@ -151,7 +151,8 @@ int WifiService::rssi() const { return cloud_spy::wifi_rssi; }
 // implementations to satisfy the linker without aborting in case
 // something pulls them in via the header.
 bool WifiService::has_saved_networks() const { return false; }
-void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig * /*static_ip*/) {}
+void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig * /*static_ip*/,
+                                                 bool /*retain_for_ble*/) {}
 void WifiService::schedule_reconnect(const WifiStaticIpConfig * /*static_ip*/) {}
 void WifiService::try_default_fallback_credentials() {}
 void WifiService::start_provisioning(ProvisioningTransport /*t*/) {}

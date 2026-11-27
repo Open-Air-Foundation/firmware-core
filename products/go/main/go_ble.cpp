@@ -23,6 +23,7 @@
 #include "sdkconfig.h"
 #endif
 #include "rtos.h"
+#include "services/ble_device_information.h"
 
 #include <cbor.h>
 
@@ -41,6 +42,8 @@ static const char *ble_command_to_str(BleCommand cmd);
 // ---------------------------------------------------------------------------
 // GATT UUIDs
 // ---------------------------------------------------------------------------
+
+static constexpr const char *DIS_MANUFACTURER = "AirGradient";
 
 static constexpr const char *SERVICE_UUID = "d1c0c0a0-6b48-4b2a-9b1d-59f9f2b0a1e1";
 static constexpr const char *MEASURES_CHAR_UUID = "d1c0c0a1-6b48-4b2a-9b1d-59f9f2b0a1e1";
@@ -518,14 +521,19 @@ BleService::BleService(RtosQueueHandle event_queue, StorageService &storage,
 
 #ifndef TEST_HOST
 
-bool BleService::init(const char *serial) {
-  if (!init_stack_and_register(serial)) {
+bool BleService::init(const char *serial, const char *model, const char *firmware_version) {
+  if (!init_stack_and_register(serial, model, firmware_version)) {
     return false;
   }
-  return start_advertising();
+  if (start_advertising()) {
+    return true;
+  }
+  deinit();
+  return false;
 }
 
-bool BleService::init_stack_and_register(const char *serial) {
+bool BleService::init_stack_and_register(const char *serial, const char *model,
+                                         const char *firmware_version) {
   if (_initialized) {
     AG_LOGW(TAG, "already initialized");
     return true;
@@ -541,10 +549,12 @@ bool BleService::init_stack_and_register(const char *serial) {
     return false;
   }
 
+  _stack_initialized = true;
+
   // --- Security: Passkey Entry (Display Only) ---
   if (!_server->set_security(AgBleIoCapability::DISPLAY_ONLY, AgBleAuth::BOND | AgBleAuth::MITM)) {
     AG_LOGE(TAG, "set_security failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -552,7 +562,7 @@ bool BleService::init_stack_and_register(const char *serial) {
   auto *svc = _server->add_service(SERVICE_UUID);
   if (svc == nullptr) {
     AG_LOGE(TAG, "add_service failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -562,7 +572,7 @@ bool BleService::init_stack_and_register(const char *serial) {
   _measures_char = svc->add_characteristic(MEASURES_CHAR_UUID, measures_properties());
   if (_measures_char == nullptr) {
     AG_LOGE(TAG, "add Measures characteristic failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -570,7 +580,7 @@ bool BleService::init_stack_and_register(const char *serial) {
   _status_char = svc->add_characteristic(STATUS_CHAR_UUID, status_properties());
   if (_status_char == nullptr) {
     AG_LOGE(TAG, "add Status characteristic failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -578,7 +588,7 @@ bool BleService::init_stack_and_register(const char *serial) {
   _config_char = svc->add_characteristic(CONFIG_CHAR_UUID, config_properties());
   if (_config_char == nullptr) {
     AG_LOGE(TAG, "add Config characteristic failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -586,7 +596,7 @@ bool BleService::init_stack_and_register(const char *serial) {
   _history_char = svc->add_characteristic(HISTORY_CHAR_UUID, history_properties());
   if (_history_char == nullptr) {
     AG_LOGE(TAG, "add History characteristic failed");
-    _server->deinit();
+    deinit();
     return false;
   }
 
@@ -599,7 +609,16 @@ bool BleService::init_stack_and_register(const char *serial) {
   // --- Start GATT service ---
   if (!svc->start()) {
     AG_LOGE(TAG, "service start failed");
-    _server->deinit();
+    deinit();
+    return false;
+  }
+
+  // Device Information is independent of the provisioning transport.
+  const DeviceInformation info{model, serial, firmware_version, DIS_MANUFACTURER};
+  constexpr uint16_t properties = AgBleProperty::READ | AgBleProperty::READ_ENC;
+  if (!register_device_information(*_server, info, properties)) {
+    AG_LOGE(TAG, "Device Information registration failed");
+    deinit();
     return false;
   }
 
@@ -632,25 +651,21 @@ bool BleService::start_advertising() {
   // --- Advertising ---
   if (!_server->set_advertising_name(_adv_name)) {
     AG_LOGE(TAG, "set_advertising_name failed");
-    _server->deinit();
     return false;
   }
 
   if (!_server->add_advertised_service_uuid(SERVICE_UUID)) {
     AG_LOGE(TAG, "add_advertised_service_uuid failed");
-    _server->deinit();
     return false;
   }
 
   if (!_server->set_advertising_interval(static_cast<uint32_t>(ADVERTISING_INTERVAL_MS * 1000))) {
     AG_LOGE(TAG, "set_advertising_interval failed");
-    _server->deinit();
     return false;
   }
 
   if (!_server->start_advertising()) {
     AG_LOGE(TAG, "start_advertising failed");
-    _server->deinit();
     return false;
   }
 
@@ -660,10 +675,11 @@ bool BleService::start_advertising() {
 }
 
 void BleService::deinit() {
-  if (!_initialized) {
+  if (!_initialized && !_stack_initialized) {
     return;
   }
 
+  _connectable.store(false);
   _connected.store(false);
   _export_active = false;
   _export_session_id = 0;
@@ -674,6 +690,11 @@ void BleService::deinit() {
   // table differently.
   _server->deinit();
   _initialized = false;
+  _stack_initialized = false;
+  _config_write_pending = false;
+  _config_write_len = 0;
+  _history_write_pending = false;
+  _history_write_len = 0;
   _measures_char = nullptr;
   _status_char = nullptr;
   _config_char = nullptr;
@@ -703,6 +724,19 @@ bool BleService::delete_all_bonds() {
 bool BleService::is_initialized() const { return _initialized; }
 
 bool BleService::is_connected() const { return _connected.load(); }
+
+bool BleService::set_connectable(bool allowed) {
+  const bool changed = _connectable.exchange(allowed) != allowed;
+  if (!_initialized || !changed || _connected.load()) {
+    return true;
+  }
+  const bool ok = allowed ? _server->start_advertising() : _server->stop_advertising();
+  if (!ok) {
+    AG_LOGE(TAG, "failed to change connectable advertising to %d", allowed);
+    _connectable.store(!allowed);
+  }
+  return ok;
+}
 
 bool BleService::is_authenticated() const {
   return _connected.load() && _server->is_peer_authenticated();
@@ -740,8 +774,9 @@ void BleService::on_disconnect(uint16_t conn_handle, int reason) {
   _export_active = false;
   _export_session_id = 0;
 
-  // Restart advertising — borrowed server is always bound.
-  _server->start_advertising();
+  if (_connectable.load()) {
+    _server->start_advertising();
+  }
 
   Event evt{};
   evt.type = EventType::BleDisconnected;
@@ -1784,8 +1819,7 @@ size_t BleService::encode_status_disc(uint8_t *buf, size_t buf_size, BleDiscReas
 // A single table drives both the full snapshot (READ) and the delta (NOTIFY).
 // Adding a config field is one row plus its two small helpers below. The
 // enum-to-wire string mappers are file-scope here so the free encode helpers
-// can reach them; BleService::gps_mode_to_str()/operating_mode_to_str() (kept
-// for tests) delegate to these.
+// can reach them; BleService::gps_mode_to_str() delegates to the same mapper.
 
 static const char *gps_mode_to_wire(GpsMode mode) {
   switch (mode) {
@@ -1800,19 +1834,6 @@ static const char *gps_mode_to_wire(GpsMode mode) {
   }
 }
 
-static const char *operating_mode_to_wire(OperatingMode mode) {
-  switch (mode) {
-  case OperatingMode::Portable:
-    return BLE_VAL_MODE_PORTABLE;
-  case OperatingMode::Stationary:
-    return BLE_VAL_MODE_STATIONARY;
-  case OperatingMode::Offline:
-    return BLE_VAL_MODE_OFFLINE;
-  default:
-    return BLE_VAL_MODE_OFFLINE;
-  }
-}
-
 struct ConfigField {
   const char *key;
   void (*encode_value)(CborEncoder &map, const GoSettings &s);
@@ -1820,8 +1841,14 @@ struct ConfigField {
 };
 
 // Per-field encode helpers — write only the value (the caller writes the key).
-static void enc_meas_int(CborEncoder &m, const GoSettings &s) {
-  cbor_encode_uint(&m, static_cast<uint64_t>(s.measure_interval_seconds));
+static void enc_idle_int(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_uint(&m, static_cast<uint64_t>(s.idle_interval_seconds));
+}
+static void enc_wifi(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_boolean(&m, s.wifi_enabled);
+}
+static void enc_tracking_int(CborEncoder &m, const GoSettings &s) {
+  cbor_encode_uint(&m, static_cast<uint64_t>(s.tracking_interval_seconds));
 }
 static void enc_temp_f(CborEncoder &m, const GoSettings &s) {
   cbor_encode_boolean(&m, s.use_fahrenheit);
@@ -1839,9 +1866,7 @@ static void enc_gps_mode(CborEncoder &m, const GoSettings &s) {
 static void enc_auto_lock(CborEncoder &m, const GoSettings &s) {
   cbor_encode_uint(&m, static_cast<uint64_t>(s.auto_lock_seconds));
 }
-static void enc_op_mode(CborEncoder &m, const GoSettings &s) {
-  cbor_encode_text_stringz(&m, operating_mode_to_wire(s.operating_mode));
-}
+
 static void enc_bled(CborEncoder &m, const GoSettings &s) {
   cbor_encode_uint(&m, static_cast<uint64_t>(s.back_led_brightness));
 }
@@ -1876,8 +1901,14 @@ static void enc_hum_correction(CborEncoder &m, const GoSettings &s) {
 }
 
 // Per-field difference predicates for delta encoding.
-static bool dif_meas_int(const GoSettings &a, const GoSettings &b) {
-  return a.measure_interval_seconds != b.measure_interval_seconds;
+static bool dif_idle_int(const GoSettings &a, const GoSettings &b) {
+  return a.idle_interval_seconds != b.idle_interval_seconds;
+}
+static bool dif_wifi(const GoSettings &a, const GoSettings &b) {
+  return a.wifi_enabled != b.wifi_enabled;
+}
+static bool dif_tracking_int(const GoSettings &a, const GoSettings &b) {
+  return a.tracking_interval_seconds != b.tracking_interval_seconds;
 }
 static bool dif_temp_f(const GoSettings &a, const GoSettings &b) {
   return a.use_fahrenheit != b.use_fahrenheit;
@@ -1897,9 +1928,7 @@ static bool dif_gps_mode(const GoSettings &a, const GoSettings &b) {
 static bool dif_auto_lock(const GoSettings &a, const GoSettings &b) {
   return a.auto_lock_seconds != b.auto_lock_seconds;
 }
-static bool dif_op_mode(const GoSettings &a, const GoSettings &b) {
-  return a.operating_mode != b.operating_mode;
-}
+
 static bool dif_bled(const GoSettings &a, const GoSettings &b) {
   return a.back_led_brightness != b.back_led_brightness;
 }
@@ -1938,14 +1967,15 @@ static bool dif_hum_correction(const GoSettings &a, const GoSettings &b) {
 }
 
 static const ConfigField CONFIG_FIELDS[] = {
-    {BLE_KEY_MEAS_INT, enc_meas_int, dif_meas_int},
+    {BLE_KEY_TRACKING_INT, enc_tracking_int, dif_tracking_int},
+    {BLE_KEY_IDLE_INT, enc_idle_int, dif_idle_int},
+    {BLE_KEY_WIFI, enc_wifi, dif_wifi},
     {BLE_KEY_TEMP_F, enc_temp_f, dif_temp_f},
     {BLE_KEY_ALT_FT, enc_alt_ft, dif_alt_ft},
     {BLE_KEY_PM_AQI, enc_pm_aqi, dif_pm_aqi},
     {BLE_KEY_PINNED_CHART, enc_pinned_chart, dif_pinned_chart},
     {BLE_KEY_GPS_MODE, enc_gps_mode, dif_gps_mode},
     {BLE_KEY_AUTO_LOCK, enc_auto_lock, dif_auto_lock},
-    {BLE_KEY_OP_MODE, enc_op_mode, dif_op_mode},
     {BLE_KEY_BACK_LED, enc_bled, dif_bled},
     {BLE_KEY_BACK_LED_INDICATOR, enc_bledi, dif_bledi},
     {BLE_KEY_TOUCH_LED, enc_tled, dif_tled},
@@ -2065,10 +2095,6 @@ const char *BleService::disc_reason_to_str(BleDiscReason reason) {
 
 const char *BleService::gps_mode_to_str(GpsMode mode) { return gps_mode_to_wire(mode); }
 
-const char *BleService::operating_mode_to_str(OperatingMode mode) {
-  return operating_mode_to_wire(mode);
-}
-
 // ---------------------------------------------------------------------------
 // CBOR decode helpers (called by orchestrator)
 // ---------------------------------------------------------------------------
@@ -2088,17 +2114,6 @@ static bool str_to_gps_mode(const char *s, GpsMode &mode) {
     return true;
   }
   return false;
-}
-
-/// Reverse mapping: text string -> OperatingMode.
-static OperatingMode str_to_operating_mode(const char *s) {
-  if (strcmp(s, BLE_VAL_MODE_PORTABLE) == 0) {
-    return OperatingMode::Portable;
-  }
-  if (strcmp(s, BLE_VAL_MODE_STATIONARY) == 0) {
-    return OperatingMode::Stationary;
-  }
-  return OperatingMode::Offline; // "offline" or unrecognized
 }
 
 /// Reverse mapping: CBOR "cmd" string -> BleCommand enum.
@@ -2124,6 +2139,9 @@ static BleCommand str_to_ble_command(const char *s) {
   if (strcmp(s, BLE_VAL_CMD_RESUME_TRACKING) == 0) {
     return BleCommand::ResumeTracking;
   }
+  if (strcmp(s, BLE_VAL_CMD_RELEASE_BLE) == 0) {
+    return BleCommand::ReleaseBle;
+  }
   if (strcmp(s, BLE_VAL_CMD_SET_AIDING) == 0) {
     return BleCommand::SetAiding;
   }
@@ -2147,6 +2165,8 @@ static const char *ble_command_to_str(BleCommand cmd) {
     return BLE_VAL_CMD_PAUSE_TRACKING;
   case BleCommand::ResumeTracking:
     return BLE_VAL_CMD_RESUME_TRACKING;
+  case BleCommand::ReleaseBle:
+    return BLE_VAL_CMD_RELEASE_BLE;
   case BleCommand::SetAiding:
     return BLE_VAL_CMD_SET_AIDING;
   case BleCommand::Set:
@@ -2226,14 +2246,36 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
       handled = true;
     }
     // --- uint config fields ---
-    else if (key_is(BLE_KEY_MEAS_INT)) {
-      result.requested_fields |= static_cast<uint32_t>(GoConfigField::MeasurementInterval);
+    else if (key_is(BLE_KEY_TRACKING_INT)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::TrackingInterval);
       cbor_value_advance(&it);
       result.recognized_config_key_count++;
       uint64_t v = 0;
       if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
-          v >= MEASURE_INTERVAL_SECONDS_MIN && v <= MEASURE_INTERVAL_SECONDS_MAX) {
-        settings.measure_interval_seconds = static_cast<int>(v);
+          v >= TRACKING_INTERVAL_SECONDS_MIN && v <= TRACKING_INTERVAL_SECONDS_MAX) {
+        settings.tracking_interval_seconds = static_cast<int>(v);
+      } else {
+        result.has_invalid_config_values = true;
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_IDLE_INT)) {
+      result.requested_fields |= static_cast<uint32_t>(GoConfigField::IdleInterval);
+      cbor_value_advance(&it);
+      result.recognized_config_key_count++;
+      uint64_t v = 0;
+      if (cbor_value_is_unsigned_integer(&it) && cbor_value_get_uint64(&it, &v) == CborNoError &&
+          v >= IDLE_INTERVAL_SECONDS_MIN && v <= IDLE_INTERVAL_SECONDS_MAX) {
+        settings.idle_interval_seconds = static_cast<int>(v);
+      } else {
+        result.has_invalid_config_values = true;
+      }
+      handled = true;
+    } else if (key_is(BLE_KEY_WIFI)) {
+      cbor_value_advance(&it);
+      result.recognized_config_key_count++;
+      bool v = false;
+      if (cbor_value_is_boolean(&it) && cbor_value_get_boolean(&it, &v) == CborNoError) {
+        settings.wifi_enabled = v;
       } else {
         result.has_invalid_config_values = true;
       }
@@ -2438,17 +2480,6 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
         }
       } else {
         result.has_invalid_config_values = true;
-      }
-      handled = true;
-    } else if (key_is(BLE_KEY_OP_MODE)) {
-      cbor_value_advance(&it);
-      result.recognized_config_key_count++;
-      char text[16] = {};
-      if (cbor_value_is_text_string(&it)) {
-        size_t slen = sizeof(text) - 1;
-        cbor_value_copy_text_string(&it, text, &slen, nullptr);
-        text[slen] = '\0';
-        settings.operating_mode = str_to_operating_mode(text);
       }
       handled = true;
     }

@@ -25,12 +25,12 @@
 #include "go_input.h"
 #include "led/go_led.h"
 #include "go_ota.h"
-#include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_settings.h"
 #include "go_storage.h"
 #include "go_types.h"
+#include "go_runtime_policy.h"
 #include "go_ui.h"
 #include "go_board_capabilities.h"
 #include "go_ulp.h"
@@ -64,7 +64,6 @@ public:
     CloudService &cloud;
     GoLocalApiService &local_api;
     SerialCommandService &serial_command;
-    PortableWifiProvisioner &portable_provisioner; // attached Portable Wi-Fi provisioning
     GoBoard &board;  // borrowed for init_wifi_subsystem() in Stationary entry
     OtaService &ota; // per-mode OTA wiring (BLE push / WiFi pull)
     AccelService &accel_service;
@@ -107,7 +106,30 @@ private:
   const char *_serial; ///< Device serial string for BLE advertising
 
   // --- Application state ---
-  OperatingMode _mode = OperatingMode::Portable;
+  // Connectivity ownership and handoffs; BLE ownership may retain connected Wi-Fi.
+  enum class ConnectivityState : uint8_t {
+    Uninitialized,      // Boot has not selected an owner.
+    Off,                // No connectivity owner.
+    Wifi,               // Wi-Fi owns network services.
+    DelayToBle,         // Unlock delay before preparing BLE ownership.
+    PreparingForBle,    // Drain services; tracking also stops and releases Wi-Fi.
+    PreparingForOff,    // Drain services and stop Wi-Fi before relinquishing ownership.
+    RetryCleanupForBle, // Retry failed cleanup before BLE ownership.
+    RetryCleanupForOff, // Retry failed cleanup before relinquishing ownership.
+    Ble,                // BLE owns connectivity; network services stay suspended.
+    RetryBle,           // Retry BLE initialization or advertising.
+    DelayToWifi,        // Return delay after the last BLE ownership reason ends.
+    ReleaseBle,         // Allow the explicit release acknowledgement to drain.
+  };
+  ConnectivityState _connectivity = ConnectivityState::Uninitialized;
+  uint32_t _connectivity_deadline_ms = 0;
+  // Auto-lock grace; Pending waits for BLE readiness.
+  enum class BleWindow : uint8_t { Closed, Pending, Open };
+  BleWindow _ble_window = BleWindow::Closed;
+  uint32_t _ble_window_deadline_ms = 0;
+  bool _wifi_fallback = false;
+  bool _wifi_setup_pending = false;
+
   Behavior _behavior = Behavior::Idle;
   LockState _lock_state = LockState::Locked;
   bool _gps_enabled = true;
@@ -240,10 +262,6 @@ private:
   static constexpr uint32_t MAX_REASONABLE_TIMEOUT_MS = 3600000;
   static constexpr uint32_t PM_RECOVERY_TIMEOUT_MS = 30000;
   static constexpr uint32_t BLE_COMMAND_RESULT_DELAY_MS = 200;
-  /// Settle window between pushing the op_mode Config delta and tearing down
-  /// the Portable BLE link, so the notification drains before disconnect.
-  /// Notifications are fire-and-forget; this covers a few connection intervals.
-  static constexpr uint32_t BLE_MODE_CHANGE_NOTIFY_SETTLE_MS = 200;
   /// Post-paint dwell before cutting power.  DisplayService::flush() already
   /// waits for e-paper completion; this intentionally slows final shutdown so
   /// the user sees the reason screen and BLE disconnect notice can drain.
@@ -297,17 +315,17 @@ private:
   void on_ble_auth_complete(bool success);
 
   // --- State transitions ---
-  void lock();
+  void lock(bool automatic = false);
   void unlock();
-  /// Begin a new tracking session. Returns false on session-id exhaustion
-  /// or storage-open failure; the snackbar + BLE notify fire inline first.
+  /// Start tracking, restarting first if GPS would take too long to wake.
   bool start_tracking();
+  /// GPS worker must be stopped. Returns false if pending intent cannot be cleared.
+  bool restart_for_tracking_if_needed();
+  /// Open the route and initialize session state for interactive start or silent boot.
+  bool begin_tracking_session();
   bool pause_tracking();
   bool resume_tracking();
   void stop_tracking();
-  /// persist=false skips onboarding + settings writes (manufacturing path).
-  void change_mode(OperatingMode new_mode, bool persist = true);
-  void apply_mode_transition(OperatingMode old_mode, OperatingMode new_mode, bool persisted);
   /// Boot-button manufacturing shortcut: skip onboarding and enter
   /// Stationary ephemerally (no NVS persist) for production testing.
   void enter_manufacturing_mode();
@@ -320,8 +338,7 @@ private:
   bool mark_onboarding_done();
   bool activate_settings_candidate(const GoSettings &candidate, bool persist = true,
                                    bool force_persist = false);
-  void apply_settings_runtime_delta(const GoSettings &previous_settings,
-                                    OperatingMode previous_mode, bool persisted);
+  void apply_settings_runtime_delta(const GoSettings &previous_settings);
   void apply_settings_change();
   bool clear_data();
   bool factory_reset(bool preserve_corrections = false);
@@ -361,14 +378,14 @@ private:
   void prepare_for_sleep(uint32_t sleep_duration_ms);
 
   // --- BLE ---
-  void init_ble_if_portable();
+  void init_ble_if_available();
   static constexpr size_t BLE_WRITE_BUF_SIZE = 256;
 
   // --- OTA ---
   bool wifi_ota_allowed() const;
   void on_wifi_ota_available();
   /// Full quiesce around a committed transfer: pause sensitive services
-  /// (sensor / GPS / PM rail), stop cloud (Stationary), feed the external
+  /// (sensor / GPS / PM rail), stop cloud (Wi-Fi), feed the external
   /// watchdog once.  No display work.  Called up front for BLE, lazily for
   /// WiFi (on_ota_download_started).
   void enter_ota();
@@ -386,10 +403,12 @@ private:
   /// _ota_committed.  Wired into run_wifi_check() via a thin forwarder.
   void on_ota_download_started();
 
-  // --- Stationary Wi-Fi ---
-  void enter_stationary();
+  // --- Wi-Fi ---
+  void enter_wifi();
   void on_wifi_connected(uint32_t ip);
   void on_wifi_disconnected(WifiDisconnectReason reason);
+  void on_wifi_suspend_complete(bool success);
+  void on_cloud_stopped();
   void on_provisioning_state_changed(const ProvisioningEventPayload &payload);
   bool activate_local_endpoint();
   void publish_local_snapshots();
@@ -398,11 +417,11 @@ private:
   void pause_provisioning_sensitive_services();
   void resume_provisioning_sensitive_services();
 
-  // --- Setup-session helpers (Stationary bring-up + provisioning) ---
+  // --- Setup-session helpers (Wi-Fi bring-up + provisioning) ---
 
   /// Idempotent session-entry preamble: silent unlock + snackbar clear.
   /// No-op when _setup_session_active is already true.  Called by both
-  /// enter_stationary() and enter_provisioning_page().
+  /// enter_wifi() and enter_provisioning_page().
   void begin_session_if_needed();
 
   /// Open Screen::Provisioning, pause sensitive services, start the
@@ -415,7 +434,7 @@ private:
   /// with a drop-free wait=true render + flush() so the leaving frame is
   /// painted before the helper returns.
   void leave_session_to_home();
-  void leave_session_to_portable();
+  void cancel_wifi_setup();
 
   /// Rebase the sensor measurement / BMS / BMS-status deadlines to now,
   /// so post-resume timers do not fire back-to-back catching up on
@@ -468,6 +487,29 @@ private:
 
   // --- Helpers ---
   bool is_gps_active() const;
+  GoRuntimePolicy runtime_policy() const;
+  uint32_t gps_sleep_interval_ms() const;
+  bool wifi_active() const;
+  bool wifi_cleanup_pending() const;
+  bool connectivity_timer_active() const;
+  bool releasing_ble() const;
+  bool ble_needed() const;
+  bool wifi_services_allowed() const;
+  bool wifi_connection_allowed() const;
+  void start_wifi_services();
+  bool ble_provisioning_allowed() const;
+  bool connectivity_paused() const;
+  void reconcile_ble_window();
+  void reconcile_connectivity(const char *saved_ssid = nullptr);
+  void start_wifi_cleanup(bool for_ble);
+  void continue_wifi_cleanup();
+  void activate_ble();
+  void begin_ble_return();
+  void resume_wifi(const char *saved_ssid);
+  void enter_wifi_fallback();
+  void request_ble_release();
+  void stop_ble();
+  void reconcile_runtime(bool reset_cadence);
   void activate_gps();
   void deactivate_gps();
 

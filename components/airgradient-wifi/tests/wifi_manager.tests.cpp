@@ -426,7 +426,7 @@ TEST_CASE("start_scan rejected in Off and AP modes", "[wifi-manager][scan]") {
   REQUIRE(hal.scan_calls == 1);
 }
 
-TEST_CASE("start_scan rejected while STA is connected (spec answer 3)", "[wifi-manager][scan]") {
+TEST_CASE("start_scan rejected until the STA connection has an IP", "[wifi-manager][scan]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
   WifiManager mgr(hal, backend);
@@ -437,9 +437,32 @@ TEST_CASE("start_scan rejected while STA is connected (spec answer 3)", "[wifi-m
   hal.sta_connected_cb();
   // While Connected (no IP yet)
   REQUIRE(mgr.start_scan() == WifiStatus::InvalidState);
+  CHECK(hal.scan_calls == 0);
+}
+
+TEST_CASE("start_scan delivers results without dropping an established connection",
+          "[wifi-manager][scan]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  mgr.set_mode(WifiMode::Sta);
+  mgr.connect(make_sta_config("Net"));
+  hal.sta_connected_cb();
   hal.got_ip_cb(0x01010101);
-  // While GotIp
-  REQUIRE(mgr.start_scan() == WifiStatus::InvalidState);
+  WifiScanEntry entry{};
+  std::strcpy(entry.ssid, "OtherNet");
+  bool delivered = false;
+  mgr.set_on_scan_complete([&](const WifiScanEntry *results, uint16_t count) {
+    REQUIRE(count == 1);
+    CHECK(std::strcmp(results[0].ssid, "OtherNet") == 0);
+    delivered = true;
+  });
+  REQUIRE(mgr.start_scan() == WifiStatus::Ok);
+  REQUIRE(hal.scan_calls == 1);
+  hal.scan_complete_cb(&entry, 1);
+  CHECK(delivered);
+  CHECK(hal.disconnect_calls == 0);
+  CHECK(hal.connect_calls == 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -523,6 +546,57 @@ TEST_CASE("disconnect after got_ip stops mDNS and reports RequestedByUser",
 // ---------------------------------------------------------------------------
 // Retry policy
 // ---------------------------------------------------------------------------
+
+TEST_CASE("disconnect echo cannot cancel a replacement connection", "[wifi-manager][connect]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  mgr.set_mode(WifiMode::Sta);
+  mgr.connect(make_sta_config("OldNet", 0));
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+  REQUIRE(mgr.disconnect() == WifiStatus::Ok);
+  int failures = 0;
+  mgr.set_on_disconnected([&](WifiDisconnectReason) { ++failures; });
+
+  SECTION("echo arrives before connecting") {
+    hal.sta_disconnected_cb(8);
+    REQUIRE(mgr.connect(make_sta_config("NewNet", 0)) == WifiStatus::Ok);
+  }
+  SECTION("echo arrives after connecting") {
+    REQUIRE(mgr.connect(make_sta_config("NewNet", 0)) == WifiStatus::Ok);
+    hal.sta_disconnected_cb(8);
+  }
+  CHECK(failures == 0);
+  CHECK(mgr.status_snapshot().sta_state == WifiStaState::Connecting);
+  CHECK(hal.connect_calls == 2);
+  CHECK(hal.disconnect_calls == 1);
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x02020202);
+  CHECK(mgr.status_snapshot().sta_state == WifiStaState::GotIp);
+  hal.sta_disconnected_cb(200);
+  CHECK(failures == 1);
+}
+
+TEST_CASE("leaving STA clears a pending disconnect echo", "[wifi-manager][connect]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  mgr.set_mode(WifiMode::Sta);
+  mgr.connect(make_sta_config("OldNet", 0));
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+  mgr.disconnect();
+  mgr.set_mode(WifiMode::Off);
+  hal.sta_disconnected_cb(8); // Ignored while STA is off.
+  mgr.set_mode(WifiMode::Sta);
+  mgr.connect(make_sta_config("NewNet", 0));
+  int failures = 0;
+  mgr.set_on_disconnected([&](WifiDisconnectReason) { ++failures; });
+  hal.sta_disconnected_cb(202);
+  CHECK(failures == 1);
+  CHECK(mgr.status_snapshot().sta_state == WifiStaState::Disconnected);
+}
 
 TEST_CASE("transient disconnect arms exponential retry timer", "[wifi-manager][retry]") {
   FakeWifiHal hal;
@@ -1489,4 +1563,90 @@ TEST_CASE("explicit connect leaves the saved-network store untouched", "[wifi-ma
   char out[WIFI_MAX_SAVED_NETWORKS][33] = {};
   REQUIRE(mgr.list_networks(out, WIFI_MAX_SAVED_NETWORKS) == 1);
   REQUIRE(std::string(out[0]) == "Saved");
+}
+
+TEST_CASE("Suspended station ignores queued link events and retry deadlines",
+          "[wifi-manager][handoff]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  REQUIRE(mgr.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+  REQUIRE(mgr.connect(make_sta_config("Net")) == WifiStatus::Ok);
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+  REQUIRE(mgr.set_mode(WifiMode::Off) == WifiStatus::Ok);
+  int connected = 0;
+  int disconnected = 0;
+  mgr.set_on_got_ip([&](uint32_t) { ++connected; });
+  mgr.set_on_disconnected([&](WifiDisconnectReason) { ++disconnected; });
+  const auto attempts = hal.connect_calls;
+  hal.sta_connected_cb();
+  hal.got_ip_cb(0x01010101);
+  hal.sta_disconnected_cb(200);
+  hal.retry_due_cb();
+  hal.dhcp_timeout_cb();
+  CHECK(mgr.status_snapshot().sta_state == WifiStaState::Disconnected);
+  CHECK(connected == 0);
+  CHECK(disconnected == 0);
+  CHECK(hal.connect_calls == attempts);
+}
+
+TEST_CASE("Scan selection returns one saved SSID without connecting", "[wifi-manager][scan]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  mgr.add_network("HomeNet", "homepass");
+  mgr.add_network("Office", "officepass");
+  char ssid[33] = "old result";
+  SECTION("strongest visible saved network wins") {
+    const WifiScanEntry results[] = {
+        make_scan_entry("Unknown", -10), make_scan_entry("HomeNet", -50),
+        make_scan_entry("Office", -70), make_scan_entry("HomeNet", -40)};
+    REQUIRE(mgr.select_saved_network(results, 4, ssid));
+    CHECK(std::string(ssid) == "HomeNet");
+  }
+  SECTION("equal signal prefers the newest saved entry") {
+    const WifiScanEntry results[] = {make_scan_entry("HomeNet", -50),
+                                     make_scan_entry("Office", -50)};
+    REQUIRE(mgr.select_saved_network(results, 2, ssid));
+    CHECK(std::string(ssid) == "Office");
+  }
+  SECTION("absent and hidden networks do not match") {
+    const WifiScanEntry results[] = {make_scan_entry("Unknown", -10), make_scan_entry("", -20)};
+    CHECK_FALSE(mgr.select_saved_network(results, 2, ssid));
+    CHECK(ssid[0] == '\0');
+  }
+  SECTION("empty scan clears the previous selection") {
+    CHECK_FALSE(mgr.select_saved_network(nullptr, 0, ssid));
+    CHECK(ssid[0] == '\0');
+  }
+  CHECK(hal.connect_calls == 0);
+  CHECK(hal.scan_calls == 0);
+}
+
+TEST_CASE("Selected saved network connects directly using its current credentials",
+          "[wifi-manager][scan]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  mgr.add_network("HomeNet", "homepass");
+  mgr.add_network("Office", "officepass");
+  mgr.set_mode(WifiMode::Sta);
+  SECTION("selected network uses stored password without another scan") {
+    REQUIRE(mgr.connect_saved_network("HomeNet") == WifiStatus::Ok);
+    CHECK(hal.connect_calls == 1);
+    CHECK(hal.last_ssid == "HomeNet");
+    CHECK(hal.last_password == "homepass");
+  }
+  SECTION("removed selection does not connect to another saved network") {
+    mgr.remove_network("HomeNet");
+    CHECK(mgr.connect_saved_network("HomeNet") == WifiStatus::NotFound);
+    CHECK(hal.connect_calls == 0);
+  }
+  SECTION("empty selection cannot trigger an automatic scan") {
+    CHECK(mgr.connect_saved_network("") == WifiStatus::InvalidArgument);
+    CHECK(mgr.connect_saved_network(nullptr) == WifiStatus::InvalidArgument);
+    CHECK(hal.connect_calls == 0);
+  }
+  CHECK(hal.scan_calls == 0);
 }

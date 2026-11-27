@@ -15,7 +15,6 @@
 #include "go_local_api.h"
 #include "go_orchestrator.h"
 #include "go_ota.h"
-#include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "services/sensor_manager.h"
@@ -24,6 +23,7 @@
 #include "gps/gps_service.h"
 #include "services/ag_client.h"
 #include "go_wifi.h"
+#include "services/wifi_manager.h"
 #include "services/local_server.h"
 
 #include <algorithm>
@@ -37,6 +37,15 @@
 // ============================================================================
 
 namespace test_spy {
+uint32_t buzzer_play_count = 0;
+uint32_t led_animation_count = 0;
+uint32_t synced_melody_count = 0;
+WifiScanCompleteCallback wake_wifi_scan_callback;
+std::string wake_wifi_selected_ssid;
+WifiStatus wake_wifi_start_result = WifiStatus::Ok;
+WifiStatus wake_wifi_stop_result = WifiStatus::Ok;
+int wake_wifi_scan_count = 0;
+int wake_wifi_stop_count = 0;
 
 // --- RTC state ---
 RtcAppState rtc_state{};
@@ -177,6 +186,17 @@ uint32_t serial_command_start_count = 0;
 float bms_battery_pct = -1.0f;
 
 void reset() {
+  buzzer_play_count = 0;
+  led_animation_count = 0;
+  synced_melody_count = 0;
+  wake_wifi_scan_callback = nullptr;
+  wake_wifi_selected_ssid.clear();
+  wake_wifi_start_result = WifiStatus::Ok;
+  wake_wifi_stop_result = WifiStatus::Ok;
+  wake_wifi_scan_count = 0;
+  wake_wifi_stop_count = 0;
+  wifi_has_saved_networks = false;
+
   rtc_state = RtcAppState{};
   rtc_snapshot = RtcDisplaySnapshot{};
   rtc_snapshot_valid = false;
@@ -310,6 +330,7 @@ void reset() {
   DisplayService::spy_flush_count = 0;
   DisplayService::spy_last_screen = Screen::Home;
   DisplayService::spy_last_init_deferred = false;
+  DisplayService::spy_last_init_skipped = false;
   DisplayService::spy_last_update_wait = false;
   DisplayService::spy_worker_busy = false;
   DisplayService::spy_on_init = nullptr;
@@ -693,8 +714,9 @@ RtcAppState PowerService::load_state() const { return test_spy::rtc_state; }
 
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*settings*/,
                                                        LockState /*lock_state*/,
-                                                       OperatingMode /*mode*/,
-                                                       uint32_t awake_ms) const {
+                                                       TrackingState /*tracking*/,
+                                                       uint32_t awake_ms,
+                                                       bool /*wifi_fallback*/) const {
   test_spy::last_sleep_awake_ms = awake_ms;
   return test_spy::sleep_decision_to_return;
 }
@@ -768,7 +790,7 @@ BleService::BleService(RtosQueueHandle /*event_queue*/, StorageService &storage,
                        AgBleServer & /*ble_server*/)
     : _event_queue(nullptr), _storage(storage), _server(nullptr) {}
 
-bool BleService::init(const char * /*serial*/) {
+bool BleService::init(const char * /*serial*/, const char *, const char *) {
   test_spy::ble_init_called = true;
   return true;
 }
@@ -830,7 +852,6 @@ size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSetti
 }
 const char *BleService::charging_state_to_str(BmsChargingState /*s*/) { return "unknown"; }
 const char *BleService::gps_mode_to_str(GpsMode /*m*/) { return "tracking"; }
-const char *BleService::operating_mode_to_str(OperatingMode /*m*/) { return "offline"; }
 
 // ============================================================================
 // WifiService stubs
@@ -852,7 +873,8 @@ WifiService::~WifiService() = default;
 
 bool WifiService::has_saved_networks() const { return test_spy::wifi_has_saved_networks; }
 
-void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig * /*static_ip*/) {
+void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig * /*static_ip*/,
+                                                 bool /*retain_for_ble*/) {
   test_spy::wifi_connect_saved_called = true;
 }
 
@@ -883,16 +905,6 @@ WifiDisconnectReason WifiService::last_disconnect_reason() const {
 bool WifiService::has_been_online() const { return false; }
 uint32_t WifiService::next_deadline_ms() const { return 0; }
 void WifiService::tick(uint32_t /*now*/) {}
-
-// ============================================================================
-// PortableWifiProvisioner stubs (GoApp only constructs it)
-// ============================================================================
-
-PortableWifiProvisioner::PortableWifiProvisioner(RtosQueueHandle event_queue, const Deps &deps,
-                                                 const Config &cfg)
-    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _board(deps.board), _cfg(cfg) {}
-
-PortableWifiProvisioner::~PortableWifiProvisioner() = default;
 
 // Private methods (never called in app tests but must link)
 void WifiService::_install_wifi_callbacks() {}
@@ -1088,11 +1100,10 @@ void Orchestrator::on_ble_config_write() {}
 void Orchestrator::on_ble_history_write() {}
 void Orchestrator::on_ble_pairing_request(uint32_t /*passkey*/) {}
 void Orchestrator::on_ble_auth_complete(bool /*success*/) {}
-void Orchestrator::lock() {}
+void Orchestrator::lock(bool) {}
 void Orchestrator::unlock() {}
 bool Orchestrator::start_tracking() { return true; }
 void Orchestrator::stop_tracking() {}
-void Orchestrator::change_mode(OperatingMode /*new_mode*/, bool /*persist*/) {}
 void Orchestrator::enter_manufacturing_mode() {}
 void Orchestrator::apply_settings_change() {}
 bool Orchestrator::clear_data() { return true; }
@@ -1113,7 +1124,7 @@ BuildContext Orchestrator::build_context() const {
 }
 void Orchestrator::try_enter_sleep() {}
 void Orchestrator::prepare_for_sleep(uint32_t /*sleep_duration_ms*/) {}
-void Orchestrator::init_ble_if_portable() {}
+void Orchestrator::init_ble_if_available() {}
 bool Orchestrator::is_gps_active() const { return false; }
 void Orchestrator::deactivate_gps() {}
 RtcAppState Orchestrator::snapshot_state() const { return RtcAppState{}; }
@@ -1138,7 +1149,7 @@ void LedService::back_chase(Rgb /*color*/, uint32_t /*step_ms*/) {}
 void LedService::back_off() {}
 void LedService::back_set_brightness(LedBrightness /*brightness*/) {}
 void LedService::back_play(const BackStep * /*steps*/, uint8_t /*count*/) {}
-void LedService::back_animate(BackAnimation /*animation*/) {}
+void LedService::back_animate(BackAnimation /*animation*/) { ++test_spy::led_animation_count; }
 void LedService::back_update_aqi(float /*pm25_ugm3*/) {}
 void LedService::back_update_co2(int /*ppm*/) {}
 void LedService::back_clear_aqi() {}
@@ -1194,7 +1205,9 @@ BuzzerService::~BuzzerService() = default;
 bool BuzzerService::init() { return true; }
 bool BuzzerService::start() { return true; }
 
-void BuzzerService::play(const Note * /*notes*/, uint8_t /*count*/) {}
+void BuzzerService::play(const Note * /*notes*/, uint8_t /*count*/) {
+  ++test_spy::buzzer_play_count;
+}
 void BuzzerService::beep(uint32_t /*freq_hz*/, uint32_t /*duration_ms*/) {}
 void BuzzerService::acknowledge_refresh() {}
 void BuzzerService::set_enabled(bool /*enabled*/) {}
@@ -1224,5 +1237,30 @@ void BuzzerService::pump_for_test(uint32_t /*now_ms*/) {}
 #include "go_melody_sync.h"
 
 uint32_t play_synced(BuzzerService & /*buzzer*/, LedService & /*led*/, MelodySelect /*melody*/) {
+  ++test_spy::synced_melody_count;
   return 0;
+}
+
+WifiStatus WifiManager::initialize() { return WifiStatus::Ok; }
+bool WifiManager::has_saved_networks() const { return test_spy::wifi_has_saved_networks; }
+WifiStatus WifiManager::set_mode(WifiMode mode) {
+  if (mode == WifiMode::Off) {
+    ++test_spy::wake_wifi_stop_count;
+    return test_spy::wake_wifi_stop_result;
+  }
+  return WifiStatus::Ok;
+}
+WifiStatus WifiManager::set_static_ip(const WifiStaticIpConfig &) { return WifiStatus::Ok; }
+WifiStatus WifiManager::clear_static_ip() { return WifiStatus::Ok; }
+WifiStatus WifiManager::set_power_save(WifiPowerSave) { return WifiStatus::Ok; }
+WifiStatus WifiManager::start_scan(const WifiScanConfig &) {
+  ++test_spy::wake_wifi_scan_count;
+  return test_spy::wake_wifi_start_result;
+}
+void WifiManager::set_on_scan_complete(WifiScanCompleteCallback callback) {
+  test_spy::wake_wifi_scan_callback = std::move(callback);
+}
+bool WifiManager::select_saved_network(const WifiScanEntry *, uint16_t, char (&ssid)[33]) const {
+  std::strncpy(ssid, test_spy::wake_wifi_selected_ssid.c_str(), sizeof(ssid) - 1);
+  return ssid[0] != '\0';
 }

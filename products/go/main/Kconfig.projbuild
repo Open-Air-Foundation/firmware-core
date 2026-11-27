@@ -1,18 +1,5 @@
 menu "AirGradient Go"
 
-    config GO_PORTABLE_PROV_RADIO_IDLE_MS
-        int "Portable provisioning Wi-Fi radio idle timeout (ms)"
-        range 10000 600000
-        default 90000
-        help
-            In Portable mode, attached Wi-Fi provisioning brings the Wi-Fi
-            radio up on demand for a scan / connect and drops it again to
-            preserve the Portable power profile. This bounds how long the
-            radio stays powered after the last scan/credentials request even
-            while the app remains connected on the BLE link. The timer is
-            armed/re-armed on every request and cancelled when the radio
-            drops (on connect verify-then-drop, BLE disconnect, or mode exit).
-
     config TRACKING_FSYNC_INTERVAL_MS
         int "Tracking fsync interval (ms)"
         range 1000 600000

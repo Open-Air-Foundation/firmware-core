@@ -87,7 +87,8 @@ private:
     Metric pinned_chart = Metric::Pm25;
     bool disable_cloud = false;
     ConfigurationControl configuration_control = ConfigurationControl::Both;
-    int measure_interval_seconds = MEASURE_INTERVAL_SECONDS_DEFAULT;
+    int tracking_interval_seconds = TRACKING_INTERVAL_SECONDS_DEFAULT;
+    int idle_interval_seconds = IDLE_INTERVAL_SECONDS_DEFAULT;
     GpsMode gps_mode = GpsMode::OnWhenTracking;
     LedBrightness back_led_brightness = LedBrightness::Off;
     BackLedIndicator back_led_indicator = BackLedIndicator::Aqi;

@@ -22,11 +22,8 @@
 
 static constexpr const char *TAG = "WifiService";
 
-// Saved-credentials policy. Bounded retry; backoffs use WifiManager defaults.
-// Kept low so a runtime dead-AP drop reaches the terminal disconnect (and the
-// disconnected icon + reconnect loop) promptly, while still riding out a
-// transient missed sweep at bring-up.
-static constexpr uint8_t STATIONARY_MAX_RETRY_COUNT = 3;
+static constexpr uint32_t WIFI_CLEANUP_STACK_BYTES = 4096;
+static constexpr uint32_t WIFI_CLEANUP_PRIORITY = 3;
 
 static void apply_stationary_power_save(WifiManager &wifi, bool enabled) {
   const WifiPowerSave mode = enabled ? WifiPowerSave::MaxModem : WifiPowerSave::None;
@@ -55,7 +52,12 @@ WifiService::WifiService(RtosQueueHandle event_queue, const Deps &deps, const Co
 }
 
 WifiService::~WifiService() {
-  if (_provisioning_active && _prov != nullptr) {
+  if (_suspend_task != nullptr) {
+    _wait_for_suspend();
+    RTOS::task_delete(_suspend_task);
+    _suspend_task = nullptr;
+  }
+  if (_prov != nullptr) {
     _prov->stop();
     _provisioning_active = false;
   }
@@ -72,7 +74,7 @@ bool WifiService::has_saved_networks() const { return _wifi.has_saved_networks()
 
 void WifiService::set_power_save_enabled(bool enabled) {
   _power_save_enabled = enabled;
-  if (!_provisioning_active && _wifi.get_mode() == WifiMode::Sta) {
+  if (!is_suspended() && !_provisioning_active && _wifi.get_mode() == WifiMode::Sta) {
     apply_stationary_power_save(_wifi, _power_save_enabled);
   }
 }
@@ -81,15 +83,26 @@ void WifiService::set_power_save_enabled(bool enabled) {
 // Connection attempts
 // ---------------------------------------------------------------------------
 
-void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *static_ip) {
+void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *static_ip,
+                                                 bool retain_for_ble) {
   _use_default_credentials = false;
   _connect_saved_internal(static_ip, /*reset_online_latches=*/true, /*arm_window=*/true);
+  if (retain_for_ble) {
+    _state.store(WifiState::ServicesSuspended);
+  }
 }
 
 void WifiService::_connect_saved_internal(const WifiStaticIpConfig *static_ip,
-                                          bool reset_online_latches, bool arm_window) {
+                                          bool reset_online_latches, bool arm_window,
+                                          const char *saved_ssid) {
+  if (reset_online_latches) {
+    _state.store(WifiState::Active);
+  }
   _install_wifi_callbacks();
-  _reset_deadline();
+  if (arm_window) {
+    _reset_deadline();
+    _arm_deadline(_cfg.initial_connect_window_ms);
+  }
   if (reset_online_latches) {
     _reset_online_latches();
   }
@@ -104,9 +117,11 @@ void WifiService::_connect_saved_internal(const WifiStaticIpConfig *static_ip,
   apply_stationary_power_save(_wifi, _power_save_enabled);
 
   WifiStaConfig sta{}; // empty ssid = auto-connect from saved networks
-  sta.max_retry_count = STATIONARY_MAX_RETRY_COUNT;
+  // Report link loss immediately. Go owns retries and their total deadline.
+  sta.max_retry_count = 0;
 
-  const WifiStatus status = _wifi.connect(sta);
+  const WifiStatus status =
+      saved_ssid != nullptr ? _wifi.connect_saved_network(saved_ssid, sta) : _wifi.connect(sta);
   if (status == WifiStatus::NotFound) {
     // No saved networks. Disconnect-policy router takes it from here.
     AG_LOGW(TAG, "saved-creds connect: no saved networks");
@@ -118,13 +133,18 @@ void WifiService::_connect_saved_internal(const WifiStaticIpConfig *static_ip,
     _post_wifi_disconnected(WifiDisconnectReason::unknown);
     return;
   }
-
-  if (arm_window) {
-    _arm_deadline(_cfg.initial_connect_window_ms);
-  }
 }
 
 void WifiService::schedule_reconnect(const WifiStaticIpConfig *static_ip) {
+  if (is_suspended()) {
+    return;
+  }
+  if (_clear_deadline_pending.exchange(false)) {
+    _initial_connect_deadline_ms = 0;
+  }
+  if (_initial_connect_deadline_ms == 0) {
+    _arm_deadline(_cfg.initial_connect_window_ms);
+  }
   if (static_ip != nullptr && static_ip->ip != 0) {
     _reconnect_static_ip = *static_ip;
     _reconnect_has_static_ip = true;
@@ -132,6 +152,9 @@ void WifiService::schedule_reconnect(const WifiStaticIpConfig *static_ip) {
     _reconnect_has_static_ip = false;
   }
   _reconnect_at_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + _cfg.reconnect_delay_ms;
+  if (_reconnect_at_ms == 0) {
+    _reconnect_at_ms = UINT32_MAX;
+  }
   AG_LOGI(TAG, "reconnect scheduled in %u ms", static_cast<unsigned>(_cfg.reconnect_delay_ms));
 }
 
@@ -141,6 +164,7 @@ void WifiService::try_default_fallback_credentials() {
 }
 
 void WifiService::_connect_fallback_internal(bool reset_online_latches, bool arm_window) {
+  _state.store(WifiState::Active);
   _install_wifi_callbacks();
   _reset_deadline();
   if (reset_online_latches) {
@@ -173,7 +197,143 @@ void WifiService::_connect_fallback_internal(bool reset_online_latches, bool arm
 // Provisioning
 // ---------------------------------------------------------------------------
 
+bool WifiService::attach_ble_provisioning() {
+  if (_provisioning_attached) {
+    return true;
+  }
+  if (_provisioning_active) {
+    return false;
+  }
+  _ensure_provisioning_manager();
+  _prov->set_attached_request_hook(
+      [this](const AttachedRequest &request) { _on_ble_provisioning_request(request); });
+  ProvisioningConfig config{};
+  config.transport = ProvisioningTransport::BleAttached;
+  config.ble.device_name = _cfg.ble_device_name;
+  config.ble.model_name = _cfg.ble_model_name;
+  config.ble.serial_number = _cfg.ble_serial_number;
+  config.ble.firmware_version = _cfg.ble_firmware_version;
+  config.overall_timeout_ms = 0;
+  _transport = ProvisioningTransport::BleAttached;
+  _provisioning_attached = _prov->start_attached(_wifi, _ble, config, /*own_wifi_callbacks=*/false);
+  return _provisioning_attached;
+}
+
+void WifiService::detach_ble_provisioning() {
+  if (!_provisioning_attached) {
+    return;
+  }
+  if (_provisioning_active) {
+    _provisioning_active = false;
+    _reset_deadline();
+    _wifi.disconnect();
+  }
+  _provisioning_connected_event_pending.store(false);
+  _prov->stop();
+  delete _prov;
+  _prov = nullptr;
+  _provisioning_attached = false;
+  _provisioning_request_mutex.lock();
+  _provisioning_request_pending = false;
+  _provisioning_request_mutex.unlock();
+}
+
+bool WifiService::ble_provisioning_attached() const { return _provisioning_attached; }
+
+void WifiService::_on_ble_provisioning_request(const AttachedRequest &request) {
+  _provisioning_request_mutex.lock();
+  _provisioning_request = request;
+  _provisioning_request_pending = true;
+  _provisioning_request_mutex.unlock();
+  Event event{};
+  event.type = EventType::BleProvisioningRequest;
+  RTOS::queue_send(_event_queue, &event);
+}
+
+void WifiService::handle_ble_provisioning_request(bool allowed) {
+  _provisioning_request_mutex.lock();
+  if (!_provisioning_request_pending) {
+    _provisioning_request_mutex.unlock();
+    return;
+  }
+  const AttachedRequest request = _provisioning_request;
+  _provisioning_request_pending = false;
+  _provisioning_request_mutex.unlock();
+  if (!_provisioning_attached) {
+    return;
+  }
+  if (!allowed || _provisioning_active || suspension_pending() || is_connecting()) {
+    _prov->send_ble_status(ProvisioningBleStatus::WIFI_CONNECT_FAILED);
+    return;
+  }
+  if (_wifi.initialize() != WifiStatus::Ok || _wifi.set_mode(WifiMode::Sta) != WifiStatus::Ok) {
+    _prov->send_ble_status(ProvisioningBleStatus::WIFI_CONNECT_FAILED);
+    return;
+  }
+  _state.store(WifiState::ServicesSuspended);
+  _install_wifi_callbacks();
+  apply_stationary_power_save(_wifi, false);
+  _provisioning_active = true;
+  if (request.kind == AttachedRequestKind::Scan) {
+    if (!_prov->request_scan()) {
+      _prov->send_ble_status(ProvisioningBleStatus::WIFI_CONNECT_FAILED);
+      finish_ble_provisioning();
+    }
+  } else {
+    _reset_deadline();
+    _reconnect_at_ms = 0;
+    _wifi.disconnect();
+    _online.store(false);
+    _arm_deadline(_cfg.initial_connect_window_ms);
+    if (!_prov->submit_credentials(request.data)) {
+      finish_ble_provisioning();
+    }
+  }
+}
+
+void WifiService::finish_ble_provisioning() {
+  if (!_provisioning_attached) {
+    return;
+  }
+  _provisioning_active = false;
+  _reset_deadline();
+  _prov->reset_to_listening();
+  apply_stationary_power_save(_wifi, _power_save_enabled);
+}
+
+void WifiService::_on_scan_results(const WifiScanEntry *entries, uint16_t count) {
+  if (!_provisioning_attached || !_provisioning_active ||
+      _prov->state() != ProvisioningState::WaitingForCredentials) {
+    return;
+  }
+  _prov->handle_scan_results(entries, count);
+  Event event{};
+  event.type = EventType::BleProvisioningScanComplete;
+  RTOS::queue_send(_event_queue, &event);
+}
+
 void WifiService::start_provisioning(ProvisioningTransport transport) {
+  if (transport == ProvisioningTransport::BleAttached) {
+    _reset_deadline();
+    _reconnect_at_ms = 0;
+    _wifi.disconnect();
+    _online.store(false);
+    _state.store(WifiState::ServicesSuspended);
+    _install_wifi_callbacks();
+    ProvisioningEventInfo info{};
+    info.event = _provisioning_attached ? ProvisioningEvent::Started : ProvisioningEvent::Stopped;
+    _post_provisioning_event(info);
+    return;
+  }
+  if (_wifi.initialize() != WifiStatus::Ok) {
+    AG_LOGE(TAG, "Wi-Fi initialization failed for provisioning");
+    ProvisioningEventInfo failure{};
+    failure.event = ProvisioningEvent::Stopped;
+    failure.stop_reason = ProvisioningStopReason::ProductRequested;
+    _post_provisioning_event(failure);
+    return;
+  }
+  _state.store(WifiState::Active);
   _use_default_credentials = false;
   _portal_used = false;
   AG_LOGI(TAG, "start_provisioning(%u)", static_cast<unsigned>(transport));
@@ -242,6 +402,14 @@ void WifiService::switch_provisioning_transport() {
 }
 
 void WifiService::stop_provisioning(bool stop_http_server) {
+  if (_provisioning_attached) {
+    if (_provisioning_active && _prov->state() == ProvisioningState::Connecting) {
+      _wifi.disconnect();
+      _prov->handle_wifi_disconnected();
+    }
+    finish_ble_provisioning();
+    return;
+  }
   if (!_provisioning_active || _prov == nullptr) {
     return;
   }
@@ -370,6 +538,15 @@ void WifiService::_ensure_provisioning_manager() {
 // ---------------------------------------------------------------------------
 
 void WifiService::shutdown() {
+  _wait_for_suspend();
+  if (_state.load() == WifiState::SuspendingServices) {
+    // Shutdown stops STA even if service-only completion has not been consumed.
+    _state.store(WifiState::Suspending);
+  }
+  // Leave a completed worker request pending until its event is acknowledged.
+  if (!suspension_pending() && !driver_released()) {
+    _state.store(WifiState::Suspended);
+  }
   _use_default_credentials = false;
   _provisioning_connected_event_pending.store(false);
   _reset_deadline();
@@ -385,6 +562,139 @@ void WifiService::shutdown() {
   _reset_online_latches();
 }
 
+void WifiService::_wait_for_suspend() {
+  if (suspension_pending()) {
+    _suspend_done_sem.take();
+    // Keep completion available for repeated shutdown or destruction before
+    // the orchestrator consumes the event.
+    _suspend_done_sem.give();
+  }
+}
+
+bool WifiService::request_suspend(SuspendMode mode) {
+  if (suspension_pending()) {
+    return true;
+  }
+  // A driver already released stays released after another cleanup request.
+  if (driver_released()) {
+    mode = SuspendMode::ReleaseDriver;
+  }
+  switch (mode) {
+  case SuspendMode::Services:
+    _state.store(WifiState::SuspendingServices);
+    break;
+  case SuspendMode::StopWifi:
+    _state.store(WifiState::Suspending);
+    break;
+  case SuspendMode::ReleaseDriver:
+    _state.store(WifiState::Releasing);
+    break;
+  }
+  if (mode != SuspendMode::Services) {
+    _provisioning_connected_event_pending.store(false);
+    _reset_deadline();
+    _reconnect_at_ms = 0;
+    _online.store(false);
+    _ip.store(0);
+    _rssi.store(WIFI_RSSI_INVALID);
+  }
+  if (_suspend_task == nullptr) {
+    if (!_suspend_done_sem.create()) {
+      complete_suspend(false);
+      return false;
+    }
+    if (!RTOS::task_create(_suspend_entry, "wifi_cleanup", WIFI_CLEANUP_STACK_BYTES, this,
+                           WIFI_CLEANUP_PRIORITY, &_suspend_task)) {
+      _suspend_done_sem.destroy();
+      complete_suspend(false);
+      return false;
+    }
+  }
+  _suspend_done_sem.take(0);
+  RTOS::task_notify_send(_suspend_task, static_cast<uint32_t>(mode));
+  return true;
+}
+
+void WifiService::_suspend_entry(void *arg) {
+  auto *self = static_cast<WifiService *>(arg);
+  for (;;) {
+    uint32_t request = 0;
+    if (RTOS::task_notify_wait(&request, UINT32_MAX)) {
+      self->_run_suspend(static_cast<SuspendMode>(request));
+    }
+  }
+}
+
+void WifiService::_run_suspend(SuspendMode mode) {
+  Event event{};
+  event.type = EventType::WifiSuspendComplete;
+  event.wifi_suspend_ok = _suspend(mode);
+  // Shutdown may wait without draining the event queue. Signal first so it
+  // can finish even if the worker is waiting for queue space.
+  _suspend_done_sem.give();
+  RTOS::queue_send(_event_queue, &event, UINT32_MAX);
+}
+
+bool WifiService::_suspend(SuspendMode mode) {
+  log_heap(TAG, "wifi.suspend:enter");
+  // A failed mDNS stop must not be treated as successful ownership release.
+  if (_wifi.clear_mdns_profile() != WifiStatus::Ok) {
+    AG_LOGE(TAG, "handoff: mDNS cleanup failed; retry required");
+    return false;
+  }
+  _local_mdns_profile_installed = false;
+  _http.stop();
+  _local_server.end();
+  _local_http_active = false;
+  if (mode == SuspendMode::Services) {
+    return true;
+  }
+  if (_wifi.set_mode(WifiMode::Off) != WifiStatus::Ok) {
+    AG_LOGE(TAG, "handoff: Wi-Fi stop failed; retry required");
+    return false;
+  }
+  log_heap(TAG, "wifi.suspend:radio-stopped");
+  if (mode == SuspendMode::ReleaseDriver) {
+    if (_wifi.deinitialize() != WifiStatus::Ok) {
+      return false;
+    }
+    log_heap(TAG, "wifi.suspend:driver-released");
+  }
+  return true;
+}
+
+void WifiService::complete_suspend(bool success) {
+  const auto state = _state.load();
+  if (!suspension_pending()) {
+    return;
+  }
+  if (state == WifiState::SuspendingServices) {
+    _state.store(success ? WifiState::ServicesSuspended : WifiState::ServicesCleanupFailed);
+    return;
+  }
+  if (!success) {
+    _state.store(WifiState::CleanupFailed);
+    return;
+  }
+  _state.store(state == WifiState::Releasing ? WifiState::Released : WifiState::Suspended);
+}
+
+bool WifiService::resume_station(const WifiStaticIpConfig *static_ip, const char *saved_ssid) {
+  if (suspension_pending()) {
+    return false;
+  }
+  if (station_retained()) {
+    _state.store(WifiState::Active);
+    return true;
+  }
+  if (_wifi.initialize() != WifiStatus::Ok) {
+    return false;
+  }
+  _state.store(WifiState::Active);
+  _connect_saved_internal(static_ip, false, true, saved_ssid);
+  return true;
+}
+
 void WifiService::clear_credentials() {
   _use_default_credentials = false;
   _wifi.clear_networks();
@@ -394,6 +704,21 @@ void WifiService::clear_credentials() {
 // ---------------------------------------------------------------------------
 // State queries
 // ---------------------------------------------------------------------------
+
+bool WifiService::suspension_pending() const {
+  const auto state = _state.load();
+  return state == WifiState::SuspendingServices || state == WifiState::Suspending ||
+         state == WifiState::Releasing;
+}
+bool WifiService::station_retained() const {
+  const auto state = _state.load();
+  return state == WifiState::SuspendingServices || state == WifiState::ServicesSuspended ||
+         state == WifiState::ServicesCleanupFailed;
+}
+bool WifiService::is_suspended() const {
+  return _state.load() != WifiState::Active && !station_retained();
+}
+bool WifiService::driver_released() const { return _state.load() == WifiState::Released; }
 
 bool WifiService::is_online() const { return _online.load(); }
 
@@ -429,10 +754,13 @@ uint32_t WifiService::next_deadline_ms() const {
   if (reconnect == 0) {
     return connect;
   }
-  return (reconnect < connect) ? reconnect : connect;
+  return static_cast<int32_t>(reconnect - connect) < 0 ? reconnect : connect;
 }
 
 void WifiService::tick(uint32_t now_ms) {
+  if (is_suspended()) {
+    return;
+  }
   if (_provisioning_connected_event_pending.load()) {
     if (RTOS::queue_send(_event_queue, &_pending_provisioning_connected_event, 0)) {
       _provisioning_connected_event_pending.store(false);
@@ -444,18 +772,32 @@ void WifiService::tick(uint32_t now_ms) {
     _initial_connect_deadline_ms = 0;
   }
 
-  if (_initial_connect_deadline_ms != 0 && now_ms >= _initial_connect_deadline_ms) {
-    // Keep the deadline due until admitted so queue pressure cannot strand setup.
-    if (_post_wifi_disconnected(WifiDisconnectReason::connection_lost)) {
+  if (_provisioning_attached && _provisioning_active) {
+    if (_initial_connect_deadline_ms != 0 &&
+        static_cast<int32_t>(now_ms - _initial_connect_deadline_ms) >= 0 &&
+        _prov->state() == ProvisioningState::Connecting) {
       _initial_connect_deadline_ms = 0;
-      AG_LOGW(TAG, "initial connect window expired");
+      _wifi.disconnect();
+      _prov->handle_wifi_disconnected();
     }
+    return;
+  }
+  if (_initial_connect_deadline_ms != 0 &&
+      static_cast<int32_t>(now_ms - _initial_connect_deadline_ms) >= 0) {
+    // Keep the deadline due until admitted so queue pressure cannot strand setup.
+    Event event{};
+    event.type = EventType::WifiConnectionTimeout;
+    _reconnect_at_ms = 0;
+    if (RTOS::queue_send(_event_queue, &event)) {
+      _initial_connect_deadline_ms = 0;
+      AG_LOGW(TAG, "Wi-Fi connection window expired");
+    }
+    return;
   }
 
-  if (_reconnect_at_ms != 0 && now_ms >= _reconnect_at_ms) {
+  if (_reconnect_at_ms != 0 && static_cast<int32_t>(now_ms - _reconnect_at_ms) >= 0) {
     _reconnect_at_ms = 0;
-    // Keep has_been_online() latched (stay "runtime") and skip the connect
-    // window; the WifiManager terminal disconnect drives the next cycle.
+    // Preserve the original reconnect deadline across internal retry attempts.
     if (!_use_default_credentials) {
       AG_LOGI(TAG, "runtime reconnect: attempting saved networks");
       const WifiStaticIpConfig *ip = _reconnect_has_static_ip ? &_reconnect_static_ip : nullptr;
@@ -474,14 +816,20 @@ void WifiService::tick(uint32_t now_ms) {
 void WifiService::_install_wifi_callbacks() {
   _wifi.set_on_got_ip([this](uint32_t ip) { _on_got_ip(ip); });
   _wifi.set_on_disconnected([this](WifiDisconnectReason r) { _on_disconnected(r); });
+  _wifi.set_on_scan_complete(
+      [this](const WifiScanEntry *entries, uint16_t count) { _on_scan_results(entries, count); });
 }
 
 void WifiService::_detach_wifi_callbacks() {
   _wifi.set_on_got_ip(nullptr);
   _wifi.set_on_disconnected(nullptr);
+  _wifi.set_on_scan_complete(nullptr);
 }
 
 void WifiService::_on_got_ip(uint32_t ip) {
+  if (is_suspended()) {
+    return;
+  }
   AG_LOGI(TAG, "wifi online: ip=0x%08x", static_cast<unsigned>(ip));
   _ip.store(ip);
   _online.store(true);
@@ -490,6 +838,11 @@ void WifiService::_on_got_ip(uint32_t ip) {
   _clear_deadline_pending.store(true);
   _rssi.store(_wifi.status_snapshot().rssi);
 
+  if (_provisioning_attached && _provisioning_active &&
+      _prov->state() == ProvisioningState::Connecting) {
+    _prov->handle_wifi_connected(ip);
+    return;
+  }
   Event evt{};
   evt.type = EventType::WifiConnected;
   evt.wifi_ip = ip;
@@ -497,11 +850,19 @@ void WifiService::_on_got_ip(uint32_t ip) {
 }
 
 void WifiService::_on_disconnected(WifiDisconnectReason reason) {
+  if (is_suspended()) {
+    return;
+  }
   AG_LOGI(TAG, "wifi disconnected: reason=%u", static_cast<unsigned>(reason));
   _online.store(false);
   _last_disconnect_reason.store(static_cast<uint8_t>(reason));
   if (reason == WifiDisconnectReason::requested_by_user) {
     return; // synthetic teardown reason; not an external failure
+  }
+  if (_provisioning_attached && _provisioning_active &&
+      _prov->state() == ProvisioningState::Connecting) {
+    _prov->handle_wifi_disconnected();
+    return;
   }
   _post_wifi_disconnected(reason);
 }
@@ -513,6 +874,9 @@ void WifiService::_reset_deadline() {
 
 void WifiService::_arm_deadline(uint32_t window_ms) {
   _initial_connect_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + window_ms;
+  if (_initial_connect_deadline_ms == 0) {
+    _initial_connect_deadline_ms = UINT32_MAX; // Zero is unarmed; expire one millisecond earlier.
+  }
 }
 
 void WifiService::_reset_online_latches() {

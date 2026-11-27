@@ -64,6 +64,7 @@ add_library(provisioning_test_support
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/wifi_portal_transport.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/provisioning_json.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/ble_transport.cpp"
+    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble/services/ble_device_information.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/internal/provisioning_qr.cpp"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/vendor/qrcodegen.c"
     "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning/services/provisioning_manager.cpp"

@@ -108,22 +108,31 @@ WifiStatus EspWifiHal::init() {
 
   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
   if (esp_wifi_init(&cfg) != ESP_OK) {
+    esp_netif_destroy_default_wifi(_sta_netif);
+    esp_netif_destroy_default_wifi(_ap_netif);
+    _sta_netif = nullptr;
+    _ap_netif = nullptr;
     return WifiStatus::Failed;
   }
+  // A later initialization failure must release partial resources before retry.
+  _initialized = true;
   // RAM storage: WifiManager owns persistence (ConfigStore); ESP-IDF must
   // never write STA credentials to its own NVS.
   if (esp_wifi_set_storage(WIFI_STORAGE_RAM) != ESP_OK) {
+    deinit();
     return WifiStatus::Failed;
   }
 
   if (esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
                                           &EspWifiHal::_wifi_event_handler, this,
                                           &_wifi_handler_instance) != ESP_OK) {
+    deinit();
     return WifiStatus::Failed;
   }
   if (esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID,
                                           &EspWifiHal::_ip_event_handler, this,
                                           &_ip_handler_instance) != ESP_OK) {
+    deinit();
     return WifiStatus::Failed;
   }
 
@@ -132,13 +141,19 @@ WifiStatus EspWifiHal::init() {
   dhcp_args.callback = &EspWifiHal::_dhcp_timer_cb;
   dhcp_args.arg = this;
   dhcp_args.name = "ag_wifi_dhcp";
-  esp_timer_create(&dhcp_args, &_dhcp_timer);
+  if (esp_timer_create(&dhcp_args, &_dhcp_timer) != ESP_OK) {
+    deinit();
+    return WifiStatus::Failed;
+  }
 
   esp_timer_create_args_t retry_args = {};
   retry_args.callback = &EspWifiHal::_retry_timer_cb;
   retry_args.arg = this;
   retry_args.name = "ag_wifi_retry";
-  esp_timer_create(&retry_args, &_retry_timer);
+  if (esp_timer_create(&retry_args, &_retry_timer) != ESP_OK) {
+    deinit();
+    return WifiStatus::Failed;
+  }
 
   _initialized = true;
   _mode = WifiMode::Off;
@@ -173,6 +188,16 @@ void EspWifiHal::deinit() {
   }
   esp_wifi_stop();
   esp_wifi_deinit();
+  // Tracking can release and later recreate the driver in the same boot.
+  // Default netifs also own event handlers; release them before recreation.
+  if (_sta_netif != nullptr) {
+    esp_netif_destroy_default_wifi(_sta_netif);
+    _sta_netif = nullptr;
+  }
+  if (_ap_netif != nullptr) {
+    esp_netif_destroy_default_wifi(_ap_netif);
+    _ap_netif = nullptr;
+  }
   _initialized = false;
   _mode = WifiMode::Off;
 }
@@ -180,7 +205,11 @@ void EspWifiHal::deinit() {
 WifiStatus EspWifiHal::set_mode(WifiMode mode) {
   const wifi_mode_t target = _to_esp_mode(mode);
   if (mode == WifiMode::Off) {
-    esp_wifi_stop();
+    const esp_err_t err = esp_wifi_stop();
+    if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_INIT && err != ESP_ERR_WIFI_NOT_STARTED) {
+      ESP_LOGE(TAG, "esp_wifi_stop failed: %d", err);
+      return WifiStatus::Failed;
+    }
     _mode = mode;
     _snapshot.mode = mode;
     return WifiStatus::Ok;

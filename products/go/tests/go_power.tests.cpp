@@ -465,17 +465,38 @@ TEST_CASE("request_system_power_reset: unavailable charger and reset failures",
 TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
   MockBmsDevice mock_bms;
 
-  SECTION("Non-Offline mode — None with zero duration") {
+  SECTION("Wi-Fi fallback permits sleep while preserving interaction and tracking gates") {
+    PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
+    GoSettings settings{};
+    settings.wifi_enabled = true;
+    settings.idle_interval_seconds = 300;
+    for (auto gps : {GpsMode::AlwaysOff, GpsMode::AlwaysOn, GpsMode::OnWhenTracking}) {
+      settings.gps_mode = gps;
+      const auto idle =
+          svc.decide_sleep(settings, LockState::Locked, TrackingState::Idle, 30000, true);
+      CHECK(idle.type == PowerService::SleepType::Deep);
+      CHECK(idle.duration_ms == 270000);
+      CHECK(
+          svc.decide_sleep(settings, LockState::Unlocked, TrackingState::Idle, 30000, true).type ==
+          PowerService::SleepType::None);
+      for (auto tracking : {TrackingState::Recording, TrackingState::Paused}) {
+        CHECK(svc.decide_sleep(settings, LockState::Locked, tracking, 30000, true).type ==
+              PowerService::SleepType::None);
+      }
+    }
+  }
+
+  SECTION("Wi-Fi keeps Idle awake") {
     PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
     GoSettings settings{};
-    settings.measure_interval_seconds = 60;
+    settings.wifi_enabled = true;
 
-    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Portable, 0);
+    auto d = svc.decide_sleep(settings, LockState::Locked, TrackingState::Idle, 0);
     CHECK(d.type == PowerService::SleepType::None);
     CHECK(d.duration_ms == 0);
 
-    d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Stationary, 0);
+    d = svc.decide_sleep(settings, LockState::Locked, TrackingState::Recording, 0);
     CHECK(d.type == PowerService::SleepType::None);
     CHECK(d.duration_ms == 0);
   }
@@ -484,16 +505,15 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
 
     GoSettings settings{};
-    settings.operating_mode = OperatingMode::Offline;
-    settings.measure_interval_seconds = 10;
-    settings.energy_saving_measure_interval_seconds = 300;
+    settings.wifi_enabled = false;
+    settings.tracking_interval_seconds = 10;
+    settings.idle_interval_seconds = 300;
     settings.auto_lock_seconds = 0;
 
     // Includes a freshly reset measurement clock and the full six-minute observation.
     for (const uint32_t awake_ms : {0u, 299'999u, 300'000u, 360'000u}) {
       CAPTURE(awake_ms);
-      const auto d =
-          svc.decide_sleep(settings, LockState::Unlocked, OperatingMode::Offline, awake_ms);
+      const auto d = svc.decide_sleep(settings, LockState::Unlocked, TrackingState::Idle, awake_ms);
       CHECK(d.type == PowerService::SleepType::None);
       CHECK(d.duration_ms == 0);
     }
@@ -503,9 +523,9 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
     for (int interval : {300, 900, 3600}) {
       GoSettings settings{};
-      settings.measure_interval_seconds = 10;
-      settings.energy_saving_measure_interval_seconds = interval;
-      auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 3000);
+      settings.tracking_interval_seconds = 10;
+      settings.idle_interval_seconds = interval;
+      auto d = svc.decide_sleep(settings, LockState::Locked, TrackingState::Idle, 3000);
       CHECK(d.type == PowerService::SleepType::Deep);
       CHECK(d.duration_ms == static_cast<uint32_t>(interval * 1000 - 3000));
     }
@@ -514,7 +534,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
   SECTION("Remaining time at the deep sleep threshold still sleeps") {
     PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG); // threshold = 5000 ms
     GoSettings settings{}; // Energy Saving defaults to 300 seconds.
-    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 295000);
+    auto d = svc.decide_sleep(settings, LockState::Locked, TrackingState::Idle, 295000);
     CHECK(d.type == PowerService::SleepType::Deep);
     CHECK(d.duration_ms == 5000);
   }
@@ -522,7 +542,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
   SECTION("Remaining time below the deep sleep threshold stays awake") {
     PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
     GoSettings settings{};
-    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 295001);
+    auto d = svc.decide_sleep(settings, LockState::Locked, TrackingState::Idle, 295001);
     CHECK(d.type == PowerService::SleepType::None);
     CHECK(d.duration_ms == 0);
   }
@@ -532,7 +552,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     config.deep_sleep_threshold_ms = 2000;
     PowerService svc(&mock_bms, test_gpio_hal, config);
     GoSettings settings{};
-    auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, 298000);
+    auto d = svc.decide_sleep(settings, LockState::Locked, TrackingState::Idle, 298000);
     CHECK(d.type == PowerService::SleepType::Deep);
     CHECK(d.duration_ms == 2000);
   }
@@ -541,7 +561,7 @@ TEST_CASE("decide_sleep: sleep type and duration", "[PowerService][sleep]") {
     PowerService svc(&mock_bms, test_gpio_hal, DEFAULT_CONFIG);
     GoSettings settings{};
     for (uint32_t awake_ms : {300000U, 305000U}) {
-      auto d = svc.decide_sleep(settings, LockState::Locked, OperatingMode::Offline, awake_ms);
+      auto d = svc.decide_sleep(settings, LockState::Locked, TrackingState::Idle, awake_ms);
       CHECK(d.type == PowerService::SleepType::None);
       CHECK(d.duration_ms == 0);
     }
@@ -611,7 +631,6 @@ TEST_CASE("RtcAppState: defaults and independent flag updates", "[PowerService][
   CHECK(static_cast<uint32_t>(RtcAppFlag::ChargingOnlyRequested) == 0x04);
 
   const RtcAppState defaults{};
-  CHECK(defaults.mode == OperatingMode::Portable);
   CHECK(defaults.behavior == Behavior::Idle);
   CHECK(defaults.lock_state == LockState::Locked);
   CHECK(defaults.tracking_state == TrackingState::Idle);
@@ -652,7 +671,6 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
 
   SECTION("invalid RTC storage returns defaults through both loaders") {
     RtcAppState stale{};
-    stale.mode = OperatingMode::Offline;
     stale.behavior = Behavior::Tracking;
     stale.lock_state = LockState::Unlocked;
     stale.tracking_state = TrackingState::Recording;
@@ -664,7 +682,6 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
     invalidate_rtc_app_state_for_test();
 
     for (const auto loaded : {svc.load_state(), load_rtc_app_state()}) {
-      CHECK(loaded.mode == OperatingMode::Portable);
       CHECK(loaded.behavior == Behavior::Idle);
       CHECK(loaded.lock_state == LockState::Locked);
       CHECK(loaded.tracking_state == TrackingState::Idle);
@@ -685,7 +702,6 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
       for (uint32_t combination = 0; combination < FLAG_COMBINATION_COUNT; ++combination) {
         CAPTURE(combination, reserved);
         RtcAppState saved{};
-        saved.mode = OperatingMode::Stationary;
         saved.behavior = Behavior::Tracking;
         saved.lock_state = LockState::Unlocked;
         saved.tracking_state = TrackingState::Recording;
@@ -699,7 +715,6 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
         svc.save_state(saved);
 
         for (const auto loaded : {svc.load_state(), load_rtc_app_state()}) {
-          CHECK(loaded.mode == saved.mode);
           CHECK(loaded.behavior == saved.behavior);
           CHECK(loaded.lock_state == saved.lock_state);
           CHECK(loaded.tracking_state == saved.tracking_state);
@@ -720,19 +735,16 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
 
   SECTION("overwrite with new state — load returns latest") {
     RtcAppState first{};
-    first.mode = OperatingMode::Stationary;
     first.tracking_session_id = 11111;
     first.flags = ~uint32_t{0};
     svc.save_state(first);
 
     RtcAppState second{};
-    second.mode = OperatingMode::Offline;
     second.tracking_session_id = 99999;
     svc.save_state(second);
 
     const RtcAppState loaded = svc.load_state();
 
-    CHECK(loaded.mode == OperatingMode::Offline);
     CHECK(loaded.tracking_session_id == 99999);
     CHECK(loaded.flags == second.flags);
     CHECK(load_rtc_app_state().flags == second.flags);
@@ -740,7 +752,6 @@ TEST_CASE("save_state / load_state: RTC state round-trip", "[PowerService][rtc]"
 
   SECTION("sensors_warm defaults to false") {
     RtcAppState saved{};
-    saved.mode = OperatingMode::Offline;
     svc.save_state(saved);
 
     const RtcAppState loaded = svc.load_state();
@@ -2203,5 +2214,28 @@ TEST_CASE("read_fg_learning_verify aggregates learned values", "[PowerService][f
   SECTION("gauge not ready -> ok false") {
     ALLOW_CALL(mock_fg, ready()).RETURN(false);
     CHECK_FALSE(svc.read_fg_learning_verify().ok);
+  }
+}
+
+TEST_CASE("sleep policy is independent of GPS and uses the Idle interval",
+          "[PowerService][sleep]") {
+  PowerService svc(nullptr, test_gpio_hal, DEFAULT_CONFIG);
+  for (auto gps : {GpsMode::AlwaysOff, GpsMode::OnWhenTracking, GpsMode::AlwaysOn}) {
+    for (auto tracking : {TrackingState::Idle, TrackingState::Recording, TrackingState::Paused}) {
+      for (bool wifi : {false, true}) {
+        for (auto lock : {LockState::Locked, LockState::Unlocked}) {
+          GoSettings settings;
+          settings.gps_mode = gps;
+          settings.wifi_enabled = wifi;
+          settings.idle_interval_seconds = 900;
+          settings.tracking_interval_seconds = 3;
+          auto decision = svc.decide_sleep(settings, lock, tracking, 10000);
+          const bool sleeps = !wifi && tracking == TrackingState::Idle && lock == LockState::Locked;
+          CHECK(decision.type ==
+                (sleeps ? PowerService::SleepType::Deep : PowerService::SleepType::None));
+          CHECK(decision.duration_ms == (sleeps ? 890000 : 0));
+        }
+      }
+    }
   }
 }

@@ -37,6 +37,7 @@
 #endif
 
 #include "go_power.h"
+#include "go_runtime_policy.h"
 
 #include "go_board.h"
 
@@ -616,7 +617,6 @@ void PowerService::save_state(const RtcAppState &state) {
 
 RtcAppState PowerService::load_state() const {
   if (!s_rtc_state_valid) {
-    // Return defaults: Portable mode, Idle behavior, Locked, GPS on.
     return RtcAppState{};
   }
   RtcAppState out{};
@@ -629,10 +629,11 @@ RtcAppState PowerService::load_state() const {
 // ---------------------------------------------------------------------------
 
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &settings,
-                                                       LockState lock_state, OperatingMode mode,
-                                                       uint32_t awake_ms) const {
-  // Only Offline mode enters sleep; Portable and Stationary stay awake.
-  if (mode != OperatingMode::Offline) {
+                                                       LockState lock_state, TrackingState tracking,
+                                                       uint32_t awake_ms,
+                                                       bool wifi_fallback) const {
+  // Tracking and Wi-Fi policy control sleep; gas sampling and GPS do not.
+  if (!GoRuntimePolicy{settings, tracking, wifi_fallback}.sleep_allowed()) {
     return {SleepType::None, 0};
   }
 
@@ -640,8 +641,7 @@ PowerService::SleepDecision PowerService::decide_sleep(const GoSettings &setting
     return {SleepType::None, 0};
   }
 
-  uint32_t interval_ms =
-      static_cast<uint32_t>(settings.energy_saving_measure_interval_seconds) * 1000;
+  uint32_t interval_ms = static_cast<uint32_t>(settings.idle_interval_seconds) * 1000;
 
   // Subtract time already spent awake so total cycle matches the interval
   uint32_t sleep_ms = (awake_ms < interval_ms) ? (interval_ms - awake_ms) : 0;

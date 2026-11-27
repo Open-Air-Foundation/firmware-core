@@ -92,12 +92,13 @@ public:
   /// failover). Arms the initial-connect deadline. Applies @p static_ip when
   /// non-null, otherwise clears any previously set static IP. Posts synthetic
   /// WifiDisconnected when the WifiManager reports NotFound up front.
-  void connect_with_saved_credentials(const WifiStaticIpConfig *static_ip = nullptr);
+  void connect_with_saved_credentials(const WifiStaticIpConfig *static_ip = nullptr,
+                                      bool retain_for_ble = false);
 
   /// Arm a runtime reconnect, issued from tick() after reconnect_delay_ms.
   /// Reuses the credential source selected at entry: saved networks or the
   /// manufacturing-only factory network. Keeps has_been_online() latched (stays
-  /// "runtime") and arms no connect window.
+  /// "runtime"). Saved-network retries share one bounded connection window.
   void schedule_reconnect(const WifiStaticIpConfig *static_ip = nullptr);
 
   /// Connect to the factory-default airgradient/cleanair AP. Explicit SSID,
@@ -106,12 +107,20 @@ public:
   /// even when connect fails immediately.
   void try_default_fallback_credentials();
 
-  // --- Provisioning (full impl lands in CP2.3) ---
+  // --- Provisioning ---
 
   /// Allocates provisioning infrastructure on the first call.
   void start_provisioning(ProvisioningTransport transport = ProvisioningTransport::BleOnly);
   void switch_provisioning_transport();
   void stop_provisioning(bool stop_http_server = true);
+
+  /// Register provisioning on the ordinary secured BLE server without starting Wi-Fi.
+  bool attach_ble_provisioning();
+  void detach_ble_provisioning();
+  bool ble_provisioning_attached() const;
+  void handle_ble_provisioning_request(bool allowed);
+  /// Finish an attached operation while retaining GATT and the Wi-Fi connection.
+  void finish_ble_provisioning();
 
   // --- Local endpoint ---
 
@@ -126,9 +135,27 @@ public:
 
   // --- Lifecycle ---
 
+  enum class SuspendMode : uint32_t { Services = 1, StopWifi, ReleaseDriver };
+
   /// Drop STA, set Wi-Fi mode Off, detach callbacks, reset latches.
   /// Called by the orchestrator on Stationary teardown.
   void shutdown();
+
+  /// Async handoff cleanup. Call only after Cloud has released HTTP/TLS.
+  /// Completion arrives as WifiSuspendComplete. The worker is reused across handoffs.
+  /// Services retains STA and its connection callbacks/retry deadlines.
+  /// Endpoint work must wait for completion acknowledgement.
+  bool request_suspend(SuspendMode mode);
+  /// Acknowledge WifiSuspendComplete before issuing more endpoint or lifecycle work.
+  void complete_suspend(bool success);
+  bool suspension_pending() const;
+  /// True when station callbacks and connection retries are disabled.
+  bool is_suspended() const;
+  /// Services are suspending/suspended, while the existing station keeps running.
+  bool station_retained() const;
+  bool driver_released() const;
+  bool resume_station(const WifiStaticIpConfig *static_ip = nullptr,
+                      const char *saved_ssid = nullptr);
 
   /// Erase all saved networks and reset online latches.
   void clear_credentials();
@@ -161,14 +188,35 @@ public:
 #endif
 
 private:
+  // Active permits normal Wi-Fi work; it does not imply a connected station.
+  enum class WifiState : uint8_t {
+    Active,
+    SuspendingServices,
+    ServicesSuspended,
+    ServicesCleanupFailed,
+    Suspending,
+    Releasing,
+    Suspended,
+    Released,
+    CleanupFailed,
+  };
+  static void _suspend_entry(void *arg);
+  void _run_suspend(SuspendMode mode);
+  bool _suspend(SuspendMode mode);
+  void _wait_for_suspend();
+  RtosTaskHandle _suspend_task = nullptr;
+  RtosBinarySemaphore _suspend_done_sem;
+  std::atomic<WifiState> _state{WifiState::Active};
   // Bind on_got_ip / on_disconnected to WifiManager. Cleared by passing
-  // null callbacks. Owned by WifiService at all times outside provisioning.
+  // null callbacks. Attached provisioning shares these; standalone setup owns them.
   void _install_wifi_callbacks();
   void _detach_wifi_callbacks();
 
   // WifiManager callback adapters (run in ESP-IDF event-loop task).
   void _on_got_ip(uint32_t ip);
   void _on_disconnected(WifiDisconnectReason reason);
+  void _on_scan_results(const struct WifiScanEntry *entries, uint16_t count);
+  void _on_ble_provisioning_request(const AttachedRequest &request);
 
   // ProvisioningManager event adapter (run in NimBLE / portal task).
   // Forwards to the orchestrator queue, except the intermediate Stopped
@@ -176,9 +224,9 @@ private:
   void _on_provisioning_event(const struct ProvisioningEventInfo &info);
 
   // Shared saved-credentials connect. Both flags true = fresh bring-up;
-  // both false = runtime reconnect (keeps has_been_online(), no window).
+  // both false = runtime reconnect (keeps online history and the current window).
   void _connect_saved_internal(const WifiStaticIpConfig *static_ip, bool reset_online_latches,
-                               bool arm_window);
+                               bool arm_window, const char *saved_ssid = nullptr);
   void _connect_fallback_internal(bool reset_online_latches, bool arm_window);
 
   void _reset_deadline();
@@ -234,7 +282,11 @@ private:
   bool _use_default_credentials = false;
 
   // Provisioning state
-  bool _provisioning_active = false;
+  std::atomic<bool> _provisioning_active{false};
+  bool _provisioning_attached = false;
+  RtosMutex _provisioning_request_mutex;
+  AttachedRequest _provisioning_request{};
+  bool _provisioning_request_pending = false;
   bool _portal_used = false; // Retained across transport switches within a session.
   ProvisioningTransport _transport = ProvisioningTransport::BleOnly;
   // Connected is the provisioning success transition and must survive central

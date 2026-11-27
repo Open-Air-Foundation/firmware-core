@@ -54,6 +54,8 @@ struct LocalServerConfig {
   std::optional<bool> cloud_connection;             // "cloudConnection"
   std::optional<std::string> configuration_control; // "configurationControl"
   std::optional<int> measurement_interval_seconds;  // "measurementInterval"
+  std::optional<int> idle_interval_seconds;         // "idleInterval"
+  std::optional<int> tracking_interval_seconds;     // "trackingInterval"
   std::optional<std::string> gps_mode;              // "gpsMode"
   std::optional<int> front_led_brightness;          // "frontLedBrightness"
   std::optional<std::string> back_led_indicator;    // "backLedIndicator"

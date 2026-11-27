@@ -481,50 +481,6 @@ target_link_libraries(go_wifi_tests PRIVATE
 catch_discover_tests(go_wifi_tests)
 
 # ---------------------------------------------------------------------------
-# go_portable_provisioner tests — real ProvisioningManager + WifiManager
-# (fake HAL) + MockBleServer + a minimal fake board.
-# ---------------------------------------------------------------------------
-
-add_library(go_portable_provisioner_test_support
-    "${AIRGRADIENT_REPO_ROOT}/products/go/main/go_portable_provisioner.cpp"
-)
-
-target_include_directories(go_portable_provisioner_test_support PUBLIC
-    "${AIRGRADIENT_REPO_ROOT}/products/go/main"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-common/include"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-ble/hal"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-bms"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-config/hal"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-gpio/hal"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-http-server"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-provisioning"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi"
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-wifi/tests"
-)
-
-# Pulls in real ProvisioningManager + WifiManager + BleTransport + cJSON +
-# rtos/common helpers + mock_ble.h include path.
-target_link_libraries(go_portable_provisioner_test_support PUBLIC provisioning_test_support)
-
-target_compile_definitions(go_portable_provisioner_test_support PUBLIC TEST_HOST)
-
-add_executable(go_portable_provisioner_tests
-    go_portable_provisioner.tests.cpp
-)
-
-target_include_directories(go_portable_provisioner_tests PRIVATE
-    "${AIRGRADIENT_REPO_ROOT}/components/airgradient-touch/hal"
-)
-
-target_link_libraries(go_portable_provisioner_tests PRIVATE
-    go_portable_provisioner_test_support
-    Catch2::Catch2WithMain
-)
-
-catch_discover_tests(go_portable_provisioner_tests)
-
-# ---------------------------------------------------------------------------
 # go_gps_driver tests
 # ---------------------------------------------------------------------------
 
@@ -650,7 +606,6 @@ target_compile_definitions(go_app_test_support PUBLIC
     CONFIG_SENSOR_WARMUP_DURATION_MS=10000
     CONFIG_SENSOR_WARMUP_INTERVAL_MS=1000
     CONFIG_TRACKING_FSYNC_INTERVAL_MS=30000
-    CONFIG_GO_PORTABLE_PROV_RADIO_IDLE_MS=90000
     CONFIG_AG_HTTP_PORT=80
 )
 

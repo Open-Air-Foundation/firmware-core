@@ -103,7 +103,7 @@ static void go_to_group(UIManager &ui, const char *group) {
 
 static void go_to_measure_interval(UIManager &ui) {
   go_to_group(ui, "Operations");
-  select_row(ui, "Measure Int.");
+  select_row(ui, "Tracking int.");
 }
 
 static void open_measure_interval_choice(UIManager &ui) {
@@ -123,9 +123,9 @@ static void check_rows(UIManager &ui, std::initializer_list<const char *> expect
 TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
   UIManager ui(DEFAULT_UI_CONFIG);
   press(ui, InputSource::TouchEnter);
-  check_rows(ui, {"Exit Menu", "Start Tracking", "Operating Mode", "Settings"});
-  open_row(ui, "Operating Mode");
-  check_rows(ui, {"Exit", "Back", "Portable", "Stationary", "Energy Saving"});
+  check_rows(ui, {"Exit Menu", "Start Tracking", "Wi-Fi", "Settings"});
+  open_row(ui, "Wi-Fi");
+  check_rows(ui, {"Exit", "Back", "Wi-Fi: Off", "Home Assistant: Off"});
   double_press(ui);
   CHECK(ui.build_values(make_default_ctx()).list.selected_row == 2);
   open_row(ui, "Settings");
@@ -133,16 +133,12 @@ TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
                   "Setup Guide", "About Device"});
   open_row(ui, "Operations");
   auto values = ui.build_values(make_default_ctx());
-  REQUIRE(values.list.row_count == 6);
-  CHECK(std::string(values.list.rows[2].text).rfind("Measure Int.: ", 0) == 0);
-  CHECK(std::string(values.list.rows[3].text) == "CO2 Calibration");
-  CHECK(std::string(values.list.rows[4].text) == "GPS: When tracking");
-  CHECK(std::string(values.list.rows[5].text) == "Buzzer: Off");
+  check_rows(ui, {"Exit", "Back", "Idle int. 5m", "Tracking int. 10s", "GPS: When tracking",
+                  "Auto Lock: 10s", "CO2 Calibration", "Buzzer: Off"});
   double_press(ui);
   open_row(ui, "Display & Touch");
   check_rows(ui, {"Exit", "Back", "Pinned Chart", "Temperature Unit: C", "Altitude Unit: m",
-                  "PM Display: ug/m3", "Auto Lock: Off", "LED Indicator: AQI", "LED Brightness",
-                  "Touch LED: Off"});
+                  "PM Display: ug/m3", "LED Indicator: AQI", "LED Brightness", "Touch LED: Off"});
   double_press(ui);
   open_row(ui, "Hardware Test");
   check_rows(ui, {"Exit", "Back", "Peripheral Test", "GPS Test", "Accelerometer Test",
@@ -157,7 +153,7 @@ TEST_CASE("UIManager: V2 hides Touch LED without breaking Display & Touch naviga
   go_to_group(ui, "Display & Touch");
 
   check_rows(ui, {"Exit", "Back", "Pinned Chart", "Temperature Unit: C", "Altitude Unit: m",
-                  "PM Display: ug/m3", "Auto Lock: Off", "LED Indicator: AQI", "LED Brightness"});
+                  "PM Display: ug/m3", "LED Indicator: AQI", "LED Brightness"});
 
   select_row(ui, "LED Brightness");
   press(ui, InputSource::TouchDown);
@@ -180,62 +176,34 @@ TEST_CASE("UIManager: V2 hides Touch LED without breaking Display & Touch naviga
   CHECK(settings.touch_led_intensity == TouchLedIntensity::Off);
 }
 
-TEST_CASE("UIManager: mode choices preserve identities across every transition",
-          "[UIManager][settings][mode]") {
-  const OperatingMode modes[] = {OperatingMode::Portable, OperatingMode::Stationary,
-                                 OperatingMode::Offline};
-  const char *labels[] = {"Portable", "Stationary", "Energy Saving"};
-  for (uint8_t from = 0; from < 3; ++from) {
-    for (uint8_t to = 0; to < 3; ++to) {
-      UIManager ui(DEFAULT_UI_CONFIG);
-      GoSettings settings{};
-      settings.operating_mode = modes[from];
-      settings.measure_interval_seconds = 17;
-      settings.energy_saving_measure_interval_seconds = 900;
-      ui.sync_settings(settings);
-      press(ui, InputSource::TouchEnter);
-      open_row(ui, "Operating Mode");
-      const auto values = ui.build_values(make_default_ctx());
-      CHECK(std::string(values.list.rows[values.list.selected_row].text) == labels[from]);
-      const auto result = open_row(ui, labels[to]);
-      CHECK(result.action == UIAction::ChangeMode);
-      CHECK(result.new_mode == modes[to]);
-      CHECK(ui.current_screen() == Screen::Home);
-      ui.apply_to_settings(settings);
-      CHECK(settings.operating_mode == modes[to]);
-      CHECK(settings.measure_interval_seconds == 17);
-      CHECK(settings.energy_saving_measure_interval_seconds == 900);
-    }
-  }
-}
-
-TEST_CASE("UIManager: Energy Saving interval menu edits only its own preference",
+TEST_CASE("UIManager: Idle interval menu edits only its own preference",
           "[UIManager][settings][interval]") {
-  const int intervals[] = {300, 900, 3600};
-  const char *labels[] = {"5m", "15m", "1h"};
-  for (uint8_t from = 0; from < 3; ++from) {
-    for (uint8_t to = 0; to < 3; ++to) {
+  const int intervals[] = {3, 10, 30, 60, 300, 900, 3600};
+  const char *labels[] = {"3s", "10s", "30s", "60s", "5m", "15m", "1h"};
+  for (uint8_t from = 0; from < 7; ++from) {
+    for (uint8_t to = 0; to < 7; ++to) {
       UIManager ui(DEFAULT_UI_CONFIG);
       GoSettings settings;
-      settings.operating_mode = OperatingMode::Offline;
-      settings.measure_interval_seconds = 17;
-      settings.energy_saving_measure_interval_seconds = intervals[from];
+      settings.wifi_enabled = false;
+      settings.tracking_interval_seconds = 17;
+      settings.idle_interval_seconds = intervals[from];
       ui.sync_settings(settings);
-      go_to_measure_interval(ui);
+      go_to_group(ui, "Operations");
+      select_row(ui, "Idle int.");
       auto values = ui.build_values(make_default_ctx());
       CHECK(std::string(values.list.rows[values.list.selected_row].text) ==
-            std::string("Measure Int.: ") + labels[from]);
+            std::string("Idle int. ") + labels[from]);
       press(ui, InputSource::TouchEnter);
-      check_rows(ui, {"Exit", "Back", "5m", "15m", "1h"});
+      check_rows(ui, {"Exit", "Back", "3s", "10s", "30s", "60s", "5m", "15m", "1h"});
       CHECK(ui.build_values(make_default_ctx()).list.selected_row == from + 2);
       CHECK(open_row(ui, labels[to]).action == UIAction::SettingsChanged);
       ui.apply_to_settings(settings);
-      CHECK(settings.measure_interval_seconds == 17);
-      CHECK(settings.energy_saving_measure_interval_seconds == intervals[to]);
-      CHECK(ui.build_values(make_default_ctx()).home.show_temp_hum);
+      CHECK(settings.tracking_interval_seconds == 17);
+      CHECK(settings.idle_interval_seconds == intervals[to]);
+      CHECK(ui.build_values(make_default_ctx()).home.show_temp_hum == (intervals[to] >= 300));
 
-      // Returning to normal mode restores the exact custom preference.
-      settings.operating_mode = OperatingMode::Portable;
+      // Tracking keeps its exact custom preference.
+      settings.wifi_enabled = false;
       ui.sync_settings(settings);
       ui.reset_to_home();
       open_measure_interval_choice(ui);
@@ -243,28 +211,10 @@ TEST_CASE("UIManager: Energy Saving interval menu edits only its own preference"
       CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Custom (17s)");
       CHECK(open_row(ui, "30s").action == UIAction::SettingsChanged);
       ui.apply_to_settings(settings);
-      CHECK(settings.measure_interval_seconds == 30);
-      CHECK(settings.energy_saving_measure_interval_seconds == intervals[to]);
+      CHECK(settings.tracking_interval_seconds == 30);
+      CHECK(settings.idle_interval_seconds == intervals[to]);
     }
   }
-}
-
-TEST_CASE("UIManager: open interval menu resynchronizes across modes",
-          "[UIManager][settings][interval]") {
-  UIManager ui(DEFAULT_UI_CONFIG);
-  GoSettings settings;
-  settings.measure_interval_seconds = 3600;
-  settings.energy_saving_measure_interval_seconds = 900;
-  ui.sync_settings(settings);
-  open_measure_interval_choice(ui);
-  settings.operating_mode = OperatingMode::Offline;
-  ui.sync_settings(settings);
-  check_rows(ui, {"Exit", "Back", "5m", "15m", "1h"});
-  CHECK(ui.build_values(make_default_ctx()).list.selected_row == 3);
-  settings.operating_mode = OperatingMode::Stationary;
-  ui.sync_settings(settings);
-  auto values = ui.build_values(make_default_ctx());
-  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "1h");
 }
 
 TEST_CASE("UIManager: group choice returns and exit gestures", "[UIManager][nav][redesign]") {
@@ -275,18 +225,18 @@ TEST_CASE("UIManager: group choice returns and exit gestures", "[UIManager][nav]
     Screen parent;
   };
   const ChoiceCase choices[] = {
-      {"Operations", "Measure Int.", "10s", Screen::Operations},
+      {"Operations", "Tracking int.", "10s", Screen::Operations},
       {"Operations", "GPS:", "Always On", Screen::Operations},
       {"Operations", "Buzzer:", "On", Screen::Operations},
       {"Display & Touch", "PM Display:", "USAQI", Screen::DisplayTouch},
-      {"Display & Touch", "Auto Lock:", "60 Seconds", Screen::DisplayTouch},
-      {"Operations", "Local Server", "Disable", Screen::Operations},
+      {"Operations", "Auto Lock:", "60 Seconds", Screen::Operations},
+
   };
   for (const auto &choice : choices) {
     DYNAMIC_SECTION(choice.setting) {
       UIManager ui(DEFAULT_UI_CONFIG);
       GoSettings settings{};
-      settings.operating_mode = OperatingMode::Stationary;
+      settings.wifi_enabled = true;
       ui.sync_settings(settings);
       go_to_group(ui, choice.group);
       open_row(ui, choice.setting);
@@ -334,7 +284,7 @@ TEST_CASE("UIManager: group summaries fit the current list font",
   for (const char *group : {"Operations", "Display & Touch", "Hardware Test"}) {
     UIManager ui(DEFAULT_UI_CONFIG);
     GoSettings settings{};
-    settings.measure_interval_seconds = 3599;
+    settings.tracking_interval_seconds = 3599;
     settings.use_fahrenheit = true;
     settings.use_feet = true;
     settings.gps_mode = GpsMode::OnWhenTracking;
@@ -483,8 +433,8 @@ TEST_CASE("UIManager: grouped menus wrap and return to their parent",
   };
   const MenuCase cases[] = {
       {nullptr, Screen::Settings, "Operations", "About Device", 8},
-      {"Operations", Screen::Operations, "Measure Int.", "Buzzer: Off", 6},
-      {"Display & Touch", Screen::DisplayTouch, "Pinned Chart", "Touch LED: Off", 10},
+      {"Operations", Screen::Operations, "Idle int.", "Buzzer: Off", 8},
+      {"Display & Touch", Screen::DisplayTouch, "Pinned Chart", "Touch LED: Off", 9},
       {"Hardware Test", Screen::HardwareTest, "Peripheral Test", "Play Melody", 7},
   };
   for (const auto &item : cases) {
@@ -560,7 +510,7 @@ TEST_CASE("UIManager: TagList wrap-around navigation", "[UIManager][nav][taglist
 TEST_CASE("UIManager: metric cycling on Home", "[UIManager][metric]") {
   UIManager ui(DEFAULT_UI_CONFIG);
   GoSettings settings{};
-  settings.measure_interval_seconds = 300;
+  settings.tracking_interval_seconds = 300;
   ui.sync_settings(settings);
 
   SECTION("starts with Metric::None") {
@@ -642,60 +592,6 @@ TEST_CASE("UIManager: tracking start/stop", "[UIManager][tracking]") {
 
     CHECK(result.action == UIAction::StopTracking);
     CHECK(ui.current_screen() == Screen::Home);
-  }
-}
-
-TEST_CASE("UIManager: Stationary and Energy Saving hide tracking and keep menu actions aligned",
-          "[UIManager][tracking][nav]") {
-  const auto mode = GENERATE(OperatingMode::Stationary, OperatingMode::Offline);
-  CAPTURE(mode);
-  UIManager ui(DEFAULT_UI_CONFIG);
-  GoSettings settings{};
-  settings.operating_mode = mode;
-  ui.sync_settings(settings);
-  press(ui, InputSource::TouchEnter);
-  check_rows(ui, {"Exit Menu", "Operating Mode", "Settings"});
-
-  SECTION("navigation skips tracking in both directions and wraps") {
-    for (uint8_t expected : {1, 2, 0}) {
-      press(ui, InputSource::TouchDown);
-      CHECK(ui.build_values(make_default_ctx()).list.selected_row == expected);
-    }
-    for (uint8_t expected : {2, 1, 0}) {
-      press(ui, InputSource::TouchUp);
-      CHECK(ui.build_values(make_default_ctx()).list.selected_row == expected);
-    }
-    press(ui, InputSource::TouchEnter);
-    CHECK(ui.current_screen() == Screen::Home);
-  }
-
-  SECTION("mode and settings open correctly and restore their cursor") {
-    CHECK(open_row(ui, "Operating Mode").action == UIAction::None);
-    CHECK(ui.current_screen() == Screen::SettingsChoice);
-    double_press(ui);
-    CHECK(ui.build_values(make_default_ctx()).list.selected_row == 1);
-    CHECK(open_row(ui, "Settings").action == UIAction::None);
-    CHECK(ui.current_screen() == Screen::Settings);
-    double_press(ui);
-    CHECK(ui.build_values(make_default_ctx()).list.selected_row == 2);
-  }
-
-  SECTION("mode synchronization moves selection off a newly hidden tracking row") {
-    settings.operating_mode = OperatingMode::Portable;
-    ui.sync_settings(settings);
-    select_row(ui, "Start Tracking");
-    settings.operating_mode = mode;
-    ui.sync_settings(settings);
-    CHECK(ui.build_values(make_default_ctx()).list.selected_row == 1);
-    press(ui, InputSource::TouchEnter);
-    CHECK(ui.current_screen() == Screen::SettingsChoice);
-  }
-
-  SECTION("returning to Portable restores tracking") {
-    settings.operating_mode = OperatingMode::Portable;
-    ui.sync_settings(settings);
-    check_rows(ui, {"Exit Menu", "Start Tracking", "Operating Mode", "Settings"});
-    CHECK(open_row(ui, "Start Tracking").action == UIAction::StartTracking);
   }
 }
 
@@ -1194,15 +1090,15 @@ TEST_CASE("UIManager: settings choice apply", "[UIManager][settings]") {
     CHECK(v.preferences.use_feet);
   }
 
-  SECTION("changing mode returns ChangeMode with new mode") {
+  SECTION("Wi-Fi is an independent saved preference") {
     press(ui, InputSource::TouchEnter);
-    open_row(ui, "Operating Mode");
-    REQUIRE(ui.current_screen() == Screen::SettingsChoice);
-    const auto result = open_row(ui, "Stationary");
-
-    CHECK(result.action == UIAction::ChangeMode);
-    CHECK(result.new_mode == OperatingMode::Stationary);
-    CHECK(ui.current_screen() == Screen::Home);
+    open_row(ui, "Wi-Fi");
+    open_row(ui, "Wi-Fi:");
+    const auto result = open_row(ui, "On");
+    CHECK(result.action == UIAction::SettingsChanged);
+    GoSettings settings;
+    ui.apply_to_settings(settings);
+    CHECK(settings.wifi_enabled);
   }
 }
 
@@ -1252,13 +1148,13 @@ TEST_CASE("UIManager: custom measurement interval presentation",
           "[UIManager][settings][interval]") {
   UIManager ui(DEFAULT_UI_CONFIG);
   GoSettings settings{};
-  settings.measure_interval_seconds = 17;
+  settings.tracking_interval_seconds = 17;
   ui.sync_settings(settings);
 
   go_to_measure_interval(ui);
   auto ctx = make_default_ctx();
   DisplayValues values = ui.build_values(ctx);
-  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Measure Int.: 17s");
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Tracking int. 17s");
 
   press(ui, InputSource::TouchEnter);
   values = ui.build_values(ctx);
@@ -1278,18 +1174,18 @@ TEST_CASE("UIManager: custom measurement interval presentation",
   REQUIRE(result.action == UIAction::SettingsChanged);
   GoSettings output{};
   ui.apply_to_settings(output);
-  CHECK(output.measure_interval_seconds == 17);
+  CHECK(output.tracking_interval_seconds == 17);
 }
 
 TEST_CASE("UIManager: unrelated setting preserves custom measurement interval",
           "[UIManager][settings][interval]") {
-  for (auto mode : {OperatingMode::Portable, OperatingMode::Stationary, OperatingMode::Offline}) {
+  for (auto mode : {false, true, false}) {
     CAPTURE(static_cast<int>(mode));
     UIManager ui(DEFAULT_UI_CONFIG);
     GoSettings settings{};
-    settings.operating_mode = mode;
-    settings.measure_interval_seconds = 17;
-    settings.energy_saving_measure_interval_seconds = 900;
+    settings.wifi_enabled = mode;
+    settings.tracking_interval_seconds = 17;
+    settings.idle_interval_seconds = 900;
     ui.sync_settings(settings);
 
     go_to_group(ui, "Display & Touch");
@@ -1301,8 +1197,8 @@ TEST_CASE("UIManager: unrelated setting preserves custom measurement interval",
     GoSettings output{};
     ui.apply_to_settings(output);
     CHECK(output.use_fahrenheit);
-    CHECK(output.measure_interval_seconds == 17);
-    CHECK(output.energy_saving_measure_interval_seconds == 900);
+    CHECK(output.tracking_interval_seconds == 17);
+    CHECK(output.idle_interval_seconds == 900);
   }
 }
 
@@ -1310,7 +1206,7 @@ TEST_CASE("UIManager: fixed choice replaces custom measurement interval",
           "[UIManager][settings][interval]") {
   UIManager ui(DEFAULT_UI_CONFIG);
   GoSettings settings{};
-  settings.measure_interval_seconds = 17;
+  settings.tracking_interval_seconds = 17;
   ui.sync_settings(settings);
   open_measure_interval_choice(ui);
 
@@ -1322,11 +1218,11 @@ TEST_CASE("UIManager: fixed choice replaces custom measurement interval",
   REQUIRE(result.action == UIAction::SettingsChanged);
   GoSettings output{};
   ui.apply_to_settings(output);
-  CHECK(output.measure_interval_seconds == 30);
+  CHECK(output.tracking_interval_seconds == 30);
 
   auto ctx = make_default_ctx();
   DisplayValues values = ui.build_values(ctx);
-  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Measure Int.: 30s");
+  CHECK(std::string(values.list.rows[values.list.selected_row].text) == "Tracking int. 30s");
 
   press(ui, InputSource::TouchEnter);
   values = ui.build_values(ctx);
@@ -1351,7 +1247,7 @@ TEST_CASE("UIManager: fixed measurement intervals keep existing choices",
   for (const auto &test_case : CASES) {
     UIManager ui(DEFAULT_UI_CONFIG);
     GoSettings settings{};
-    settings.measure_interval_seconds = test_case.seconds;
+    settings.tracking_interval_seconds = test_case.seconds;
     ui.sync_settings(settings);
     open_measure_interval_choice(ui);
 
@@ -1362,7 +1258,7 @@ TEST_CASE("UIManager: fixed measurement intervals keep existing choices",
 
     GoSettings output{};
     ui.apply_to_settings(output);
-    CHECK(output.measure_interval_seconds == test_case.seconds);
+    CHECK(output.tracking_interval_seconds == test_case.seconds);
   }
 }
 
@@ -1370,18 +1266,18 @@ TEST_CASE("UIManager: open interval choice resynchronizes fixed and custom value
           "[UIManager][settings][interval]") {
   UIManager ui(DEFAULT_UI_CONFIG);
   GoSettings settings{};
-  settings.measure_interval_seconds = 17;
+  settings.tracking_interval_seconds = 17;
   ui.sync_settings(settings);
   open_measure_interval_choice(ui);
 
-  settings.measure_interval_seconds = 30;
+  settings.tracking_interval_seconds = 30;
   ui.sync_settings(settings);
   DisplayValues values = ui.build_values(make_default_ctx());
   REQUIRE(values.list.row_count == 9);
   CHECK(values.list.selected_row == 4);
   CHECK(std::string(values.list.rows[values.list.selected_row].text) == "30s");
 
-  settings.measure_interval_seconds = 19;
+  settings.tracking_interval_seconds = 19;
   ui.sync_settings(settings);
   values = ui.build_values(make_default_ctx());
   REQUIRE(values.list.row_count == 10);
@@ -1608,9 +1504,9 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
     s.use_fahrenheit = true;
     s.use_feet = true;
     s.pm_use_usaqi = true;
-    s.measure_interval_seconds = 60;
+    s.tracking_interval_seconds = 60;
     s.gps_mode = GpsMode::AlwaysOn;
-    s.operating_mode = OperatingMode::Stationary;
+    s.wifi_enabled = true;
     s.auto_lock_seconds = 30;
 
     ui.sync_settings(s);
@@ -1622,13 +1518,13 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
 
   SECTION("sync_settings maps measure_interval 10s to index 1") {
     GoSettings s{};
-    s.measure_interval_seconds = 10;
+    s.tracking_interval_seconds = 10;
     ui.sync_settings(s);
 
     // Verify via apply_to_settings round-trip
     GoSettings out{};
     ui.apply_to_settings(out);
-    CHECK(out.measure_interval_seconds == 10);
+    CHECK(out.tracking_interval_seconds == 10);
   }
 
   SECTION("sync_settings round-trips altitude unit") {
@@ -1643,22 +1539,22 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
 
   SECTION("sync_settings maps measure_interval 300s to index 4") {
     GoSettings s{};
-    s.measure_interval_seconds = 300;
+    s.tracking_interval_seconds = 300;
     ui.sync_settings(s);
 
     GoSettings out{};
     ui.apply_to_settings(out);
-    CHECK(out.measure_interval_seconds == 300);
+    CHECK(out.tracking_interval_seconds == 300);
   }
 
   SECTION("sync_settings maps measure_interval minimum 3s to index 0") {
     GoSettings s{};
-    s.measure_interval_seconds = 3;
+    s.tracking_interval_seconds = 3;
     ui.sync_settings(s);
 
     GoSettings out{};
     ui.apply_to_settings(out);
-    CHECK(out.measure_interval_seconds == 3);
+    CHECK(out.tracking_interval_seconds == 3);
   }
 
   SECTION("sync_settings preserves valid custom intervals") {
@@ -1666,12 +1562,12 @@ TEST_CASE("UIManager: sync_settings from GoSettings", "[UIManager][sync]") {
 
     for (const int interval : CUSTOM_INTERVALS) {
       GoSettings input{};
-      input.measure_interval_seconds = interval;
+      input.tracking_interval_seconds = interval;
       ui.sync_settings(input);
 
       GoSettings output{};
       ui.apply_to_settings(output);
-      CHECK(output.measure_interval_seconds == interval);
+      CHECK(output.tracking_interval_seconds == interval);
     }
   }
 
@@ -1715,7 +1611,7 @@ TEST_CASE("UIManager: every Auto Lock choice maps to its duration",
         ui.apply_to_settings(output);
         CHECK(output.auto_lock_seconds == initial.seconds);
 
-        go_to_group(ui, "Display & Touch");
+        go_to_group(ui, "Operations");
         select_row(ui, "Auto Lock:");
         auto values = ui.build_values(make_default_ctx());
         CHECK(std::string(values.list.rows[values.list.selected_row].text) == initial.summary);
@@ -1726,7 +1622,7 @@ TEST_CASE("UIManager: every Auto Lock choice maps to its duration",
 
         const auto result = open_row(ui, selected.label);
         CHECK(result.action == UIAction::SettingsChanged);
-        REQUIRE(ui.current_screen() == Screen::DisplayTouch);
+        REQUIRE(ui.current_screen() == Screen::Operations);
         ui.apply_to_settings(output);
         CHECK(output.auto_lock_seconds == selected.seconds);
         values = ui.build_values(make_default_ctx());
@@ -1805,7 +1701,7 @@ TEST_CASE("UIManager: minimal build context renders unavailable inputs safely",
 TEST_CASE("UIManager: chart extraction from MeasuresAGo cache", "[UIManager][chart]") {
   UIManager ui(DEFAULT_UI_CONFIG);
   GoSettings settings{};
-  settings.measure_interval_seconds = 300;
+  settings.tracking_interval_seconds = 300;
   settings.pinned_chart = Metric::None;
   ui.sync_settings(settings);
 
@@ -2203,13 +2099,13 @@ TEST_CASE("UIManager: GPS Test screen", "[UIManager][hwtest][gps]") {
     return open_row(ui, "GPS Test");
   };
 
-  SECTION("Energy Saving GPS Test has no action") {
+  SECTION("GPS Test is available with Wi-Fi Off") {
     GoSettings settings{};
-    settings.operating_mode = OperatingMode::Offline;
+    settings.wifi_enabled = false;
     ui.sync_settings(settings);
     auto result = open_gps();
-    CHECK(result.action == UIAction::None);
-    CHECK(ui.current_screen() == Screen::HardwareTest);
+    CHECK(result.action == UIAction::OpenGpsTest);
+    CHECK(ui.current_screen() == Screen::GpsTest);
   }
 
   SECTION("selecting the row opens the live screen and emits OpenGpsTest") {
@@ -2826,8 +2722,9 @@ TEST_CASE("UIManager: interval boundary controls the compact home layout", "[UIM
   for (int interval : {1, 60, 299, 300, 301}) {
     CAPTURE(interval);
     UIManager ui(DEFAULT_UI_CONFIG);
+    ui.sync_tracking_state(TrackingState::Recording);
     GoSettings settings{};
-    settings.measure_interval_seconds = interval;
+    settings.tracking_interval_seconds = interval;
     ui.sync_settings(settings);
     const auto v = ui.build_values(ctx);
     CHECK(v.home.show_temp_hum == (interval >= 300));
@@ -2845,8 +2742,9 @@ TEST_CASE("UIManager: interval boundary controls the compact home layout", "[UIM
 TEST_CASE("UIManager: compact browsing and locking reset to the default PM chart",
           "[UIManager][metric]") {
   UIManager ui(DEFAULT_UI_CONFIG);
+  ui.sync_tracking_state(TrackingState::Recording);
   GoSettings settings{};
-  settings.measure_interval_seconds = 60;
+  settings.tracking_interval_seconds = 60;
   ui.sync_settings(settings);
   MeasuresAGo cache[2]{};
   cache[0].pm_a.pm_25 = 10.0f;
@@ -2895,20 +2793,21 @@ TEST_CASE("UIManager: compact browsing and locking reset to the default PM chart
 TEST_CASE("UIManager: interval changes remove hidden metric focus", "[UIManager][metric]") {
   for (int selected_steps : {3, 4}) {
     UIManager ui(DEFAULT_UI_CONFIG);
+    ui.sync_tracking_state(TrackingState::Recording);
     GoSettings settings{};
-    settings.measure_interval_seconds = 300;
+    settings.tracking_interval_seconds = 300;
     ui.sync_settings(settings);
     auto ctx = make_default_ctx();
     for (int i = 0; i < selected_steps; ++i)
       press(ui, InputSource::TouchDown);
     REQUIRE(ui.build_values(ctx).home.active_metric ==
             (selected_steps == 3 ? Metric::Temp : Metric::Humidity));
-    settings.measure_interval_seconds = 299;
+    settings.tracking_interval_seconds = 299;
     ui.sync_settings(settings);
     CHECK_FALSE(ui.build_values(ctx).home.show_temp_hum);
     CHECK(ui.build_values(ctx).home.active_metric == Metric::None);
     CHECK(ui.build_values(ctx).chart_metric() == Metric::Pm25);
-    settings.measure_interval_seconds = 300;
+    settings.tracking_interval_seconds = 300;
     ui.sync_settings(settings);
     CHECK(ui.build_values(ctx).home.show_temp_hum);
     CHECK(ui.build_values(ctx).chart_metric() == Metric::Pm25);
@@ -2920,7 +2819,7 @@ TEST_CASE("UIManager: interval changes remove hidden metric focus", "[UIManager]
 TEST_CASE("UIManager: default PM chart handles empty and invalid history", "[UIManager][chart]") {
   UIManager ui(DEFAULT_UI_CONFIG);
   GoSettings settings{};
-  settings.measure_interval_seconds = 60;
+  settings.tracking_interval_seconds = 60;
   ui.sync_settings(settings);
   auto ctx = make_default_ctx();
   auto v = ui.build_values(ctx);
@@ -2949,7 +2848,7 @@ TEST_CASE("UIManager: pinned chart is independent of browsing and lock state",
   for (int interval : {60, 300}) {
     UIManager ui(DEFAULT_UI_CONFIG);
     GoSettings settings{};
-    settings.measure_interval_seconds = interval;
+    settings.tracking_interval_seconds = interval;
     settings.pinned_chart = Metric::Co2;
     ui.sync_settings(settings);
     auto ctx = make_default_ctx();
@@ -2987,8 +2886,9 @@ TEST_CASE("UIManager: pinned chart hint uses only the empty overview row", "[UIM
   for (int interval : {30, 299, 300, 600}) {
     CAPTURE(interval);
     UIManager ui(DEFAULT_UI_CONFIG);
+    ui.sync_tracking_state(TrackingState::Recording);
     GoSettings settings{};
-    settings.measure_interval_seconds = interval;
+    settings.tracking_interval_seconds = interval;
     settings.pinned_chart = Metric::None;
     ui.sync_settings(settings);
     auto ctx = make_default_ctx();
@@ -3015,7 +2915,7 @@ TEST_CASE("UIManager: selected charts never show the pin hint even without histo
           "[UIManager][chart]") {
   UIManager ui(DEFAULT_UI_CONFIG);
   GoSettings settings{};
-  settings.measure_interval_seconds = 30;
+  settings.tracking_interval_seconds = 30;
   auto ctx = make_default_ctx();
   for (auto metric : {Metric::Pm25, Metric::Co2, Metric::Temp, Metric::Humidity, Metric::Tvoc,
                       Metric::Nox, Metric::Pressure, Metric::Altitude}) {
@@ -3035,10 +2935,11 @@ TEST_CASE("UIManager: hidden pinned chart returns when the interval permits it",
           "[UIManager][chart]") {
   for (auto metric : {Metric::Temp, Metric::Humidity}) {
     UIManager ui(DEFAULT_UI_CONFIG);
+    ui.sync_tracking_state(TrackingState::Recording);
     GoSettings settings{};
     settings.pinned_chart = metric;
     for (int interval : {300, 299, 301}) {
-      settings.measure_interval_seconds = interval;
+      settings.tracking_interval_seconds = interval;
       ui.sync_settings(settings);
       for (bool locked : {true, false}) {
         auto ctx = make_default_ctx();
@@ -3091,7 +2992,7 @@ TEST_CASE("UIManager: every chart extracts its own valid history", "[UIManager][
   const float expected[] = {12.0f, 650.0f, 21.0f, 45.0f, 110.0f, 8.0f, 1013.0f, -42.0f};
   UIManager ui(DEFAULT_UI_CONFIG);
   GoSettings settings{};
-  settings.measure_interval_seconds = 300;
+  settings.tracking_interval_seconds = 300;
   ui.sync_settings(settings);
   auto ctx = make_default_ctx();
   ctx.history.samples = cache;
@@ -3120,50 +3021,6 @@ TEST_CASE("UIManager: every chart extracts its own valid history", "[UIManager][
   CHECK(v.home.chart.min == 1013.0f);
 }
 
-TEST_CASE("UIManager: Local Server is only visible in Stationary and retains its selection",
-          "[UIManager][settings][local-server]") {
-  UIManager ui(DEFAULT_UI_CONFIG);
-  GoSettings settings{};
-  settings.operating_mode = OperatingMode::Stationary;
-  ui.sync_settings(settings);
-  go_to_group(ui, "Operations");
-  check_rows(ui, {"Exit", "Back", "Measure Int.: 10s", "CO2 Calibration", "GPS: When tracking",
-                  "Buzzer: Off", "Local Server"});
-  open_row(ui, "Local Server");
-  check_rows(ui, {"Exit", "Back", "Disable", "Enable"});
-  CHECK(ui.build_values(make_default_ctx()).list.selected_row == 3);
-  CHECK(open_row(ui, "Disable").action == UIAction::SettingsChanged);
-  ui.apply_to_settings(settings);
-  REQUIRE_FALSE(settings.local_server_enabled);
-
-  for (auto mode : {OperatingMode::Portable, OperatingMode::Offline}) {
-    settings.operating_mode = mode;
-    ui.sync_settings(settings);
-    auto values = ui.build_values(make_default_ctx());
-    REQUIRE(values.list.row_count == 6);
-    CHECK(values.list.selected_row < values.list.row_count);
-    for (uint8_t row = 0; row < values.list.row_count; ++row)
-      CHECK(std::string(values.list.rows[row].text) != "Local Server");
-    ui.apply_to_settings(settings);
-    CHECK_FALSE(settings.local_server_enabled);
-  }
-
-  settings.operating_mode = OperatingMode::Stationary;
-  ui.sync_settings(settings);
-  open_row(ui, "Local Server");
-  CHECK(ui.build_values(make_default_ctx()).list.selected_row == 2);
-  CHECK(open_row(ui, "Enable").action == UIAction::SettingsChanged);
-  ui.apply_to_settings(settings);
-  CHECK(settings.local_server_enabled);
-
-  // A mode update while editing must close the now-hidden choice.
-  open_row(ui, "Local Server");
-  settings.operating_mode = OperatingMode::Portable;
-  ui.sync_settings(settings);
-  CHECK(ui.current_screen() == Screen::Operations);
-  CHECK(ui.build_values(make_default_ctx()).list.row_count == 6);
-}
-
 TEST_CASE("UIManager: LED Indicator shows its value and retains the selected option",
           "[UIManager][settings][led]") {
   for (const auto initial : {BackLedIndicator::Aqi, BackLedIndicator::Co2}) {
@@ -3174,7 +3031,7 @@ TEST_CASE("UIManager: LED Indicator shows its value and retains the selected opt
     ui.sync_settings(settings);
     go_to_group(ui, "Display & Touch");
     auto values = ui.build_values(make_default_ctx());
-    REQUIRE(values.list.row_count == MAX_LIST_ROWS);
+    REQUIRE(values.list.row_count == MAX_LIST_ROWS - 1);
     select_row(ui, "LED Indicator");
     values = ui.build_values(make_default_ctx());
     const char *initial_label =

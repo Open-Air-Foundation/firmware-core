@@ -180,7 +180,7 @@ async def _scan_for_ago(timeout: float) -> BLEDevice:
     if found is None:
         raise RuntimeError(
             f"No AGo device found after {timeout}s scan. "
-            "Make sure the device is advertising in Portable mode, "
+            "Make sure the device is unlocked and advertising, "
             "or pass --ago-address explicitly."
         )
     return found

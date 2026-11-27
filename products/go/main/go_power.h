@@ -174,7 +174,7 @@ public:
 
   /// Sleep type selected by decide_sleep().
   enum class SleepType {
-    None, ///< Do not sleep (device is unlocked, not Offline, or interval too short)
+    None, ///< Do not sleep (unlocked, tracking/Wi-Fi active, or interval too short)
     Deep, ///< Deep sleep — CPU reboots on wake; does not return from enter_sleep()
   };
 
@@ -329,7 +329,7 @@ public:
   /// Uses Config::deep_sleep_threshold_ms from construction.
   ///
   /// Rules:
-  ///   - Not Offline mode  -> {None, 0}  (only Offline sleeps)
+  ///   - Tracking or Wi-Fi enabled -> {None, 0}
   ///   - Unlocked          -> {None, 0}  (never sleep while user is active)
   ///   - sleep_ms >= deep_sleep_threshold_ms -> {Deep, sleep_ms}
   ///   - sleep_ms <  deep_sleep_threshold_ms -> {None, 0}  (stay awake; avoid
@@ -339,10 +339,11 @@ public:
   ///
   /// @param settings   Current settings (sensor and display intervals).
   /// @param lock_state Current lock state.
-  /// @param mode       Current operating mode.
+  /// @param tracking   Current tracking state.
   /// @param awake_ms   Milliseconds the device has been awake this cycle.
-  SleepDecision decide_sleep(const GoSettings &settings, LockState lock_state, OperatingMode mode,
-                             uint32_t awake_ms) const;
+  SleepDecision decide_sleep(const GoSettings &settings, LockState lock_state,
+                             TrackingState tracking, uint32_t awake_ms,
+                             bool wifi_fallback = false) const;
 
   /// Return true when the given sleep duration is short enough that keeping
   /// the PM sensor measuring (GPIO held) across deep sleep is beneficial.
@@ -351,7 +352,7 @@ public:
   bool should_hold_pm_sensor(uint32_t sleep_duration_ms) const;
 
   /// Return true when the measurement interval is long enough to justify
-  /// sleeping the PM sensor between measurements (Portable mode).
+  /// sleeping the PM sensor between awake measurements.
   ///
   /// The threshold is `Config::pm_sleep_threshold_ms` (default 20 s), which
   /// accounts for ~10 s warmup plus a minimum sleep time.

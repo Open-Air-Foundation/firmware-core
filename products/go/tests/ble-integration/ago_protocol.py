@@ -23,7 +23,12 @@ CHAR_STATUS_UUID = "d1c0c0a2-6b48-4b2a-9b1d-59f9f2b0a1e1"
 CHAR_CONFIG_UUID = "d1c0c0a3-6b48-4b2a-9b1d-59f9f2b0a1e1"
 CHAR_HISTORY_UUID = "d1c0c0a4-6b48-4b2a-9b1d-59f9f2b0a1e1"
 
-# Standard Device Information Service (0x180A) — present in Portable mode.
+# Provisioning is exposed alongside the data service, even with Wi-Fi disabled.
+PROVISIONING_SERVICE_UUID = "acbcfea8-e541-4c40-9bfd-17820f16c95c"
+CHAR_WIFI_SCAN_UUID = "467a080f-e50f-42c9-b9b2-a2ab14d82725"
+CHAR_WIFI_CREDENTIALS_UUID = "703fa252-3d2a-4da9-a05c-83b0d9cacb8e"
+
+# Standard Device Information Service (0x180A).
 # 16-bit SIG UUIDs expand against the Bluetooth base UUID.
 DIS_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb"
 DIS_MODEL_NUMBER_UUID = "00002a24-0000-1000-8000-00805f9b34fb"
@@ -119,11 +124,10 @@ CHARGING_STATES = {"none", "trickle", "pre", "fast", "taper", "topoff", "done", 
 # ---------------------------------------------------------------------------
 
 CONFIG_READ_KEYS = {
-    "meas_int",
+    "idle_int", "tracking_int", "wifi",
     "temp_f", "alt_ft", "pm_aqi", "pchart",
     "gps_mode",
     "auto_lock",
-    "op_mode",
     "bled", "bledi", "tled",
     "buz", "abc", "tlo", "nlo",
     "pm25_corr", "temp_corr", "hum_corr",
@@ -135,6 +139,8 @@ CONFIG_READ_KEYS = {
 # Read (CONFIG_READ_KEYS, no "type").
 CONFIG_NOTIFY_TYPE = "config"
 
+INTERVAL_SECONDS_MIN = 1
+INTERVAL_SECONDS_MAX = 3600
 CO2_ABC_DAYS_DISABLED = -1
 CO2_ABC_DAYS_MIN = 1
 CO2_ABC_DAYS_MAX = 200
@@ -142,14 +148,15 @@ LEARNING_OFFSET_HOURS_MIN = 1
 LEARNING_OFFSET_HOURS_MAX = 1000
 
 CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
-    "meas_int": (int,),
+    "idle_int": (int,),
+    "tracking_int": (int,),
+    "wifi": (bool,),
     "temp_f": (bool,),
     "alt_ft": (bool,),
     "pm_aqi": (bool,),
     "pchart": (int,),
     "gps_mode": (str,),
     "auto_lock": (int,),
-    "op_mode": (str,),
     "bled": (int,),
     "bledi": (str,),
     "tled": (int,),
@@ -165,7 +172,6 @@ CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
 
 BACK_LED_INDICATORS = {"aqi", "co2"}
 GPS_MODES = {"off", "tracking", "always"}
-OPERATING_MODES = {"portable", "stationary", "offline"}
 
 CORRECTION_MAP_KEYS = {"pm25_corr", "temp_corr", "hum_corr"}
 CORRECTION_SCHEMA_VERSION = 1
@@ -187,6 +193,7 @@ CMD_RESULT_KEYS_FAILURE = {"type", "cmd", "ok", "err"}
 COMMANDS = {
     "co2_cal", "clear_data", "factory_rst",
     "start_tracking", "stop_tracking", "pause_tracking", "resume_tracking",
+    "release_ble",
 }
 
 # Config "set" rejection error strings (cmd_result err values).

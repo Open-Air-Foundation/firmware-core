@@ -99,6 +99,20 @@ TEST_CASE("BleTransport: setup creates provisioning service and DIS", "[ble_tran
   MockBleGattService *dis = ble.find_service(DIS_UUID);
   REQUIRE(dis != nullptr);
   REQUIRE(dis->started);
+  REQUIRE(dis->characteristics.size() == 4);
+  const struct {
+    const char *uuid;
+    const char *value;
+  } identity[] = {
+      {"2A24", "I-9PSL"}, {"2A25", "AABBCCDD"}, {"2A26", "1.0.0"}, {"2A29", "AirGradient"}};
+  for (const auto &field : identity) {
+    auto *characteristic = dis->find_char(field.uuid);
+    REQUIRE(characteristic != nullptr);
+    REQUIRE(characteristic->last_value_str() == field.value);
+  }
+  for (const auto &characteristic : dis->characteristics) {
+    REQUIRE(characteristic.properties == (AgBleProperty::READ | AgBleProperty::READ_ENC));
+  }
 
   // Manufacturer data was set (2-byte company ID + payload).
   REQUIRE_FALSE(ble.last_mfg_data.empty());
@@ -106,6 +120,41 @@ TEST_CASE("BleTransport: setup creates provisioning service and DIS", "[ble_tran
   REQUIRE(ble.last_mfg_data[1] == 0xFF);
 
   transport.teardown();
+  REQUIRE(ble.deinit_count == 1);
+}
+
+TEST_CASE("BleTransport: missing identity fields remain empty", "[ble_transport]") {
+  MockBleServer ble;
+  BleTransport transport;
+  ProvisioningBleConfig config;
+
+  REQUIRE(transport.setup(ble, config));
+  auto *dis = ble.find_service(DIS_UUID);
+  REQUIRE(dis != nullptr);
+  REQUIRE(dis->started);
+  for (const char *uuid : {"2A24", "2A25", "2A26"}) {
+    auto *characteristic = dis->find_char(uuid);
+    REQUIRE(characteristic != nullptr);
+    REQUIRE(characteristic->last_value.empty());
+  }
+}
+
+TEST_CASE("BleTransport: incomplete device information prevents advertising", "[ble_transport]") {
+  class FailedDisService : public MockBleGattService {
+  public:
+    AgBleCharacteristic *add_characteristic(const char *, uint16_t) override { return nullptr; }
+  };
+  class FailedDisServer : public MockBleServer {
+  public:
+    AgBleGattService *add_service(const char *uuid) override {
+      return std::strcmp(uuid, DIS_UUID) == 0 ? &dis : MockBleServer::add_service(uuid);
+    }
+    FailedDisService dis;
+  } ble;
+  BleTransport transport;
+
+  REQUIRE_FALSE(transport.setup(ble, basic_ble_config()));
+  REQUIRE(ble.start_advertising_count == 0);
   REQUIRE(ble.deinit_count == 1);
 }
 
@@ -423,7 +472,7 @@ TEST_CASE("BleTransport: scan page JSON contains ssid, rssi, open flag", "[ble_t
 // Attached mode: setup_on_server() / detach()
 // ============================================================================
 
-TEST_CASE("BleTransport: setup_on_server registers prov+DIS without init/security/advertising",
+TEST_CASE("BleTransport: setup_on_server registers provisioning without duplicating owner services",
           "[ble_transport][attached]") {
   MockBleServer ble;
   // The owner already initialised the server (BleService path).
@@ -444,16 +493,15 @@ TEST_CASE("BleTransport: setup_on_server registers prov+DIS without init/securit
   REQUIRE_FALSE(static_cast<bool>(ble.connect_cb));
   REQUIRE_FALSE(static_cast<bool>(ble.disconnect_cb));
 
-  // Provisioning service + DIS were still registered and started.
+  // The provisioning service is registered and started.
   MockBleGattService *prov_svc = ble.find_service(PROV_SERVICE_UUID);
   REQUIRE(prov_svc != nullptr);
   REQUIRE(prov_svc->started);
   REQUIRE(prov_svc->find_char(CRED_STATUS_CHAR_UUID) != nullptr);
   REQUIRE(prov_svc->find_char(SCAN_CHAR_UUID) != nullptr);
 
-  MockBleGattService *dis = ble.find_service(DIS_UUID);
-  REQUIRE(dis != nullptr);
-  REQUIRE(dis->started);
+  // The owner already supplies Device Information on the shared server.
+  CHECK(ble.find_service(DIS_UUID) == nullptr);
 
   transport.detach();
 }

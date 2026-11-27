@@ -18,7 +18,6 @@
 #include "go_input.h"
 #include "led/go_led.h"
 #include "go_ota.h"
-#include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_storage.h"
@@ -234,18 +233,6 @@ int wifi_rssi = WIFI_RSSI_INVALID;
 bool wifi_schedule_reconnect_called = false;
 int wifi_schedule_reconnect_count = 0;
 
-// --- PortableWifiProvisioner ---
-bool portable_attach_called = false;
-bool portable_attach_result = true;
-bool portable_attached = false;
-bool portable_stop_called = false;
-bool portable_handle_pending_called = false;
-bool portable_on_connected_called = false;
-bool portable_on_ble_disconnected_called = false;
-bool portable_is_radio_active = false;
-uint32_t portable_next_deadline_ms = 0;
-bool portable_tick_called = false;
-
 // --- OtaService ---
 bool ota_setup_ble_called = false;
 bool ota_setup_ble_result = true;
@@ -282,7 +269,30 @@ uint32_t ensure_pmid_healthy_count = 0;
 bool recover_pm_sensor_called = false;
 uint32_t recover_pm_sensor_count = 0;
 
+bool cloud_stop_ready = true;
+uint32_t cloud_request_stop_count = 0;
+bool wifi_suspend_ready = true;
+bool wifi_suspend_ok = true;
+uint32_t wifi_suspend_count = 0;
+uint32_t wifi_resume_count = 0;
+std::string wifi_resume_ssid;
+uint32_t wifi_deinit_count = 0;
+WifiService::SuspendMode wifi_suspend_mode = WifiService::SuspendMode::StopWifi;
+bool ble_connectable = true;
+std::vector<std::string> connectivity_calls;
+
 void reset() {
+  cloud_stop_ready = true;
+  cloud_request_stop_count = 0;
+  wifi_suspend_ready = true;
+  wifi_suspend_ok = true;
+  wifi_suspend_count = 0;
+  wifi_resume_count = 0;
+  wifi_resume_ssid.clear();
+  wifi_deinit_count = 0;
+  wifi_suspend_mode = WifiService::SuspendMode::StopWifi;
+  ble_connectable = true;
+  connectivity_calls.clear();
   during_melody = nullptr;
   buzzer_refresh_ack_count = 0;
   buzzer_play_count = 0;
@@ -454,17 +464,6 @@ void reset() {
   wifi_rssi = WIFI_RSSI_INVALID;
   wifi_schedule_reconnect_called = false;
   wifi_schedule_reconnect_count = 0;
-
-  portable_attach_called = false;
-  portable_attach_result = true;
-  portable_attached = false;
-  portable_stop_called = false;
-  portable_handle_pending_called = false;
-  portable_on_connected_called = false;
-  portable_on_ble_disconnected_called = false;
-  portable_is_radio_active = false;
-  portable_next_deadline_ms = 0;
-  portable_tick_called = false;
 
   ota_setup_ble_called = false;
   ota_setup_ble_result = true;
@@ -821,8 +820,9 @@ RtcAppState PowerService::load_state() const { return test_spy::state_to_load; }
 
 PowerService::SleepDecision PowerService::decide_sleep(const GoSettings & /*settings*/,
                                                        LockState /*lock_state*/,
-                                                       OperatingMode /*mode*/,
-                                                       uint32_t /*awake_ms*/) const {
+                                                       TrackingState /*tracking*/,
+                                                       uint32_t /*awake_ms*/,
+                                                       bool /*wifi_fallback*/) const {
   return {test_spy::sleep_type_to_return, 10000};
 }
 
@@ -909,23 +909,26 @@ BleService::BleService(RtosQueueHandle /*event_queue*/, StorageService &storage,
                        AgBleServer & /*ble_server*/)
     : _event_queue(nullptr), _storage(storage), _server(nullptr) {}
 
-bool BleService::init(const char * /*serial*/) {
+bool BleService::init(const char * /*serial*/, const char *, const char *) {
   test_spy::ble_init_called = true;
   test_spy::ble_initialized = true;
   return true;
 }
 
-bool BleService::init_stack_and_register(const char * /*serial*/) {
+bool BleService::init_stack_and_register(const char * /*serial*/, const char *, const char *) {
   test_spy::ble_init_called = true;
   return true;
 }
 
 bool BleService::start_advertising() {
+  test_spy::connectivity_calls.push_back("ble_start");
   test_spy::ble_initialized = true;
   return true;
 }
 
 void BleService::deinit() {
+  test_spy::connectivity_calls.push_back("ble_stop");
+  _export_active = false;
   test_spy::ble_deinit_called = true;
   test_spy::ble_initialized = false;
   test_spy::ble_connected = false;
@@ -1071,7 +1074,6 @@ size_t BleService::encode_config(uint8_t * /*buf*/, size_t /*sz*/, const GoSetti
 }
 const char *BleService::charging_state_to_str(BmsChargingState /*s*/) { return "unknown"; }
 const char *BleService::gps_mode_to_str(GpsMode /*m*/) { return "tracking"; }
-const char *BleService::operating_mode_to_str(OperatingMode /*m*/) { return "offline"; }
 
 // ============================================================================
 // ULP stubs (go_ulp.h — LP Core not available on host)
@@ -1110,7 +1112,9 @@ void WifiService::set_power_save_enabled(bool enabled) {
   ++test_spy::wifi_set_power_save_count;
 }
 
-void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *static_ip) {
+void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *static_ip,
+                                                 bool retain_for_ble) {
+  _state.store(retain_for_ble ? WifiState::ServicesSuspended : WifiState::Active);
   test_spy::wifi_connect_saved_called = true;
   if (static_ip != nullptr) {
     test_spy::wifi_last_static_ip = *static_ip;
@@ -1135,10 +1139,24 @@ void WifiService::schedule_reconnect(const WifiStaticIpConfig *static_ip) {
 
 void WifiService::try_default_fallback_credentials() { test_spy::wifi_try_fallback_called = true; }
 
+bool WifiService::attach_ble_provisioning() {
+  _provisioning_attached = true;
+  return true;
+}
+void WifiService::detach_ble_provisioning() { _provisioning_attached = false; }
+bool WifiService::ble_provisioning_attached() const { return _provisioning_attached; }
+void WifiService::finish_ble_provisioning() { test_spy::wifi_provisioning_active = false; }
+void WifiService::handle_ble_provisioning_request(bool allowed) {
+  if (allowed) {
+    test_spy::wifi_provisioning_active = true;
+  }
+}
+
 void WifiService::start_provisioning(ProvisioningTransport t) {
   test_spy::wifi_start_provisioning_called = true;
   test_spy::wifi_start_provisioning_transport = t;
-  test_spy::wifi_provisioning_active = true;
+  test_spy::wifi_provisioning_active = t != ProvisioningTransport::BleAttached;
+  _transport = t;
   stop_local_endpoint();
 }
 
@@ -1173,9 +1191,7 @@ void WifiService::clear_credentials() { test_spy::wifi_clear_credentials_called 
 bool WifiService::is_online() const { return test_spy::wifi_is_online; }
 bool WifiService::is_connecting() const { return test_spy::wifi_is_connecting; }
 bool WifiService::is_provisioning() const { return test_spy::wifi_provisioning_active; }
-ProvisioningTransport WifiService::current_transport() const {
-  return ProvisioningTransport::BleOnly;
-}
+ProvisioningTransport WifiService::current_transport() const { return _transport; }
 uint32_t WifiService::ip() const { return 0; }
 int WifiService::rssi() const { return test_spy::wifi_rssi; }
 WifiDisconnectReason WifiService::last_disconnect_reason() const {
@@ -1194,55 +1210,6 @@ void WifiService::_reset_deadline() {}
 void WifiService::_arm_deadline(uint32_t /*window_ms*/) {}
 void WifiService::_reset_online_latches() {}
 bool WifiService::_post_wifi_disconnected(WifiDisconnectReason /*r*/) { return true; }
-
-// ============================================================================
-// PortableWifiProvisioner stubs
-// ============================================================================
-
-PortableWifiProvisioner::PortableWifiProvisioner(RtosQueueHandle event_queue, const Deps &deps,
-                                                 const Config &cfg)
-    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _board(deps.board), _cfg(cfg) {}
-
-PortableWifiProvisioner::~PortableWifiProvisioner() = default;
-
-bool PortableWifiProvisioner::attach() {
-  test_spy::portable_attach_called = true;
-  test_spy::portable_attached = test_spy::portable_attach_result;
-  return test_spy::portable_attach_result;
-}
-
-void PortableWifiProvisioner::stop() {
-  test_spy::portable_stop_called = true;
-  test_spy::portable_attached = false;
-}
-
-void PortableWifiProvisioner::handle_pending_request() {
-  test_spy::portable_handle_pending_called = true;
-}
-
-void PortableWifiProvisioner::on_connected() { test_spy::portable_on_connected_called = true; }
-
-void PortableWifiProvisioner::on_ble_disconnected() {
-  test_spy::portable_on_ble_disconnected_called = true;
-}
-
-bool PortableWifiProvisioner::is_radio_active() const { return test_spy::portable_is_radio_active; }
-
-bool PortableWifiProvisioner::is_attached() const { return test_spy::portable_attached; }
-
-uint32_t PortableWifiProvisioner::next_deadline_ms() const {
-  return test_spy::portable_next_deadline_ms;
-}
-
-void PortableWifiProvisioner::tick(uint32_t /*now_ms*/) { test_spy::portable_tick_called = true; }
-
-// Private — never called via orchestrator stubs.
-void PortableWifiProvisioner::_on_attached_request(const AttachedRequest & /*req*/) {}
-void PortableWifiProvisioner::_on_provisioning_event(const ProvisioningEventInfo & /*info*/) {}
-bool PortableWifiProvisioner::_ensure_wifi_ready() { return true; }
-void PortableWifiProvisioner::_drop_radio() {}
-void PortableWifiProvisioner::_arm_idle_timer() {}
-void PortableWifiProvisioner::_cancel_idle_timer() {}
 
 // ============================================================================
 // AgClient stubs (concrete class — no virtuals; link-time replacement)
@@ -1289,10 +1256,17 @@ CloudService::~CloudService() = default;
 
 bool CloudService::start() {
   ++test_spy::cloud_start_count;
+  if (test_spy::cloud_start_result) {
+    _task_handle = reinterpret_cast<RtosTaskHandle>(1);
+  }
   return test_spy::cloud_start_result;
 }
 
-void CloudService::stop() { ++test_spy::cloud_stop_count; }
+void CloudService::stop() {
+  ++test_spy::cloud_stop_count;
+  _task_handle = nullptr;
+  _shutdown_pending = false;
+}
 
 void CloudService::arm(bool fire_now) {
   ++test_spy::cloud_arm_count;
@@ -1501,4 +1475,87 @@ uint32_t play_synced(BuzzerService & /*buzzer*/, LedService & /*led*/, MelodySel
     test_spy::during_melody();
   }
   return 0;
+}
+
+bool BleService::set_connectable(bool allowed) {
+  test_spy::ble_connectable = allowed;
+  return true;
+}
+void CloudService::request_stop() {
+  ++test_spy::cloud_request_stop_count;
+  test_spy::connectivity_calls.push_back("cloud_stop_requested");
+  if (_task_handle != nullptr || !test_spy::cloud_stop_ready) {
+    _shutdown_pending = true;
+  }
+}
+bool CloudService::stop_pending() const { return _shutdown_pending.load(); }
+void CloudService::complete_stop() {
+  test_spy::connectivity_calls.push_back("cloud_stopped");
+  stop();
+}
+bool WifiService::request_suspend(SuspendMode mode) {
+  if (suspension_pending()) {
+    return true;
+  }
+  if (driver_released()) {
+    mode = SuspendMode::ReleaseDriver;
+  }
+  switch (mode) {
+  case SuspendMode::Services:
+    _state.store(WifiState::SuspendingServices);
+    break;
+  case SuspendMode::StopWifi:
+    _state.store(WifiState::Suspending);
+    break;
+  case SuspendMode::ReleaseDriver:
+    _state.store(WifiState::Releasing);
+    break;
+  }
+  ++test_spy::wifi_suspend_count;
+  test_spy::wifi_suspend_mode = mode;
+  test_spy::connectivity_calls.push_back("wifi_suspend_requested");
+  return true;
+}
+void WifiService::complete_suspend(bool success) {
+  const auto state = _state.load();
+  if (!suspension_pending()) {
+    return;
+  }
+  if (state == WifiState::SuspendingServices) {
+    _state.store(success ? WifiState::ServicesSuspended : WifiState::ServicesCleanupFailed);
+    return;
+  }
+  if (!success) {
+    _state.store(WifiState::CleanupFailed);
+    return;
+  }
+  _state.store(state == WifiState::Releasing ? WifiState::Released : WifiState::Suspended);
+}
+
+bool WifiService::suspension_pending() const {
+  const auto state = _state.load();
+  return state == WifiState::SuspendingServices || state == WifiState::Suspending ||
+         state == WifiState::Releasing;
+}
+bool WifiService::station_retained() const {
+  const auto state = _state.load();
+  return state == WifiState::SuspendingServices || state == WifiState::ServicesSuspended ||
+         state == WifiState::ServicesCleanupFailed;
+}
+bool WifiService::is_suspended() const {
+  return _state.load() != WifiState::Active && !station_retained();
+}
+bool WifiService::driver_released() const { return _state.load() == WifiState::Released; }
+
+bool WifiService::resume_station(const WifiStaticIpConfig *ip, const char *saved_ssid) {
+  test_spy::wifi_resume_ssid = saved_ssid != nullptr ? saved_ssid : "";
+  ++test_spy::wifi_resume_count;
+  if (station_retained()) {
+    _state.store(WifiState::Active);
+    return true;
+  }
+  _state.store(WifiState::Active);
+  test_spy::connectivity_calls.push_back("wifi_resume");
+  connect_with_saved_credentials(ip);
+  return true;
 }

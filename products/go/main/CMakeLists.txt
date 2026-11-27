@@ -14,7 +14,6 @@ idf_component_register(
          "go_local_api.cpp"
          "go_orchestrator.cpp"
          "go_ota.cpp"
-         "go_portable_provisioner.cpp"
          "go_power.cpp"
          "go_sensor_producer.cpp"
          "serial_command/serial_command.cpp"

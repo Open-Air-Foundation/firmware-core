@@ -562,6 +562,8 @@ constexpr int BODY_H = 232;
 // Status bar
 constexpr int STATUS_DIVIDER_Y = 17;
 constexpr int ICON_GAP = 2;
+constexpr int STATUS_ICON_GAP = 4;
+constexpr int BLE_LINK_WIDTH = 11;
 constexpr int LOCK_X = 6;
 constexpr int BATTERY_X = 116;
 constexpr int TRACKING_X = 109;
@@ -681,10 +683,11 @@ bool is_home_like(Screen screen) { return screen == Screen::Home || screen == Sc
 bool is_list_screen(Screen screen) {
   return screen == Screen::TrackingMenu || screen == Screen::TrackingStatus ||
          screen == Screen::Settings || screen == Screen::Operations ||
-         screen == Screen::DisplayTouch || screen == Screen::SettingsChoice ||
-         screen == Screen::TagList || screen == Screen::Confirm || screen == Screen::About ||
-         screen == Screen::HardwareTest || screen == Screen::PeripheralTest ||
-         screen == Screen::GpsTest || screen == Screen::AccelTest;
+         screen == Screen::WifiSettings || screen == Screen::DisplayTouch ||
+         screen == Screen::SettingsChoice || screen == Screen::TagList ||
+         screen == Screen::Confirm || screen == Screen::About || screen == Screen::HardwareTest ||
+         screen == Screen::PeripheralTest || screen == Screen::GpsTest ||
+         screen == Screen::AccelTest;
 }
 
 // Any reason-specific shutdown screen.
@@ -1226,6 +1229,14 @@ void draw_provisioning_qr(u8g2_t *u, const AirgradientProvisioning::QrCode *qr, 
   }
 }
 
+// Cursor follows visible pixels, excluding each font's side bearings.
+int draw_status_glyph(u8g2_t *u, int x, uint16_t glyph) {
+  const int offset = u8g2_GetXOffsetGlyph(u, glyph);
+  const int width = u->font_decode.glyph_width;
+  u8g2_DrawGlyph(u, x - offset, STATUS_BASELINE_Y, glyph);
+  return x + width + STATUS_ICON_GAP;
+}
+
 void draw_provisioning_separator(u8g2_t *u, int y) { u8g2_DrawHLine(u, 10, y, SCREEN_W - 20); }
 
 void draw_provisioning_action_row(u8g2_t *u, const char *text, int y, bool selected) {
@@ -1282,7 +1293,8 @@ DisplayService::DisplayService(const Config &config)
     : _config(config), _u8g2{}, _render_buf{}, _prev_state{}, _pending_mode(RefreshMode::Full),
       _task_handle(nullptr), _running(false), _worker_busy(false) {}
 
-bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
+bool DisplayService::init(const DisplayValues &initial, bool defer_refresh,
+                          bool skip_initial_refresh) {
   esp_err_t err = driver_init(_config);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "driver init failed: %s", esp_err_to_name(err));
@@ -1298,7 +1310,8 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
   _prev_state = {.screen = initial.screen, .header = initial.header};
   _render_frame(initial);
 
-  if (!defer_refresh) {
+  _initial_refresh_pending = skip_initial_refresh;
+  if (!skip_initial_refresh && !defer_refresh) {
     // Synchronous initial full refresh (worker not yet started).
     // Default behavior: backward compatible with run_full_boot() and run_fast_path().
     err = driver_bus_acquire();
@@ -1317,7 +1330,8 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
       return false;
     }
     _refresh_policy.completed(RefreshMode::Full, static_cast<uint32_t>(RTOS::get_time_ms()));
-  } else {
+    _initial_refresh_pending = false;
+  } else if (!skip_initial_refresh) {
     // Deferred refresh: render is already in _render_buf. Reserve it for the
     // worker, then signal the initial full refresh. Returns in ~10 ms.
     // The worker acquires the SPI bus for ~3 s; any other SPI device (NAND)
@@ -1340,7 +1354,7 @@ bool DisplayService::init(const DisplayValues &initial, bool defer_refresh) {
     return false;
   }
 
-  if (defer_refresh) {
+  if (defer_refresh && !skip_initial_refresh) {
     // Kick the worker to process the initial full refresh immediately.
     RTOS::task_notify_give(_task_handle);
   }
@@ -1379,7 +1393,9 @@ bool DisplayService::update(const DisplayValues &values, bool wait) {
       !entering_system_screen &&
       (is_menu_navigation_screen(_prev_state.screen) || is_menu_navigation_screen(values.screen));
 
-  if (values.screen == Screen::TrackingStatus) {
+  if (_initial_refresh_pending) {
+    _pending_mode = RefreshMode::Full;
+  } else if (values.screen == Screen::TrackingStatus) {
     // Status never refreshes the top bar, even on entry or beyond the partial budget.
     // Its non-session classification keeps the worker's transfer body-only.
     _pending_mode = RefreshMode::Partial;
@@ -1448,6 +1464,7 @@ void DisplayService::update_sync(const DisplayValues &values) {
     ESP_LOGE(TAG, "sync update failed: %s", esp_err_to_name(err));
   } else {
     _refresh_policy.completed(RefreshMode::Full, static_cast<uint32_t>(RTOS::get_time_ms()));
+    _initial_refresh_pending = false;
   }
   _prev_state = {.screen = values.screen, .header = values.header};
   _release_framebuffer();
@@ -1479,6 +1496,7 @@ void DisplayService::clear() {
     ESP_LOGE(TAG, "clear failed: %s", esp_err_to_name(err));
   } else {
     _refresh_policy.completed(RefreshMode::Full, static_cast<uint32_t>(RTOS::get_time_ms()));
+    _initial_refresh_pending = false;
   }
   _release_framebuffer();
 }
@@ -1578,6 +1596,7 @@ void DisplayService::_render_frame(const DisplayValues &v) {
   case Screen::TrackingMenu:
   case Screen::TrackingStatus:
   case Screen::Settings:
+  case Screen::WifiSettings:
   case Screen::Operations:
   case Screen::DisplayTouch:
   case Screen::SettingsChoice:
@@ -1639,20 +1658,18 @@ void DisplayService::_draw_status_bar(const DisplayHeader &header) {
   // 1. Lock or Unlock icon (left-pinned, always drawn)
   if (header.locked) {
     u8g2_SetFont(&_u8g2, u8g2_font_open_iconic_all_1x_t);
-    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0xCA);
+    cursor = draw_status_glyph(&_u8g2, cursor, 0xCA);
   } else {
     u8g2_SetFont(&_u8g2, u8g2_font_open_iconic_thing_1x_t);
-    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0x44);
+    cursor = draw_status_glyph(&_u8g2, cursor, 0x44);
   }
-  cursor += 10 + ICON_GAP;
 
   // 2. Dynamic flow icons: WiFi (connected vs disconnected), Link/Unlink, GPS
   if (header.connectivity.wifi_enabled) {
     u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
-    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y,
-                   header.connectivity.wifi_connected ? WIFI_GLYPH_CONNECTED
-                                                      : WIFI_GLYPH_DISCONNECTED);
-    cursor += 10 + ICON_GAP;
+    cursor = draw_status_glyph(&_u8g2, cursor,
+                               header.connectivity.wifi_connected ? WIFI_GLYPH_CONNECTED
+                                                                  : WIFI_GLYPH_DISCONNECTED);
   }
 
   if (header.connectivity.ble_enabled) {
@@ -1673,13 +1690,12 @@ void DisplayService::_draw_status_bar(const DisplayHeader &header) {
       u8g2_DrawLine(&_u8g2, x + 4, LINK_CY + 6, x + 3, LINK_CY + 7);
       u8g2_DrawLine(&_u8g2, x + 6, LINK_CY + 6, x + 7, LINK_CY + 7);
     }
-    cursor += 12 + ICON_GAP;
+    cursor += BLE_LINK_WIDTH + STATUS_ICON_GAP;
   }
 
   if (header.connectivity.gps_fix) {
     u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
-    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0xE0A1);
-    cursor += 10 + ICON_GAP;
+    cursor = draw_status_glyph(&_u8g2, cursor, 0xE0A1);
   }
 
   // 3. Tracking dot (right-pinned; shifts left when plug icon is present)
@@ -2469,6 +2485,9 @@ void DisplayService::_worker_loop() {
       ESP_LOGE(TAG, "worker: refresh failed: %s", esp_err_to_name(err));
     } else {
       _refresh_policy.completed(_pending_mode, static_cast<uint32_t>(RTOS::get_time_ms()));
+      if (_pending_mode == RefreshMode::Full) {
+        _initial_refresh_pending = false;
+      }
     }
 
     driver_bus_release();

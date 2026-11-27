@@ -137,6 +137,7 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
           config.ble.device_name != nullptr ? config.ble.device_name : "",
           config.ble.model_name != nullptr ? config.ble.model_name : "");
 
+  _owns_wifi_callbacks = true;
   _wifi = &wifi;
   _http = want_wifi ? &http : nullptr;
   _config = config;
@@ -290,7 +291,8 @@ bool ProvisioningManager::start(WifiManager &wifi, AgBleServer &ble, HttpServer 
 }
 
 bool ProvisioningManager::start_attached(WifiManager &wifi, AgBleServer &ble,
-                                         const ProvisioningConfig &config) {
+                                         const ProvisioningConfig &config,
+                                         bool own_wifi_callbacks) {
   _mutex.lock();
   if (_state != ProvisioningState::Idle) {
     AG_LOGW(TAG, "start_attached() called while not Idle (state=%u)",
@@ -313,6 +315,7 @@ bool ProvisioningManager::start_attached(WifiManager &wifi, AgBleServer &ble,
           transport_name(config.transport), config.ble.device_name,
           config.ble.model_name != nullptr ? config.ble.model_name : "");
 
+  _owns_wifi_callbacks = own_wifi_callbacks;
   _wifi = &wifi;
   _http = nullptr; // no portal/HTTP in attached mode
   _config = config;
@@ -349,30 +352,39 @@ bool ProvisioningManager::start_attached(WifiManager &wifi, AgBleServer &ble,
     return false;
   }
 
-  // Install the Wi-Fi result callbacks (no radio yet — the product powers it
-  // before request_scan() / submit_credentials()).
-  wifi.set_on_got_ip([this](uint32_t ip) { _on_sta_connected(ip); });
-  wifi.set_on_disconnected([this](WifiDisconnectReason reason) {
-    (void)reason;
-    _on_sta_disconnected();
-  });
-  wifi.set_on_scan_complete([this](const WifiScanEntry *r, uint16_t c) { _on_scan_results(r, c); });
+  // The product may retain callbacks for an existing station connection.
+  if (_owns_wifi_callbacks) {
+    wifi.set_on_got_ip([this](uint32_t ip) { _on_sta_connected(ip); });
+    wifi.set_on_disconnected([this](WifiDisconnectReason reason) {
+      (void)reason;
+      _on_sta_disconnected();
+    });
+    wifi.set_on_scan_complete(
+        [this](const WifiScanEntry *r, uint16_t c) { _on_scan_results(r, c); });
+  }
 
   if (_config.connect_timeout_ms > 0) {
     wifi.set_dhcp_timeout_ms(_config.connect_timeout_ms);
   }
 
-  // Park WaitingForCredentials, radio off (timeout disabled in attached mode).
+  // Wait for a product-admitted request; leave the station untouched.
   _set_state_locked(ProvisioningState::WaitingForCredentials);
 
-  AG_LOGI(TAG, "attached provisioning started transport=%s (radio off)",
-          transport_name(_config.transport));
+  AG_LOGI(TAG, "attached provisioning registered transport=%s", transport_name(_config.transport));
 
   ProvisioningEventInfo info;
   info.event = ProvisioningEvent::Started;
   _mutex.unlock();
   _emit(info);
   return true;
+}
+
+void ProvisioningManager::handle_wifi_connected(uint32_t ip) { _on_sta_connected(ip); }
+
+void ProvisioningManager::handle_wifi_disconnected() { _on_sta_disconnected(); }
+
+void ProvisioningManager::handle_scan_results(const WifiScanEntry *entries, uint16_t count) {
+  _on_scan_results(entries, count);
 }
 
 void ProvisioningManager::set_attached_request_hook(AttachedRequestCallback hook) {
@@ -449,7 +461,7 @@ void ProvisioningManager::stop(bool stop_http_server) {
 
   // Detach WifiManager callbacks. Attached mode leaves the radio to the
   // product, so the manager does not change Wi-Fi mode here.
-  if (_wifi != nullptr) {
+  if (_wifi != nullptr && _owns_wifi_callbacks) {
     _wifi->set_on_scan_complete(nullptr);
     _wifi->set_on_ap_client_joined(nullptr);
     _wifi->set_on_ap_client_left(nullptr);
@@ -715,11 +727,9 @@ bool ProvisioningManager::_trigger_scan() {
     return false;
   }
   AG_LOGI(TAG, "wifi scan triggered");
-  if (_wifi != nullptr) {
-    _wifi->start_scan({});
-  }
+  const bool started = _wifi != nullptr && _wifi->start_scan({}) == WifiStatus::Ok;
   _mutex.unlock();
-  return true;
+  return started;
 }
 
 void ProvisioningManager::_on_timeout() {
