@@ -290,7 +290,7 @@ uint32_t wifi_suspend_count = 0;
 uint32_t wifi_resume_count = 0;
 std::string wifi_resume_ssid;
 uint32_t wifi_deinit_count = 0;
-bool wifi_suspend_deinitialize = false;
+WifiService::SuspendMode wifi_suspend_mode = WifiService::SuspendMode::StopWifi;
 bool ble_connectable = true;
 std::vector<std::string> connectivity_calls;
 
@@ -303,7 +303,7 @@ void reset() {
   wifi_resume_count = 0;
   wifi_resume_ssid.clear();
   wifi_deinit_count = 0;
-  wifi_suspend_deinitialize = false;
+  wifi_suspend_mode = WifiService::SuspendMode::StopWifi;
   ble_connectable = true;
   connectivity_calls.clear();
   during_melody = nullptr;
@@ -1552,20 +1552,36 @@ void CloudService::complete_stop() {
   test_spy::connectivity_calls.push_back("cloud_stopped");
   stop();
 }
-bool WifiService::request_suspend(bool deinitialize) {
+bool WifiService::request_suspend(SuspendMode mode) {
   if (suspension_pending()) {
     return true;
   }
-  deinitialize = deinitialize || driver_released();
-  _state.store(deinitialize ? WifiState::Releasing : WifiState::Suspending);
+  if (driver_released()) {
+    mode = SuspendMode::ReleaseDriver;
+  }
+  switch (mode) {
+  case SuspendMode::Services:
+    _state.store(WifiState::SuspendingServices);
+    break;
+  case SuspendMode::StopWifi:
+    _state.store(WifiState::Suspending);
+    break;
+  case SuspendMode::ReleaseDriver:
+    _state.store(WifiState::Releasing);
+    break;
+  }
   ++test_spy::wifi_suspend_count;
-  test_spy::wifi_suspend_deinitialize = deinitialize;
+  test_spy::wifi_suspend_mode = mode;
   test_spy::connectivity_calls.push_back("wifi_suspend_requested");
   return true;
 }
 void WifiService::complete_suspend(bool success) {
   const auto state = _state.load();
-  if (state != WifiState::Suspending && state != WifiState::Releasing) {
+  if (!suspension_pending()) {
+    return;
+  }
+  if (state == WifiState::SuspendingServices) {
+    _state.store(success ? WifiState::ServicesSuspended : WifiState::ServicesCleanupFailed);
     return;
   }
   if (!success) {
@@ -1574,16 +1590,29 @@ void WifiService::complete_suspend(bool success) {
   }
   _state.store(state == WifiState::Releasing ? WifiState::Released : WifiState::Suspended);
 }
+
 bool WifiService::suspension_pending() const {
   const auto state = _state.load();
-  return state == WifiState::Suspending || state == WifiState::Releasing;
+  return state == WifiState::SuspendingServices || state == WifiState::Suspending ||
+         state == WifiState::Releasing;
 }
-bool WifiService::is_suspended() const { return _state.load() != WifiState::Active; }
+bool WifiService::station_retained() const {
+  const auto state = _state.load();
+  return state == WifiState::SuspendingServices || state == WifiState::ServicesSuspended ||
+         state == WifiState::ServicesCleanupFailed;
+}
+bool WifiService::is_suspended() const {
+  return _state.load() != WifiState::Active && !station_retained();
+}
 bool WifiService::driver_released() const { return _state.load() == WifiState::Released; }
 
 bool WifiService::resume_station(const WifiStaticIpConfig *ip, const char *saved_ssid) {
   test_spy::wifi_resume_ssid = saved_ssid != nullptr ? saved_ssid : "";
   ++test_spy::wifi_resume_count;
+  if (station_retained()) {
+    _state.store(WifiState::Active);
+    return true;
+  }
   _state.store(WifiState::Active);
   test_spy::connectivity_calls.push_back("wifi_resume");
   connect_with_saved_credentials(ip);

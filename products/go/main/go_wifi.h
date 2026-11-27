@@ -126,18 +126,24 @@ public:
 
   // --- Lifecycle ---
 
+  enum class SuspendMode : uint32_t { Services = 1, StopWifi, ReleaseDriver };
+
   /// Drop STA, set Wi-Fi mode Off, detach callbacks, reset latches.
   /// Called by the orchestrator on Stationary teardown.
   void shutdown();
 
   /// Async handoff cleanup. Call only after Cloud has released HTTP/TLS.
   /// Completion arrives as WifiSuspendComplete. The worker is reused across handoffs.
-  /// While pending, only completion acknowledgement/state queries may touch this service.
-  bool request_suspend(bool deinitialize);
-  /// Acknowledge WifiSuspendComplete on the orchestrator task before issuing more work.
+  /// Services retains STA and its connection callbacks/retry deadlines.
+  /// Endpoint work must wait for completion acknowledgement.
+  bool request_suspend(SuspendMode mode);
+  /// Acknowledge WifiSuspendComplete before issuing more endpoint or lifecycle work.
   void complete_suspend(bool success);
   bool suspension_pending() const;
+  /// True when station callbacks and connection retries are disabled.
   bool is_suspended() const;
+  /// Services are suspending/suspended, while the existing station keeps running.
+  bool station_retained() const;
   bool driver_released() const;
   bool resume_station(const WifiStaticIpConfig *static_ip = nullptr,
                       const char *saved_ssid = nullptr);
@@ -176,6 +182,9 @@ private:
   // Active permits normal Wi-Fi work; it does not imply a connected station.
   enum class WifiState : uint8_t {
     Active,
+    SuspendingServices,
+    ServicesSuspended,
+    ServicesCleanupFailed,
     Suspending,
     Releasing,
     Suspended,
@@ -183,8 +192,8 @@ private:
     CleanupFailed,
   };
   static void _suspend_entry(void *arg);
-  void _run_suspend(bool deinitialize);
-  bool _suspend(bool deinitialize);
+  void _run_suspend(SuspendMode mode);
+  bool _suspend(SuspendMode mode);
   void _wait_for_suspend();
   RtosTaskHandle _suspend_task = nullptr;
   RtosBinarySemaphore _suspend_done_sem;

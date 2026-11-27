@@ -495,6 +495,8 @@ private:
   bool releasing_ble() const;
   bool ble_needed() const;
   bool wifi_services_allowed() const;
+  bool wifi_connection_allowed() const;
+  void start_wifi_services();
   bool connectivity_paused() const;
   void reconcile_connectivity(const char *saved_ssid = nullptr);
   void start_wifi_cleanup(bool for_ble);

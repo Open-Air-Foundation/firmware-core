@@ -25,8 +25,6 @@ static constexpr const char *TAG = "WifiService";
 static constexpr uint32_t WIFI_CLEANUP_STACK_BYTES = 4096;
 static constexpr uint32_t WIFI_CLEANUP_PRIORITY = 3;
 
-enum class WifiCleanupRequest : uint32_t { Suspend = 1, Release };
-
 static void apply_stationary_power_save(WifiManager &wifi, bool enabled) {
   const WifiPowerSave mode = enabled ? WifiPowerSave::MaxModem : WifiPowerSave::None;
   const WifiStatus status = wifi.set_power_save(mode);
@@ -93,7 +91,9 @@ void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *stati
 void WifiService::_connect_saved_internal(const WifiStaticIpConfig *static_ip,
                                           bool reset_online_latches, bool arm_window,
                                           const char *saved_ssid) {
-  _state.store(WifiState::Active);
+  if (reset_online_latches) {
+    _state.store(WifiState::Active);
+  }
   _install_wifi_callbacks();
   if (arm_window) {
     _reset_deadline();
@@ -400,6 +400,10 @@ void WifiService::_ensure_provisioning_manager() {
 
 void WifiService::shutdown() {
   _wait_for_suspend();
+  if (_state.load() == WifiState::SuspendingServices) {
+    // Shutdown stops STA even if service-only completion has not been consumed.
+    _state.store(WifiState::Suspending);
+  }
   // Leave a completed worker request pending until its event is acknowledged.
   if (!suspension_pending() && !driver_released()) {
     _state.store(WifiState::Suspended);
@@ -428,34 +432,47 @@ void WifiService::_wait_for_suspend() {
   }
 }
 
-bool WifiService::request_suspend(bool deinitialize) {
+bool WifiService::request_suspend(SuspendMode mode) {
   if (suspension_pending()) {
     return true;
   }
   // A driver already released stays released after another cleanup request.
-  deinitialize = deinitialize || driver_released();
-  _state.store(deinitialize ? WifiState::Releasing : WifiState::Suspending);
-  _provisioning_connected_event_pending.store(false);
-  _reset_deadline();
-  _reconnect_at_ms = 0;
-  _online.store(false);
-  _ip.store(0);
-  _rssi.store(WIFI_RSSI_INVALID);
+  if (driver_released()) {
+    mode = SuspendMode::ReleaseDriver;
+  }
+  switch (mode) {
+  case SuspendMode::Services:
+    _state.store(WifiState::SuspendingServices);
+    break;
+  case SuspendMode::StopWifi:
+    _state.store(WifiState::Suspending);
+    break;
+  case SuspendMode::ReleaseDriver:
+    _state.store(WifiState::Releasing);
+    break;
+  }
+  if (mode != SuspendMode::Services) {
+    _provisioning_connected_event_pending.store(false);
+    _reset_deadline();
+    _reconnect_at_ms = 0;
+    _online.store(false);
+    _ip.store(0);
+    _rssi.store(WIFI_RSSI_INVALID);
+  }
   if (_suspend_task == nullptr) {
     if (!_suspend_done_sem.create()) {
-      _state.store(WifiState::CleanupFailed);
+      complete_suspend(false);
       return false;
     }
     if (!RTOS::task_create(_suspend_entry, "wifi_cleanup", WIFI_CLEANUP_STACK_BYTES, this,
                            WIFI_CLEANUP_PRIORITY, &_suspend_task)) {
       _suspend_done_sem.destroy();
-      _state.store(WifiState::CleanupFailed);
+      complete_suspend(false);
       return false;
     }
   }
   _suspend_done_sem.take(0);
-  const auto request = deinitialize ? WifiCleanupRequest::Release : WifiCleanupRequest::Suspend;
-  RTOS::task_notify_send(_suspend_task, static_cast<uint32_t>(request));
+  RTOS::task_notify_send(_suspend_task, static_cast<uint32_t>(mode));
   return true;
 }
 
@@ -464,22 +481,22 @@ void WifiService::_suspend_entry(void *arg) {
   for (;;) {
     uint32_t request = 0;
     if (RTOS::task_notify_wait(&request, UINT32_MAX)) {
-      self->_run_suspend(request == static_cast<uint32_t>(WifiCleanupRequest::Release));
+      self->_run_suspend(static_cast<SuspendMode>(request));
     }
   }
 }
 
-void WifiService::_run_suspend(bool deinitialize) {
+void WifiService::_run_suspend(SuspendMode mode) {
   Event event{};
   event.type = EventType::WifiSuspendComplete;
-  event.wifi_suspend_ok = _suspend(deinitialize);
+  event.wifi_suspend_ok = _suspend(mode);
   // Shutdown may wait without draining the event queue. Signal first so it
   // can finish even if the worker is waiting for queue space.
   _suspend_done_sem.give();
   RTOS::queue_send(_event_queue, &event, UINT32_MAX);
 }
 
-bool WifiService::_suspend(bool deinitialize) {
+bool WifiService::_suspend(SuspendMode mode) {
   log_heap(TAG, "wifi.suspend:enter");
   // A failed mDNS stop must not be treated as successful ownership release.
   if (_wifi.clear_mdns_profile() != WifiStatus::Ok) {
@@ -490,12 +507,15 @@ bool WifiService::_suspend(bool deinitialize) {
   _http.stop();
   _local_server.end();
   _local_http_active = false;
+  if (mode == SuspendMode::Services) {
+    return true;
+  }
   if (_wifi.set_mode(WifiMode::Off) != WifiStatus::Ok) {
     AG_LOGE(TAG, "handoff: Wi-Fi stop failed; retry required");
     return false;
   }
   log_heap(TAG, "wifi.suspend:radio-stopped");
-  if (deinitialize) {
+  if (mode == SuspendMode::ReleaseDriver) {
     if (_wifi.deinitialize() != WifiStatus::Ok) {
       return false;
     }
@@ -506,7 +526,11 @@ bool WifiService::_suspend(bool deinitialize) {
 
 void WifiService::complete_suspend(bool success) {
   const auto state = _state.load();
-  if (state != WifiState::Suspending && state != WifiState::Releasing) {
+  if (!suspension_pending()) {
+    return;
+  }
+  if (state == WifiState::SuspendingServices) {
+    _state.store(success ? WifiState::ServicesSuspended : WifiState::ServicesCleanupFailed);
     return;
   }
   if (!success) {
@@ -517,9 +541,17 @@ void WifiService::complete_suspend(bool success) {
 }
 
 bool WifiService::resume_station(const WifiStaticIpConfig *static_ip, const char *saved_ssid) {
-  if (suspension_pending() || _wifi.initialize() != WifiStatus::Ok) {
+  if (suspension_pending()) {
     return false;
   }
+  if (station_retained()) {
+    _state.store(WifiState::Active);
+    return true;
+  }
+  if (_wifi.initialize() != WifiStatus::Ok) {
+    return false;
+  }
+  _state.store(WifiState::Active);
   _connect_saved_internal(static_ip, false, true, saved_ssid);
   return true;
 }
@@ -536,9 +568,17 @@ void WifiService::clear_credentials() {
 
 bool WifiService::suspension_pending() const {
   const auto state = _state.load();
-  return state == WifiState::Suspending || state == WifiState::Releasing;
+  return state == WifiState::SuspendingServices || state == WifiState::Suspending ||
+         state == WifiState::Releasing;
 }
-bool WifiService::is_suspended() const { return _state.load() != WifiState::Active; }
+bool WifiService::station_retained() const {
+  const auto state = _state.load();
+  return state == WifiState::SuspendingServices || state == WifiState::ServicesSuspended ||
+         state == WifiState::ServicesCleanupFailed;
+}
+bool WifiService::is_suspended() const {
+  return _state.load() != WifiState::Active && !station_retained();
+}
 bool WifiService::driver_released() const { return _state.load() == WifiState::Released; }
 
 bool WifiService::is_online() const { return _online.load(); }

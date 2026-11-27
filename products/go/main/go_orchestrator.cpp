@@ -866,7 +866,7 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::WifiConnectionTimeout:
     if (_manufacturing_mode) {
       on_wifi_disconnected(WifiDisconnectReason::connection_lost);
-    } else if (wifi_active()) {
+    } else if (wifi_connection_allowed()) {
       enter_wifi_fallback();
     }
     break;
@@ -2950,8 +2950,8 @@ void Orchestrator::cancel_wifi_setup() {
 
 void Orchestrator::on_wifi_connected(uint32_t ip) {
   AG_LOGI(TAG, "wifi connected: ip=0x%08x", static_cast<unsigned>(ip));
-  if (!wifi_services_allowed()) {
-    return; // ignore stale events after Wi-Fi relinquishes ownership
+  if (!wifi_connection_allowed()) {
+    return; // Ignore stale events after the station is stopped or no longer wanted.
   }
   if (_svc.wifi.is_provisioning()) {
     return; // provisioning owns the shared listener until its Connected handoff
@@ -2961,6 +2961,11 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
   _corrected_measures = apply_measurement_corrections(
       _raw_measures, effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
   _svc.local_api.publish_measurement_snapshot(_corrected_measures);
+  if (!wifi_services_allowed()) {
+    publish_local_wifi_snapshot();
+    request_background_display_update();
+    return;
+  }
 
   if (_bring_up_pending) {
     // Initial Wi-Fi bring-up STA success: show "Connected!\n<ip>"
@@ -2989,8 +2994,12 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
     reconcile_connectivity();
     return;
   }
+  start_wifi_services();
+}
+
+void Orchestrator::start_wifi_services() {
   activate_local_endpoint();
-  // Cloud arm: unconditional on every Wi-Fi IP transition.
+  // Arm after IP acquisition or return from BLE ownership with a retained station.
   // start() is idempotent (no-op on reconnect, heap-claim on first call).
   _svc.cloud.set_disable_cloud(_settings.disable_cloud);
   _svc.cloud.set_config_fetch_enabled(_settings.configuration_control !=
@@ -3001,13 +3010,13 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
   }
   _svc.cloud.arm(_cloud_first_post_pending);
   _cloud_first_post_pending = false;
-  log_heap(TAG, "wifi.connected:after-cloud-start");
+  log_heap(TAG, "wifi.services:after-cloud-start");
 }
 
 void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
   AG_LOGI(TAG, "wifi disconnected: %s", wifi_disconnect_reason_to_string(reason));
   log_heap(TAG, "wifi.disconnected:enter");
-  if (!wifi_services_allowed() || _svc.wifi.is_suspended()) {
+  if (!wifi_connection_allowed()) {
     return;
   }
   _local_api_activation_retry_deadline_ms = 0;
@@ -3203,7 +3212,7 @@ void Orchestrator::publish_local_snapshots() {
 }
 
 void Orchestrator::publish_local_wifi_snapshot() {
-  if (!wifi_active() || !_svc.wifi.is_online()) {
+  if (!_svc.wifi.is_online()) {
     _svc.local_api.publish_wifi_rssi(std::nullopt);
     return;
   }
@@ -3518,7 +3527,8 @@ BuildContext Orchestrator::build_context() const {
               .ble_connected = _svc.ble_service.is_authenticated(),
               // Icon reflects the saved preference; glyph reflects link state.
               .wifi_enabled = (_settings.wifi_enabled || _manufacturing_mode),
-              .wifi_connected = (wifi_active()) && _svc.wifi.is_online(),
+              .wifi_connected =
+                  (_settings.wifi_enabled || _manufacturing_mode) && _svc.wifi.is_online(),
               .gps_enabled = is_gps_active(),
               .gps_fix = is_fix_valid(_latest_gps.fix),
           },
@@ -3759,6 +3769,13 @@ bool Orchestrator::ble_needed() const {
          _svc.ota.is_ble_active();
 }
 
+bool Orchestrator::wifi_connection_allowed() const {
+  return !_shutting_down && !_svc.wifi.is_suspended() &&
+         (wifi_active() || wifi_cleanup_pending() || _svc.wifi.station_retained()) &&
+         (_manufacturing_mode || (_settings.wifi_enabled && (!_wifi_fallback || wifi_active()) &&
+                                  !tracking_session_active(_tracking_state)));
+}
+
 bool Orchestrator::wifi_services_allowed() const {
   return wifi_active() &&
          (_manufacturing_mode ||
@@ -3866,7 +3883,12 @@ void Orchestrator::reconcile_connectivity(const char *saved_ssid) {
     break;
   }
 
-  // Radio ownership is now Off. Reevaluate BLE after any explicit release.
+  // Ownership is now Off; a station retained during BLE may still be connected.
+  if (_svc.wifi.station_retained() && (!_settings.wifi_enabled || _wifi_fallback)) {
+    start_wifi_cleanup(ble_needed());
+    return;
+  }
+  // Reevaluate BLE after any explicit release.
   if (ble_needed()) {
     activate_ble();
     return;
@@ -3926,7 +3948,13 @@ void Orchestrator::continue_wifi_cleanup() {
                        _connectivity == ConnectivityState::RetryWifiCleanupForBle;
   _connectivity =
       for_ble ? ConnectivityState::StoppingWifiForBle : ConnectivityState::StoppingWifiForOff;
-  if (!_svc.wifi.request_suspend(tracking_session_active(_tracking_state))) {
+  WifiService::SuspendMode mode = WifiService::SuspendMode::StopWifi;
+  if (tracking_session_active(_tracking_state)) {
+    mode = WifiService::SuspendMode::ReleaseDriver;
+  } else if (for_ble && _settings.wifi_enabled && !_wifi_fallback) {
+    mode = WifiService::SuspendMode::Services;
+  }
+  if (!_svc.wifi.request_suspend(mode)) {
     _connectivity = for_ble ? ConnectivityState::RetryWifiCleanupForBle
                             : ConnectivityState::RetryWifiCleanupForOff;
     _connectivity_deadline_ms = now + CONNECTIVITY_RETRY_MS;
@@ -3934,6 +3962,10 @@ void Orchestrator::continue_wifi_cleanup() {
 }
 
 void Orchestrator::activate_ble() {
+  if (_svc.wifi.station_retained() && (!_settings.wifi_enabled || _wifi_fallback)) {
+    start_wifi_cleanup(true);
+    return;
+  }
   if (tracking_session_active(_tracking_state) && !_svc.wifi.driver_released()) {
     start_wifi_cleanup(true);
     return;
@@ -3969,6 +4001,9 @@ void Orchestrator::resume_wifi(const char *saved_ssid) {
     return;
   }
   _cloud_first_post_pending = true;
+  if (_svc.wifi.is_online()) {
+    start_wifi_services();
+  }
 }
 
 void Orchestrator::enter_wifi_fallback() {
@@ -3976,7 +4011,8 @@ void Orchestrator::enter_wifi_fallback() {
   _bring_up_pending = false;
   _corrected_measures = apply_measurement_corrections(
       _raw_measures, effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
-  if (wifi_active()) {
+  if (!wifi_cleanup_pending() && !releasing_ble() &&
+      (wifi_active() || _svc.wifi.station_retained())) {
     start_wifi_cleanup(ble_needed());
   }
   request_background_display_update();
@@ -4008,7 +4044,7 @@ void Orchestrator::on_wifi_suspend_complete(bool success) {
     return;
   }
   _connectivity = to_ble ? ConnectivityState::Ble : ConnectivityState::Off;
-  _svc.local_api.publish_wifi_rssi(std::nullopt);
+  publish_local_wifi_snapshot();
   // Reevaluate current intent, including a tracking start during ordinary suspension.
   reconcile_connectivity();
 }

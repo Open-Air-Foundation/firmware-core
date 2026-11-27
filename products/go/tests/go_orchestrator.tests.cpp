@@ -279,7 +279,7 @@ extern uint32_t cloud_request_stop_count;
 extern bool wifi_suspend_ready;
 extern bool wifi_suspend_ok;
 extern uint32_t wifi_suspend_count;
-extern bool wifi_suspend_deinitialize;
+extern WifiService::SuspendMode wifi_suspend_mode;
 extern uint32_t wifi_deinit_count;
 extern bool ble_connectable;
 extern std::vector<std::string> connectivity_calls;
@@ -585,10 +585,12 @@ public:
     event.type = EventType::WifiSuspendComplete;
     event.wifi_suspend_ok = test_spy::wifi_suspend_ok;
     if (event.wifi_suspend_ok) {
-      if (test_spy::wifi_suspend_deinitialize) {
+      if (test_spy::wifi_suspend_mode == WifiService::SuspendMode::ReleaseDriver) {
         ++test_spy::wifi_deinit_count;
       }
-      test_spy::wifi_is_online = false;
+      if (test_spy::wifi_suspend_mode != WifiService::SuspendMode::Services) {
+        test_spy::wifi_is_online = false;
+      }
       test_spy::connectivity_calls.push_back("wifi_suspended");
     }
     return event;
@@ -13316,6 +13318,16 @@ public:
   static void exporting(BleService &s, bool value) { s._export_active = value; }
 };
 
+static void send_release(Orchestrator &orch) {
+  test_spy::ble_pending_config_len = 1;
+  test_spy::ble_config_decode_result = {};
+  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
+  test_spy::ble_config_decode_result.cmd = BleCommand::ReleaseBle;
+  Event event{};
+  event.type = EventType::BleConfigWrite;
+  A::dispatch(orch, event);
+}
+
 TEST_CASE("Handoff: unlock drains Cloud then network cleanup before BLE is ready",
           "[Orchestrator][handoff]") {
   TestFixture f;
@@ -13387,9 +13399,125 @@ TEST_CASE("Handoff: connection window precedes the nonconnectable handoff delay"
     now = start + 66000;
     A::connectivity(orch);
     CHECK_FALSE(test_spy::ble_initialized);
-    CHECK(test_spy::wifi_connect_saved_called);
+    CHECK_FALSE(test_spy::wifi_connect_saved_called);
+    CHECK(test_spy::wifi_resume_count == 1);
     CHECK(A::wifi_allowed(orch));
   }
+}
+
+TEST_CASE("Handoff: BLE retains Wi-Fi and resumes services without a new IP event",
+          "[Orchestrator][handoff]") {
+  TestFixture f;
+  f.settings.wifi_enabled = true;
+  f.settings.local_server_enabled = true;
+  auto orch = f.make_orchestrator();
+  uint32_t now = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  test_spy::wifi_has_saved_networks = true;
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_has_been_online = true;
+  test_spy::wifi_rssi = -55;
+  A::unlock(orch);
+  now = 3000;
+  A::connectivity(orch);
+  REQUIRE(test_spy::ble_initialized);
+  CHECK(test_spy::wifi_suspend_mode == WifiService::SuspendMode::Services);
+  CHECK(f.wifi_service.is_online());
+  CHECK(f.wifi_service.station_retained());
+  CHECK(A::build_context(orch).connectivity.wifi_connected);
+  CHECK_FALSE(A::wifi_allowed(orch));
+  CHECK(test_spy::cloud_start_count == 0);
+  CHECK(test_spy::wifi_ensure_local_http_count == 0);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 0);
+  CHECK(f.local_api.access() == ConfigAccess::Disabled);
+
+  // IP renewal under BLE ownership updates state without restarting services.
+  A::on_wifi_connected(orch, 0x01020304);
+  CHECK(test_spy::cloud_start_count == 0);
+  CHECK(test_spy::wifi_ensure_local_http_count == 0);
+  A::lock(orch);
+  now = 6000;
+  A::connectivity(orch);
+  CHECK_FALSE(test_spy::ble_initialized);
+  CHECK_FALSE(test_spy::wifi_connect_saved_called);
+  CHECK(test_spy::wifi_deinit_count == 0);
+  CHECK(test_spy::cloud_start_count == 1);
+  CHECK(test_spy::wifi_ensure_local_http_count == 1);
+  CHECK(test_spy::wifi_ensure_local_mdns_count == 1);
+  CHECK(f.local_api.access() == ConfigAccess::ReadWrite);
+}
+
+TEST_CASE("Handoff: Wi-Fi loss under BLE ownership retries then falls back on timeout",
+          "[Orchestrator][handoff][fallback]") {
+  TestFixture f;
+  f.settings.wifi_enabled = true;
+  auto orch = f.make_orchestrator();
+  uint32_t now = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  test_spy::wifi_is_online = true;
+  test_spy::wifi_has_been_online = true;
+  A::unlock(orch);
+  now = 3000;
+  A::connectivity(orch);
+  REQUIRE(f.wifi_service.station_retained());
+  test_spy::ble_connected = true;
+  test_spy::ble_authenticated = true;
+  test_spy::wifi_is_online = false;
+  A::on_wifi_disconnected(orch, WifiDisconnectReason::connection_lost);
+  CHECK(test_spy::wifi_schedule_reconnect_count == 1);
+  CHECK_FALSE(A::wifi_fallback(orch));
+  CHECK_FALSE(A::build_context(orch).connectivity.wifi_connected);
+
+  Event timeout{};
+  timeout.type = EventType::WifiConnectionTimeout;
+  A::dispatch(orch, timeout);
+  REQUIRE(A::wifi_fallback(orch));
+  CHECK(test_spy::wifi_suspend_mode == WifiService::SuspendMode::StopWifi);
+  A::finish_wifi_suspend(orch);
+  CHECK(test_spy::ble_connected);
+  CHECK_FALSE(f.wifi_service.station_retained());
+  CHECK(A::settings(orch).wifi_enabled);
+  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+  CHECK(test_spy::cloud_start_count == 0);
+
+  send_release(orch);
+  now += 200;
+  A::connectivity(orch);
+  CHECK_FALSE(test_spy::ble_initialized);
+  CHECK(test_spy::wifi_resume_count == 0);
+  CHECK(A::wifi_fallback(orch));
+}
+
+TEST_CASE("Handoff: tracking and Wi-Fi Off stop a station retained for BLE",
+          "[Orchestrator][handoff]") {
+  TestFixture f;
+  f.settings.wifi_enabled = true;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  uint32_t now = 0;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  test_spy::wifi_is_online = true;
+  A::unlock(orch);
+  now = 3000;
+  A::connectivity(orch);
+  REQUIRE(f.wifi_service.station_retained());
+  test_spy::ble_connected = true;
+  test_spy::ble_authenticated = true;
+  bool tracking = false;
+  SECTION("tracking releases the driver") {
+    tracking = true;
+    REQUIRE(A::start_tracking(orch));
+  }
+  SECTION("Wi-Fi Off stops the radio") { A::configure_wifi(orch, false); }
+  REQUIRE(A::handoff(orch));
+  CHECK(test_spy::wifi_suspend_mode ==
+        (tracking ? WifiService::SuspendMode::ReleaseDriver : WifiService::SuspendMode::StopWifi));
+  A::finish_wifi_suspend(orch);
+  CHECK_FALSE(f.wifi_service.is_online());
+  CHECK_FALSE(f.wifi_service.station_retained());
+  CHECK(f.wifi_service.driver_released() == tracking);
+  CHECK(test_spy::ble_connected);
+  CHECK(test_spy::cloud_start_count == 0);
 }
 
 TEST_CASE("Handoff: manual lock cancels unused window and unlock cancels return",
@@ -13437,7 +13565,8 @@ TEST_CASE("Handoff: manual lock during cleanup does not initialize unnecessary B
   CHECK_FALSE(test_spy::wifi_connect_saved_called);
   now = 6000;
   A::connectivity(orch);
-  CHECK(test_spy::wifi_connect_saved_called);
+  CHECK_FALSE(test_spy::wifi_connect_saved_called);
+  CHECK(test_spy::wifi_resume_count == 1);
 }
 
 TEST_CASE("Handoff: authenticated clients survive either lock and window expiry",
@@ -13556,16 +13685,6 @@ TEST_CASE("Handoff: rejected tracking start does not release WiFi resources",
   CHECK(A::wifi_allowed(orch));
 }
 
-static void send_release(Orchestrator &orch) {
-  test_spy::ble_pending_config_len = 1;
-  test_spy::ble_config_decode_result = {};
-  test_spy::ble_config_decode_result.op = BleConfigOp::Command;
-  test_spy::ble_config_decode_result.cmd = BleCommand::ReleaseBle;
-  Event event{};
-  event.type = EventType::BleConfigWrite;
-  A::dispatch(orch, event);
-}
-
 TEST_CASE("Handoff: release acknowledges then locks and skips the handoff delay",
           "[Orchestrator][handoff][release]") {
   for (const bool wifi_enabled : {false, true}) {
@@ -13596,7 +13715,8 @@ TEST_CASE("Handoff: release acknowledges then locks and skips the handoff delay"
     CHECK_FALSE(test_spy::ble_initialized);
     CHECK_FALSE(A::returning(orch));
     CHECK_FALSE(A::releasing(orch));
-    CHECK(test_spy::wifi_connect_saved_called == wifi_enabled);
+    CHECK_FALSE(test_spy::wifi_connect_saved_called);
+    CHECK(test_spy::wifi_resume_count == (wifi_enabled ? 1 : 0));
     CHECK(A::settings(orch).wifi_enabled == wifi_enabled);
   }
 }
@@ -13863,7 +13983,7 @@ TEST_CASE("Handoff: Wi-Fi Off bypasses delay and tracking upgrades pending clean
   A::configure_wifi(orch, false);
   REQUIRE(A::handoff(orch));
   CHECK(test_spy::wifi_suspend_count == 1);
-  CHECK_FALSE(test_spy::wifi_suspend_deinitialize);
+  CHECK(test_spy::wifi_suspend_mode == WifiService::SuspendMode::StopWifi);
   REQUIRE(A::start_tracking(orch));
   test_spy::wifi_suspend_ready = true;
   A::connectivity(orch); // Complete the already admitted ordinary suspension.
