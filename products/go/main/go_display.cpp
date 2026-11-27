@@ -562,6 +562,8 @@ constexpr int BODY_H = 232;
 // Status bar
 constexpr int STATUS_DIVIDER_Y = 17;
 constexpr int ICON_GAP = 2;
+constexpr int STATUS_ICON_GAP = 4;
+constexpr int BLE_LINK_WIDTH = 11;
 constexpr int LOCK_X = 6;
 constexpr int BATTERY_X = 116;
 constexpr int TRACKING_X = 109;
@@ -1227,6 +1229,14 @@ void draw_provisioning_qr(u8g2_t *u, const AirgradientProvisioning::QrCode *qr, 
   }
 }
 
+// Cursor follows visible pixels, excluding each font's side bearings.
+int draw_status_glyph(u8g2_t *u, int x, uint16_t glyph) {
+  const int offset = u8g2_GetXOffsetGlyph(u, glyph);
+  const int width = u->font_decode.glyph_width;
+  u8g2_DrawGlyph(u, x - offset, STATUS_BASELINE_Y, glyph);
+  return x + width + STATUS_ICON_GAP;
+}
+
 void draw_provisioning_separator(u8g2_t *u, int y) { u8g2_DrawHLine(u, 10, y, SCREEN_W - 20); }
 
 void draw_provisioning_action_row(u8g2_t *u, const char *text, int y, bool selected) {
@@ -1648,20 +1658,18 @@ void DisplayService::_draw_status_bar(const DisplayHeader &header) {
   // 1. Lock or Unlock icon (left-pinned, always drawn)
   if (header.locked) {
     u8g2_SetFont(&_u8g2, u8g2_font_open_iconic_all_1x_t);
-    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0xCA);
+    cursor = draw_status_glyph(&_u8g2, cursor, 0xCA);
   } else {
     u8g2_SetFont(&_u8g2, u8g2_font_open_iconic_thing_1x_t);
-    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0x44);
+    cursor = draw_status_glyph(&_u8g2, cursor, 0x44);
   }
-  cursor += 10 + ICON_GAP;
 
   // 2. Dynamic flow icons: WiFi (connected vs disconnected), Link/Unlink, GPS
   if (header.connectivity.wifi_enabled) {
     u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
-    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y,
-                   header.connectivity.wifi_connected ? WIFI_GLYPH_CONNECTED
-                                                      : WIFI_GLYPH_DISCONNECTED);
-    cursor += 10 + ICON_GAP;
+    cursor = draw_status_glyph(&_u8g2, cursor,
+                               header.connectivity.wifi_connected ? WIFI_GLYPH_CONNECTED
+                                                                  : WIFI_GLYPH_DISCONNECTED);
   }
 
   if (header.connectivity.ble_enabled) {
@@ -1682,13 +1690,12 @@ void DisplayService::_draw_status_bar(const DisplayHeader &header) {
       u8g2_DrawLine(&_u8g2, x + 4, LINK_CY + 6, x + 3, LINK_CY + 7);
       u8g2_DrawLine(&_u8g2, x + 6, LINK_CY + 6, x + 7, LINK_CY + 7);
     }
-    cursor += 12 + ICON_GAP;
+    cursor += BLE_LINK_WIDTH + STATUS_ICON_GAP;
   }
 
   if (header.connectivity.gps_fix) {
     u8g2_SetFont(&_u8g2, u8g2_font_siji_t_6x10);
-    u8g2_DrawGlyph(&_u8g2, static_cast<u8g2_uint_t>(cursor), STATUS_BASELINE_Y, 0xE0A1);
-    cursor += 10 + ICON_GAP;
+    cursor = draw_status_glyph(&_u8g2, cursor, 0xE0A1);
   }
 
   // 3. Tracking dot (right-pinned; shifts left when plug icon is present)
