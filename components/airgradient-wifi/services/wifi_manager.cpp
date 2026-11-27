@@ -374,8 +374,8 @@ WifiStatus WifiManager::start_scan(const WifiScanConfig &config) {
   if (_auto_scan_pending || _auto_sweeping) {
     return WifiStatus::InvalidState;
   }
-  // Spec answer 3: only allow scan when STA is fully disconnected.
-  if (_sta_state != WifiStaState::Disconnected) {
+  // Keep association and DHCP uninterrupted; an established link can scan.
+  if (_sta_state == WifiStaState::Connecting || _sta_state == WifiStaState::Connected) {
     return WifiStatus::InvalidState;
   }
   return _hal.start_scan(config);

@@ -128,8 +128,8 @@ public:
   // -- Scan --
 
   /// Trigger an async Wi-Fi scan. Results delivered via
-  /// on_scan_complete callback. Requires Sta or ApSta mode AND the STA
-  /// must be disconnected (no scan-while-connected at v1).
+  /// on_scan_complete callback. Requires Sta or ApSta mode with the STA
+  /// disconnected or holding an IP. Rejected during connection or auto selection.
   WifiStatus start_scan(const WifiScanConfig &config = {});
 
   /// Select the strongest visible saved SSID; ties prefer the newest saved entry.

@@ -426,7 +426,7 @@ TEST_CASE("start_scan rejected in Off and AP modes", "[wifi-manager][scan]") {
   REQUIRE(hal.scan_calls == 1);
 }
 
-TEST_CASE("start_scan rejected while STA is connected (spec answer 3)", "[wifi-manager][scan]") {
+TEST_CASE("start_scan rejected until the STA connection has an IP", "[wifi-manager][scan]") {
   FakeWifiHal hal;
   FakeConfigStore backend;
   WifiManager mgr(hal, backend);
@@ -437,9 +437,32 @@ TEST_CASE("start_scan rejected while STA is connected (spec answer 3)", "[wifi-m
   hal.sta_connected_cb();
   // While Connected (no IP yet)
   REQUIRE(mgr.start_scan() == WifiStatus::InvalidState);
+  CHECK(hal.scan_calls == 0);
+}
+
+TEST_CASE("start_scan delivers results without dropping an established connection",
+          "[wifi-manager][scan]") {
+  FakeWifiHal hal;
+  FakeConfigStore backend;
+  WifiManager mgr(hal, backend);
+  mgr.set_mode(WifiMode::Sta);
+  mgr.connect(make_sta_config("Net"));
+  hal.sta_connected_cb();
   hal.got_ip_cb(0x01010101);
-  // While GotIp
-  REQUIRE(mgr.start_scan() == WifiStatus::InvalidState);
+  WifiScanEntry entry{};
+  std::strcpy(entry.ssid, "OtherNet");
+  bool delivered = false;
+  mgr.set_on_scan_complete([&](const WifiScanEntry *results, uint16_t count) {
+    REQUIRE(count == 1);
+    CHECK(std::strcmp(results[0].ssid, "OtherNet") == 0);
+    delivered = true;
+  });
+  REQUIRE(mgr.start_scan() == WifiStatus::Ok);
+  REQUIRE(hal.scan_calls == 1);
+  hal.scan_complete_cb(&entry, 1);
+  CHECK(delivered);
+  CHECK(hal.disconnect_calls == 0);
+  CHECK(hal.connect_calls == 1);
 }
 
 // ---------------------------------------------------------------------------

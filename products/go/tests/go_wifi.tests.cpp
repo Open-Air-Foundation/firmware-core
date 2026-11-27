@@ -1828,6 +1828,39 @@ TEST_CASE("attached scan is admitted by policy and finishes without dropping the
   CHECK(ble.deinit_count == 0);
 }
 
+TEST_CASE("attached BLE scan returns results while the station is retained",
+          "[go_wifi][attached]") {
+  MockBleServer ble;
+  Fixture f({}, &ble);
+  f.seed_network();
+  f.svc.connect_with_saved_credentials();
+  f.hal.got_ip_cb(0xC0A80164);
+  WifiServiceTestAccess::install_worker(f.svc);
+  REQUIRE(f.svc.request_suspend(WifiService::SuspendMode::Services));
+  WifiServiceTestAccess::finish_suspend(f.svc, WifiService::SuspendMode::Services);
+  f.svc.complete_suspend(true);
+  REQUIRE(f.svc.station_retained());
+  REQUIRE(ble.init("Go"));
+  REQUIRE(f.svc.attach_ble_provisioning());
+  auto *scan = ble.find_char(PROVISIONING_UUID, "467a080f-e50f-42c9-b9b2-a2ab14d82725");
+  REQUIRE(scan != nullptr);
+  scan->simulate_write("1");
+  f.svc.handle_ble_provisioning_request(true);
+  REQUIRE(f.hal.scan_calls == 1);
+  REQUIRE(f.svc.is_provisioning());
+  f.hal.scan_cb(nullptr, 0);
+  REQUIRE(f.rtos.first_event(EventType::BleProvisioningScanComplete) != nullptr);
+  CHECK(scan->notify_count == 1);
+  CHECK(scan->last_notified_value_str() == R"({"found":0})");
+  f.svc.finish_ble_provisioning();
+  CHECK_FALSE(f.svc.is_provisioning());
+  CHECK(f.svc.is_online());
+  CHECK(f.svc.ip() == 0xC0A80164);
+  CHECK(f.hal.disconnect_calls == 0);
+  CHECK(f.hal.connect_calls == 1);
+  CHECK(ble.deinit_count == 0);
+}
+
 TEST_CASE("attached credentials save only after success and keep GATT available",
           "[go_wifi][attached]") {
   MockBleServer ble;
