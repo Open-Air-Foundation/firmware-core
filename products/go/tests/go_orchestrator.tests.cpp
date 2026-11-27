@@ -262,18 +262,6 @@ extern int wifi_rssi;
 extern bool wifi_schedule_reconnect_called;
 extern int wifi_schedule_reconnect_count;
 
-// --- PortableWifiProvisioner ---
-extern bool portable_attach_called;
-extern bool portable_attach_result;
-extern bool portable_attached;
-extern bool portable_stop_called;
-extern bool portable_handle_pending_called;
-extern bool portable_on_connected_called;
-extern bool portable_on_ble_disconnected_called;
-extern bool portable_is_radio_active;
-extern uint32_t portable_next_deadline_ms;
-extern bool portable_tick_called;
-
 extern bool cloud_stop_ready;
 extern uint32_t cloud_request_stop_count;
 extern bool wifi_suspend_ready;
@@ -872,7 +860,6 @@ struct TestFixture {
   StubSerialCommandChannel serial_command_channel;
   SerialCommandService serial_command;
   StubGoBoard stub_board;
-  PortableWifiProvisioner portable_provisioner;
   AccelService accel_service;
 
   Orchestrator::Services services;
@@ -908,16 +895,12 @@ struct TestFixture {
                                 .firmware_version = "test",
                                 .capabilities = board_capabilities(variant)}),
         serial_command(event_queue, serial_command_channel),
-        portable_provisioner(nullptr,
-                             {*reinterpret_cast<WifiManager *>(_stub_buf),
-                              *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
-                             PortableWifiProvisioner::Config{}),
         accel_service(accel_sensor, test_gpio_hal, event_queue, {.pin_int = 3}),
-        services{sensor_producer,   gps_service,          input_service,        display_service,
-                 led_service_inert, buzzer_service_inert, storage_service,      power_service,
-                 ui_manager,        ble_service,          wifi_service,         cloud_service,
-                 local_api,         serial_command,       portable_provisioner, stub_board,
-                 ota_service,       accel_service} {
+        services{sensor_producer,   gps_service,          input_service,   display_service,
+                 led_service_inert, buzzer_service_inert, storage_service, power_service,
+                 ui_manager,        ble_service,          wifi_service,    cloud_service,
+                 local_api,         serial_command,       stub_board,      ota_service,
+                 accel_service} {
     stub_board.board_variant = variant;
     test_spy::reset();
     reboot_count = 0;
@@ -1236,6 +1219,27 @@ TEST_CASE("init(PowerOn): Getting Started is usable before the first measurement
   CHECK_FALSE(A::sensitive_services_paused(orch));
   CHECK_FALSE(test_spy::sensor_stopped);
   CHECK_FALSE(test_spy::cache_measurement_called);
+
+  SECTION("Attached provisioning registration preserves the guide QR") {
+    REQUIRE(f.wifi_service.ble_provisioning_attached());
+    const auto before = f.ui_manager.build_values(A::build_context(orch));
+    REQUIRE(before.qr != nullptr);
+    const auto guide_qr = *before.qr;
+    const auto update_count = DisplayService::spy_update_count;
+
+    Event event{};
+    event.type = EventType::ProvisioningStateChanged;
+    event.prov.event = static_cast<uint8_t>(ProvisioningEvent::Started);
+    event.prov.transport = static_cast<uint8_t>(ProvisioningTransport::BleAttached);
+    A::dispatch(orch, event);
+
+    const auto after = f.ui_manager.build_values(A::build_context(orch));
+    REQUIRE(after.qr != nullptr);
+    CHECK(std::memcmp(after.qr->buffer, guide_qr.buffer, sizeof(guide_qr.buffer)) == 0);
+    CHECK(f.ui_manager.current_screen() == Screen::GettingStarted);
+    CHECK(A::setup_session_active(orch));
+    CHECK(DisplayService::spy_update_count == update_count);
+  }
 
   SECTION("Short, double, and power presses leave onboarding open") {
     A::on_input(orch, {InputSource::TouchEnter, InputType::ShortPress});
@@ -8313,7 +8317,6 @@ struct PmSleepFixture {
   StubSerialCommandChannel serial_command_channel;
   SerialCommandService serial_command;
   StubGoBoard stub_board;
-  PortableWifiProvisioner portable_provisioner;
   AccelService accel_service;
 
   MockRTOS mock_rtos;
@@ -8359,16 +8362,12 @@ struct PmSleepFixture {
                             .firmware_version = "test",
                             .capabilities = board_capabilities(BoardVariant::V1)}),
         serial_command(nullptr, serial_command_channel),
-        portable_provisioner(nullptr,
-                             {*reinterpret_cast<WifiManager *>(_stub_buf),
-                              *reinterpret_cast<AgBleServer *>(_stub_buf), stub_board},
-                             PortableWifiProvisioner::Config{}),
         accel_service(nullptr, test_gpio_hal, nullptr, {}),
-        services{sensor_producer,   gps_service,          input_service,        display_service,
-                 led_service_inert, buzzer_service_inert, storage_service,      power_service,
-                 ui_manager,        ble_service,          wifi_service,         cloud_service,
-                 local_api,         serial_command,       portable_provisioner, stub_board,
-                 ota_service,       accel_service} {
+        services{sensor_producer,   gps_service,          input_service,   display_service,
+                 led_service_inert, buzzer_service_inert, storage_service, power_service,
+                 ui_manager,        ble_service,          wifi_service,    cloud_service,
+                 local_api,         serial_command,       stub_board,      ota_service,
+                 accel_service} {
     test_spy::reset();
     RTOS::set_instance(&mock_rtos);
     settings.wifi_enabled = false;
@@ -9286,7 +9285,7 @@ TEST_CASE("Wi-Fi ownership resumes through the lifecycle service",
 
   A::configure_wifi(orch, true);
 
-  CHECK(test_spy::connectivity_calls.back() == "wifi_resume");
+  CHECK(f.stub_board.init_wifi_subsystem_calls == 1);
   CHECK(test_spy::wifi_connect_saved_called);
 }
 
@@ -9319,7 +9318,7 @@ TEST_CASE("Cold-boot Stationary calls init_wifi_subsystem exactly once",
   CHECK_FALSE(test_spy::wifi_try_fallback_called);
 }
 
-TEST_CASE("Portable -> Stationary tears down BLE before bringing up Wi-Fi",
+TEST_CASE("Enabling Wi-Fi preserves ordinary BLE during saved-network connection",
           "[Orchestrator][stationary][mode_change]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -9333,8 +9332,8 @@ TEST_CASE("Portable -> Stationary tears down BLE before bringing up Wi-Fi",
   ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(3000);
   A::connectivity(orch);
 
-  // Both should have happened; the spec requires deinit BEFORE enter_wifi.
-  CHECK(test_spy::ble_deinit_called);
+  // Wi-Fi starts immediately on the existing BLE connection.
+  CHECK_FALSE(test_spy::ble_deinit_called);
   CHECK(test_spy::wifi_connect_saved_called);
 }
 
@@ -9354,7 +9353,7 @@ TEST_CASE("change_mode leaving Portable does not notify when no client is connec
   A::connectivity(orch);
 
   CHECK_FALSE(test_spy::ble_notify_disconnect_called);
-  CHECK(test_spy::ble_deinit_called);
+  CHECK_FALSE(test_spy::ble_deinit_called);
 }
 
 TEST_CASE("Disabling Wi-Fi while locked suspends it without starting BLE",
@@ -9992,7 +9991,7 @@ TEST_CASE("on_wifi_connected during bring-up transitions Info -> Home unlocked",
   CHECK(v.snackbar_text == nullptr);
 }
 
-TEST_CASE("bring-up failure cleans up without opening provisioning",
+TEST_CASE("Explicit Wi-Fi enable opens setup after saved-network failure",
           "[Orchestrator][session][bring_up][failure]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -10006,11 +10005,9 @@ TEST_CASE("bring-up failure cleans up without opening provisioning",
 
   A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::no_ap_found));
 
-  // Ordinary connection failures go through radio cleanup.
-  CHECK(DisplayService::spy_flush_count == 0);
-  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
-  CHECK(A::handoff(orch));
-  CHECK(f.ui_manager.current_screen() != Screen::Provisioning);
+  CHECK(test_spy::wifi_start_provisioning_called);
+  CHECK_FALSE(A::handoff(orch));
+  CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
 }
 
 TEST_CASE("manufacturing startup failures wait for the connection window",
@@ -10559,7 +10556,7 @@ TEST_CASE("compute_queue_timeout_ms never falls through to the no-candidate path
 // Portable attached Wi-Fi provisioning wiring
 // ============================================================================
 
-TEST_CASE("Ordinary BLE excludes attached provisioning", "[Orchestrator][portable_prov]") {
+TEST_CASE("Ordinary BLE registers attached provisioning", "[Orchestrator][portable_prov]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
@@ -10570,36 +10567,25 @@ TEST_CASE("Ordinary BLE excludes attached provisioning", "[Orchestrator][portabl
   A::configure_wifi(orch, false);
   A::unlock(orch);
   A::finish_wifi_suspend(orch);
-  CHECK_FALSE(test_spy::portable_attach_called);
+  CHECK(f.wifi_service.ble_provisioning_attached());
   CHECK(test_spy::ble_init_called); // init_stack_and_register
   CHECK(test_spy::ble_initialized); // start_advertising
 
   // Enabling Wi-Fi while unlocked keeps ordinary BLE ownership.
   A::configure_wifi(orch, true);
-  CHECK_FALSE(test_spy::portable_stop_called);
+  CHECK(f.wifi_service.ble_provisioning_attached());
   CHECK_FALSE(test_spy::ble_deinit_called);
 }
 
-TEST_CASE("PortableProvRequest cannot start setup under ordinary BLE",
-          "[Orchestrator][portable_prov]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-
-  Event evt{};
-  evt.type = EventType::PortableProvRequest;
-  A::dispatch(orch, evt);
-
-  CHECK_FALSE(test_spy::portable_handle_pending_called);
-}
-
-TEST_CASE("Attached Connected persists metadata and calls provisioner.on_connected",
+TEST_CASE("Attached Connected persists metadata and retains the BLE connection",
           "[Orchestrator][portable_prov]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
   CP2_ALLOW_CONFIG_WRITES(f);
   A::settings(orch).configuration_control = ConfigurationControl::Cloud;
 
+  REQUIRE(f.wifi_service.attach_ble_provisioning());
+  test_spy::wifi_provisioning_active = true;
   Event evt =
       make_provisioning_event(ProvisioningEvent::Connected, ProvisioningTransport::BleAttached);
   evt.prov.disable_cloud = true;
@@ -10610,10 +10596,12 @@ TEST_CASE("Attached Connected persists metadata and calls provisioner.on_connect
   CHECK(A::settings(orch).configuration_control == ConfigurationControl::Local);
   CHECK(A::settings(orch).static_ip.ip == 0x0100007f);
   CHECK(test_spy::cloud_last_disable_cloud == true);
-  CHECK(test_spy::portable_on_connected_called);
+  CHECK_FALSE(f.wifi_service.is_provisioning());
+  CHECK(f.wifi_service.ble_provisioning_attached());
+  CHECK_FALSE(test_spy::ble_deinit_called);
 }
 
-TEST_CASE("Attached Connected continues verification after metadata persistence failure",
+TEST_CASE("Attached Connected retains the connection after metadata persistence failure",
           "[Orchestrator][portable_prov][failure]") {
   TestFixture f;
   auto orch = f.make_orchestrator();
@@ -10624,6 +10612,8 @@ TEST_CASE("Attached Connected continues verification after metadata persistence 
       .RETURN(ConfigStoreResult::OK);
   REQUIRE_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::ERROR);
 
+  REQUIRE(f.wifi_service.attach_ble_provisioning());
+  test_spy::wifi_provisioning_active = true;
   Event evt =
       make_provisioning_event(ProvisioningEvent::Connected, ProvisioningTransport::BleAttached);
   evt.prov.disable_cloud = true;
@@ -10632,20 +10622,10 @@ TEST_CASE("Attached Connected continues verification after metadata persistence 
 
   CHECK_FALSE(A::settings(orch).disable_cloud);
   CHECK(A::settings(orch).static_ip.ip == 0);
-  CHECK(test_spy::portable_on_connected_called);
+  CHECK_FALSE(f.wifi_service.is_provisioning());
+  CHECK(f.wifi_service.ble_provisioning_attached());
+  CHECK_FALSE(test_spy::ble_deinit_called);
   CHECK(test_spy::cloud_set_disable_count == 0);
-}
-
-TEST_CASE("BleDisconnected forwards to the provisioner", "[Orchestrator][portable_prov]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-
-  Event evt{};
-  evt.type = EventType::BleDisconnected;
-  A::dispatch(orch, evt);
-
-  CHECK(test_spy::portable_on_ble_disconnected_called);
 }
 
 TEST_CASE("History export rejected only while the provisioning radio is active",
@@ -10658,7 +10638,7 @@ TEST_CASE("History export rejected only while the provisioning radio is active",
   test_spy::ble_history_decode_result.op = BleHistoryOp::List;
 
   SECTION("rejected while radio active") {
-    test_spy::portable_is_radio_active = true;
+    test_spy::wifi_provisioning_active = true;
     Event evt{};
     evt.type = EventType::BleHistoryWrite;
     A::dispatch(orch, evt);
@@ -10668,7 +10648,7 @@ TEST_CASE("History export rejected only while the provisioning radio is active",
   }
 
   SECTION("allowed while radio off (parked session)") {
-    test_spy::portable_is_radio_active = false;
+    test_spy::wifi_provisioning_active = false;
     Event evt{};
     evt.type = EventType::BleHistoryWrite;
     A::dispatch(orch, evt);
@@ -10676,22 +10656,6 @@ TEST_CASE("History export rejected only while the provisioning radio is active",
     CHECK(test_spy::ble_history_list_called);
     CHECK_FALSE(test_spy::ble_notify_history_error_called);
   }
-}
-
-TEST_CASE("Portable provisioning radio-idle deadline drives the orchestrator timer",
-          "[Orchestrator][portable_prov]") {
-  TestFixture f;
-  auto orch = f.make_orchestrator();
-  CP2_ALLOW_CONFIG_WRITES(f);
-
-  test_spy::portable_next_deadline_ms = 5'000;
-  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(1'000);
-
-  const uint32_t t = A::compute_queue_timeout_ms(orch);
-  CHECK(t <= 4'000); // 5000 - 1000
-
-  A::check_timers(orch);
-  CHECK(test_spy::portable_tick_called);
 }
 
 // ============================================================================
@@ -12640,6 +12604,7 @@ TEST_CASE("Stationary entry derives Wi-Fi power saving from Local Server prefere
     CHECK(test_spy::wifi_set_power_save_count == 1);
     test_spy::wifi_is_online = true;
     A::on_wifi_connected(orch, 0x0100A8C0);
+    A::lock(orch);
     CHECK(test_spy::wifi_ensure_local_http_count == (enabled ? 1 : 0));
     CHECK(test_spy::cloud_start_count == 1);
 
@@ -14191,7 +14156,8 @@ TEST_CASE("Fallback survives BLE without measurements or timer ticks restarting 
   test_spy::measurement_requested = false;
   A::configure_wifi(orch, true);
   CHECK_FALSE(A::wifi_fallback(orch));
-  CHECK(test_spy::wifi_resume_count == 1);
+  CHECK(test_spy::wifi_connect_saved_called);
+  CHECK(A::bring_up_pending(orch));
   CHECK_FALSE(test_spy::measurement_requested);
 }
 
@@ -14651,4 +14617,156 @@ TEST_CASE("BLE preference activation publishes to UI and HTTP only after persist
   CHECK(ui_settings.wifi_enabled == expected.wifi_enabled);
   CHECK(test_spy::ble_notify_config_called == save_ok);
   CHECK(test_spy::wifi_resume_count == 0);
+}
+
+TEST_CASE("Explicit Wi-Fi enable keeps BLE connected throughout setup",
+          "[Orchestrator][attached][wifi]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_wifi(orch, false);
+  A::unlock(orch);
+  REQUIRE(test_spy::ble_initialized);
+  REQUIRE(f.wifi_service.ble_provisioning_attached());
+  test_spy::ble_connected = true;
+  test_spy::ble_authenticated = true;
+  SECTION("no credentials opens setup immediately") {
+    test_spy::wifi_has_saved_networks = false;
+    A::configure_wifi(orch, true);
+    CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
+    CHECK(test_spy::wifi_start_provisioning_transport == ProvisioningTransport::BleAttached);
+    CHECK(A::setup_session_active(orch));
+    CHECK_FALSE(A::bring_up_pending(orch));
+  }
+  SECTION("saved credentials connect immediately and return home on success") {
+    test_spy::wifi_has_saved_networks = true;
+    A::configure_wifi(orch, true);
+    REQUIRE(test_spy::wifi_connect_saved_called);
+    REQUIRE(A::bring_up_pending(orch));
+    REQUIRE(f.ui_manager.current_screen() == Screen::Info);
+    test_spy::wifi_is_online = true;
+    A::on_wifi_connected(orch, 0xC0A80164);
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+    CHECK_FALSE(A::setup_session_active(orch));
+    CHECK(test_spy::cloud_start_count == 0);
+    CHECK(test_spy::wifi_ensure_local_http_count == 0);
+  }
+  SECTION("saved credentials failure opens setup") {
+    test_spy::wifi_has_saved_networks = true;
+    A::configure_wifi(orch, true);
+    A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+    CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
+    CHECK(test_spy::wifi_start_provisioning_transport == ProvisioningTransport::BleAttached);
+    CHECK_FALSE(A::wifi_fallback(orch));
+  }
+  SECTION("saved credentials timeout opens setup") {
+    test_spy::wifi_has_saved_networks = true;
+    A::configure_wifi(orch, true);
+    Event event{};
+    event.type = EventType::WifiConnectionTimeout;
+    A::dispatch(orch, event);
+    CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
+    CHECK(test_spy::wifi_start_provisioning_transport == ProvisioningTransport::BleAttached);
+  }
+  SECTION("submitted credentials finish setup on the same BLE connection") {
+    test_spy::wifi_has_saved_networks = false;
+    A::configure_wifi(orch, true);
+    test_spy::wifi_provisioning_active = true;
+    test_spy::wifi_is_online = true;
+    A::dispatch(orch, make_provisioning_event(ProvisioningEvent::Connected,
+                                              ProvisioningTransport::BleAttached));
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+    CHECK_FALSE(A::setup_session_active(orch));
+    CHECK_FALSE(A::sensitive_services_paused(orch));
+    CHECK_FALSE(f.wifi_service.is_provisioning());
+  }
+  SECTION("failed credentials keep setup open for retry") {
+    test_spy::wifi_has_saved_networks = false;
+    A::configure_wifi(orch, true);
+    test_spy::wifi_provisioning_active = true;
+    A::dispatch(orch, make_provisioning_event(ProvisioningEvent::ConnectFailed,
+                                              ProvisioningTransport::BleAttached));
+    CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
+    CHECK(A::setup_session_active(orch));
+    CHECK_FALSE(f.wifi_service.is_provisioning());
+  }
+  SECTION("authentication returns to Wi-Fi setup instead of leaving it") {
+    test_spy::wifi_has_saved_networks = false;
+    A::configure_wifi(orch, true);
+    A::on_ble_auth_complete(orch, true);
+    CHECK(f.ui_manager.current_screen() == Screen::Provisioning);
+    CHECK(A::setup_session_active(orch));
+    CHECK(A::sensitive_services_paused(orch));
+  }
+  SECTION("turning Wi-Fi off exits setup without disconnecting BLE") {
+    test_spy::wifi_has_saved_networks = false;
+    A::configure_wifi(orch, true);
+    REQUIRE(A::setup_session_active(orch));
+    A::configure_wifi(orch, false);
+    CHECK_FALSE(A::setup_session_active(orch));
+    CHECK_FALSE(A::sensitive_services_paused(orch));
+    CHECK(f.ui_manager.current_screen() == Screen::Home);
+  }
+  CHECK_FALSE(test_spy::ble_deinit_called);
+  CHECK(f.wifi_service.ble_provisioning_attached());
+  CHECK(test_spy::ble_connected);
+}
+
+TEST_CASE("BLE provisioning requests are silent and respect Wi-Fi and tracking policy",
+          "[Orchestrator][attached][wifi]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CP2_ALLOW_CONFIG_WRITES(f);
+  A::set_wifi(orch, false);
+  A::unlock(orch);
+  REQUIRE(f.wifi_service.ble_provisioning_attached());
+  test_spy::ble_connected = true;
+  test_spy::ble_authenticated = true;
+  A::settings(orch).wifi_enabled = true; // Already enabled, not a settings transition.
+  bool allowed = true;
+  SECTION("idle Wi-Fi enabled") {}
+  SECTION("Wi-Fi disabled") {
+    A::settings(orch).wifi_enabled = false;
+    allowed = false;
+  }
+  SECTION("tracking") {
+    A::set_tracking_state(orch, TrackingState::Recording);
+    allowed = false;
+  }
+  SECTION("tracking paused") {
+    A::set_tracking_state(orch, TrackingState::Paused);
+    allowed = false;
+  }
+  SECTION("unauthenticated") {
+    test_spy::ble_authenticated = false;
+    allowed = false;
+  }
+  SECTION("normal connection in progress") {
+    test_spy::wifi_is_connecting = true;
+    allowed = false;
+  }
+  Event event{};
+  event.type = EventType::BleProvisioningRequest;
+  A::dispatch(orch, event);
+  CHECK(f.wifi_service.is_provisioning() == allowed);
+  CHECK(f.ui_manager.current_screen() == Screen::Home);
+  CHECK_FALSE(A::setup_session_active(orch));
+  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+  CHECK_FALSE(test_spy::ble_deinit_called);
+}
+
+TEST_CASE("Cold boot saved-network failure retains fallback-to-sleep behavior",
+          "[Orchestrator][attached][cold_boot]") {
+  TestFixture f;
+  f.settings.wifi_enabled = true;
+  f.settings.onboarding_done = true;
+  auto orch = f.make_orchestrator();
+  test_spy::wifi_has_saved_networks = true;
+  orch.init(WakeCause::PowerOn);
+  REQUIRE_FALSE(A::bring_up_pending(orch));
+  REQUIRE(test_spy::wifi_resume_count == 1);
+  A::dispatch(orch, make_wifi_disconnected(WifiDisconnectReason::auth_failed));
+  CHECK(A::wifi_fallback(orch));
+  CHECK_FALSE(test_spy::wifi_start_provisioning_called);
+  CHECK(f.ui_manager.current_screen() != Screen::Provisioning);
 }

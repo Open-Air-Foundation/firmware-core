@@ -217,8 +217,8 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   // Waking from the sleep cycle with Wi-Fi enabled implies prior fallback.
   _wifi_fallback =
       _settings.wifi_enabled && (cause == WakeCause::Timer || cause == WakeCause::Button);
-  _wifi_setup_pending =
-      cause == WakeCause::PowerOn && _settings.wifi_enabled && !_svc.wifi.has_saved_networks();
+  _wifi_setup_pending = cause == WakeCause::PowerOn && !handoff.tracking_restart &&
+                        _settings.wifi_enabled && !_svc.wifi.has_saved_networks();
 
   // --- Apply initial lock state ---
   if (handoff.initial_lock_state == LockState::Unlocked) {
@@ -520,12 +520,6 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     next = std::min(next, until(_local_api_activation_retry_deadline_ms));
   }
 
-  // Portable provisioning radio-idle deadline
-  uint32_t prov_deadline = _svc.portable_provisioner.next_deadline_ms();
-  if (prov_deadline != 0) {
-    next = std::min(next, until(prov_deadline));
-  }
-
   // Wi-Fi checks are scheduled by cloud. Only BLE start-edge polling lives here.
   if (_svc.ble_service.is_initialized() &&
       (_svc.ble_service.is_authenticated() || _svc.ota.is_ble_active())) {
@@ -645,9 +639,6 @@ void Orchestrator::check_timers() {
     _local_api_activation_retry_deadline_ms = 0;
     (void)activate_local_endpoint();
   }
-
-  // --- Portable provisioning radio-idle tick (drops the radio on timeout) ---
-  _svc.portable_provisioner.tick(now);
 
   // BLE transfers still run synchronously from their start-edge poll.
   if (_svc.ble_service.is_initialized() &&
@@ -866,6 +857,9 @@ void Orchestrator::dispatch(const Event &event) {
   case EventType::WifiConnectionTimeout:
     if (_manufacturing_mode) {
       on_wifi_disconnected(WifiDisconnectReason::connection_lost);
+    } else if (_bring_up_pending && _setup_session_active) {
+      enter_provisioning_page(_svc.ble_service.is_initialized() ? ProvisioningTransport::BleAttached
+                                                                : ProvisioningTransport::BleOnly);
     } else if (wifi_connection_allowed()) {
       enter_wifi_fallback();
     }
@@ -879,9 +873,13 @@ void Orchestrator::dispatch(const Event &event) {
     on_provisioning_state_changed(event.prov);
     break;
 
-  case EventType::PortableProvRequest:
-    // Ordinary BLE no longer admits an attached setup transport.
-    break; // Setup is owned by the explicit provisioning flow.
+  case EventType::BleProvisioningRequest:
+    _svc.wifi.handle_ble_provisioning_request(ble_provisioning_allowed());
+    break;
+  case EventType::BleProvisioningScanComplete:
+    _svc.wifi.finish_ble_provisioning();
+    reconcile_connectivity();
+    break;
 
   case EventType::CloudStopped:
     on_cloud_stopped();
@@ -1602,7 +1600,13 @@ void Orchestrator::on_input(const InputEventData &input) {
     _svc.ui_manager.set_provisioning_ui_state(ProvisioningUiState::SwitchingTransport);
     update_display(/*wait=*/true);
     _svc.display_service.flush();
-    _svc.wifi.switch_provisioning_transport();
+    if (_svc.wifi.ble_provisioning_attached()) {
+      stop_ble();
+      _connectivity = ConnectivityState::Wifi;
+      _svc.wifi.start_provisioning(ProvisioningTransport::WifiOnly);
+    } else {
+      _svc.wifi.switch_provisioning_transport();
+    }
     return;
   case UIAction::None:
     break;
@@ -2228,7 +2232,8 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
   const bool was_wifi_fallback = _wifi_fallback;
   if (previous_settings.wifi_enabled != _settings.wifi_enabled) {
     _wifi_fallback = false;
-    _wifi_setup_pending = _settings.wifi_enabled && !_svc.wifi.has_saved_networks();
+    _wifi_setup_pending = _settings.wifi_enabled && (!tracking_session_active(_tracking_state) ||
+                                                     !_svc.wifi.has_saved_networks());
   }
   // Rendering reads UI-owned display preferences.
   _svc.ui_manager.sync_settings(_settings);
@@ -2298,6 +2303,12 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
     _svc.ble_service.notify_config(previous_settings, _settings);
   }
 
+  if (previous_settings.wifi_enabled && !_settings.wifi_enabled) {
+    _svc.wifi.stop_provisioning();
+    if (_bring_up_pending || _provisioning_sensitive_services_paused) {
+      leave_session_to_home();
+    }
+  }
   reconcile_runtime(false);
   request_background_display_update();
 }
@@ -2472,10 +2483,12 @@ void Orchestrator::on_ble_disconnected() {
     return;
   }
   AG_LOGI(TAG, "BLE client disconnected");
-  // The provisioner has no transport disconnect callback; forward so it
-  // drops the radio.
-  _svc.portable_provisioner.on_ble_disconnected();
   _svc.ui_manager.dismiss_pairing_passkey();
+  if (_setup_session_active && _provisioning_sensitive_services_paused &&
+      _svc.wifi.ble_provisioning_attached()) {
+    _svc.ui_manager.open_provisioning(ProvisioningTransport::BleAttached);
+    update_display(/*wait=*/true);
+  }
   reconcile_connectivity();
   request_background_display_update(/*wait=*/true);
 }
@@ -2492,6 +2505,12 @@ void Orchestrator::on_ble_auth_complete(bool success) {
   // after the onboarding latch is persisted and activated.
   const bool onboarding_saved = !success || mark_onboarding_done();
 
+  if (_setup_session_active && _provisioning_sensitive_services_paused &&
+      _svc.wifi.ble_provisioning_attached()) {
+    _svc.ui_manager.open_provisioning(ProvisioningTransport::BleAttached);
+    update_display(/*wait=*/true);
+    return;
+  }
   if (_setup_session_active) {
     if (success && onboarding_saved) {
       leave_session_to_home();
@@ -2680,7 +2699,7 @@ void Orchestrator::on_ble_history_write() {
 
   // Reject the blocking export reads while the provisioning radio is active
   // so provisioning notifies aren't starved; control/cleanup ops still run.
-  if (_svc.portable_provisioner.is_radio_active() &&
+  if ((_svc.wifi.is_provisioning() || _setup_session_active) &&
       (result.op == BleHistoryOp::List || result.op == BleHistoryOp::Start ||
        result.op == BleHistoryOp::Fill)) {
     AG_LOGW(TAG, "history export rejected — provisioning radio active");
@@ -2749,7 +2768,11 @@ void Orchestrator::init_ble_if_available() {
     AG_LOGE(TAG, "BLE stack init/register failed");
     return;
   }
-  // Wi-Fi setup owns its provisioning transport only while the setup page is open.
+  if (!_svc.wifi.attach_ble_provisioning()) {
+    AG_LOGE(TAG, "provisioning registration failed");
+    _svc.ble_service.deinit();
+    return;
+  }
 
   // Co-register OTA between the register phase and advertising. Non-fatal on
   // failure: drop any partial registration, advertise without OTA.
@@ -2771,8 +2794,8 @@ void Orchestrator::init_ble_if_available() {
       _svc.ble_service.set_disconnect_observer(nullptr);
       _svc.ota.teardown_ble();
     }
+    _svc.wifi.detach_ble_provisioning();
     _svc.ble_service.deinit();
-    _svc.portable_provisioner.stop(); // release the now-deinitialized server
   }
   log_heap(TAG, "ble.init:post");
 }
@@ -2785,8 +2808,12 @@ void Orchestrator::enter_wifi() {
   if (tracking_session_active(_tracking_state) || wifi_cleanup_pending()) {
     return;
   }
-  stop_ble();
-  _connectivity = ConnectivityState::Wifi;
+  _wifi_setup_pending = false;
+  if (_manufacturing_mode) {
+    stop_ble();
+  }
+  const bool attached = _svc.ble_service.is_initialized();
+  _connectivity = attached ? ConnectivityState::Ble : ConnectivityState::Wifi;
   log_heap(TAG, "wifi.enter:enter");
   // Initialize lazily when Wi-Fi is requested. Re-entry is idempotent.
   _svc.board.init_wifi_subsystem();
@@ -2819,10 +2846,11 @@ void Orchestrator::enter_wifi() {
     const WifiStaticIpConfig *ip = _settings.static_ip.ip != 0 ? &_settings.static_ip : nullptr;
     AG_LOGI(TAG, "wifi: saved credentials %s static IP", ip != nullptr ? "with" : "without");
     _svc.ui_manager.show_info("Connecting to saved Wi-Fi...");
-    _svc.wifi.connect_with_saved_credentials(ip);
+    _svc.wifi.connect_with_saved_credentials(ip, /*retain_for_ble=*/attached);
   } else {
     AG_LOGI(TAG, "wifi: no credentials — opening provisioning");
-    enter_provisioning_page(ProvisioningTransport::BleOnly);
+    enter_provisioning_page(attached ? ProvisioningTransport::BleAttached
+                                     : ProvisioningTransport::BleOnly);
     return;
   }
 
@@ -2858,8 +2886,12 @@ void Orchestrator::enter_provisioning_page(ProvisioningTransport transport) {
       _svc.ota.is_ble_active() || _ota_committed) {
     return;
   }
-  stop_ble();
-  _connectivity = ConnectivityState::Wifi;
+  if (transport == ProvisioningTransport::BleAttached) {
+    _connectivity = ConnectivityState::Ble;
+  } else {
+    stop_ble();
+    _connectivity = ConnectivityState::Wifi;
+  }
   _wifi_setup_pending = false;
   AG_LOGI(TAG, "enter_provisioning_page: transport=%u", static_cast<unsigned>(transport));
   _local_api_activation_retry_deadline_ms = 0;
@@ -2938,11 +2970,10 @@ void Orchestrator::cancel_wifi_setup() {
     _svc.ui_manager.show_snackbar("Settings save failed");
     return;
   }
-  _svc.wifi.stop_provisioning();
-  resume_provisioning_sensitive_services();
-  rebase_periodic_clocks();
-
-  _setup_session_active = false; // gate cleared after teardown completes
+  if (_setup_session_active) {
+    _svc.wifi.stop_provisioning();
+    leave_session_to_home();
+  }
   reconcile_connectivity();
   update_display(/*wait=*/true); // Ensure the Home frame is painted.
   _svc.display_service.flush();  // paint completes before caller returns
@@ -2961,11 +2992,6 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
   _corrected_measures = apply_measurement_corrections(
       _raw_measures, effective_measurement_corrections(_settings, _tracking_state, _wifi_fallback));
   _svc.local_api.publish_measurement_snapshot(_corrected_measures);
-  if (!wifi_services_allowed()) {
-    publish_local_wifi_snapshot();
-    request_background_display_update();
-    return;
-  }
 
   if (_bring_up_pending) {
     // Initial Wi-Fi bring-up STA success: show "Connected!\n<ip>"
@@ -2984,14 +3010,15 @@ void Orchestrator::on_wifi_connected(uint32_t ip) {
     RTOS::delay_ms(STA_RESULT_HOLD_MS);
 
     leave_session_to_home();
-  } else if (!_setup_session_active && _svc.ui_manager.current_screen() == Screen::Home) {
+  } else if (wifi_services_allowed() && !_setup_session_active &&
+             _svc.ui_manager.current_screen() == Screen::Home) {
     // Post-online reconnect on Home — keep the existing snackbar.
     AG_LOGI(TAG, "wifi reconnected");
     _svc.ui_manager.show_snackbar("Wi-Fi connected");
     update_display();
   }
+  reconcile_connectivity();
   if (!wifi_services_allowed()) {
-    reconcile_connectivity();
     return;
   }
   start_wifi_services();
@@ -3029,6 +3056,11 @@ void Orchestrator::on_wifi_disconnected(WifiDisconnectReason reason) {
 
   if (!_manufacturing_mode) {
     if (reason == WifiDisconnectReason::requested_by_user) {
+      return;
+    }
+    if (_bring_up_pending && _setup_session_active) {
+      enter_provisioning_page(_svc.ble_service.is_initialized() ? ProvisioningTransport::BleAttached
+                                                                : ProvisioningTransport::BleOnly);
       return;
     }
     if (_wifi_fallback || !_svc.wifi.has_been_online()) {
@@ -3070,33 +3102,34 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
   AG_LOGI(TAG, "provisioning event=%u transport=%u", static_cast<unsigned>(event),
           payload.transport);
 
-  // Portable attached provisioning is silent (no on-device UI). Only
-  // Connected needs action: persist metadata, then verify-then-drop.
-  if (static_cast<ProvisioningTransport>(payload.transport) == ProvisioningTransport::BleAttached) {
-    switch (event) {
-    case ProvisioningEvent::Connected:
-      // Creds saved by ProvisioningManager on got-IP; persist product metadata.
-      {
-        GoSettings candidate = _settings;
-        candidate.disable_cloud = payload.disable_cloud;
-        candidate.static_ip = payload.static_ip;
-        if (payload.disable_cloud &&
-            _settings.configuration_control == ConfigurationControl::Cloud) {
-          candidate.configuration_control = ConfigurationControl::Local;
-        }
-        if (!activate_settings_candidate(candidate)) {
-          AG_LOGW(TAG, "attached provisioning metadata save failed");
-        }
+  const bool attached =
+      static_cast<ProvisioningTransport>(payload.transport) == ProvisioningTransport::BleAttached;
+  if (attached && !_svc.wifi.ble_provisioning_attached()) {
+    return;
+  }
+  if (attached && event == ProvisioningEvent::Stopped) {
+    return; // GATT teardown is not cancellation of an on-device setup session.
+  }
+  // Onboarding also owns a setup session, but only Wi-Fi setup pauses services.
+  if (attached && (!_setup_session_active || !_provisioning_sensitive_services_paused)) {
+    if (event == ProvisioningEvent::Connected) {
+      GoSettings candidate = _settings;
+      candidate.disable_cloud = payload.disable_cloud;
+      candidate.static_ip = payload.static_ip;
+      if (payload.disable_cloud && _settings.configuration_control == ConfigurationControl::Cloud) {
+        candidate.configuration_control = ConfigurationControl::Local;
       }
-      _svc.portable_provisioner.on_connected();
-      break;
-    case ProvisioningEvent::ConnectFailed:
-      // Nothing to persist; manager stays listening, radio up for retry.
-      break;
-    case ProvisioningEvent::Started:
-    case ProvisioningEvent::Connecting:
-    case ProvisioningEvent::Stopped:
-      break;
+      if (!activate_settings_candidate(candidate)) {
+        AG_LOGW(TAG, "attached provisioning metadata save failed");
+      }
+      _wifi_fallback = false;
+      _svc.wifi.finish_ble_provisioning();
+      on_wifi_connected(payload.ip);
+      reconcile_connectivity();
+    } else if (event == ProvisioningEvent::ConnectFailed) {
+      _svc.wifi.finish_ble_provisioning();
+      on_wifi_disconnected(WifiDisconnectReason::connection_lost);
+      reconcile_connectivity();
     }
     return;
   }
@@ -3116,6 +3149,9 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     break;
 
   case ProvisioningEvent::ConnectFailed:
+    if (attached) {
+      _svc.wifi.finish_ble_provisioning();
+    }
     _svc.ui_manager.set_provisioning_ui_state(ProvisioningUiState::ConnectFailed);
     update_display();
     break;
@@ -3149,10 +3185,15 @@ void Orchestrator::on_provisioning_state_changed(const ProvisioningEventPayload 
     // blocks for POST_CONNECT_HOLD_MS (~1.5 s) when called after
     // Connected, which doubles as the on-page hold now that the success
     // page is actually visible.  No snackbar — the page already shows it.
+    if (attached) {
+      RTOS::delay_ms(STA_RESULT_HOLD_MS);
+    }
     _svc.wifi.stop_provisioning();
     leave_session_to_home();
-    _connectivity = ConnectivityState::DelayToBle;
-    _connectivity_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+    if (!attached) {
+      _connectivity = ConnectivityState::DelayToBle;
+      _connectivity_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms());
+    }
     reconcile_connectivity();
     break;
   }
@@ -3713,7 +3754,7 @@ uint32_t Orchestrator::gps_sleep_interval_ms() const {
 void Orchestrator::stop_ble() {
   _svc.ble_service.set_disconnect_observer(nullptr);
   _svc.ota.teardown_ble();
-  _svc.portable_provisioner.stop();
+  _svc.wifi.detach_ble_provisioning();
   _svc.ble_service.deinit();
 }
 
@@ -3832,6 +3873,25 @@ bool Orchestrator::wifi_services_allowed() const {
   return !ble_needed();
 }
 
+bool Orchestrator::ble_provisioning_allowed() const {
+  if (!_settings.wifi_enabled || tracking_session_active(_tracking_state)) {
+    return false;
+  }
+  if (!_svc.ble_service.is_authenticated() || releasing_ble()) {
+    return false;
+  }
+  if (wifi_cleanup_pending() || _bring_up_pending || _svc.wifi.is_connecting()) {
+    return false;
+  }
+  if (_svc.ble_service.export_active()) {
+    return false;
+  }
+  if (_svc.ota.is_ble_active() || _ota_committed) {
+    return false;
+  }
+  return true;
+}
+
 bool Orchestrator::connectivity_paused() const {
   if (_connectivity == ConnectivityState::Uninitialized) {
     return true;
@@ -3845,7 +3905,7 @@ bool Orchestrator::connectivity_paused() const {
   if (_svc.wifi.is_provisioning()) {
     return true;
   }
-  if (_bring_up_pending) {
+  if (_bring_up_pending || _provisioning_sensitive_services_paused) {
     return true;
   }
   if (_manufacturing_mode) {
@@ -3856,6 +3916,14 @@ bool Orchestrator::connectivity_paused() const {
 
 void Orchestrator::reconcile_connectivity(const char *saved_ssid) {
   if (connectivity_paused()) {
+    return;
+  }
+
+  if (_wifi_setup_pending && !tracking_session_active(_tracking_state) &&
+      (_connectivity == ConnectivityState::Off || ble_needed()) && !wifi_cleanup_pending() &&
+      !releasing_ble() && !_svc.ble_service.export_active()) {
+    prepare_pm();
+    enter_wifi();
     return;
   }
 
@@ -3966,13 +4034,12 @@ void Orchestrator::reconcile_connectivity(const char *saved_ssid) {
     return;
   }
   prepare_pm();
+  if (_wifi_setup_pending) {
+    enter_wifi();
+    return;
+  }
   if (!_svc.wifi.has_saved_networks()) {
-    if (_wifi_setup_pending) {
-      _wifi_setup_pending = false;
-      enter_wifi();
-    } else {
-      enter_wifi_fallback();
-    }
+    enter_wifi_fallback();
     return;
   }
   resume_wifi(saved_ssid);
@@ -4113,7 +4180,7 @@ void Orchestrator::on_wifi_suspend_complete(bool success) {
 void Orchestrator::request_ble_release() {
   if (!_svc.ble_service.is_authenticated() || tracking_session_active(_tracking_state) ||
       _svc.ble_service.export_active() || _svc.ota.is_ble_active() || _ota_committed ||
-      releasing_ble()) {
+      _setup_session_active || _svc.wifi.is_provisioning() || releasing_ble()) {
     _svc.ble_service.notify_command_result(BleCommand::ReleaseBle, false, BLE_VAL_ERR_BUSY);
     return;
   }

@@ -92,7 +92,8 @@ public:
   /// failover). Arms the initial-connect deadline. Applies @p static_ip when
   /// non-null, otherwise clears any previously set static IP. Posts synthetic
   /// WifiDisconnected when the WifiManager reports NotFound up front.
-  void connect_with_saved_credentials(const WifiStaticIpConfig *static_ip = nullptr);
+  void connect_with_saved_credentials(const WifiStaticIpConfig *static_ip = nullptr,
+                                      bool retain_for_ble = false);
 
   /// Arm a runtime reconnect, issued from tick() after reconnect_delay_ms.
   /// Reuses the credential source selected at entry: saved networks or the
@@ -106,12 +107,20 @@ public:
   /// even when connect fails immediately.
   void try_default_fallback_credentials();
 
-  // --- Provisioning (full impl lands in CP2.3) ---
+  // --- Provisioning ---
 
   /// Allocates provisioning infrastructure on the first call.
   void start_provisioning(ProvisioningTransport transport = ProvisioningTransport::BleOnly);
   void switch_provisioning_transport();
   void stop_provisioning(bool stop_http_server = true);
+
+  /// Register provisioning on the ordinary secured BLE server without starting Wi-Fi.
+  bool attach_ble_provisioning();
+  void detach_ble_provisioning();
+  bool ble_provisioning_attached() const;
+  void handle_ble_provisioning_request(bool allowed);
+  /// Finish an attached operation while retaining GATT and the Wi-Fi connection.
+  void finish_ble_provisioning();
 
   // --- Local endpoint ---
 
@@ -199,13 +208,15 @@ private:
   RtosBinarySemaphore _suspend_done_sem;
   std::atomic<WifiState> _state{WifiState::Active};
   // Bind on_got_ip / on_disconnected to WifiManager. Cleared by passing
-  // null callbacks. Owned by WifiService at all times outside provisioning.
+  // null callbacks. Attached provisioning shares these; standalone setup owns them.
   void _install_wifi_callbacks();
   void _detach_wifi_callbacks();
 
   // WifiManager callback adapters (run in ESP-IDF event-loop task).
   void _on_got_ip(uint32_t ip);
   void _on_disconnected(WifiDisconnectReason reason);
+  void _on_scan_results(const struct WifiScanEntry *entries, uint16_t count);
+  void _on_ble_provisioning_request(const AttachedRequest &request);
 
   // ProvisioningManager event adapter (run in NimBLE / portal task).
   // Forwards to the orchestrator queue, except the intermediate Stopped
@@ -271,7 +282,11 @@ private:
   bool _use_default_credentials = false;
 
   // Provisioning state
-  bool _provisioning_active = false;
+  std::atomic<bool> _provisioning_active{false};
+  bool _provisioning_attached = false;
+  RtosMutex _provisioning_request_mutex;
+  AttachedRequest _provisioning_request{};
+  bool _provisioning_request_pending = false;
   bool _portal_used = false; // Retained across transport switches within a session.
   ProvisioningTransport _transport = ProvisioningTransport::BleOnly;
   // Connected is the provisioning success transition and must survive central

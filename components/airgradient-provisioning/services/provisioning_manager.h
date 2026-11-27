@@ -78,16 +78,21 @@ public:
   bool start(WifiManager &wifi, AgBleServer &ble, HttpServer &http,
              const ProvisioningConfig &config);
 
-  /// Attached BLE-only provisioning on a borrowed, already-advertising server
-  /// (Portable link). Non-blocking, no HttpServer. Unlike start(): the server
-  /// is not init'd/secured/advertised here, the radio stays OFF (no
-  /// set_mode(Sta)), and scan/credential writes go to the attached request
-  /// hook instead of touching Wi-Fi on the NimBLE task. The WifiManager result
-  /// callbacks ARE installed. stop() uses detach() (no server deinit).
+  /// Register provisioning on a borrowed BLE server before its owner advertises.
+  /// No HttpServer, BLE initialization/security changes, or Wi-Fi mode changes.
+  /// Scan/credential writes go to the attached request hook for product admission.
+  /// The owner supplies Device Information. stop() detaches without server deinit.
   ///
   /// Requires config.transport == BleAttached and a non-null ble.device_name.
   /// Returns false if already running or arguments are invalid.
-  bool start_attached(WifiManager &wifi, AgBleServer &ble, const ProvisioningConfig &config);
+  /// With own_wifi_callbacks=false, the product retains Wi-Fi callbacks and
+  /// forwards only provisioning results through handle_wifi_* / handle_scan_results.
+  bool start_attached(WifiManager &wifi, AgBleServer &ble, const ProvisioningConfig &config,
+                      bool own_wifi_callbacks = true);
+
+  void handle_wifi_connected(uint32_t ip);
+  void handle_wifi_disconnected();
+  void handle_scan_results(const struct WifiScanEntry *entries, uint16_t count);
 
   /// Register the attached request hook. Invoked on the NimBLE task for each
   /// scan/credentials write, OUTSIDE the mutex (it does queue_send() and the
@@ -100,7 +105,7 @@ public:
   bool request_scan();
   bool submit_credentials(const ProvisioningData &data);
 
-  /// Attached verify-then-drop: reopen the session (Connected ->
+  /// Reopen an attached session after success (Connected ->
   /// WaitingForCredentials) so a later write is accepted. No-op otherwise.
   void reset_to_listening();
 
@@ -186,6 +191,7 @@ private:
   bool _ble_active = false;
   bool _wifi_active = false;
   bool _mdns_profile_installed = false;
+  bool _owns_wifi_callbacks = true;
 
   std::unique_ptr<WifiPortalTransport> _portal;
   std::unique_ptr<BleTransport> _ble_transport;

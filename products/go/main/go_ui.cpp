@@ -717,7 +717,8 @@ const char *UIManager::provisioning_status_text() const {
     return _provisioning_connected_text;
   }
 
-  const bool ble = _provisioning_transport == ProvisioningTransport::BleOnly;
+  const bool ble = (_provisioning_transport == ProvisioningTransport::BleOnly ||
+                    _provisioning_transport == ProvisioningTransport::BleAttached);
   switch (_provisioning_ui_state) {
   case ProvisioningUiState::WaitingForCredentials:
     return ble ? "Waiting for app..." : "Waiting for setup...";
@@ -742,7 +743,8 @@ const char *UIManager::provisioning_status_text() const {
 void UIManager::_encode_provisioning_qr() {
   // BleOnly -> companion-app URL; WifiOnly -> WIFI: join descriptor.
   // On failure the QR stays zeroed and the renderer no-ops.
-  if (_provisioning_transport == ProvisioningTransport::BleOnly) {
+  if ((_provisioning_transport == ProvisioningTransport::BleOnly ||
+       _provisioning_transport == ProvisioningTransport::BleAttached)) {
     (void)AirgradientProvisioning::encode_go_to_app_qr(&_qr);
     return;
   }
@@ -2079,7 +2081,8 @@ void UIManager::populate_tag_list_rows(DisplayValues &v) const {
 void UIManager::populate_provisioning_rows(DisplayValues &v) const {
   // Two action rows.  Labels depend on the active transport — row 0 is
   // always the switch-transport button, row 1 is always cancel-setup.
-  const bool ble_active = _provisioning_transport == ProvisioningTransport::BleOnly;
+  const bool ble_active = (_provisioning_transport == ProvisioningTransport::BleOnly ||
+                           _provisioning_transport == ProvisioningTransport::BleAttached);
   copy_row(v, 0, ble_active ? "Use portal" : "Use app", false);
   copy_row(v, 1, "Cancel setup", false);
   v.list.row_count = 2;
@@ -2093,7 +2096,8 @@ void UIManager::populate_provisioning_confirm_rows(DisplayValues &v) const {
   const char *question = "Confirm?";
   if (_provisioning_confirm_kind == 0) {
     // Switch transport — name the target transport, not the source.
-    question = (_provisioning_transport == ProvisioningTransport::BleOnly)
+    question = ((_provisioning_transport == ProvisioningTransport::BleOnly ||
+                 _provisioning_transport == ProvisioningTransport::BleAttached))
                    ? "Switch to Wi-Fi setup?"
                    : "Switch to app setup?";
   } else {

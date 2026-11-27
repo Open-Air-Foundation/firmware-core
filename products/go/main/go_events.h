@@ -37,12 +37,13 @@ enum class EventType : uint8_t {
   BleAuthComplete,   // payload: bool ble_auth_ok (link encrypted/authenticated)
 
   // --- Wi-Fi events ---
-  WifiConnected,            // payload: uint32_t wifi_ip (network byte order)
-  WifiDisconnected,         // payload: uint8_t wifi_disconnect_reason
-  WifiConnectionTimeout,    // no payload; whole initial/reconnect window expired
-  WifiSuspendComplete,      // payload: bool wifi_suspend_ok
-  ProvisioningStateChanged, // payload: ProvisioningEventPayload prov
-  PortableProvRequest,      // no payload (parsed request in provisioner buffer)
+  WifiConnected,               // payload: uint32_t wifi_ip (network byte order)
+  WifiDisconnected,            // payload: uint8_t wifi_disconnect_reason
+  WifiConnectionTimeout,       // no payload; whole initial/reconnect window expired
+  WifiSuspendComplete,         // payload: bool wifi_suspend_ok
+  ProvisioningStateChanged,    // payload: ProvisioningEventPayload prov
+  BleProvisioningRequest,      // no payload (parsed request in WifiService)
+  BleProvisioningScanComplete, // no payload; attached scan notifications have been queued
 
   // --- Cloud transport events ---
   PostMeasuresResult, // payload: uint8_t cloud_result (AgClientResult)

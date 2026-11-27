@@ -18,7 +18,6 @@
 #include "go_input.h"
 #include "led/go_led.h"
 #include "go_ota.h"
-#include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_storage.h"
@@ -233,18 +232,6 @@ bool wifi_has_been_online = false;
 int wifi_rssi = WIFI_RSSI_INVALID;
 bool wifi_schedule_reconnect_called = false;
 int wifi_schedule_reconnect_count = 0;
-
-// --- PortableWifiProvisioner ---
-bool portable_attach_called = false;
-bool portable_attach_result = true;
-bool portable_attached = false;
-bool portable_stop_called = false;
-bool portable_handle_pending_called = false;
-bool portable_on_connected_called = false;
-bool portable_on_ble_disconnected_called = false;
-bool portable_is_radio_active = false;
-uint32_t portable_next_deadline_ms = 0;
-bool portable_tick_called = false;
 
 // --- OtaService ---
 bool ota_setup_ble_called = false;
@@ -477,17 +464,6 @@ void reset() {
   wifi_rssi = WIFI_RSSI_INVALID;
   wifi_schedule_reconnect_called = false;
   wifi_schedule_reconnect_count = 0;
-
-  portable_attach_called = false;
-  portable_attach_result = true;
-  portable_attached = false;
-  portable_stop_called = false;
-  portable_handle_pending_called = false;
-  portable_on_connected_called = false;
-  portable_on_ble_disconnected_called = false;
-  portable_is_radio_active = false;
-  portable_next_deadline_ms = 0;
-  portable_tick_called = false;
 
   ota_setup_ble_called = false;
   ota_setup_ble_result = true;
@@ -1136,7 +1112,9 @@ void WifiService::set_power_save_enabled(bool enabled) {
   ++test_spy::wifi_set_power_save_count;
 }
 
-void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *static_ip) {
+void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig *static_ip,
+                                                 bool retain_for_ble) {
+  _state.store(retain_for_ble ? WifiState::ServicesSuspended : WifiState::Active);
   test_spy::wifi_connect_saved_called = true;
   if (static_ip != nullptr) {
     test_spy::wifi_last_static_ip = *static_ip;
@@ -1161,10 +1139,24 @@ void WifiService::schedule_reconnect(const WifiStaticIpConfig *static_ip) {
 
 void WifiService::try_default_fallback_credentials() { test_spy::wifi_try_fallback_called = true; }
 
+bool WifiService::attach_ble_provisioning() {
+  _provisioning_attached = true;
+  return true;
+}
+void WifiService::detach_ble_provisioning() { _provisioning_attached = false; }
+bool WifiService::ble_provisioning_attached() const { return _provisioning_attached; }
+void WifiService::finish_ble_provisioning() { test_spy::wifi_provisioning_active = false; }
+void WifiService::handle_ble_provisioning_request(bool allowed) {
+  if (allowed) {
+    test_spy::wifi_provisioning_active = true;
+  }
+}
+
 void WifiService::start_provisioning(ProvisioningTransport t) {
   test_spy::wifi_start_provisioning_called = true;
   test_spy::wifi_start_provisioning_transport = t;
-  test_spy::wifi_provisioning_active = true;
+  test_spy::wifi_provisioning_active = t != ProvisioningTransport::BleAttached;
+  _transport = t;
   stop_local_endpoint();
 }
 
@@ -1199,9 +1191,7 @@ void WifiService::clear_credentials() { test_spy::wifi_clear_credentials_called 
 bool WifiService::is_online() const { return test_spy::wifi_is_online; }
 bool WifiService::is_connecting() const { return test_spy::wifi_is_connecting; }
 bool WifiService::is_provisioning() const { return test_spy::wifi_provisioning_active; }
-ProvisioningTransport WifiService::current_transport() const {
-  return ProvisioningTransport::BleOnly;
-}
+ProvisioningTransport WifiService::current_transport() const { return _transport; }
 uint32_t WifiService::ip() const { return 0; }
 int WifiService::rssi() const { return test_spy::wifi_rssi; }
 WifiDisconnectReason WifiService::last_disconnect_reason() const {
@@ -1220,55 +1210,6 @@ void WifiService::_reset_deadline() {}
 void WifiService::_arm_deadline(uint32_t /*window_ms*/) {}
 void WifiService::_reset_online_latches() {}
 bool WifiService::_post_wifi_disconnected(WifiDisconnectReason /*r*/) { return true; }
-
-// ============================================================================
-// PortableWifiProvisioner stubs
-// ============================================================================
-
-PortableWifiProvisioner::PortableWifiProvisioner(RtosQueueHandle event_queue, const Deps &deps,
-                                                 const Config &cfg)
-    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _board(deps.board), _cfg(cfg) {}
-
-PortableWifiProvisioner::~PortableWifiProvisioner() = default;
-
-bool PortableWifiProvisioner::attach() {
-  test_spy::portable_attach_called = true;
-  test_spy::portable_attached = test_spy::portable_attach_result;
-  return test_spy::portable_attach_result;
-}
-
-void PortableWifiProvisioner::stop() {
-  test_spy::portable_stop_called = true;
-  test_spy::portable_attached = false;
-}
-
-void PortableWifiProvisioner::handle_pending_request() {
-  test_spy::portable_handle_pending_called = true;
-}
-
-void PortableWifiProvisioner::on_connected() { test_spy::portable_on_connected_called = true; }
-
-void PortableWifiProvisioner::on_ble_disconnected() {
-  test_spy::portable_on_ble_disconnected_called = true;
-}
-
-bool PortableWifiProvisioner::is_radio_active() const { return test_spy::portable_is_radio_active; }
-
-bool PortableWifiProvisioner::is_attached() const { return test_spy::portable_attached; }
-
-uint32_t PortableWifiProvisioner::next_deadline_ms() const {
-  return test_spy::portable_next_deadline_ms;
-}
-
-void PortableWifiProvisioner::tick(uint32_t /*now_ms*/) { test_spy::portable_tick_called = true; }
-
-// Private — never called via orchestrator stubs.
-void PortableWifiProvisioner::_on_attached_request(const AttachedRequest & /*req*/) {}
-void PortableWifiProvisioner::_on_provisioning_event(const ProvisioningEventInfo & /*info*/) {}
-bool PortableWifiProvisioner::_ensure_wifi_ready() { return true; }
-void PortableWifiProvisioner::_drop_radio() {}
-void PortableWifiProvisioner::_arm_idle_timer() {}
-void PortableWifiProvisioner::_cancel_idle_timer() {}
 
 // ============================================================================
 // AgClient stubs (concrete class — no virtuals; link-time replacement)

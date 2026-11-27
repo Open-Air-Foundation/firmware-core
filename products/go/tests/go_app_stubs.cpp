@@ -15,7 +15,6 @@
 #include "go_local_api.h"
 #include "go_orchestrator.h"
 #include "go_ota.h"
-#include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "services/sensor_manager.h"
@@ -874,7 +873,8 @@ WifiService::~WifiService() = default;
 
 bool WifiService::has_saved_networks() const { return test_spy::wifi_has_saved_networks; }
 
-void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig * /*static_ip*/) {
+void WifiService::connect_with_saved_credentials(const WifiStaticIpConfig * /*static_ip*/,
+                                                 bool /*retain_for_ble*/) {
   test_spy::wifi_connect_saved_called = true;
 }
 
@@ -905,16 +905,6 @@ WifiDisconnectReason WifiService::last_disconnect_reason() const {
 bool WifiService::has_been_online() const { return false; }
 uint32_t WifiService::next_deadline_ms() const { return 0; }
 void WifiService::tick(uint32_t /*now*/) {}
-
-// ============================================================================
-// PortableWifiProvisioner stubs (GoApp only constructs it)
-// ============================================================================
-
-PortableWifiProvisioner::PortableWifiProvisioner(RtosQueueHandle event_queue, const Deps &deps,
-                                                 const Config &cfg)
-    : _event_queue(event_queue), _wifi(deps.wifi), _ble(deps.ble), _board(deps.board), _cfg(cfg) {}
-
-PortableWifiProvisioner::~PortableWifiProvisioner() = default;
 
 // Private methods (never called in app tests but must link)
 void WifiService::_install_wifi_callbacks() {}

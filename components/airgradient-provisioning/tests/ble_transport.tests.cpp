@@ -472,7 +472,7 @@ TEST_CASE("BleTransport: scan page JSON contains ssid, rssi, open flag", "[ble_t
 // Attached mode: setup_on_server() / detach()
 // ============================================================================
 
-TEST_CASE("BleTransport: setup_on_server registers prov+DIS without init/security/advertising",
+TEST_CASE("BleTransport: setup_on_server registers provisioning without duplicating owner services",
           "[ble_transport][attached]") {
   MockBleServer ble;
   // The owner already initialised the server (BleService path).
@@ -493,16 +493,15 @@ TEST_CASE("BleTransport: setup_on_server registers prov+DIS without init/securit
   REQUIRE_FALSE(static_cast<bool>(ble.connect_cb));
   REQUIRE_FALSE(static_cast<bool>(ble.disconnect_cb));
 
-  // Provisioning service + DIS were still registered and started.
+  // The provisioning service is registered and started.
   MockBleGattService *prov_svc = ble.find_service(PROV_SERVICE_UUID);
   REQUIRE(prov_svc != nullptr);
   REQUIRE(prov_svc->started);
   REQUIRE(prov_svc->find_char(CRED_STATUS_CHAR_UUID) != nullptr);
   REQUIRE(prov_svc->find_char(SCAN_CHAR_UUID) != nullptr);
 
-  MockBleGattService *dis = ble.find_service(DIS_UUID);
-  REQUIRE(dis != nullptr);
-  REQUIRE(dis->started);
+  // The owner already supplies Device Information on the shared server.
+  CHECK(ble.find_service(DIS_UUID) == nullptr);
 
   transport.detach();
 }

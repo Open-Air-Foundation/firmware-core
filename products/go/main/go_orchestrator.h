@@ -25,7 +25,6 @@
 #include "go_input.h"
 #include "led/go_led.h"
 #include "go_ota.h"
-#include "go_portable_provisioner.h"
 #include "go_power.h"
 #include "go_sensor_producer.h"
 #include "go_settings.h"
@@ -65,7 +64,6 @@ public:
     CloudService &cloud;
     GoLocalApiService &local_api;
     SerialCommandService &serial_command;
-    PortableWifiProvisioner &portable_provisioner; // attached Portable Wi-Fi provisioning
     GoBoard &board;  // borrowed for init_wifi_subsystem() in Stationary entry
     OtaService &ota; // per-mode OTA wiring (BLE push / WiFi pull)
     AccelService &accel_service;
@@ -498,6 +496,7 @@ private:
   bool wifi_services_allowed() const;
   bool wifi_connection_allowed() const;
   void start_wifi_services();
+  bool ble_provisioning_allowed() const;
   bool connectivity_paused() const;
   void reconcile_connectivity(const char *saved_ssid = nullptr);
   void start_wifi_cleanup(bool for_ble);

@@ -268,15 +268,18 @@ bool BleTransport::_register_gatt(const ProvisioningBleConfig &config) {
     return false;
   }
 
-  // --- Device Information Service ---
-  const DeviceInformation info{config.model_name, config.serial_number, config.firmware_version,
-                               DEFAULT_MANUFACTURER};
-  constexpr uint16_t dis_props = AgBleProperty::READ | AgBleProperty::READ_ENC;
-  if (!register_device_information(*_ble, info, dis_props)) {
-    AG_LOGE(TAG, "Device Information registration failed");
-    return false;
+  // The owner supplies Device Information on an attached server.
+  if (_owns_server) {
+    // --- Device Information Service ---
+    const DeviceInformation info{config.model_name, config.serial_number, config.firmware_version,
+                                 DEFAULT_MANUFACTURER};
+    constexpr uint16_t dis_props = AgBleProperty::READ | AgBleProperty::READ_ENC;
+    if (!register_device_information(*_ble, info, dis_props)) {
+      AG_LOGE(TAG, "Device Information registration failed");
+      return false;
+    }
   }
-  AG_LOGD(TAG, "GATT services registered (Prov + DIS)");
+  AG_LOGD(TAG, "provisioning GATT registered");
   return true;
 }
 

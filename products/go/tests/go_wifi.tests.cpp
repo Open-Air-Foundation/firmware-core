@@ -85,7 +85,7 @@ public:
 
   WifiStatus start_scan(const WifiScanConfig &) override {
     ++scan_calls;
-    return WifiStatus::Ok;
+    return scan_status;
   }
   WifiStatus start_ap(const WifiApConfig &) override { return WifiStatus::Ok; }
   WifiStatus stop_ap() override { return WifiStatus::Ok; }
@@ -138,7 +138,7 @@ public:
     sta_disconnected_cb = std::move(cb);
   }
   void set_on_got_ip(WifiGotIpCallback cb) override { got_ip_cb = std::move(cb); }
-  void set_on_scan_complete(WifiScanCompleteCallback) override {}
+  void set_on_scan_complete(WifiScanCompleteCallback cb) override { scan_cb = std::move(cb); }
   void set_on_ap_client_joined(WifiApClientJoinedCallback) override {}
   void set_on_ap_client_left(WifiApClientLeftCallback) override {}
   void set_on_dhcp_timeout(std::function<void()>) override {}
@@ -147,6 +147,7 @@ public:
   // Observables
   int connect_calls = 0;
   int scan_calls = 0;
+  WifiStatus scan_status = WifiStatus::Ok;
   WifiStatus connect_status = WifiStatus::Ok;
   int disconnect_calls = 0;
   int set_static_ip_calls = 0;
@@ -173,6 +174,7 @@ public:
   WifiConnectedCallback sta_connected_cb;
   std::function<void(int)> sta_disconnected_cb;
   WifiGotIpCallback got_ip_cb;
+  WifiScanCompleteCallback scan_cb;
 
 private:
   WifiMode _mode = WifiMode::Off;
@@ -1750,4 +1752,159 @@ TEST_CASE("A wake-selected SSID connects directly with a fresh deadline", "[go_w
   CHECK_FALSE(f.rtos.has_event(EventType::WifiConnectionTimeout));
   f.svc.tick(75000);
   CHECK(f.rtos.has_event(EventType::WifiConnectionTimeout));
+}
+
+namespace {
+constexpr const char *PROVISIONING_UUID = "acbcfea8-e541-4c40-9bfd-17820f16c95c";
+}
+
+TEST_CASE("attached provisioning registration preserves the station and normal callbacks",
+          "[go_wifi][attached]") {
+  MockBleServer ble;
+  Fixture f({}, &ble);
+  REQUIRE(ble.init("Go"));
+  SECTION("Wi-Fi off") {
+    REQUIRE(f.svc.attach_ble_provisioning());
+    CHECK(f.hal.init_calls == 0);
+    CHECK(f.hal.connect_calls == 0);
+    CHECK(f.hal.scan_calls == 0);
+    CHECK(f.wifi.get_mode() == WifiMode::Off);
+  }
+  SECTION("normal station already connected") {
+    f.seed_network();
+    f.svc.connect_with_saved_credentials();
+    f.hal.got_ip_cb(0xC0A80164);
+    const int connects = f.hal.connect_calls;
+    const int disconnects = f.hal.disconnect_calls;
+    REQUIRE(f.svc.attach_ble_provisioning());
+    CHECK(f.svc.is_online());
+    CHECK(f.hal.connect_calls == connects);
+    CHECK(f.hal.disconnect_calls == disconnects);
+    f.svc.detach_ble_provisioning();
+    f.rtos.captured.clear();
+    f.hal.sta_disconnected_cb(200);
+    CHECK(f.rtos.first_event(EventType::WifiDisconnected) != nullptr);
+  }
+  CHECK(ble.init_count == 1);
+  CHECK(ble.deinit_count == 0);
+  CHECK(ble.find_service("180A") == nullptr);
+}
+
+TEST_CASE("attached scan is admitted by policy and finishes without dropping the station",
+          "[go_wifi][attached]") {
+  MockBleServer ble;
+  Fixture f({}, &ble);
+  REQUIRE(ble.init("Go"));
+  REQUIRE(f.svc.attach_ble_provisioning());
+  auto *scan = ble.find_char(PROVISIONING_UUID, "467a080f-e50f-42c9-b9b2-a2ab14d82725");
+  REQUIRE(scan != nullptr);
+  scan->simulate_write("1");
+  CHECK(f.hal.init_calls == 0); // NimBLE only queues the request.
+  REQUIRE(f.rtos.first_event(EventType::BleProvisioningRequest) != nullptr);
+  SECTION("rejected while disabled or busy") {
+    f.svc.handle_ble_provisioning_request(false);
+    CHECK(f.hal.scan_calls == 0);
+    CHECK(f.hal.init_calls == 0);
+    CHECK_FALSE(f.svc.is_provisioning());
+  }
+  SECTION("scan completes") {
+    f.svc.handle_ble_provisioning_request(true);
+    REQUIRE(f.hal.scan_calls == 1);
+    REQUIRE(f.svc.is_provisioning());
+    REQUIRE(f.hal.scan_cb);
+    f.hal.scan_cb(nullptr, 0);
+    REQUIRE(f.rtos.first_event(EventType::BleProvisioningScanComplete) != nullptr);
+    f.svc.finish_ble_provisioning();
+    CHECK_FALSE(f.svc.is_provisioning());
+    CHECK(f.wifi.get_mode() == WifiMode::Sta);
+    CHECK(f.hal.disconnect_calls == 0);
+  }
+  SECTION("driver rejects scan") {
+    f.hal.scan_status = WifiStatus::Failed;
+    f.svc.handle_ble_provisioning_request(true);
+    CHECK_FALSE(f.svc.is_provisioning());
+  }
+  CHECK(f.svc.ble_provisioning_attached());
+  CHECK(ble.deinit_count == 0);
+}
+
+TEST_CASE("attached credentials save only after success and keep GATT available",
+          "[go_wifi][attached]") {
+  MockBleServer ble;
+  Fixture f({}, &ble);
+  REQUIRE(ble.init("Go"));
+  REQUIRE(f.svc.attach_ble_provisioning());
+  auto *credentials = ble.find_char(PROVISIONING_UUID, "703fa252-3d2a-4da9-a05c-83b0d9cacb8e");
+  REQUIRE(credentials != nullptr);
+  credentials->simulate_write(R"({"ssid":"NewWiFi","password":"secret12"})");
+  CHECK(f.hal.connect_calls == 0);
+  f.svc.handle_ble_provisioning_request(true);
+  REQUIRE(f.svc.is_provisioning());
+  REQUIRE(f.hal.connect_calls == 1);
+  CHECK(f.hal.last_ssid == "NewWiFi");
+  CHECK_FALSE(f.svc.has_saved_networks());
+  f.rtos.captured.clear();
+  SECTION("success retains the link and saves credentials") {
+    f.hal.got_ip_cb(0xC0A80164);
+    auto *event = f.rtos.first_event(EventType::ProvisioningStateChanged);
+    REQUIRE(event != nullptr);
+    CHECK(event->prov.event == static_cast<uint8_t>(ProvisioningEvent::Connected));
+    CHECK(f.svc.has_saved_networks());
+    f.svc.finish_ble_provisioning();
+    CHECK(f.svc.is_online());
+    CHECK(f.hal.disconnect_calls == 0);
+    CHECK(f.svc.next_deadline_ms() == 0);
+    // A subsequent network failure still reaches the normal retry policy.
+    f.rtos.captured.clear();
+    f.hal.sta_disconnected_cb(200);
+    CHECK(f.rtos.first_event(EventType::WifiDisconnected) != nullptr);
+  }
+  SECTION("failed credentials remain unsaved and allow another attempt") {
+    f.hal.sta_disconnected_cb(202);
+    auto *event = f.rtos.first_event(EventType::ProvisioningStateChanged);
+    REQUIRE(event != nullptr);
+    CHECK(event->prov.event == static_cast<uint8_t>(ProvisioningEvent::ConnectFailed));
+    CHECK_FALSE(f.svc.has_saved_networks());
+    f.svc.finish_ble_provisioning();
+    credentials->simulate_write(R"({"ssid":"OtherWiFi","password":"secret12"})");
+    f.svc.handle_ble_provisioning_request(true);
+    CHECK(f.hal.last_ssid == "OtherWiFi");
+    CHECK(f.svc.is_provisioning());
+  }
+  SECTION("missing driver result times out") {
+    f.svc.tick(WifiServiceTestAccess::deadline(f.svc));
+    auto *event = f.rtos.first_event(EventType::ProvisioningStateChanged);
+    REQUIRE(event != nullptr);
+    CHECK(event->prov.event == static_cast<uint8_t>(ProvisioningEvent::ConnectFailed));
+    CHECK_FALSE(f.svc.has_saved_networks());
+    f.svc.finish_ble_provisioning();
+    CHECK_FALSE(f.svc.is_provisioning());
+  }
+  SECTION("cancel retains the BLE service") {
+    f.svc.stop_provisioning();
+    CHECK_FALSE(f.svc.is_provisioning());
+    CHECK_FALSE(f.svc.has_saved_networks());
+    CHECK(f.svc.next_deadline_ms() == 0);
+  }
+  CHECK(f.svc.ble_provisioning_attached());
+  CHECK(ble.deinit_count == 0);
+}
+
+TEST_CASE("opening attached setup cancels an old saved-network deadline", "[go_wifi][attached]") {
+  MockBleServer ble;
+  Fixture f({}, &ble);
+  REQUIRE(ble.init("Go"));
+  REQUIRE(f.svc.attach_ble_provisioning());
+  f.seed_network();
+  f.svc.connect_with_saved_credentials(nullptr, true);
+  REQUIRE(f.svc.next_deadline_ms() != 0);
+  f.svc.start_provisioning(ProvisioningTransport::BleAttached);
+  CHECK(f.svc.next_deadline_ms() == 0);
+  CHECK_FALSE(f.svc.is_connecting());
+  CHECK_FALSE(f.svc.is_provisioning());
+  CHECK(f.svc.station_retained());
+  f.rtos.captured.clear();
+  f.svc.tick(60'000);
+  CHECK(f.rtos.first_event(EventType::WifiConnectionTimeout) == nullptr);
+  CHECK(ble.deinit_count == 0);
 }

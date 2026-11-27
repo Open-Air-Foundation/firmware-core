@@ -125,6 +125,8 @@ public:
 
   // -- Test hooks: fire HAL-level events to drive WifiManager --
 
+  void fire_got_ip(uint32_t ip) { _on_got_ip(ip); }
+
   void fire_sta_disconnected(int raw_reason) {
     if (_on_disconnected) {
       _on_disconnected(raw_reason);
@@ -1452,4 +1454,31 @@ TEST_CASE("Attached: stop() skips the hold and does NOT deinit the borrowed serv
   // does not force Wi-Fi mode either (the product owns the radio).
   REQUIRE(f.ble.deinit_count == 0);
   REQUIRE(f.wifi.get_mode() == WifiMode::Sta);
+}
+
+TEST_CASE("Attached: external callback ownership survives registration and teardown",
+          "[provisioning][attached]") {
+  Fixture f;
+  REQUIRE(f.ble.init("Go"));
+  int scan_results = 0;
+  int disconnects = 0;
+  f.wifi.set_on_scan_complete([&](const WifiScanEntry *, uint16_t) { ++scan_results; });
+  f.wifi.set_on_disconnected([&](WifiDisconnectReason) { ++disconnects; });
+  REQUIRE(f.prov.start_attached(f.wifi, f.ble, attached_cfg(), false));
+  f.hal.fire_scan_complete(nullptr, 0);
+  CHECK(scan_results == 1);
+
+  REQUIRE(f.wifi.set_mode(WifiMode::Sta) == WifiStatus::Ok);
+  REQUIRE(f.prov.submit_credentials(f.creds()));
+  f.wifi.set_on_got_ip([&](uint32_t ip) { f.prov.handle_wifi_connected(ip); });
+  f.hal.fire_got_ip(0xC0A80164);
+  CHECK(f.prov.state() == ProvisioningState::Connected);
+  CHECK(f.wifi.has_saved_networks());
+  f.prov.stop();
+
+  f.hal.fire_scan_complete(nullptr, 0);
+  CHECK(scan_results == 2);
+  f.hal.fire_sta_disconnected(200);
+  CHECK(disconnects == 1);
+  CHECK(f.ble.deinit_count == 0);
 }
