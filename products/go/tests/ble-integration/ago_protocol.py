@@ -96,13 +96,15 @@ MEASURES_FIELD_TYPES: dict[str, tuple[type, ...]] = {
 # only the transition delta (STATUS_NOTIFY_KEYS); the other keys come via Read.
 STATUS_ALL_KEYS = {
     "gps_fix", "gps_sat", "bat_pct", "bat_v", "charging",
-    "tracking", "session", "trk", "flash_kb", "used_kb",
+    "tracking", "session", "trk", "stop", "flash_kb", "used_kb",
 }
 
 # Tracking Status NOTIFY carries the session and its current state.
-STATUS_NOTIFY_KEYS = {"tracking", "session", "trk"}
+STATUS_NOTIFY_KEYS = {"tracking", "session", "trk", "stop"}
+STATUS_CHARGING_KEYS = {"charging", "bat_pct", "bat_v"}
 
 TRACKING_STATES = {"idle": 0, "recording": 1, "paused": 2}
+STOP_REASONS = {"none": 0, "user": 1, "duration": 2}
 
 STATUS_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "gps_fix": (int,),
@@ -113,6 +115,7 @@ STATUS_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "tracking": (bool,),
     "session": (int,),
     "trk": (int,),
+    "stop": (int,),
     "flash_kb": (int,),
     "used_kb": (int,),
 }
@@ -194,7 +197,7 @@ CMD_RESULT_KEYS_FAILURE = {"type", "cmd", "ok", "err"}
 COMMANDS = {
     "co2_cal", "clear_data", "factory_rst",
     "start_tracking", "stop_tracking", "pause_tracking", "resume_tracking",
-    "release_ble",
+    "tracking_duration", "release_ble",
 }
 
 # Config "set" rejection error strings (cmd_result err values).
@@ -338,12 +341,12 @@ def _encode_correction_set(
     return bytes(payload)
 
 
-def encode_command(cmd: str) -> bytes:
+def encode_command(cmd: str, **arguments: Any) -> bytes:
     """Build a Config write payload for executing a command.
 
     Example: encode_command("co2_cal")
     """
-    return cbor2.dumps({"op": "cmd", "cmd": cmd})
+    return cbor2.dumps({"op": "cmd", "cmd": cmd, **arguments})
 
 
 def encode_history_list() -> bytes:

@@ -9,6 +9,42 @@ import pytest
 import ago_protocol as proto
 from conftest import NotificationCollector
 from test_measurement_history import _collect_pass, _download
+from test_tracking_duration import _next_tracking_status
+
+
+@pytest.mark.parametrize("arguments", [{}, {"duration_min": 0}, {"duration_min": 1},
+                                      {"duration_min": 1440}, {"duration_min": None}])
+def test_command_duration_encoding(arguments):
+    # Explicit zero/null must not be silently omitted by the helper.
+    assert cbor2.loads(proto.encode_command("start_tracking", **arguments)) == {
+        "op": "cmd", "cmd": "start_tracking", **arguments,
+    }
+
+
+@pytest.mark.parametrize("stop", [0, 1, 2])
+async def test_tracking_collector_skips_charging_delta(stop):
+    collector = NotificationCollector()
+    status = {"tracking": False, "session": 0, "trk": 0, "stop": stop}
+    collector.callback(None, cbor2.dumps({"charging": "fast", "bat_pct": 75, "bat_v": 4.0}))
+    collector.callback(None, cbor2.dumps(status))
+    assert await _next_tracking_status(collector, 0.01) == status
+    with pytest.raises(asyncio.TimeoutError):
+        await _next_tracking_status(collector, 0.01)
+
+
+@pytest.mark.parametrize("stop", [True, False, "user", 1.0, -1, 3])
+async def test_tracking_collector_rejects_invalid_stop(stop):
+    collector = NotificationCollector()
+    collector.callback(None, cbor2.dumps({"tracking": False, "session": 0, "trk": 0, "stop": stop}))
+    with pytest.raises(AssertionError):
+        await _next_tracking_status(collector, 0.01)
+
+
+async def test_tracking_collector_rejects_old_status_shape():
+    collector = NotificationCollector()
+    collector.callback(None, cbor2.dumps({"tracking": False, "session": 0, "trk": 0}))
+    with pytest.raises(AssertionError):
+        await _next_tracking_status(collector, 0.01)
 
 
 def measurement_bytes(timestamp=0):

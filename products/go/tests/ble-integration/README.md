@@ -90,10 +90,11 @@ export any routes and measurement logs you need to keep, and run one test proces
   Run it only under the sensor's calibration conditions. Use
   `--ago-notify-timeout=90` for these cases; the default 30 seconds is shorter
   than the firmware's approximately 60-second calibration polling window.
-- `test_status_notify.py` stops any existing tracking session, creates test
-  sessions, exercises pause/resume, and leaves tracking idle. It temporarily
+- `test_status_notify.py` and `test_tracking_duration.py` stop any existing
+  tracking session, create test sessions, exercise pause/resume, and leave
+  tracking idle. Each temporarily
   sets GPS Off and restores the preference afterward to avoid a GPS-triggered
-  restart during notification tests. It does not restore the original session.
+  restart during notification tests. The original session is not restored.
 - `TestHistoryDelete::test_delete_session` deletes an existing non-active
   route. Deleted data is not restored.
 - `test_measurement_history.py::test_delete_closed_log_ends_export` deletes one
@@ -144,10 +145,11 @@ single notification, then validates it across all tests:
 Reads the Status characteristic once (module-scoped fixture), then validates
 the payload across all tests:
 
-- Payload is a 10-key CBOR map with all expected keys, including `trk`
+- Payload is an 11-key CBOR map with all expected keys, including `trk` and `stop`
 - Field types match the spec (uint, float, str, bool)
 - `trk` is an integer enum: 0 = Idle, 1 = Recording, 2 = Paused; the legacy
   `tracking` boolean and session ID agree with that state
+- `stop` is an integer: 0 = None, 1 = User, 2 = Duration; active sessions use 0
 - `"charging"` is a known enum string
 - `"bat_pct"` is in 0-100 range
 - `"bat_v"` is non-negative
@@ -159,11 +161,11 @@ The firmware version is no longer part of Status; it is validated via DIS
 
 Verifies tracking transitions through the existing Status and Config
 characteristics. Each tracking push is a **delta** carrying
-`{tracking, session, trk}`, while Status READ returns the full 10-key snapshot:
+`{tracking, session, trk, stop}`, while Status READ returns the full 11-key snapshot:
 
-- `start_tracking` → `tracking=true`, `session>0`, `trk=1`; matching Config
-  `cmd_result`; READ returns all 10 keys
-- `stop_tracking` → `tracking=false`, `session=0`, `trk=0`; READ agrees
+- `start_tracking` → `tracking=true`, `session>0`, `trk=1`, `stop=0`; matching Config
+  `cmd_result`; READ returns all 11 keys
+- `stop_tracking` → `tracking=false`, `session=0`, `trk=0`, `stop=1`; READ agrees
 - `pause_tracking` / `resume_tracking` → `trk=2` / `trk=1`; `tracking` remains
   true and the session ID stays unchanged in both NOTIFY and READ; each command
   has a matching successful Config result
@@ -174,6 +176,22 @@ characteristics. Each tracking push is a **delta** carrying
 Clients should use `trk` for the full tracking state;
 the tests continue checking `tracking` because the current firmware retains it
 for compatibility. See the [BLE client guide](../../go_ble_client.md#6-status-characteristic).
+
+### `test_tracking_duration.py` — Tracking Duration
+
+Checks duration bounds and CBOR types, missing/duplicate/misplaced arguments,
+Idle rejection, and unchanged settings after rejected writes. Duration updates
+and cancellation produce only a Config `cmd_result`, without a preference delta
+or tracking transition.
+
+Six countdown cases take about seven minutes altogether. They verify expiry
+while Recording or Paused, resume preserving the deadline, replacement counting
+from the update, cancellation, and manual Stop clearing the timer before a new
+Start. Expiry must notify `stop=2` without a command result; the next Start resets
+`stop=0`. Charging deltas are ignored while waiting for tracking transitions.
+
+Run only these tests with `pytest products/go/tests/ble-integration/test_tracking_duration.py -v`.
+The one-minute waits use their own deadline rather than `--ago-notify-timeout`.
 
 ### `test_config.py` — Config Operations
 
@@ -277,6 +295,7 @@ products/go/tests/ble-integration/
   test_measures.py            Measures read + notification tests
   test_status.py              Status read tests
   test_status_notify.py       Status NOTIFY on tracking transitions
+  test_tracking_duration.py   Duration validation and real countdowns
   test_config.py              Config read/write/notify tests
   test_history.py             Route History download flow tests
   test_measurement_history.py  Measurement History protocol tests

@@ -161,7 +161,7 @@ class TestStatusNotify:
                 response=True,
             )
 
-            # Status NOTIFY: tracking transition delta — {tracking, session, trk}.
+            # Status NOTIFY: tracking transition delta — {tracking, session, trk, stop}.
             status_raw = await status_notifications.wait_for(
                 timeout=ago_notify_timeout
             )
@@ -174,6 +174,7 @@ class TestStatusNotify:
                 f"  Expected: {proto.STATUS_NOTIFY_KEYS}\n"
                 f"  Got:      {set(status.keys())}"
             )
+            assert type(status["stop"]) is int and status["stop"] == proto.STOP_REASONS["none"]
             assert status["tracking"] is True, (
                 f"Status NOTIFY did not report tracking=true: {status!r}"
             )
@@ -183,13 +184,14 @@ class TestStatusNotify:
             assert type(status["trk"]) is int
             assert status["trk"] == proto.TRACKING_STATES["recording"]
 
-            # READ remains the full 10-key snapshot.
+            # READ remains the full 11-key snapshot.
             read_back = await _read_status(ago_client)
             assert set(read_back.keys()) == proto.STATUS_ALL_KEYS, (
                 f"Status READ is not the full snapshot.\n"
                 f"  Expected: {proto.STATUS_ALL_KEYS}\n"
                 f"  Got:      {set(read_back.keys())}"
             )
+            assert type(read_back["stop"]) is int and read_back["stop"] == proto.STOP_REASONS["none"]
             assert read_back["tracking"] is True
             assert read_back["session"] == status["session"]
             assert type(read_back["trk"]) is int
@@ -250,6 +252,7 @@ class TestStatusNotify:
                 f"  Expected: {proto.STATUS_NOTIFY_KEYS}\n"
                 f"  Got:      {set(status.keys())}"
             )
+            assert type(status["stop"]) is int and status["stop"] == proto.STOP_REASONS["user"]
             assert status["tracking"] is False, (
                 f"Status NOTIFY did not report tracking=false: {status!r}"
             )
@@ -259,11 +262,12 @@ class TestStatusNotify:
             assert type(status["trk"]) is int
             assert status["trk"] == proto.TRACKING_STATES["idle"]
 
-            # READ remains the full 10-key snapshot.
+            # READ remains the full 11-key snapshot.
             read_back = await _read_status(ago_client)
             assert set(read_back.keys()) == proto.STATUS_ALL_KEYS, (
                 f"Status READ is not the full snapshot: {set(read_back.keys())}"
             )
+            assert type(read_back["stop"]) is int and read_back["stop"] == proto.STOP_REASONS["user"]
             assert read_back["tracking"] is False
             assert read_back["session"] == 0
             assert type(read_back["trk"]) is int
@@ -308,6 +312,7 @@ class TestStatusNotify:
                 )
                 status = proto.decode_cbor(status_raw)
                 assert set(status.keys()) == proto.STATUS_NOTIFY_KEYS
+                assert type(status["stop"]) is int and status["stop"] == 0
                 assert status["tracking"] is True
                 assert type(status["trk"]) is int and status["trk"] == state
                 assert type(status["session"]) is int and status["session"] > 0
@@ -319,6 +324,7 @@ class TestStatusNotify:
 
                 read_back = await _read_status(ago_client)
                 assert set(read_back.keys()) == proto.STATUS_ALL_KEYS
+                assert type(read_back["stop"]) is int and read_back["stop"] == 0
                 assert read_back["tracking"] is True
                 assert type(read_back["trk"]) is int and read_back["trk"] == state
                 assert read_back["session"] == session_id
