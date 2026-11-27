@@ -14724,6 +14724,7 @@ TEST_CASE("BLE preference activation publishes to UI and HTTP only after persist
   SECTION("Idle interval") { candidate.idle_interval_seconds = 901; }
   SECTION("Tracking interval") { candidate.tracking_interval_seconds = 17; }
   SECTION("Wi-Fi preference retains the connected BLE owner") { candidate.wifi_enabled = true; }
+  SECTION("Measurement logging") { candidate.log_measurements = true; }
   test_spy::ble_connected = true;
   test_spy::ble_pending_config_len = 1;
   test_spy::ble_config_decode_result.op = BleConfigOp::Set;
@@ -14749,6 +14750,8 @@ TEST_CASE("BLE preference activation publishes to UI and HTTP only after persist
   CHECK(ui_settings.idle_interval_seconds == expected.idle_interval_seconds);
   CHECK(ui_settings.tracking_interval_seconds == expected.tracking_interval_seconds);
   CHECK(ui_settings.wifi_enabled == expected.wifi_enabled);
+  CHECK(ui_settings.log_measurements == expected.log_measurements);
+  CHECK(snapshot.log_measurements == expected.log_measurements);
   CHECK(test_spy::ble_notify_config_called == save_ok);
   CHECK(test_spy::wifi_resume_count == 0);
 }
@@ -14903,4 +14906,170 @@ TEST_CASE("Cold boot saved-network failure retains fallback-to-sleep behavior",
   CHECK(A::wifi_fallback(orch));
   CHECK_FALSE(test_spy::wifi_start_provisioning_called);
   CHECK(f.ui_manager.current_screen() != Screen::Provisioning);
+}
+
+namespace test_spy {
+extern int measurement_appends;
+extern int measurement_closes;
+extern bool measurements_cleared;
+extern MeasurementLogRecord last_measurement;
+extern MeasurementLogBoundary measurement_boundary;
+} // namespace test_spy
+
+TEST_CASE("Measurement logging records raw Idle samples and suspends throughout tracking",
+          "[Orchestrator][logs]") {
+  TestFixture f;
+  f.settings.log_measurements = true;
+  auto orch = f.make_orchestrator();
+  MeasuresAGo raw{};
+  raw.pm_a.pm_25 = 12.5f;
+  raw.temp_hum_a.temperature = 23;
+  A::on_sensor_data(orch, raw);
+  CHECK(test_spy::measurement_appends == 1);
+  CHECK(test_spy::last_measurement.sensors.pm_a.pm_25 == raw.pm_a.pm_25);
+  CHECK(test_spy::last_measurement.sensors.temp_hum_a.humidity == MeasuresInvalid::HUMIDITY);
+  REQUIRE(A::start_tracking(orch));
+  CHECK(test_spy::measurement_closes > 0);
+  A::on_sensor_data(orch, raw);
+  CHECK(test_spy::measurement_appends == 1);
+  A::pause_tracking(orch);
+  A::on_sensor_data(orch, raw);
+  CHECK(test_spy::measurement_appends == 1);
+  CHECK(A::settings(orch).log_measurements);
+  A::stop_tracking(orch);
+  CHECK(test_spy::measurement_boundary == MeasurementLogBoundary::AfterTracking);
+  A::on_sensor_data(orch, raw);
+  CHECK(test_spy::measurement_appends == 2);
+  CHECK(test_spy::cache_measurement_called);
+  REQUIRE(A::clear_data(orch));
+  CHECK(test_spy::measurements_cleared);
+}
+
+TEST_CASE("Logging setting activates only after persistence and disable preserves files",
+          "[Orchestrator][logs]") {
+  TestFixture f;
+  f.settings.log_measurements = true;
+  auto orch = f.make_orchestrator();
+  GoSettings candidate = f.settings;
+  candidate.log_measurements = false;
+  f.ui_manager.sync_settings(candidate);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  bool saved = true;
+  SECTION("success") {}
+  SECTION("persistence failure") { saved = false; }
+  REQUIRE_CALL(f.mock_config, commit())
+      .RETURN(saved ? ConfigStoreResult::OK : ConfigStoreResult::ERROR);
+  A::apply_settings_change(orch);
+  CHECK(A::settings(orch).log_measurements == !saved);
+  CHECK_FALSE(test_spy::measurements_cleared);
+  CHECK(test_spy::measurement_closes == (saved ? 1 : 0));
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK(test_spy::measurement_appends == (saved ? 0 : 1));
+}
+
+TEST_CASE("Logging ignores refresh and carries pending boundaries through sleep",
+          "[Orchestrator][logs]") {
+  TestFixture f;
+  f.settings.log_measurements = true;
+  auto orch = f.make_orchestrator();
+  Event refresh{};
+  refresh.type = EventType::SensorDataReady;
+  refresh.sensor_data.origin = MeasurementOrigin::Refresh;
+  A::dispatch(orch, refresh);
+  CHECK(test_spy::measurement_appends == 0);
+  REQUIRE(f.storage_service.set_log_boundary(MeasurementLogBoundary::Enabled));
+  const auto state = A::snapshot_state(orch);
+  CHECK(state.measurement_log_sequence == 0);
+  CHECK(state.measurement_log_boundary == static_cast<uint8_t>(MeasurementLogBoundary::Enabled));
+  A::settings(orch).log_measurements = false;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK(test_spy::measurement_appends == 0);
+  CHECK(test_spy::cache_measurement_called);
+}
+
+TEST_CASE("HTTP logging activates one preference after persistence across tracking states",
+          "[Orchestrator][logs][local-api]") {
+  const auto tracking =
+      GENERATE(TrackingState::Idle, TrackingState::Recording, TrackingState::Paused);
+  const bool saved = GENERATE(false, true);
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::set_tracking_state(orch, tracking);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  REQUIRE_CALL(f.mock_config, commit())
+      .RETURN(saved ? ConfigStoreResult::OK : ConfigStoreResult::ERROR);
+  f.local_api.set_access(ConfigAccess::ReadWrite);
+  LocalServerConfig partial;
+  partial.log_measurements = true;
+  REQUIRE(f.local_api.submit_config(partial).status == ConfigSubmitStatus::Accepted);
+  CHECK_FALSE(A::settings(orch).log_measurements);
+  dispatch_next_local_request(f, orch);
+  CHECK(A::settings(orch).log_measurements == saved);
+  CHECK(f.local_api.get_config().log_measurements == saved);
+  GoSettings ui;
+  f.ui_manager.apply_to_settings(ui);
+  CHECK(ui.log_measurements == saved);
+  CHECK(ui.idle_interval_seconds == f.settings.idle_interval_seconds);
+  CHECK(ui.tracking_interval_seconds == f.settings.tracking_interval_seconds);
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK(test_spy::measurement_appends == (saved && tracking == TrackingState::Idle ? 1 : 0));
+}
+
+namespace test_spy {
+extern int ble_history_ticks;
+extern uint32_t ble_measurement_list_after;
+extern uint32_t ble_measurement_start;
+extern uint32_t ble_measurement_delete;
+} // namespace test_spy
+
+TEST_CASE("Measurement History commands dispatch independently of tracking identifiers",
+          "[Orchestrator][logs][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  REQUIRE(A::start_tracking(orch));
+  const auto session = A::tracking_session_id(orch);
+  test_spy::ble_pending_history_len = 1;
+  test_spy::ble_history_decode_result.measurement_log = true;
+  test_spy::ble_history_decode_result.after = 7;
+  test_spy::ble_history_decode_result.session_id = session;
+  Event event{};
+  event.type = EventType::BleHistoryWrite;
+  test_spy::ble_history_decode_result.op = BleHistoryOp::List;
+  A::dispatch(orch, event);
+  CHECK(test_spy::ble_measurement_list_after == 7);
+  CHECK_FALSE(test_spy::ble_history_list_called);
+  test_spy::ble_history_decode_result.op = BleHistoryOp::Start;
+  A::dispatch(orch, event);
+  CHECK(test_spy::ble_measurement_start == session);
+  CHECK_FALSE(test_spy::ble_history_start_called);
+  test_spy::ble_history_decode_result.op = BleHistoryOp::Delete;
+  A::dispatch(orch, event);
+  CHECK(test_spy::ble_measurement_delete == session);
+  CHECK_FALSE(test_spy::ble_history_delete_called);
+  CHECK_FALSE(test_spy::ble_notify_history_error_called);
+  CHECK(A::tracking_state(orch) == TrackingState::Recording);
+}
+
+TEST_CASE("Active exports leave measurements input and timers running and Clear Data ends export",
+          "[Orchestrator][logs][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  BleServiceTestAccess::exporting(f.ble_service, true);
+  CHECK(A::compute_queue_timeout_ms(orch) <= BleService::HISTORY_POLL_MS);
+  A::check_timers(orch);
+  CHECK(test_spy::ble_history_ticks == 1);
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK(test_spy::cache_measurement_called);
+  A::unlock(orch);
+  CHECK(A::lock_state(orch) == LockState::Unlocked);
+  REQUIRE(A::clear_data(orch));
+  CHECK(test_spy::ble_history_end_called);
+  CHECK_FALSE(f.ble_service.export_active());
+  CHECK(test_spy::measurements_cleared);
 }

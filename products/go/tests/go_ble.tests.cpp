@@ -9,6 +9,7 @@
 #include "go_ble.h"
 #include "go_ble_protocol.h"
 #include "go_storage.h"
+#include "rtos.h"
 #include "hal/ble_server.h"
 
 #include <cbor.h>
@@ -159,12 +160,20 @@ struct SessionEntry {
 
 static std::vector<SessionEntry> sessions;
 static std::vector<RoutePoint> points;
+static std::vector<MeasurementLogRecord> measurements;
+static bool snapshot_ok = true;
+static bool measurement_exists = true;
+static uint32_t measurement_writer = 0;
+static uint32_t deleted_measurement = 0;
 static uint32_t total_capacity_kb = 0;
 static uint32_t used_kb = 0;
 static bool delete_route_returns = true;
 static uint32_t last_deleted_session_id = 0;
 
 static void reset() {
+  measurements.clear();
+  snapshot_ok = measurement_exists = true;
+  measurement_writer = deleted_measurement = 0;
   sessions.clear();
   points.clear();
   total_capacity_kb = 0;
@@ -256,6 +265,38 @@ uint32_t StorageService::total_capacity_kb() const { return storage_spy::total_c
 
 uint32_t StorageService::used_kb() const { return storage_spy::used_kb; }
 
+bool StorageService::read_measurement(uint32_t sequence, uint32_t index,
+                                      MeasurementLogRecord &out) const {
+  if (sequence != 1 || !storage_spy::measurement_exists ||
+      index >= storage_spy::measurements.size())
+    return false;
+  out = storage_spy::measurements[index];
+  return true;
+}
+bool StorageService::next_measurement_log(uint32_t after, MeasurementLogInfo &out) const {
+  if (after >= 1 || !storage_spy::measurement_exists)
+    return false;
+  out = {};
+  out.sequence = 1;
+  out.count = storage_spy::measurements.size();
+  return true;
+}
+bool StorageService::protect_measurement_log(uint32_t sequence, MeasurementLogInfo &out) {
+  if (sequence != 1 || !storage_spy::snapshot_ok || _protected_log != 0 ||
+      !next_measurement_log(0, out))
+    return false;
+  _protected_log = sequence;
+  return true;
+}
+bool StorageService::delete_measurement_log(uint32_t sequence) {
+  if (!storage_spy::measurement_exists || sequence != 1 || sequence == _protected_log ||
+      sequence == storage_spy::measurement_writer)
+    return false;
+  storage_spy::deleted_measurement = sequence;
+  storage_spy::measurement_exists = false;
+  return true;
+}
+
 // ===========================================================================
 // BleServiceTestAccess — friend class for private member access
 // ===========================================================================
@@ -326,6 +367,11 @@ public:
   static uint16_t config_properties() { return BleService::config_properties(); }
   static uint16_t history_properties() { return BleService::history_properties(); }
 
+  static void drain_history(BleService &svc) {
+    for (size_t i = 0; svc._export_streaming && svc._export_active && i < 65537; ++i)
+      svc.tick_history();
+    REQUIRE_FALSE(svc._export_streaming);
+  }
   // --- State readers ---
   static bool export_active(const BleService &svc) { return svc._export_active; }
   static uint32_t export_session_id(const BleService &svc) { return svc._export_session_id; }
@@ -497,6 +543,18 @@ static NandStorage *null_nand_ptr = nullptr;
 /// mock for advertising assertions construct their own MockBleServer and
 /// inject it via BleServiceTestAccess::set_server().
 static MockBleServer default_ble_server;
+class HistoryClock : public RTOS {
+public:
+  uint64_t now = 0;
+  uint64_t get_time_ms_impl() override { return now; }
+  void delay_ms_impl(uint32_t) override { FAIL("History must not block on backpressure"); }
+};
+static HistoryClock history_clock;
+struct HistoryClockSetup {
+  HistoryClockSetup() { RTOS::set_instance(&history_clock); }
+  ~HistoryClockSetup() { RTOS::set_instance(nullptr); }
+};
+static HistoryClockSetup history_clock_setup;
 
 /// Helper: constructs a valid MeasuresAGo with all sensors reading valid data.
 static MeasuresAGo make_valid_measures() {
@@ -867,7 +925,7 @@ TEST_CASE("BLE: encode_status clamps negative battery values to 0") {
 // CBOR encoding: Config
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BLE: encode_config produces 19 keys with compact device config") {
+TEST_CASE("BLE: encode_config produces 20 keys with compact device config") {
   StorageService storage(*null_cache_ptr, *null_nand_ptr);
   BleService svc(nullptr, storage, default_ble_server);
   auto settings = make_default_settings();
@@ -877,7 +935,7 @@ TEST_CASE("BLE: encode_config produces 19 keys with compact device config") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 19);
+  CHECK(entries.size() == 20);
 
   CHECK(find_entry(entries, "tracking_int") != nullptr);
   CHECK(find_entry(entries, "idle_int") != nullptr);
@@ -1104,7 +1162,7 @@ TEST_CASE("BLE: notify_config sends altitude-unit-only changes") {
 
   const auto read_entries =
       decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 19);
+  CHECK(read_entries.size() == 20);
   CHECK(find_entry(read_entries, "alt_ft")->bool_val);
 
   const auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -1136,7 +1194,7 @@ TEST_CASE("BLE: notify_config sends delta and keeps READ as full snapshot") {
   REQUIRE(config_char.notify_count == 1);
 
   auto read_entries = decode_cbor_map(config_char.last_value.data(), config_char.last_value.size());
-  CHECK(read_entries.size() == 19); // full snapshot, no "type"
+  CHECK(read_entries.size() == 20); // full snapshot, no "type"
   CHECK(find_entry(read_entries, "type") == nullptr);
 
   auto notify_entries = decode_cbor_map(config_char.last_notified_value.data(),
@@ -2767,6 +2825,7 @@ TEST_CASE("BLE: on_disconnect clears state and restarts advertising") {
   CHECK(svc.is_connected() == false);
   CHECK(svc.is_authenticated() == false);
   CHECK(BleServiceTestAccess::export_active(svc) == false);
+  svc.tick_history(); // Storage cleanup runs on the application task.
   CHECK(BleServiceTestAccess::export_session_id(svc) == 0);
   CHECK(server.start_advertising_count == 1);
 }
@@ -2801,6 +2860,7 @@ TEST_CASE("BLE: handle_history_list sends session list with pagination fields") 
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   svc.handle_history_list();
 
@@ -2826,6 +2886,7 @@ TEST_CASE("BLE: handle_history_list empty list sends one page with count zero") 
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   svc.handle_history_list();
 
@@ -2855,6 +2916,7 @@ TEST_CASE("BLE: handle_history_list paginates large session lists") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   svc.handle_history_list();
 
@@ -2901,8 +2963,10 @@ TEST_CASE("BLE: handle_history_start sends error for non-existent session") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   svc.handle_history_start(99999);
+  BleServiceTestAccess::drain_history(svc);
 
   REQUIRE(!history_char.last_value.empty());
   CHECK(history_char.last_value[0] == 0x00);
@@ -2922,8 +2986,10 @@ TEST_CASE("BLE: handle_history_start completes an empty session") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   svc.handle_history_start(10001);
+  BleServiceTestAccess::drain_history(svc);
 
   REQUIRE(history_char.all_values.size() == 2);
 
@@ -2963,8 +3029,10 @@ TEST_CASE("BLE: handle_history_start streams points and sends done") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   svc.handle_history_start(10001);
+  BleServiceTestAccess::drain_history(svc);
 
   // Should have sent multiple notifications:
   // 1. started (CBOR tag 0x00)
@@ -2998,8 +3066,10 @@ TEST_CASE("BLE: history export sends raw route points") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   svc.handle_history_start(10001);
+  BleServiceTestAccess::drain_history(svc);
 
   const auto binary =
       std::find_if(history_char.all_values.begin(), history_char.all_values.end(),
@@ -3028,12 +3098,15 @@ TEST_CASE("BLE: history fill sends raw route points") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   svc.handle_history_start(10001);
+  BleServiceTestAccess::drain_history(svc);
 
   history_char.all_values.clear();
   uint32_t index = 0;
   svc.handle_history_fill(&index, 1);
+  BleServiceTestAccess::drain_history(svc);
 
   const auto binary =
       std::find_if(history_char.all_values.begin(), history_char.all_values.end(),
@@ -3052,9 +3125,11 @@ TEST_CASE("BLE: handle_history_fill sends error when no active download") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   uint32_t indices[] = {0, 1};
   svc.handle_history_fill(indices, 2);
+  BleServiceTestAccess::drain_history(svc);
 
   REQUIRE(!history_char.last_value.empty());
   CHECK(history_char.last_value[0] == 0x00);
@@ -3077,11 +3152,14 @@ TEST_CASE("BLE: handle_history_fill retransmits requested points") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
-  BleServiceTestAccess::set_export_active(svc, true);
-  BleServiceTestAccess::set_export_session_id(svc, 10001);
+  default_ble_server.peer_authenticated = true;
+  svc.handle_history_start(10001);
+  BleServiceTestAccess::drain_history(svc);
+  history_char.reset();
 
   uint32_t indices[] = {0, 2};
   svc.handle_history_fill(indices, 2);
+  BleServiceTestAccess::drain_history(svc);
 
   // Should have sent: 2 binary data + 1 done
   REQUIRE(history_char.notify_count >= 3);
@@ -3100,6 +3178,7 @@ TEST_CASE("BLE: handle_history_end clears export state and sends ended") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
   BleServiceTestAccess::set_export_active(svc, true);
   BleServiceTestAccess::set_export_session_id(svc, 10042);
 
@@ -3134,6 +3213,7 @@ TEST_CASE("BLE: handle_history_delete sends error for non-existent session") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   svc.handle_history_delete(99999);
 
@@ -3156,6 +3236,7 @@ TEST_CASE("BLE: handle_history_delete succeeds and sends deleted response") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   svc.handle_history_delete(10001);
 
@@ -3179,6 +3260,7 @@ TEST_CASE("BLE: handle_history_delete deletes an empty session") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   svc.handle_history_delete(10001);
 
@@ -3202,6 +3284,7 @@ TEST_CASE("BLE: handle_history_delete sends error when storage delete fails") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   svc.handle_history_delete(10001);
 
@@ -3224,8 +3307,10 @@ TEST_CASE("BLE: handle_history_delete ends active export for deleted session") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
-  BleServiceTestAccess::set_export_active(svc, true);
-  BleServiceTestAccess::set_export_session_id(svc, 10001);
+  default_ble_server.peer_authenticated = true;
+  svc.handle_history_start(10001);
+  BleServiceTestAccess::drain_history(svc);
+  history_char.reset();
 
   svc.handle_history_delete(10001);
 
@@ -3248,6 +3333,7 @@ TEST_CASE("BLE: handle_history_delete does not end export for different session"
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
   BleServiceTestAccess::set_export_active(svc, true);
   BleServiceTestAccess::set_export_session_id(svc, 20001);
 
@@ -3264,6 +3350,7 @@ TEST_CASE("BLE: notify_history_error sends error notification") {
   MockBleCharacteristic history_char;
   BleServiceTestAccess::set_history_char(svc, &history_char);
   BleServiceTestAccess::set_connected(svc, true);
+  default_ble_server.peer_authenticated = true;
 
   svc.notify_history_error(BLE_VAL_ERR_SESSION_ACTIVE);
 
@@ -3514,4 +3601,252 @@ TEST_CASE("BLE: wifi preference accepts only booleans and shares the config regi
   const auto len = encode_set_uint(buf, sizeof(buf), "wifi", 1);
   CHECK(BleService::decode_config_write(buf, len, settings).has_invalid_config_values);
   CHECK_FALSE(settings.wifi_enabled);
+}
+
+struct MeasurementHistoryFixture {
+  StorageService storage{*null_cache_ptr, *null_nand_ptr};
+  MockBleServer server;
+  BleService service{nullptr, storage, server};
+  MockBleCharacteristic characteristic;
+  MeasurementHistoryFixture() {
+    storage_spy::reset();
+    history_clock.now = 0;
+    server.peer_authenticated = true;
+    BleServiceTestAccess::set_connected(service, true);
+    BleServiceTestAccess::set_history_char(service, &characteristic);
+    MeasurementLogRecord record{};
+    record.timestamp = 0x123456789LL;
+    record.sensors = make_valid_measures();
+    record.battery_percentage = 72;
+    storage_spy::measurements = {record, record};
+  }
+  ~MeasurementHistoryFixture() { service.handle_history_end(); }
+  auto response() {
+    REQUIRE(characteristic.last_value.size() > 1);
+    REQUIRE(characteristic.last_value[0] == 0);
+    return decode_cbor_map(characteristic.last_value.data() + 1,
+                           characteristic.last_value.size() - 1);
+  }
+};
+
+TEST_CASE_METHOD(MeasurementHistoryFixture,
+                 "Measurement history uses an incremental fixed snapshot and 39-byte wire records",
+                 "[BLE][logs]") {
+  service.handle_measurement_start(1);
+  REQUIRE(service.export_active());
+  REQUIRE(characteristic.all_values.size() == 1); // setup never streams synchronously
+  auto started = response();
+  CHECK(find_entry(started, "total")->uint_val == 2);
+  CHECK(find_entry(started, "pt_size")->uint_val == 39);
+  CHECK(find_entry(started, "version")->uint_val == 1);
+  CHECK(find_entry(started, "kind")->text_val == "measurements");
+  storage_spy::measurements.push_back({}); // New append is outside the snapshot.
+  service.tick_history();
+  REQUIRE(characteristic.all_values.size() == 2);
+  const auto packet = characteristic.last_value;
+  REQUIRE(packet.size() == 42); // 3 bytes framing + 39 bytes record
+  CHECK(packet[0] == 1);
+  CHECK(packet[1] == 0);
+  CHECK(packet[2] == 0);
+  const uint8_t timestamp[] = {0x89, 0x67, 0x45, 0x23, 0x01, 0, 0, 0};
+  CHECK(std::equal(std::begin(timestamp), std::end(timestamp), packet.begin() + 3));
+  RoutePoint point{};
+  point.sensors = storage_spy::measurements[0].sensors;
+  point.battery_percentage = 72;
+  uint8_t route[56]{};
+  BleServiceTestAccess::route_point_to_wire(point, route);
+  CHECK(std::equal(route + 25, route + 56, packet.begin() + 11));
+  service.tick_history();
+  CHECK(characteristic.last_value[1] == 1);
+  service.tick_history();
+  CHECK(find_entry(response(), "sent")->uint_val == 2);
+  CHECK(service.export_active()); // Recovery window survives initial pass.
+  CHECK_FALSE(storage.delete_measurement_log(1));
+  const uint32_t outside = 2;
+  service.handle_history_fill(&outside, 1);
+  CHECK(find_entry(response(), "err")->text_val == "invalid_index");
+  const uint32_t index = 0;
+  service.handle_history_fill(&index, 1);
+  service.tick_history();
+  CHECK(characteristic.last_value == packet);
+  service.tick_history();
+  CHECK(find_entry(response(), "sent")->uint_val == 1);
+  service.handle_history_end();
+  CHECK_FALSE(service.export_active());
+  CHECK(storage.delete_measurement_log(1));
+}
+
+TEST_CASE_METHOD(MeasurementHistoryFixture,
+                 "Measurement listing includes unknown-time logs and cursor exhaustion",
+                 "[BLE][logs]") {
+  storage_spy::measurements[0].timestamp = 0;
+  service.handle_measurement_list(0);
+  auto list = response();
+  CHECK(find_entry(list, "kind")->text_val == "measurements");
+  CHECK(find_entry(list, "next")->uint_val == 1);
+  CborParser parser;
+  CborValue root, logs, entry, value;
+  REQUIRE(cbor_parser_init(characteristic.last_value.data() + 1,
+                           characteristic.last_value.size() - 1, 0, &parser, &root) == CborNoError);
+  REQUIRE(cbor_value_map_find_value(&root, "logs", &logs) == CborNoError);
+  REQUIRE(cbor_value_enter_container(&logs, &entry) == CborNoError);
+  REQUIRE(cbor_value_map_find_value(&entry, "first_ts", &value) == CborNoError);
+  int64_t timestamp = -1;
+  REQUIRE(cbor_value_get_int64(&value, &timestamp) == CborNoError);
+  CHECK(timestamp == 0);
+  service.handle_measurement_list(1);
+  CHECK(find_entry(response(), "next")->uint_val == 0);
+}
+
+TEST_CASE_METHOD(
+    MeasurementHistoryFixture,
+    "Measurement history releases protection on failure disconnect timeout and replacement",
+    "[BLE][logs]") {
+  service.handle_measurement_start(1);
+  REQUIRE(service.export_active());
+  SECTION("read failure") {
+    storage_spy::measurements.clear();
+    service.tick_history();
+    CHECK(find_entry(response(), "err")->text_val == "flash_error");
+  }
+  SECTION("disconnect") {
+    BleServiceTestAccess::on_disconnect(service, 1, 0);
+    service.tick_history();
+  }
+  SECTION("notification backpressure remains incremental and times out") {
+    characteristic.notify_returns = false;
+    const int attempts = characteristic.notify_count;
+    service.tick_history();
+    CHECK(characteristic.notify_count == attempts + 1);
+    CHECK(service.export_active());
+    history_clock.now = 60000;
+    service.tick_history();
+  }
+  SECTION("inactivity after initial pass") {
+    BleServiceTestAccess::drain_history(service);
+    history_clock.now = 59999;
+    service.tick_history();
+    CHECK(service.export_active());
+    history_clock.now = 60000;
+    service.tick_history();
+  }
+  SECTION("replacement with nonexistent track") { service.handle_history_start(10001); }
+  CHECK_FALSE(service.export_active());
+  CHECK(storage.delete_measurement_log(1));
+}
+
+TEST_CASE_METHOD(MeasurementHistoryFixture,
+                 "Measurement history checks authentication snapshot setup and writer deletion",
+                 "[BLE][logs]") {
+  SECTION("authentication") {
+    server.peer_authenticated = false;
+    service.handle_measurement_start(1);
+    service.handle_measurement_list(0);
+    service.handle_measurement_delete(1);
+    CHECK(characteristic.all_values.empty());
+    CHECK_FALSE(service.export_active());
+    CHECK(storage_spy::deleted_measurement == 0);
+  }
+  SECTION("sync failure at setup") {
+    storage_spy::snapshot_ok = false;
+    service.handle_measurement_start(1);
+    CHECK_FALSE(service.export_active());
+    CHECK(storage.delete_measurement_log(1));
+  }
+  SECTION("failed setup notification") {
+    characteristic.notify_returns = false;
+    service.handle_measurement_start(1);
+    CHECK_FALSE(service.export_active());
+    CHECK(storage.delete_measurement_log(1));
+  }
+  SECTION("explicit exported file deletion") {
+    service.handle_measurement_start(1);
+    service.handle_measurement_delete(1);
+    CHECK_FALSE(service.export_active());
+    CHECK(storage_spy::deleted_measurement == 1);
+  }
+  SECTION("current writer remains undeletable") {
+    storage_spy::measurement_writer = 1;
+    service.handle_measurement_start(1);
+    service.handle_measurement_delete(1);
+    CHECK_FALSE(service.export_active());
+    CHECK(storage_spy::deleted_measurement == 0);
+    CHECK(find_entry(response(), "err")->text_val == "delete_failed");
+  }
+  SECTION("tracking transfer count limit") {
+    storage_spy::sessions = {{10001, 65536, 0}};
+    service.handle_history_start(10001);
+    CHECK_FALSE(service.export_active());
+    CHECK(find_entry(response(), "err")->text_val == "unsupported_export");
+  }
+}
+
+TEST_CASE("BLE measurement History parses kind after fill indices and validates sequence range",
+          "[BLE][logs]") {
+  for (uint64_t sequence : {uint64_t(1), uint64_t(UINT32_MAX), uint64_t(UINT32_MAX) + 1}) {
+    uint8_t buf[128]{};
+    CborEncoder encoder, map, array;
+    cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+    cbor_encoder_create_map(&encoder, &map, 4);
+    cbor_encode_text_stringz(&map, "pts");
+    cbor_encoder_create_array(&map, &array, 1);
+    cbor_encode_uint(&array, 0);
+    cbor_encoder_close_container(&map, &array);
+    cbor_encode_text_stringz(&map, "kind");
+    cbor_encode_text_stringz(&map, "measurements");
+    cbor_encode_text_stringz(&map, "op");
+    cbor_encode_text_stringz(&map, "fill");
+    cbor_encode_text_stringz(&map, "after");
+    cbor_encode_uint(&map, sequence);
+    cbor_encoder_close_container(&encoder, &map);
+    const auto decoded =
+        BleService::decode_history_write(buf, cbor_encoder_get_buffer_size(&encoder, buf));
+    if (sequence > UINT32_MAX)
+      CHECK(decoded.op == BleHistoryOp::Invalid);
+    else {
+      CHECK(decoded.op == BleHistoryOp::Fill);
+      CHECK(decoded.measurement_log);
+      CHECK(decoded.after == sequence);
+      CHECK(decoded.point_count == 1);
+    }
+  }
+}
+
+TEST_CASE("BLE logging Config uses a boolean preference without a capability field",
+          "[BLE][logs]") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService service(nullptr, storage, default_ble_server);
+  GoSettings settings;
+  uint8_t buf[512]{};
+  auto size = BleServiceTestAccess::encode_config(service, buf, sizeof(buf), settings);
+  auto fields = decode_cbor_map(buf, size);
+  REQUIRE(find_entry(fields, "log_m") != nullptr);
+  CHECK_FALSE(find_entry(fields, "log_m")->bool_val);
+  CHECK(find_entry(fields, "log_v") == nullptr);
+  auto enabled = settings;
+  enabled.log_measurements = true;
+  size = BleServiceTestAccess::encode_config_delta(service, buf, sizeof(buf), settings, enabled);
+  fields = decode_cbor_map(buf, size);
+  CHECK(find_entry(fields, "log_m")->bool_val);
+  CHECK(find_entry(fields, "log_v") == nullptr);
+  CHECK(fields.size() == 2); // type + preference
+  for (bool value : {true, false}) {
+    CborEncoder encoder, map;
+    cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+    cbor_encoder_create_map(&encoder, &map, 2);
+    cbor_encode_text_stringz(&map, "op");
+    cbor_encode_text_stringz(&map, "set");
+    cbor_encode_text_stringz(&map, "log_m");
+    cbor_encode_boolean(&map, value);
+    cbor_encoder_close_container(&encoder, &map);
+    auto result =
+        BleService::decode_config_write(buf, cbor_encoder_get_buffer_size(&encoder, buf), settings);
+    CHECK_FALSE(result.has_invalid_config_values);
+    CHECK_FALSE(result.has_unknown_keys);
+    CHECK(settings.log_measurements == value);
+    CHECK(result.requested_fields == static_cast<uint32_t>(GoConfigField::LogMeasurements));
+  }
+  size = encode_set_text(buf, sizeof(buf), "log_m", "true");
+  CHECK(BleService::decode_config_write(buf, size, settings).has_invalid_config_values);
+  CHECK_FALSE(settings.log_measurements);
 }

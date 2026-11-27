@@ -28,6 +28,7 @@
 #include "services/payload_cache.h"
 #include "gps/gps_types.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -44,6 +45,29 @@ struct RoutePoint {
   GpsData gps;                      ///< GPS position and fix metadata
   MeasuresAGo sensors;              ///< Sensor readings at this point
   float battery_percentage = -1.0f; ///< Battery SOC (0–100 %), -1 = invalid
+};
+
+enum class MeasurementLogBoundary : uint32_t { ColdBoot = 1, Enabled, AfterTracking, RecordLimit };
+
+struct MeasurementLogRecord {
+  int64_t timestamp = 0; // Zero means UTC is unknown; order is file sequence + index.
+  MeasuresAGo sensors{};
+  float battery_percentage = -1.0f;
+};
+
+// Version 1 retains the experiment's native ESP32 little-endian disk layout.
+// Changing these requires a new file version; BLE has a separate packed encoding.
+static_assert(sizeof(MeasurementLogRecord) == 112);
+static_assert(offsetof(MeasurementLogRecord, sensors) == 8);
+static_assert(offsetof(MeasurementLogRecord, battery_percentage) == 104);
+static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__);
+
+struct MeasurementLogInfo {
+  uint32_t sequence = 0;
+  uint32_t count = 0;
+  MeasurementLogBoundary boundary = MeasurementLogBoundary::ColdBoot;
+  int64_t first_timestamp = 0;
+  int64_t last_timestamp = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -72,6 +96,10 @@ enum class CacheField : uint8_t {
 /// Host-test seam for `fflush` / `fsync` interception. Host tests install
 /// one to verify durability-budget cadence and inject sync failures.
 struct StorageTestSeam {
+  int64_t free_kb = -1; // Negative uses actual filesystem capacity.
+  int deleted_logs = 0;
+  int64_t reclaimed_kb = 0;
+  int write_bytes = -1; // Negative writes a complete record.
   int fflush_count = 0;
   int fsync_count = 0;
   int fflush_return = 0; ///< Non-zero = simulate fflush failure.
@@ -234,6 +262,24 @@ public:
   /// Returns 0 when NAND is not mounted or filesystem stats are unavailable.
   uint32_t used_kb() const;
 
+  static constexpr uint32_t STORAGE_RESERVE_KB = 5;
+  static constexpr uint32_t LOG_RECORD_LIMIT = 1024;
+  bool set_log_boundary(MeasurementLogBoundary reason);
+  bool append_measurement(const MeasurementLogRecord &record);
+  bool sync_measurements();
+  bool close_measurements();
+  MeasurementLogBoundary measurement_log_boundary() const { return _log_boundary; }
+  uint32_t current_measurement_log() const { return _log_sequence; }
+  bool resume_measurements(uint32_t sequence);
+  // Ordered pagination, without allocating an array for the whole directory.
+  bool next_measurement_log(uint32_t after, MeasurementLogInfo &out) const;
+  bool measurement_log_info(uint32_t sequence, MeasurementLogInfo &out) const;
+  bool read_measurement(uint32_t sequence, uint32_t index, MeasurementLogRecord &out) const;
+  bool protect_measurement_log(uint32_t sequence, MeasurementLogInfo &snapshot);
+  void release_measurement_log() { _protected_log = 0; }
+  bool delete_measurement_log(uint32_t sequence);
+  bool clear_measurements();
+
 #ifdef TEST_HOST
   /// Install (or clear, with nullptr) a test seam. Caller-owned.
   void set_test_seam(StorageTestSeam *seam) { _test_seam = seam; }
@@ -246,6 +292,20 @@ private:
   FILE *_route_file = nullptr;
   uint32_t _current_session_id = 0;
   uint32_t _current_point_count = 0;
+
+  FILE *_log_file = nullptr;
+  uint32_t _log_sequence = 0;
+  uint32_t _log_count = 0;
+  uint32_t _log_sync_ms = UINT32_MAX;
+  uint32_t _protected_log = 0;
+  MeasurementLogBoundary _log_boundary = MeasurementLogBoundary::ColdBoot;
+  bool sync_measurement_file(FILE *file);
+  bool create_measurement_log();
+  bool reclaim_measurement_space();
+  void format_log_path(uint32_t sequence, char *out, size_t capacity) const;
+
+  bool has_measurement_space() const;
+  bool measurement_free_kb(uint32_t &free_kb) const;
 
   /// Timestamp (ms) of the last successful fsync. `FSYNC_ANCHOR_NONE` =
   /// no anchor yet, forces the next append to sync unconditionally.

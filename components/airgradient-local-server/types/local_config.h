@@ -61,6 +61,7 @@ struct LocalServerConfig {
   std::optional<std::string> back_led_indicator;    // "backLedIndicator"
   std::optional<int> back_led_brightness;           // "backLedBrightness"
   std::optional<int> touch_led_intensity;           // "touchLedIntensity"
+  std::optional<bool> log_measurements;             // "logMeasurements"
   std::optional<bool> buzzer_enabled;               // "buzzerEnabled"
   std::optional<int> co2_abc_days;                  // "co2AbcDays"
   std::optional<int> tvoc_learning_offset;          // "tvocLearningOffset"

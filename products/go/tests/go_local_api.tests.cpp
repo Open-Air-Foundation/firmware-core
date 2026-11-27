@@ -1490,3 +1490,46 @@ TEST_CASE("Go local API interval fields cannot bypass Cloud authority through co
     CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
   }
 }
+
+TEST_CASE("Go logging HTTP setting is admitted independently and publishes after activation") {
+  Fixture fixture;
+  GoSettings settings;
+  settings.idle_interval_seconds = 17;
+  settings.tracking_interval_seconds = 30;
+  fixture.service->publish_config_snapshot(settings);
+  fixture.service->set_access(ConfigAccess::ReadWrite);
+  CHECK(fixture.service->get_config().log_measurements == false);
+  LocalServerConfig partial;
+  partial.log_measurements = true;
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+  auto request = fixture.receive_request();
+  CHECK(request.config.update_mask == field_mask(GoConfigField::LogMeasurements));
+  CHECK(request.config.log_measurements);
+  CHECK(fixture.service->get_config().log_measurements == false);
+  settings.log_measurements = true;
+  fixture.service->publish_config_snapshot(settings);
+  CHECK(fixture.service->get_config().log_measurements == true);
+  CHECK(fixture.service->get_config().idle_interval_seconds == 17);
+  CHECK(fixture.service->get_config().tracking_interval_seconds == 30);
+  partial.log_measurements = false;
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+  CHECK_FALSE(fixture.receive_request().config.log_measurements);
+}
+
+TEST_CASE("HTTP logging follows authority including the control-only recovery exception") {
+  Fixture fixture;
+  GoSettings settings;
+  settings.configuration_control = ConfigurationControl::Cloud;
+  fixture.service->publish_config_snapshot(settings);
+  fixture.service->set_access(ConfigAccess::ReadWrite);
+  LocalServerConfig partial;
+  partial.log_measurements = true;
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Forbidden);
+  partial.configuration_control = "both";
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Forbidden);
+  CHECK(GoLocalApiServiceTestAccess::request_count(*fixture.service) == 0);
+  partial.log_measurements.reset();
+  require_status(fixture.service->submit_config(partial), ConfigSubmitStatus::Accepted);
+  CHECK(fixture.receive_request().config.update_mask ==
+        field_mask(GoConfigField::ConfigurationControl));
+}

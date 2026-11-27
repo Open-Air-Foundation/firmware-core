@@ -93,6 +93,7 @@ private:
     LedBrightness back_led_brightness = LedBrightness::Off;
     BackLedIndicator back_led_indicator = BackLedIndicator::Aqi;
     TouchLedIntensity touch_led_intensity = TouchLedIntensity::Off;
+    bool log_measurements = false;
     bool buzzer_enabled = false;
     int co2_abc_days = CO2_ABC_DAYS_DEFAULT;
     int tvoc_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;

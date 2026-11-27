@@ -99,13 +99,15 @@ alone does not prove that either diagnostic ran.
 Persisted mutation tests require `--ago-allow-config-write`. They round-trip the
 temperature and altitude units, Pinned Chart, Idle/Tracking intervals and GPS settings,
 back LED indicator (`aqi`/`co2`), back LED and V1 touch LED levels, buzzer, CO2 ABC period,
-and TVOC/NOx learning offsets.
+TVOC/NOx learning offsets, and `logMeasurements`.
 Each parameterized case
 changes one field, polls the asynchronous GET snapshot for convergence, and
 attempts to restore that field during fixture teardown. A lost connection or
 interrupted run can prevent cleanup; read back settings after a failure.
 They run only when `configurationControl` is `local`, preventing cloud updates
-from racing with restoration.
+from racing with restoration. Enabling logging can create files or reclaim old
+measurement logs when storage is low; restoring the preference does not undo
+those file changes.
 
 Extended invalid-value cases use the same opt-in and restoration fixture. If a
 firmware regression accepts and persists an invalid value, teardown restores the
@@ -141,8 +143,9 @@ unknown-key rejection, and omission of invalid values rather than JSON `null`.
 
 Validates the complete Go configuration schema and safe empty-update admission.
 Opt-in parameterized cases round-trip and restore the display-unit, Pinned
-Chart, timing, GPS, LED, buzzer, CO2 ABC, and gas-learning settings.
-The schema uses `idleInterval` and `trackingInterval`; each interval round trip
+Chart, timing, GPS, LED, buzzer, CO2 ABC, gas-learning, and measurement-logging settings.
+The schema requires boolean `logMeasurements`; its round-trip and no-op cases
+check GET convergence and restoration. The schema uses `idleInterval` and `trackingInterval`; each interval round trip
 checks that the other preference is unchanged. `measurementInterval` is absent.
 The schema requires `backLedIndicator` to be `aqi` or `co2`; its round-trip case
 switches to the other indicator and restores the original selection.
@@ -154,6 +157,9 @@ invalid fields; config enum, type, and range rejection; nested dotted error
 paths; and known fields unsupported by Go. Legacy `measurementInterval` writes
 return `404 not_found`, including mixed requests with a valid interval change;
 the configuration must stay unchanged throughout the convergence window.
+Non-boolean `logMeasurements` writes return `400 invalid_value` with the field
+name, including mixed writes with a valid interval change; neither field may
+change.
 
 ### `test_actions.py` — Actions
 
@@ -195,6 +201,7 @@ products/go/tests/local-server-integration/
   test_errors.py       Parsing and provider errors
   test_actions.py      Fire-and-forget action tests
   test_ota.py          Operator-gated OTA policy tests
+  test_protocol_offline.py  Offline logging schema checks
 ```
 
 ## Design Notes
@@ -240,3 +247,10 @@ pytest products/go/tests/local-server-integration/ --collect-only -q
 Collection confirms test discovery only. Record the firmware revision, board,
 network setup, opt-in flags, selected tests, skips, and results for a hardware
 verification run.
+
+Run the offline schema checks without HTTP or mDNS access:
+
+```sh
+uv run --project products/go/tests/local-server-integration pytest \
+  products/go/tests/local-server-integration/test_protocol_offline.py -q
+```

@@ -124,7 +124,7 @@ CHARGING_STATES = {"none", "trickle", "pre", "fast", "taper", "topoff", "done", 
 # ---------------------------------------------------------------------------
 
 CONFIG_READ_KEYS = {
-    "idle_int", "tracking_int", "wifi",
+    "idle_int", "tracking_int", "wifi", "log_m",
     "temp_f", "alt_ft", "pm_aqi", "pchart",
     "gps_mode",
     "auto_lock",
@@ -151,6 +151,7 @@ CONFIG_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "idle_int": (int,),
     "tracking_int": (int,),
     "wifi": (bool,),
+    "log_m": (bool,),
     "temp_f": (bool,),
     "alt_ft": (bool,),
     "pm_aqi": (bool,),
@@ -232,6 +233,14 @@ ROUTE_POINT_FIELDS = (
 
 # History session list entry keys
 SESSION_ENTRY_KEYS = {"id", "pts", "ts"}
+MEASUREMENT_LOG_ENTRY_KEYS = {"session", "count", "boundary", "first_ts", "last_ts", "version"}
+MEASUREMENT_RECORD_WIRE_SIZE = 39
+MEASUREMENT_LOG_VERSION = 1
+MEASUREMENT_LOG_RECORD_LIMIT = 1024
+MAX_FILL_POINTS = 50
+MEASUREMENT_RECORD_FIELDS = ("timestamp", *ROUTE_POINT_FIELDS[5:])
+_MEASUREMENT_RECORD_STRUCT = struct.Struct("<q5f3hfB")
+assert _MEASUREMENT_RECORD_STRUCT.size == MEASUREMENT_RECORD_WIRE_SIZE
 
 
 # ---------------------------------------------------------------------------
@@ -362,16 +371,32 @@ def encode_history_delete(session_id: int) -> bytes:
     return cbor2.dumps({"op": "delete", "session": session_id})
 
 
+def encode_measurement_list(after: int = 0) -> bytes:
+    return cbor2.dumps({"op": "list", "kind": "measurements", "after": after})
+
+
+def encode_measurement_start(sequence: int) -> bytes:
+    return cbor2.dumps({"op": "start", "kind": "measurements", "session": sequence})
+
+
+def encode_measurement_delete(sequence: int) -> bytes:
+    return cbor2.dumps({"op": "delete", "kind": "measurements", "session": sequence})
+
+
 # ---------------------------------------------------------------------------
 # History notification parsers
 # ---------------------------------------------------------------------------
 
-def parse_history_notification(data: bytes) -> tuple[int, Any]:
+def parse_history_notification(
+    data: bytes, *, kind: str | None = None, version: int = 1,
+) -> tuple[int, Any]:
     """Parse a History characteristic notification.
 
     Returns (tag, payload) where:
       - tag == HISTORY_TAG_CBOR:   payload is the decoded CBOR dict
-      - tag == HISTORY_TAG_BINARY: payload is (point_index, [route_point_dicts])
+      - tag == HISTORY_TAG_BINARY: payload is (point_index, [record_dicts])
+
+    Omit kind for routes; use kind="measurements", version=1 for measurement logs.
     """
     if len(data) < 1:
         raise ValueError("Empty history notification")
@@ -383,39 +408,36 @@ def parse_history_notification(data: bytes) -> tuple[int, Any]:
         return tag, cbor2.loads(body)
 
     if tag == HISTORY_TAG_BINARY:
-        return tag, _parse_binary_chunk(body)
+        return tag, _parse_binary_chunk(body, kind=kind, version=version)
 
     raise ValueError(f"Unknown history tag: 0x{tag:02x}")
 
 
-def _parse_binary_chunk(body: bytes) -> tuple[int, list[dict[str, Any]]]:
+def _parse_binary_chunk(
+    body: bytes, *, kind: str | None = None, version: int = 1,
+) -> tuple[int, list[dict[str, Any]]]:
     """Parse the body of a binary history notification (after the tag byte).
 
-    Returns (first_point_index, [route_point_dicts]).
+    Returns (first_point_index, [record_dicts]).
     """
+    if kind is None:
+        layout, fields = _ROUTE_POINT_STRUCT, ROUTE_POINT_FIELDS
+    elif kind == "measurements" and version == MEASUREMENT_LOG_VERSION:
+        layout, fields = _MEASUREMENT_RECORD_STRUCT, MEASUREMENT_RECORD_FIELDS
+    else:
+        raise ValueError(f"Unsupported history format: {kind=}, {version=}")
     if len(body) < 2:
         raise ValueError(f"Binary chunk too short for header: {len(body)} bytes")
-
     point_index = struct.unpack_from("<H", body, 0)[0]
     payload = body[2:]
-
-    if len(payload) % ROUTE_POINT_WIRE_SIZE != 0:
-        raise ValueError(
-            f"Binary payload size {len(payload)} is not a multiple of "
-            f"{ROUTE_POINT_WIRE_SIZE}"
-        )
-
-    points: list[dict[str, Any]] = []
-    offset = 0
-    while offset < len(payload):
-        points.append(parse_route_point_wire(payload, offset))
-        offset += ROUTE_POINT_WIRE_SIZE
-
+    if not payload or len(payload) % layout.size:
+        raise ValueError(f"Binary payload size {len(payload)} is not a positive multiple of {layout.size}")
+    points = [dict(zip(fields, values)) for values in layout.iter_unpack(payload)]
     return point_index, points
 
 
 def parse_route_point_wire(data: bytes, offset: int = 0) -> dict[str, Any]:
-    """Decode a single 55-byte RoutePointWire from *data* at *offset*.
+    """Decode a single 56-byte RoutePointWire from *data* at *offset*.
 
     Returns a dict keyed by ROUTE_POINT_FIELDS.
     """

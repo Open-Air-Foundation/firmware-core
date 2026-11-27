@@ -24,6 +24,7 @@ struct GoSettings {
   GpsMode gps_mode = GpsMode::OnWhenTracking;
 
   // --- Device behavior ---
+  bool log_measurements = false;
   bool wifi_enabled = false;
   int auto_lock_seconds = 10; // 0 = auto-lock disabled
 

@@ -259,6 +259,10 @@ ParseStatus apply_item(const cJSON *item, LocalServerConfig &out, ConfigFieldId 
     field = ConfigFieldId::IdleInterval;
     return take_int(item, out.idle_interval_seconds) ? ParseStatus::Ok : ParseStatus::InvalidValue;
   }
+  if (std::strcmp(key, fields::LOG_MEASUREMENTS) == 0) {
+    field = ConfigFieldId::LogMeasurements;
+    return take_bool(item, out.log_measurements) ? ParseStatus::Ok : ParseStatus::InvalidValue;
+  }
   if (std::strcmp(key, fields::TRACKING_INTERVAL) == 0) {
     field = ConfigFieldId::TrackingInterval;
     return take_int(item, out.tracking_interval_seconds) ? ParseStatus::Ok
@@ -510,6 +514,9 @@ size_t serialize(const LocalServerConfig &cfg, char *buf, size_t buf_len) {
     cJSON_AddNumberToObject(root, fields::TOUCH_LED_INTENSITY,
                             static_cast<double>(*cfg.touch_led_intensity));
   }
+  if (cfg.log_measurements.has_value()) {
+    cJSON_AddBoolToObject(root, fields::LOG_MEASUREMENTS, *cfg.log_measurements);
+  }
   if (cfg.buzzer_enabled.has_value()) {
     cJSON_AddBoolToObject(root, fields::BUZZER_ENABLED, *cfg.buzzer_enabled);
   }
@@ -580,6 +587,8 @@ const char *config_field_wire_key(ConfigFieldId id) {
     return fields::MEASUREMENT_INTERVAL;
   case ConfigFieldId::IdleInterval:
     return fields::IDLE_INTERVAL;
+  case ConfigFieldId::LogMeasurements:
+    return fields::LOG_MEASUREMENTS;
   case ConfigFieldId::TrackingInterval:
     return fields::TRACKING_INTERVAL;
   case ConfigFieldId::GpsMode:

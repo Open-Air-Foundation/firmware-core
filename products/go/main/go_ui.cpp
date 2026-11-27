@@ -529,6 +529,7 @@ void UIManager::sync_settings(const GoSettings &s) {
 
   _setting_tracking_interval_seconds = s.tracking_interval_seconds;
   _setting_idle_interval_seconds = s.idle_interval_seconds;
+  _setting_log_measurements = s.log_measurements;
   _setting_wifi = s.wifi_enabled;
   if (!display_temp_hum_for_interval(setting_measure_interval_seconds()) &&
       (_active_metric == Metric::Temp || _active_metric == Metric::Humidity)) {
@@ -598,6 +599,7 @@ void UIManager::apply_to_settings(GoSettings &settings) const {
     break;
   }
 
+  settings.log_measurements = _setting_log_measurements;
   settings.wifi_enabled = _setting_wifi;
 
   // Auto-lock: index 0=Off(0s), 1=10s, 2=30s, 3=60s
@@ -987,7 +989,8 @@ const UIManager::SettingId *UIManager::group_items(Screen screen, uint8_t &count
   static constexpr SettingId WIFI[] = {SettingId::Wifi, SettingId::LocalServer};
   static constexpr SettingId OPERATIONS[] = {SettingId::IdleInterval,   SettingId::TrackingInterval,
                                              SettingId::GpsMode,        SettingId::AutoLock,
-                                             SettingId::Co2Calibration, SettingId::Buzzer};
+                                             SettingId::Co2Calibration, SettingId::Buzzer,
+                                             SettingId::LogMeasurements};
   static constexpr SettingId DISPLAY_TOUCH[] = {
       SettingId::PinnedChart,      SettingId::Units,
       SettingId::AltitudeUnit,     SettingId::PmDisplay,
@@ -1039,6 +1042,7 @@ uint8_t UIManager::setting_option_count(SettingId setting_id) const {
   }
   case SettingId::GpsMode:
     return GPS_MODE_COUNT;
+  case SettingId::LogMeasurements:
   case SettingId::Wifi:
     return 2;
   case SettingId::AutoLock:
@@ -1077,6 +1081,8 @@ uint8_t UIManager::setting_current_option(SettingId setting_id) const {
     return (uint8_t)measure_interval_option_index(editing_measure_interval_seconds(setting_id));
   case SettingId::GpsMode:
     return _setting_gps_mode;
+  case SettingId::LogMeasurements:
+    return _setting_log_measurements;
   case SettingId::Wifi:
     return _setting_wifi;
   case SettingId::AutoLock:
@@ -1133,6 +1139,9 @@ void UIManager::apply_setting_choice(uint8_t option_index) {
     break;
   case SettingId::GpsMode:
     _setting_gps_mode = option_index;
+    break;
+  case SettingId::LogMeasurements:
+    _setting_log_measurements = option_index != 0;
     break;
   case SettingId::Wifi:
     _setting_wifi = option_index != 0;
@@ -1892,6 +1901,10 @@ void UIManager::populate_settings_group_rows(DisplayValues &v) const {
     case SettingId::Co2Calibration:
       (void)snprintf(label, sizeof(label), "CO2 Calibration");
       break;
+    case SettingId::LogMeasurements:
+      (void)snprintf(label, sizeof(label), "Log Measurement %s",
+                     _setting_log_measurements ? "On" : "Off");
+      break;
     case SettingId::GpsMode: {
       // Keep the longest summary within the 19-character list-row width.
       static const char *const GPS_SUMMARIES[] = {"Always Off", "When tracking", "Always On"};
@@ -1960,6 +1973,7 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   case SettingId::GpsMode:
     options = GPS_MODE_OPTIONS;
     break;
+  case SettingId::LogMeasurements:
   case SettingId::Wifi:
     options = LOCAL_SERVER_OPTIONS;
     break;

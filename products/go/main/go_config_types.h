@@ -50,6 +50,7 @@ enum class GoConfigField : uint32_t {
   BackLedIndicator = 1U << 18,
   IdleInterval = 1U << 19,
   TrackingInterval = 1U << 20,
+  LogMeasurements = 1U << 21,
 };
 
 constexpr int TRACKING_INTERVAL_SECONDS_MIN = 1;
@@ -123,6 +124,7 @@ struct GoConfigUpdate {
   BackLedIndicator back_led_indicator = BackLedIndicator::Aqi;
   TouchLedIntensity touch_led_intensity = TouchLedIntensity::Off;
   bool buzzer_enabled = false;
+  bool log_measurements = false;
   int co2_abc_days = CO2_ABC_DAYS_DEFAULT;
   int tvoc_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;
   int nox_learning_offset = LEARNING_OFFSET_HOURS_DEFAULT;

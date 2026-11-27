@@ -124,6 +124,8 @@ enum class BleHistoryOp : uint8_t {
 
 /// Result of decoding a History characteristic write.
 struct BleHistoryDecodeResult {
+  bool measurement_log = false;
+  uint32_t after = 0;
   BleHistoryOp op = BleHistoryOp::Invalid;
   uint32_t session_id = 0; ///< Valid when op == Start or Delete
 
@@ -252,8 +254,8 @@ public:
   /// Send session list as CBOR notification.
   void handle_history_list();
 
-  /// Stream all points for a session as binary notifications. Blocks until
-  /// complete. Sends CBOR "started" before and "done" after the stream.
+  /// Capture the count and send "started"; tick_history() streams incrementally.
+  /// A completed pass sends "done" and retains the snapshot for fill requests.
   void handle_history_start(uint32_t session_id);
 
   /// Retransmit specific points by index. Sends binary data notifications
@@ -279,6 +281,13 @@ public:
 
   bool is_initialized() const;
   bool set_connectable(bool allowed);
+  void handle_measurement_list(uint32_t after);
+  void handle_measurement_start(uint32_t sequence);
+  void handle_measurement_delete(uint32_t sequence);
+  // Application-task only: one record per tick, also releases disconnected exports.
+  void tick_history();
+  static constexpr uint32_t HISTORY_POLL_MS = 20;
+
   bool export_active() const { return _export_active.load(); }
   /// True while a GAP link exists (not necessarily usable).
   bool is_connected() const;
@@ -355,6 +364,19 @@ private:
   uint32_t _export_session_id = 0;
   std::atomic<bool> _export_active{false};
 
+  bool _export_measurements = false;
+  bool _export_streaming = false;
+  uint32_t _export_total = 0;
+  uint32_t _export_offset = 0;
+  uint32_t _export_activity_ms = 0;
+  uint32_t _fill_indices[BleHistoryDecodeResult::MAX_FILL_POINTS]{};
+  size_t _fill_count = 0;
+  size_t _fill_offset = 0;
+  uint32_t _pass_sent = 0;
+  static constexpr uint32_t EXPORT_IDLE_MS = 60000;
+  void begin_export(uint32_t id, uint32_t count, bool measurements);
+  void release_export();
+
   // --- Internal helpers ---
 
   void on_connect(uint16_t conn_handle);
@@ -390,7 +412,7 @@ private:
   bool send_history_cbor(const uint8_t *cbor_data, size_t cbor_len);
 
   /// Send a binary data chunk on the History characteristic (tag 0x01).
-  /// Retries with backpressure if the TX buffer is full.
+  /// Single attempt; tick_history() retries on later loop iterations.
   bool send_history_binary(uint16_t first_point_index, const uint8_t *data, size_t data_len);
 
   /// Convert a RoutePoint to the 55-byte RoutePointWire binary format.

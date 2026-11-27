@@ -76,16 +76,16 @@ payload is shown as a decoded CBOR value (or a hex dump for binary data):
 DEBUG ago_ble_test:conftest.py WRITE Config   {'op': 'set', 'temp_f': True}
 DEBUG ago_ble_test:conftest.py NOTIFY Config   {'type': 'config', 'temp_f': True, ...}
 DEBUG ago_ble_test:conftest.py READ   Status   {'bat_pct': 87, 'used_kb': 8192, ...}
-DEBUG ago_ble_test:conftest.py NOTIFY History  <binary pts=1 idx=2>
+DEBUG ago_ble_test:conftest.py NOTIFY History  <binary idx=2 record_bytes=56>
 ```
 
 ## Device Side Effects
 
 The BLE suite has **no opt-in gates** for mutations. Use a dedicated device,
-export any routes you need to keep, and run one test process at a time:
+export any routes and measurement logs you need to keep, and run one test process at a time:
 
-- Config write tests change settings and attempt restoration in cleanup. An
-  interrupted run or lost connection can leave changed settings behind.
+- Config write tests change settings, including `log_m`, and attempt restoration
+  in cleanup. An interrupted run or lost connection can leave changed settings behind.
 - `TestConfigCommand` in `test_config.py` requests physical CO2 calibration.
   Run it only under the sensor's calibration conditions. Use
   `--ago-notify-timeout=90` for these cases; the default 30 seconds is shorter
@@ -96,6 +96,11 @@ export any routes you need to keep, and run one test process at a time:
   restart during notification tests. It does not restore the original session.
 - `TestHistoryDelete::test_delete_session` deletes an existing non-active
   route. Deleted data is not restored.
+- `test_measurement_history.py::test_delete_closed_log_ends_export` deletes one
+  existing measurement log when logging is already disabled. Other measurement
+  History cases use existing logs and do not change the logging preference.
+- Toggling `log_m` can create logs and trigger automatic oldest-log deletion if
+  storage is low; restoring the preference does not undo those file changes.
 
 For an initial read/notification check without those mutations:
 
@@ -177,7 +182,7 @@ Covers read, write, delta-notify, and command operations:
 - **Read** (sync): reads Config once (module-scoped fixture), then validates the
   expected config keys present with correct types; versioned correction
   maps and their value arrays, `bledi`, and `gps_mode` use valid fields and enum
-  values. The 19-key snapshot includes `idle_int`, `tracking_int`, and `wifi`
+  values. The 20-key snapshot includes `idle_int`, `tracking_int`, `wifi`, and `log_m`
 - **Set config** (async): writes a single-field `{"op": "set", ...}`, verifies
   the device sends a Config **delta** notification — `"type": "config"` plus
   only the changed key
@@ -195,7 +200,11 @@ Covers read, write, delta-notify, and command operations:
 - **LED indicator validation** (async): invalid names and CBOR types return
   `invalid_config_value` and preserve the config snapshot. LED round trips also
   verify that changing indicator or brightness preserves the other setting.
-- **No-op set** (async): writing an unchanged value emits no notification
+- **Measurement logging** (async): `log_m` is a boolean in the 20-key snapshot;
+  toggling it emits an exact delta and restores the original preference.
+  Non-boolean values are rejected without a delta or configuration change
+- **No-op set** (async): writing an unchanged value, including `log_m`, emits
+  no notification
 - **Correction set** (async): writes a complete temperature correction group,
   verifies the nested Config delta without a Measures notification, then
   restores the original group
@@ -216,7 +225,7 @@ Covers read, write, delta-notify, and command operations:
 ### `test_history.py` — History Characteristic
 
 Exercises the full download protocol. Download tests select a session with at
-least one point and are **skipped** when the device has no non-empty sessions.
+least one point and at most 65,535 points; they skip when no eligible session exists.
 
 - **List**: writes `{"op": "list"}`, verifies `"sessions"` array with
   `id`/`pts`/`ts` per entry
@@ -230,6 +239,20 @@ least one point and are **skipped** when the device has no non-empty sessions.
   active download returns `"no_active_download"`
 - **Delete**: a nonexistent session returns `"session_not_found"`; deleting a
   listed non-active session returns `"deleted"` and removes only that session
+
+### `test_measurement_history.py` — Measurement Logs
+
+Checks `kind:"measurements"` cursor pagination, version-1 39-byte records,
+`started.total` snapshot bounds, deliberate gap recovery with `fill`, empty
+fills, end cleanup, and missing-log errors. Download cases skip without stored
+logs. Deletion ends an active export, removes only the chosen log, and preserves
+route IDs; it skips while `log_m` is enabled.
+
+### `test_protocol_offline.py` — Offline Protocol Checks
+
+Checks command encoding, binary offsets, signed 64-bit UTC (including unknown
+time), invalid sentinels, malformed packets, route compatibility, and download
+helper behavior with simulated notifications. No device fixtures are used.
 
 ### `test_device_info.py` — Device Information Service
 
@@ -255,7 +278,9 @@ products/go/tests/ble-integration/
   test_status.py              Status read tests
   test_status_notify.py       Status NOTIFY on tracking transitions
   test_config.py              Config read/write/notify tests
-  test_history.py             History download flow tests
+  test_history.py             Route History download flow tests
+  test_measurement_history.py  Measurement History protocol tests
+  test_protocol_offline.py     Offline decoder and helper checks
   test_device_info.py         Device Information Service (DIS) read tests
 ```
 
@@ -292,10 +317,11 @@ firmware and are stricter than the forward-compatible parsing expected of apps.
 The suite does not cover sleep-cycle broadcasts, provisioning requests, Wi-Fi
 enable/setup transitions, successful `release_ble` disconnects, OTA transfer,
 fresh pairing, charging/disconnect notifications, or GPS-restart reconnect
-recovery. History tests
-skip download checks without a non-empty route and do not simulate packet loss
-or verify successful gap filling. Passing schema and notification checks does
-not establish physical sensor accuracy or calibration quality.
+recovery. Route History tests skip downloads without an eligible route. Measurement
+History tests discard one received record to exercise gap filling but do not
+simulate radio loss. They do not establish persistence across reboot, storage
+reclamation under pressure, live-writer deletion rejection, or the 60-second
+export timeout. Passing schema and notification checks does not establish physical sensor accuracy or calibration quality.
 
 To inspect collection without connecting to a device:
 
@@ -305,3 +331,10 @@ pytest products/go/tests/ble-integration/ --collect-only -q
 
 Collection confirms test discovery only. Record the firmware revision, board,
 host platform, selected tests, skips, and results for a hardware verification run.
+
+Run the offline checks separately, without Bluetooth access:
+
+```sh
+uv run --project products/go/tests/ble-integration pytest \
+  products/go/tests/ble-integration/test_protocol_offline.py -q
+```

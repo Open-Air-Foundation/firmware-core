@@ -96,10 +96,13 @@ struct RtcAppState {
   Behavior behavior = Behavior::Idle;
   LockState lock_state = LockState::Locked;
   TrackingState tracking_state = TrackingState::Idle;
+  uint8_t measurement_log_boundary = 1; // MeasurementLogBoundary::ColdBoot
   uint32_t flags = static_cast<uint32_t>(RtcAppFlag::GpsEnabled);
   TrackingTiming tracking_timing{};
   // 5-digit session ID; 0 = no active session
   uint32_t tracking_session_id = 0;
+
+  uint32_t measurement_log_sequence = 0;
 
   // Expected GPS wake on retained clock; zero if no sleep is scheduled.
   uint64_t gps_wake_deadline_ms = 0;
