@@ -68,7 +68,8 @@ void print_settings(const GoSettings &settings);
 
 // One-shot intent only: no session or point exists before the BQ reset.
 bool pending_tracking_start(ConfigStore &store);
-bool save_pending_tracking_start(ConfigStore &store, bool pending);
+uint16_t pending_tracking_duration(ConfigStore &store);
+bool save_pending_tracking_start(ConfigStore &store, bool pending, uint16_t duration_minutes = 0);
 
 // ---------------------------------------------------------------------------
 // Factory fuel-gauge learning state (production-level, separate from user

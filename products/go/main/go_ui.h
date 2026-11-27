@@ -33,6 +33,7 @@ enum class UIAction : uint8_t {
   StopTracking,
   PauseTracking,
   ResumeTracking,
+  SetTrackingDuration,
   SettingsChanged, ///< UI Manager updated internal settings state.
   ClearData,
   CalibrateCo2,
@@ -88,6 +89,7 @@ enum class ProvisioningUiState : uint8_t {
 
 struct UIActionResult {
   UIAction action = UIAction::None;
+  uint16_t duration_minutes = 0;
   uint8_t tag_index = 0;
   const char *tag_label = nullptr; ///< Points to static tag label string.
   MelodySelect melody = MelodySelect::Off;
@@ -152,6 +154,7 @@ struct BuildContext {
 
   // Current-session values, computed by the orchestrator only for Tracking Status.
   TrackingStatusSnapshot tracking_status{};
+  uint32_t tracking_remaining_minutes = TRACKING_TIME_INVALID_S;
 };
 
 // ---------------------------------------------------------------------------
@@ -312,6 +315,7 @@ private:
     PinnedChart,
     IdleInterval,
     TrackingInterval,
+    TrackingDuration,
     LogMeasurements,
     GpsMode,
     Wifi,
@@ -487,7 +491,7 @@ private:
 
   // --- Row population ---
   void populate_menu_rows(DisplayValues &v) const;
-  void populate_tracking_rows(DisplayValues &v) const;
+  void populate_tracking_rows(DisplayValues &v, uint32_t remaining_minutes) const;
   void populate_tracking_status_rows(DisplayValues &v, const TrackingStatusSnapshot &status,
                                      TrackingState tracking_state, bool gps_enabled,
                                      const GpsData *gps_data) const;

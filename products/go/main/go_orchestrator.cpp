@@ -212,6 +212,8 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
           static_cast<int>(handoff.initial_lock_state));
 
   // A reboot never resumes a tracking session; stored records remain intact.
+  _tracking_stop_ms = 0;
+  _svc.ble_service.set_tracking_stop_reason(TrackingStopReason::None);
   _tracking_timing = {};
   _tracking_state = TrackingState::Idle;
   _tracking_session_id = 0;
@@ -291,8 +293,9 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
 
   if (handoff.tracking_restart) {
     // Consume intent before starting: ordinary reboots must never resume a session.
+    const uint16_t minutes = pending_tracking_duration(_config_store);
     if (save_pending_tracking_start(_config_store, false)) {
-      (void)begin_tracking_session();
+      (void)begin_tracking_session(minutes);
     } else {
       AG_LOGE(TAG, "Unable to consume pending tracking start");
       _svc.ui_manager.show_snackbar("Tracking start could not be saved");
@@ -383,6 +386,7 @@ void Orchestrator::run() {
     uint32_t timeout = compute_queue_timeout_ms();
     Event evt{};
     if (RTOS::queue_receive(_event_queue, &evt, timeout)) {
+      check_tracking_deadline();
       dispatch(evt);
     }
 
@@ -446,6 +450,17 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
   const auto until = [now](uint32_t deadline) {
     return static_cast<int32_t>(deadline - now) <= 0 ? 0u : deadline - now;
   };
+
+  if (_tracking_stop_ms != 0) {
+    const uint64_t elapsed_now = RTOS::get_retained_time_ms();
+    const uint64_t remaining =
+        _tracking_stop_ms > elapsed_now ? _tracking_stop_ms - elapsed_now : 0;
+    next = std::min(next, static_cast<uint32_t>(remaining));
+    if (remaining != 0 && _svc.ui_manager.current_screen() == Screen::TrackingMenu) {
+      // Wake at the next displayed minute change, even with a long measurement interval.
+      next = std::min(next, static_cast<uint32_t>((remaining - 1) % TRACKING_MINUTE_MS + 1));
+    }
+  }
 
   if (_svc.ble_service.export_active())
     next = std::min(next, BleService::HISTORY_POLL_MS);
@@ -567,6 +582,11 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
 }
 
 void Orchestrator::check_timers() {
+  check_tracking_deadline();
+  if (_svc.ui_manager.current_screen() == Screen::TrackingMenu &&
+      _tracking_menu_minutes != tracking_remaining_minutes()) {
+    update_display();
+  }
   _svc.ble_service.tick_history();
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
 
@@ -664,7 +684,10 @@ void Orchestrator::check_timers() {
       (_svc.ble_service.is_authenticated() || _svc.ota.is_ble_active())) {
     if ((now - _last_ota_check_ms) >= OTA_BLE_POLL_INTERVAL_MS) {
       _last_ota_check_ms = now;
-      if (_svc.ota.is_ble_active()) {
+      if (_svc.ota.is_ble_active() && tracking_session_active(_tracking_state)) {
+        // Reject before flashing or quiescing services; Recording and Paused both own the session.
+        (void)_svc.ota.run_ble(false);
+      } else if (_svc.ota.is_ble_active()) {
         // Latched START is a committed transfer — quiesce + paint up front.
         _ota_committed = false;
         enter_ota();
@@ -1182,6 +1205,8 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
 
   log_sensor_snapshot(_raw_measures);
 
+  check_tracking_deadline();
+
   // Unconditional — snapshot is ready for the next Cloud arm.
   _svc.cloud.update_measures_snapshot(_raw_measures);
 
@@ -1551,6 +1576,9 @@ void Orchestrator::on_input(const InputEventData &input) {
   case UIAction::StopTracking:
     stop_tracking();
     break;
+  case UIAction::SetTrackingDuration:
+    (void)set_tracking_duration(result.duration_minutes);
+    break;
   case UIAction::SettingsChanged:
     apply_settings_change();
     break;
@@ -1704,7 +1732,7 @@ void Orchestrator::unlock() {
   update_display();
 }
 
-bool Orchestrator::restart_for_tracking_if_needed() {
+bool Orchestrator::restart_for_tracking_if_needed(uint16_t duration_minutes) {
   // The caller stops the GPS worker before inspecting the receiver deadline.
   const uint32_t remaining_ms = _svc.gps_service.sleep_remaining_ms();
   if (remaining_ms <= GPS_RESET_THRESHOLD_MS) {
@@ -1715,7 +1743,7 @@ bool Orchestrator::restart_for_tracking_if_needed() {
     _svc.ui_manager.show_snackbar("Logging sync failed");
     return false;
   }
-  if (save_pending_tracking_start(_config_store, true)) {
+  if (save_pending_tracking_start(_config_store, true, duration_minutes)) {
     _svc.storage_service.backup_cache();
     _svc.display_service.flush();
     AG_LOGI(TAG, "GPS wake in %lu ms: requesting silent tracking restart",
@@ -1735,7 +1763,7 @@ bool Orchestrator::restart_for_tracking_if_needed() {
   return true;
 }
 
-bool Orchestrator::begin_tracking_session() {
+bool Orchestrator::begin_tracking_session(uint16_t duration_minutes) {
   if (!_svc.storage_service.close_measurements()) {
     _svc.ui_manager.show_snackbar("Logging sync failed");
     return false;
@@ -1756,6 +1784,8 @@ bool Orchestrator::begin_tracking_session() {
   }
   _tracking_session_id = session_id;
   _tracking_state = TrackingState::Recording;
+  (void)set_tracking_duration(duration_minutes);
+  _svc.ble_service.set_tracking_stop_reason(TrackingStopReason::None);
   _behavior = Behavior::Tracking;
   if (!tracking_timing_start(_tracking_timing,
                              tracking_seconds_from_ms(RTOS::get_retained_time_ms()))) {
@@ -1764,7 +1794,9 @@ bool Orchestrator::begin_tracking_session() {
   return true;
 }
 
-bool Orchestrator::start_tracking() {
+bool Orchestrator::start_tracking(uint16_t duration_minutes) {
+  if (duration_minutes > TRACKING_DURATION_MAX_MINUTES)
+    return false;
   if (_setup_session_active || _svc.wifi.is_provisioning() || _svc.ota.is_ble_active() ||
       _ota_committed) {
     return false;
@@ -1779,13 +1811,13 @@ bool Orchestrator::start_tracking() {
   if (gps_stopped) {
     // Finish any in-flight sleep command before inspecting its deadline.
     _svc.gps_service.stop();
-    if (!restart_for_tracking_if_needed()) {
+    if (!restart_for_tracking_if_needed(duration_minutes)) {
       (void)_svc.gps_service.start(gps_sleep_interval_ms());
       return false;
     }
   }
 
-  if (!begin_tracking_session()) {
+  if (!begin_tracking_session(duration_minutes)) {
     if (gps_stopped) {
       (void)_svc.gps_service.start(gps_sleep_interval_ms());
     }
@@ -1867,12 +1899,14 @@ bool Orchestrator::resume_tracking() {
   return true;
 }
 
-void Orchestrator::stop_tracking() {
+void Orchestrator::stop_tracking(TrackingStopReason reason) {
   if (!tracking_session_active(_tracking_state)) {
     return;
   }
 
   AG_LOGI(TAG, "stop_tracking");
+  _tracking_stop_ms = 0;
+  _svc.ble_service.set_tracking_stop_reason(reason);
   const bool was_gps_active = is_gps_active();
   const uint32_t ended_session_id = _tracking_session_id;
   _svc.storage_service.set_log_boundary(MeasurementLogBoundary::AfterTracking);
@@ -1893,6 +1927,29 @@ void Orchestrator::stop_tracking() {
   update_display(/*wait=*/true);
   _svc.ble_service.notify_tracking_status(_latest_power, _latest_gps, _tracking_session_id,
                                           _tracking_state);
+}
+
+bool Orchestrator::set_tracking_duration(uint16_t minutes) {
+  if (!tracking_session_active(_tracking_state) || minutes > TRACKING_DURATION_MAX_MINUTES)
+    return false;
+  _tracking_stop_ms =
+      minutes == 0 ? 0 : RTOS::get_retained_time_ms() + minutes * TRACKING_MINUTE_MS;
+  return true;
+}
+
+uint32_t Orchestrator::tracking_remaining_minutes() const {
+  if (_tracking_stop_ms == 0)
+    return TRACKING_TIME_INVALID_S;
+  const uint64_t now = RTOS::get_retained_time_ms();
+  return now >= _tracking_stop_ms
+             ? 0
+             : static_cast<uint32_t>((_tracking_stop_ms - now + TRACKING_MINUTE_MS - 1) /
+                                     TRACKING_MINUTE_MS);
+}
+
+void Orchestrator::check_tracking_deadline() {
+  if (_tracking_stop_ms != 0 && RTOS::get_retained_time_ms() >= _tracking_stop_ms)
+    stop_tracking(TrackingStopReason::Duration);
 }
 
 bool Orchestrator::mark_onboarding_done() {
@@ -2610,10 +2667,11 @@ void Orchestrator::on_ble_config_write() {
     _svc.ble_service.notify_command_result(BleCommand::Set, false, BLE_VAL_ERR_UNKNOWN_CONFIG_KEY);
     return;
   }
-  if (result.op == BleConfigOp::Set && result.has_invalid_config_values) {
-    AG_LOGW(TAG, "BLE config set rejected: invalid config value");
-    _svc.ble_service.notify_command_result(BleCommand::Set, false,
-                                           BLE_VAL_ERR_INVALID_CONFIG_VALUE);
+  if (result.has_invalid_config_values) {
+    AG_LOGW(TAG, "BLE write rejected: invalid config value");
+    _svc.ble_service.notify_command_result(result.op == BleConfigOp::Set ? BleCommand::Set
+                                                                         : result.cmd,
+                                           false, BLE_VAL_ERR_INVALID_CONFIG_VALUE);
     return;
   }
   if (result.op == BleConfigOp::Set && result.recognized_config_key_count > 1) {
@@ -2678,7 +2736,7 @@ void Orchestrator::on_ble_config_write() {
       }
       // start_tracking() already fired the inline snackbar + Status notify
       // on failure; just propagate the bool to the command result.
-      const bool ok = start_tracking();
+      const bool ok = start_tracking(result.duration_minutes);
       _svc.ble_service.notify_command_result(result.cmd, ok,
                                              ok ? nullptr : BLE_VAL_ERR_FLASH_ERROR);
     } break;
@@ -2702,6 +2760,13 @@ void Orchestrator::on_ble_config_write() {
       }
       _svc.ble_service.notify_command_result(result.cmd, ok,
                                              ok ? nullptr : BLE_VAL_ERR_FLASH_ERROR);
+    } break;
+    case BleCommand::SetTrackingDuration: {
+      const bool ok = set_tracking_duration(result.duration_minutes);
+      _svc.ble_service.notify_command_result(result.cmd, ok,
+                                             ok ? nullptr : BLE_VAL_ERR_NOT_TRACKING);
+      if (ok)
+        update_display();
     } break;
     case BleCommand::ReleaseBle:
       request_ble_release();
@@ -3374,8 +3439,8 @@ void Orchestrator::resume_provisioning_sensitive_services() {
 // ---------------------------------------------------------------------------
 
 bool Orchestrator::wifi_ota_allowed() const {
-  return wifi_services_allowed() && _svc.wifi.is_online() && !_setup_session_active &&
-         !_settings.disable_cloud;
+  return !tracking_session_active(_tracking_state) && wifi_services_allowed() &&
+         _svc.wifi.is_online() && !_setup_session_active && !_settings.disable_cloud;
 }
 
 void Orchestrator::on_wifi_ota_available() {
@@ -3528,6 +3593,8 @@ bool Orchestrator::update_display(bool wait) {
   const bool accepted = _svc.display_service.update(values, wait);
   const uint32_t submitted_ms = static_cast<uint32_t>(RTOS::get_time_ms());
   if (accepted) {
+    if (_svc.ui_manager.current_screen() == Screen::TrackingMenu)
+      _tracking_menu_minutes = ctx.tracking_remaining_minutes;
     _display_feedback_pending = false;
     _display_has_snackbar = has_snackbar;
     if (has_snackbar && _svc.ui_manager.mark_snackbar_submitted(submitted_ms)) {
@@ -3659,6 +3726,7 @@ BuildContext Orchestrator::build_context() const {
               .pass = _accel_pass,
           },
       .tracking_status = tracking_status,
+      .tracking_remaining_minutes = tracking_remaining_minutes(),
   };
 }
 

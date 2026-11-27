@@ -728,3 +728,21 @@ TEST_CASE("a pre-transfer START reject does not fire the progress callback") {
   REQUIRE(h.internal_state() == ST_IDLE);
   REQUIRE(events.empty());
 }
+
+TEST_CASE("product admission rejects pending OTA before flash and permits a later retry") {
+  Harness h;
+  h.write_control(encode_start(3, nullptr));
+  REQUIRE(h.svc.is_active());
+  CHECK(h.svc.run(0, false) == OtaStatus::InvalidArgument);
+  CHECK(h.last_status() == FAILED_INVALID_ARG);
+  CHECK_FALSE(h.svc.is_active());
+  CHECK_FALSE(h.writer.begin_called);
+  h.write_data(std::vector<uint8_t>{1, 2, 3});
+  CHECK(h.writer.write_calls == 0);
+  h.write_control(encode_start(3, nullptr));
+  REQUIRE(h.svc.is_active());
+  REQUIRE(h.begin_step());
+  h.write_data(std::vector<uint8_t>{1, 2, 3});
+  h.finish_step();
+  CHECK(h.last_status() == DONE_OK);
+}

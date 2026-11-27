@@ -29,10 +29,10 @@ void OtaService::handle_disconnect() { _ble_ota.handle_disconnect(); }
 
 bool OtaService::is_ble_active() const { return _ble_ota.is_active(); }
 
-OtaStatus OtaService::run_ble() {
+OtaStatus OtaService::run_ble(bool start_allowed) {
   // START is already latched (is_ble_active() returned true), so run(0) drives
   // the transfer immediately with no idle park.
-  return _ble_ota.run(0);
+  return _ble_ota.run(0, start_allowed);
 }
 
 OtaStatus OtaService::check_wifi_update() const {

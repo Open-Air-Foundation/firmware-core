@@ -888,7 +888,7 @@ TEST_CASE("BLE: encode_status retains existing fields and adds trk") {
   REQUIRE(len > 0);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 10);
+  CHECK(entries.size() == 11);
 
   CHECK(find_entry(entries, "gps_fix")->uint_val == 3);
   CHECK(find_entry(entries, "gps_sat")->uint_val == 12);
@@ -1260,11 +1260,11 @@ TEST_CASE("BLE: status transition delta and cmd_result are within budget") {
   size_t len = BleServiceTestAccess::encode_status_transition(svc, buf, sizeof(buf), 0xFFFFFFFFu,
                                                               TrackingState::Recording);
   REQUIRE(len > 0);
-  CHECK(len == 29); // Largest session ID; trk adds five bytes to the legacy delta.
+  CHECK(len == 46); // Full-width session ID and stop_reason:none.
   CHECK(len <= TEST_NOTIFY_BUDGET);
 
   auto entries = decode_cbor_map(buf, len);
-  CHECK(entries.size() == 3);
+  CHECK(entries.size() == 4);
   CHECK(find_entry(entries, "tracking") != nullptr);
   CHECK(find_entry(entries, "session") != nullptr);
   CHECK(find_entry(entries, "trk")->uint_val == 1);
@@ -2493,8 +2493,8 @@ TEST_CASE("BLE: Status Read and tracking notifications report the enum alongside
     const auto read = decode_cbor_map(status_char.last_value.data(), status_char.last_value.size());
     const auto notify = decode_cbor_map(status_char.last_notified_value.data(),
                                         status_char.last_notified_value.size());
-    REQUIRE(read.size() == 10);
-    REQUIRE(notify.size() == 3);
+    REQUIRE(read.size() == 11);
+    REQUIRE(notify.size() == 4);
     for (const auto &entries : {read, notify}) {
       REQUIRE(find_entry(entries, "trk") != nullptr);
       REQUIRE(find_entry(entries, "tracking") != nullptr);
@@ -2523,13 +2523,13 @@ TEST_CASE("BLE: notify_tracking_status notifies 3-key delta while READ stays 10 
 
   // Stored value (READ) is the full 10-key snapshot.
   auto read_entries = decode_cbor_map(status_char.last_value.data(), status_char.last_value.size());
-  CHECK(read_entries.size() == 10);
+  CHECK(read_entries.size() == 11);
   CHECK(find_entry(read_entries, "type") == nullptr);
 
   // NOTIFY carries the {tracking, session, trk} transition delta.
   auto notify_entries = decode_cbor_map(status_char.last_notified_value.data(),
                                         status_char.last_notified_value.size());
-  CHECK(notify_entries.size() == 3);
+  CHECK(notify_entries.size() == 4);
   CHECK(find_entry(notify_entries, "tracking")->bool_val == true);
   CHECK(find_entry(notify_entries, "session")->uint_val == 10042);
   CHECK(find_entry(notify_entries, "trk")->uint_val == 1);
@@ -2567,7 +2567,7 @@ TEST_CASE("BLE: notify_charging_status notifies 3-key power delta while READ sta
 
   // Stored value (READ) is the full 10-key snapshot, no discriminator.
   auto read_entries = decode_cbor_map(status_char.last_value.data(), status_char.last_value.size());
-  CHECK(read_entries.size() == 10);
+  CHECK(read_entries.size() == 11);
   CHECK(find_entry(read_entries, "tracking")->bool_val == true);
   CHECK(find_entry(read_entries, "session")->uint_val == 10042);
   CHECK(find_entry(read_entries, "trk")->uint_val == 2);
@@ -3849,4 +3849,99 @@ TEST_CASE("BLE logging Config uses a boolean preference without a capability fie
   size = encode_set_text(buf, sizeof(buf), "log_m", "true");
   CHECK(BleService::decode_config_write(buf, size, settings).has_invalid_config_values);
   CHECK_FALSE(settings.log_measurements);
+}
+
+TEST_CASE("BLE: tracking durations require whole unsigned minutes in the correct command",
+          "[duration]") {
+  for (const char *command : {"start_tracking", "tracking_duration", "stop_tracking"}) {
+    for (int value : {-1, 0, 1, 1440, 1441}) {
+      for (int encoding = 0; encoding < 6; ++encoding) {
+        CAPTURE(command, value, encoding);
+        uint8_t buf[128];
+        CborEncoder encoder, map;
+        cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+        cbor_encoder_create_map(&encoder, &map, CborIndefiniteLength);
+        cbor_encode_text_stringz(&map, "op");
+        cbor_encode_text_stringz(&map, "cmd");
+        cbor_encode_text_stringz(&map, "cmd");
+        cbor_encode_text_stringz(&map, command);
+        if (encoding != 5) {
+          cbor_encode_text_stringz(&map, "duration_min");
+          switch (encoding) {
+          case 0:
+            cbor_encode_int(&map, value);
+            break;
+          case 1:
+            cbor_encode_double(&map, value);
+            break;
+          case 2:
+            cbor_encode_boolean(&map, true);
+            break;
+          case 3:
+            cbor_encode_text_stringz(&map, "30");
+            break;
+          case 4:
+            cbor_encode_int(&map, value);
+            cbor_encode_text_stringz(&map, "duration_min");
+            cbor_encode_int(&map, value);
+            break;
+          }
+        }
+        cbor_encoder_close_container(&encoder, &map);
+        GoSettings settings;
+        auto result = BleService::decode_config_write(
+            buf, cbor_encoder_get_buffer_size(&encoder, buf), settings);
+        const bool start = std::string(command) == "start_tracking";
+        const bool change = std::string(command) == "tracking_duration";
+        const bool valid = encoding == 5 ? !change
+                                         : encoding == 0 && value <= 1440 &&
+                                               ((start && value >= 1) || (change && value >= 0));
+        CHECK(result.has_invalid_config_values == !valid);
+        CHECK(result.duration_present == (encoding != 5));
+        if (valid && encoding == 0)
+          CHECK(result.duration_minutes == value);
+      }
+    }
+  }
+}
+
+TEST_CASE("BLE: duration is not a persistent Config field", "[duration]") {
+  uint8_t buf[64];
+  CborEncoder encoder, map;
+  cbor_encoder_init(&encoder, buf, sizeof(buf), 0);
+  cbor_encoder_create_map(&encoder, &map, 2);
+  cbor_encode_text_stringz(&map, "op");
+  cbor_encode_text_stringz(&map, "set");
+  cbor_encode_text_stringz(&map, "duration_min");
+  cbor_encode_uint(&map, 30);
+  cbor_encoder_close_container(&encoder, &map);
+  GoSettings settings;
+  const auto result =
+      BleService::decode_config_write(buf, cbor_encoder_get_buffer_size(&encoder, buf), settings);
+  CHECK(result.has_invalid_config_values);
+  CHECK(result.recognized_config_key_count == 0);
+}
+
+TEST_CASE("BLE: stop reason is present in snapshots and deltas and survives reconnect",
+          "[duration]") {
+  StorageService storage(*null_cache_ptr, *null_nand_ptr);
+  BleService svc(nullptr, storage, default_ble_server);
+  MockBleCharacteristic status;
+  BleServiceTestAccess::set_status_char(svc, &status);
+  const TrackingStopReason reasons[] = {TrackingStopReason::None, TrackingStopReason::User,
+                                        TrackingStopReason::Duration};
+  const char *labels[] = {"none", "user", "duration"};
+  for (int i = 0; i < 3; ++i) {
+    svc.set_tracking_stop_reason(reasons[i]);
+    BleServiceTestAccess::set_connected(svc, false);
+    svc.notify_tracking_status(make_valid_power(), make_valid_gps(), 0, TrackingState::Idle);
+    BleServiceTestAccess::set_connected(svc, true);
+    svc.notify_tracking_status(make_valid_power(), make_valid_gps(), 0, TrackingState::Idle);
+    for (const auto &bytes : {status.last_value, status.last_notified_value}) {
+      auto entries = decode_cbor_map(bytes.data(), bytes.size());
+      REQUIRE(find_entry(entries, "stop_reason") != nullptr);
+      CHECK(find_entry(entries, "stop_reason")->text_val == labels[i]);
+      CHECK(bytes.size() <= TEST_NOTIFY_BUDGET);
+    }
+  }
 }

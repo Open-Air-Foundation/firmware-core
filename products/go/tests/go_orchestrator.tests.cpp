@@ -226,6 +226,8 @@ extern bool ota_teardown_ble_called;
 extern uint32_t ota_teardown_ble_count;
 extern bool ota_handle_disconnect_called;
 extern bool ota_is_ble_active;
+extern bool ota_start_allowed;
+extern TrackingStopReason ble_stop_reason;
 extern uint32_t ota_run_ble_count;
 extern OtaStatus ota_run_ble_result;
 extern uint32_t ota_run_wifi_count;
@@ -709,7 +711,14 @@ public:
   static uint16_t accel_magnitude_mg(const Orchestrator &o) { return o._accel_magnitude_mg; }
   static void lock(Orchestrator &o) { o.lock(); }
   static void unlock(Orchestrator &o) { o.unlock(); }
-  static bool start_tracking(Orchestrator &o) { return o.start_tracking(); }
+  static bool start_tracking(Orchestrator &o, uint16_t minutes = 0) {
+    return o.start_tracking(minutes);
+  }
+  static bool set_duration(Orchestrator &o, uint16_t minutes) {
+    return o.set_tracking_duration(minutes);
+  }
+  static uint64_t tracking_deadline(const Orchestrator &o) { return o._tracking_stop_ms; }
+  static void check_deadline(Orchestrator &o) { o.check_tracking_deadline(); }
   static bool pause_tracking(Orchestrator &o) { return o.pause_tracking(); }
   static bool resume_tracking(Orchestrator &o) { return o.resume_tracking(); }
   static TrackingState tracking_state(const Orchestrator &o) { return o._tracking_state; }
@@ -870,6 +879,8 @@ struct TestFixture {
   std::unique_ptr<trompeloeil::expectation> _exp_delay;
   std::unique_ptr<trompeloeil::expectation> _exp_get_float;
   std::unique_ptr<trompeloeil::expectation> _exp_set_float;
+  std::unique_ptr<trompeloeil::expectation> _exp_get_duration;
+  std::unique_ptr<trompeloeil::expectation> _exp_set_duration;
 
   explicit TestFixture(AccelSensor *accel_sensor = nullptr, BoardVariant variant = BoardVariant::V1)
       : event_queue(mock_rtos.queue_create_impl(EVENT_QUEUE_DEPTH, sizeof(Event))),
@@ -906,6 +917,12 @@ struct TestFixture {
     reboot_count = 0;
     during_reboot = nullptr;
     RTOS::set_instance(&mock_rtos);
+    _exp_get_duration = NAMED_ALLOW_CALL(mock_config, get_int(trompeloeil::_, trompeloeil::_))
+                            .WITH(std::strcmp(_1, "trk_duration") == 0)
+                            .RETURN(ConfigStoreResult::NOT_FOUND);
+    _exp_set_duration = NAMED_ALLOW_CALL(mock_config, set_int(trompeloeil::_, trompeloeil::_))
+                            .WITH(std::strcmp(_1, "trk_duration") == 0)
+                            .RETURN(ConfigStoreResult::OK);
     _exp_time = NAMED_ALLOW_CALL(mock_rtos, get_time_ms_impl()).RETURN(0);
     _exp_delay = NAMED_ALLOW_CALL(mock_rtos, delay_ms_impl(trompeloeil::_));
     _exp_get_float = NAMED_ALLOW_CALL(mock_config, get_float(trompeloeil::_, trompeloeil::_))
@@ -2415,7 +2432,7 @@ TEST_CASE("Tracking Status refresh: timer phase uses the clock after an earlier 
   CHECK(test_spy::bms_poll_count == polls_before + 1);
 }
 
-TEST_CASE("Tracking Status refresh: late OTA override is observed before a due periodic frame",
+TEST_CASE("Tracking Status refresh continues after rejecting OTA during tracking",
           "[Orchestrator][tracking][status][refresh]") {
   TestFixture f;
   f.settings.tracking_interval_seconds = 3600;
@@ -2433,13 +2450,14 @@ TEST_CASE("Tracking Status refresh: late OTA override is observed before a due p
   test_spy::retained_time_read_count = 0;
   A::check_timers(orch);
   CHECK(test_spy::ota_run_ble_count == 1);
-  CHECK(reboot_count == 1);
-  CHECK(DisplayService::spy_update_count == attempts + 2); // Updating, then Restarting.
-  CHECK(DisplayService::spy_last_screen == Screen::Info);
-  CHECK_FALSE(A::tracking_status_refresh_armed(orch));
-  CHECK(A::last_input_ms(orch) == now_ms);
-  CHECK(test_spy::session_point_count_query_count == 0);
-  CHECK(test_spy::retained_time_read_count == 0);
+  CHECK_FALSE(test_spy::ota_start_allowed);
+  CHECK(reboot_count == 0);
+  CHECK(DisplayService::spy_update_count == attempts + 1);
+  CHECK(DisplayService::spy_last_screen == Screen::TrackingStatus);
+  CHECK(A::tracking_status_refresh_armed(orch));
+  CHECK(A::last_input_ms(orch) == 0);
+  CHECK(test_spy::session_point_count_query_count == 1);
+  CHECK(test_spy::retained_time_read_count == 1);
 }
 
 TEST_CASE("Tracking Status: external transitions reliably paint and preserve view and cursor",
@@ -15072,4 +15090,189 @@ TEST_CASE("Active exports leave measurements input and timers running and Clear 
   CHECK(test_spy::ble_history_end_called);
   CHECK_FALSE(f.ble_service.export_active());
   CHECK(test_spy::measurements_cleared);
+}
+
+TEST_CASE("Tracking duration expires once in Recording or Paused across millisecond wrap",
+          "[Orchestrator][duration]") {
+  for (bool paused : {false, true}) {
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    f.mock_rtos.retained_time_ms = uint64_t(UINT32_MAX) - 30000;
+    REQUIRE(A::start_tracking(orch, 1));
+    const auto deadline = A::tracking_deadline(orch);
+    CHECK(deadline == f.mock_rtos.retained_time_ms + 60000);
+    if (paused)
+      REQUIRE(A::pause_tracking(orch));
+    f.mock_rtos.retained_time_ms = deadline - 1;
+    A::check_deadline(orch);
+    REQUIRE(A::tracking_active(orch));
+    CHECK(A::build_context(orch).tracking_remaining_minutes == 1);
+    CHECK(A::compute_queue_timeout_ms(orch) <= 1);
+    RTOS::set_system_time_from_epoch(100); // Wall time cannot move the deadline.
+    f.mock_rtos.retained_time_ms = deadline + 5000;
+    A::check_timers(orch);
+    CHECK(A::tracking_state(orch) == TrackingState::Idle);
+    CHECK(A::tracking_deadline(orch) == 0);
+    CHECK(test_spy::ble_stop_reason == TrackingStopReason::Duration);
+    const auto notifications = test_spy::ble_notify_tracking_status_count;
+    A::check_timers(orch);
+    CHECK(test_spy::ble_notify_tracking_status_count == notifications);
+    REQUIRE(A::start_tracking(orch));
+    CHECK(A::tracking_deadline(orch) == 0);
+    CHECK(test_spy::ble_stop_reason == TrackingStopReason::None);
+  }
+}
+
+TEST_CASE("Tracking duration replacement cancellation and failed admission preserve session",
+          "[Orchestrator][duration]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  CHECK_FALSE(A::set_duration(orch, 1));
+  test_spy::create_route_result = false;
+  CHECK_FALSE(A::start_tracking(orch, 30));
+  CHECK(A::tracking_deadline(orch) == 0);
+  test_spy::create_route_result = true;
+  REQUIRE(A::start_tracking(orch, 60));
+  f.mock_rtos.retained_time_ms = 40 * TRACKING_MINUTE_MS;
+  REQUIRE(A::set_duration(orch, 30));
+  const auto deadline = A::tracking_deadline(orch);
+  CHECK(deadline == 70 * TRACKING_MINUTE_MS);
+  CHECK_FALSE(A::start_tracking(orch, 1));
+  CHECK_FALSE(A::set_duration(orch, 1441));
+  REQUIRE(A::pause_tracking(orch));
+  test_spy::resume_route_result = false;
+  CHECK_FALSE(A::resume_tracking(orch));
+  CHECK(A::tracking_state(orch) == TrackingState::Paused);
+  CHECK(A::tracking_deadline(orch) == deadline);
+  test_spy::resume_route_result = true;
+  REQUIRE(A::resume_tracking(orch));
+  CHECK(A::tracking_deadline(orch) == deadline);
+  REQUIRE(A::set_duration(orch, 0));
+  f.mock_rtos.retained_time_ms = deadline + 1;
+  A::check_timers(orch);
+  CHECK(A::tracking_active(orch));
+  REQUIRE(A::set_duration(orch, 1));
+  A::stop_tracking(orch);
+  CHECK(A::tracking_deadline(orch) == 0);
+  CHECK(test_spy::ble_stop_reason == TrackingStopReason::User);
+  test_spy::create_route_result = false;
+  CHECK_FALSE(A::start_tracking(orch, 1));
+  CHECK(test_spy::ble_stop_reason == TrackingStopReason::User);
+}
+
+TEST_CASE("Tracking duration BLE commands reject invalid requests without changing countdown",
+          "[Orchestrator][duration][ble]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  auto &request = test_spy::ble_config_decode_result;
+  test_spy::ble_pending_config_len = 1;
+  request.op = BleConfigOp::Command;
+  request.cmd = BleCommand::SetTrackingDuration;
+  request.duration_present = true;
+  request.duration_minutes = 30;
+  Event event{};
+  event.type = EventType::BleConfigWrite;
+  A::dispatch(orch, event);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  CHECK(std::string(test_spy::ble_last_command_error) == "not_tracking");
+  request.cmd = BleCommand::StartTracking;
+  A::dispatch(orch, event);
+  REQUIRE(test_spy::ble_last_command_success);
+  CHECK(A::tracking_deadline(orch) == 30 * TRACKING_MINUTE_MS);
+  request.cmd = BleCommand::SetTrackingDuration;
+  request.duration_minutes = 0;
+  request.has_invalid_config_values = true;
+  A::dispatch(orch, event);
+  CHECK_FALSE(test_spy::ble_last_command_success);
+  CHECK(std::string(test_spy::ble_last_command_error) == "invalid_config_value");
+  CHECK(A::tracking_deadline(orch) == 30 * TRACKING_MINUTE_MS);
+  request.has_invalid_config_values = false;
+  A::dispatch(orch, event);
+  CHECK(test_spy::ble_last_command_success);
+  CHECK(A::tracking_deadline(orch) == 0);
+}
+
+TEST_CASE("Tracking duration refreshes the menu at minute boundaries and stops before append",
+          "[Orchestrator][duration][display]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  A::unlock(orch);
+  REQUIRE(A::start_tracking(orch, 2));
+  f.ui_manager.set_screen(Screen::TrackingMenu);
+  A::check_timers(orch);
+  auto updates = DisplayService::spy_update_count;
+  CHECK(A::build_context(orch).tracking_remaining_minutes == 2);
+  f.mock_rtos.retained_time_ms = 59999;
+  A::check_timers(orch);
+  CHECK(DisplayService::spy_update_count == updates);
+  f.mock_rtos.retained_time_ms = 60000;
+  A::check_timers(orch);
+  CHECK(DisplayService::spy_update_count == updates + 1);
+  CHECK(A::build_context(orch).tracking_remaining_minutes == 1);
+  const auto session = A::tracking_session_id(orch);
+  f.mock_rtos.retained_time_ms = 120000;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK(A::tracking_state(orch) == TrackingState::Idle);
+  CHECK(test_spy::route_point_counts[session] == 0);
+}
+
+TEST_CASE("Tracking duration survives only the intentional GPS start handoff",
+          "[Orchestrator][duration][gps_restart]") {
+  TestFixture f;
+  auto orch = f.make_orchestrator();
+  int stored_minutes = 0;
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_))
+      .WITH(std::strcmp(_1, "trk_duration") == 0)
+      .LR_SIDE_EFFECT(stored_minutes = _2)
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, get_int(trompeloeil::_, trompeloeil::_))
+      .WITH(std::strcmp(_1, "trk_duration") == 0)
+      .LR_SIDE_EFFECT(_2 = stored_minutes)
+      .RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, commit()).RETURN(ConfigStoreResult::OK);
+  test_spy::gps_remaining_ms = 300000;
+  struct Reset {};
+  f.stub_bms.on_reset = [&] { throw Reset{}; };
+  REQUIRE_THROWS_AS(A::start_tracking(orch, 30), Reset);
+  CHECK(stored_minutes == 30);
+  CHECK(A::tracking_deadline(orch) == 0);
+  f.mock_rtos.retained_time_ms = 5000;
+  BootHandoff handoff{};
+  handoff.tracking_restart = true;
+  handoff.initial_lock_state = LockState::Unlocked;
+  handoff.display_painted = true;
+  orch.init(WakeCause::PowerOn, handoff);
+  CHECK(A::tracking_deadline(orch) == 5000 + 30 * TRACKING_MINUTE_MS);
+  handoff.tracking_restart = false;
+  orch.init(WakeCause::PowerOn, handoff);
+  CHECK_FALSE(A::tracking_active(orch));
+  CHECK(A::tracking_deadline(orch) == 0);
+}
+
+TEST_CASE("OTA rejects both Recording and Paused without interrupting the session",
+          "[Orchestrator][duration][ota]") {
+  for (bool paused : {false, true}) {
+    TestFixture f;
+    auto orch = f.make_orchestrator();
+    REQUIRE(A::start_tracking(orch, 30));
+    if (paused)
+      REQUIRE(A::pause_tracking(orch));
+    const auto deadline = A::tracking_deadline(orch);
+    const auto state = A::tracking_state(orch);
+    test_spy::ble_initialized = true;
+    test_spy::ota_is_ble_active = true;
+    ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).RETURN(5000);
+    A::check_timers(orch);
+    CHECK(test_spy::ota_run_ble_count == 1);
+    CHECK_FALSE(test_spy::ota_start_allowed);
+    CHECK_FALSE(A::sensitive_services_paused(orch));
+    CHECK_FALSE(A::ota_committed(orch));
+    CHECK(A::tracking_state(orch) == state);
+    CHECK(A::tracking_deadline(orch) == deadline);
+    Event event{};
+    event.type = EventType::WifiOtaAvailable;
+    A::dispatch(orch, event);
+    CHECK(test_spy::ota_run_wifi_count == 0);
+  }
 }

@@ -611,10 +611,11 @@ TEST_CASE("UIManager: tracking submenu preserves four main rows and pause naviga
   REQUIRE(ui.current_screen() == Screen::TrackingMenu);
   CHECK(ui.is_on_menu_screen());
   auto menu = ui.build_values(ctx);
-  CHECK(menu.list.row_count == 5);
+  CHECK(menu.list.row_count == 6);
   CHECK(menu.list.selected_row == 2);
   CHECK(std::string(menu.list.rows[menu.list.selected_row].text) == "Status");
-  check_rows(ui, {"Exit", "Back", "Status", "Pause Tracking", "Stop Tracking"}, ctx);
+  check_rows(ui, {"Exit", "Back", "Status", "Pause Tracking", "Stop Tracking", "Stop after: Off"},
+             ctx);
   CHECK(open_row(ui, "Back", ctx).action == UIAction::None);
   CHECK(ui.current_screen() == Screen::MainMenu);
   CHECK(ui.build_values(ctx).list.selected_row == 1);
@@ -3055,5 +3056,33 @@ TEST_CASE("UIManager: LED Indicator shows its value and retains the selected opt
           (next == BackLedIndicator::Aqi ? "LED Indicator: AQI" : "LED Indicator: CO2"));
     open_row(ui, "LED Indicator");
     CHECK(ui.build_values(make_default_ctx()).list.selected_row == 2 + static_cast<uint8_t>(next));
+  }
+}
+
+TEST_CASE("UIManager: duration choices return minutes and expiry leaves the picker",
+          "[UIManager][duration]") {
+  const uint16_t minutes[] = {0, 15, 30, 60, 120, 240, 480};
+  const char *labels[] = {"Off", "15 min", "30 min", "60 min", "120 min", "240 min", "480 min"};
+  for (bool paused : {false, true}) {
+    for (int i = 0; i < 7; ++i) {
+      UIManager ui(DEFAULT_UI_CONFIG);
+      auto ctx = make_default_ctx();
+      ctx.tracking_state = paused ? TrackingState::Paused : TrackingState::Recording;
+      ui.sync_tracking_state(ctx.tracking_state);
+      ui.set_screen(Screen::TrackingMenu);
+      CHECK(open_row(ui, "Stop after: Off", ctx).action == UIAction::None);
+      REQUIRE(ui.current_screen() == Screen::SettingsChoice);
+      const auto result = open_row(ui, labels[i], ctx);
+      CHECK(result.action == UIAction::SetTrackingDuration);
+      CHECK(result.duration_minutes == minutes[i]);
+      REQUIRE(ui.current_screen() == Screen::TrackingMenu);
+      ctx.tracking_remaining_minutes = 1440;
+      CHECK(std::string(ui.build_values(ctx).list.rows[5].text) == "Stop in: 1440m");
+      open_row(ui, "Stop in: 1440m", ctx);
+      ui.sync_tracking_state(TrackingState::Idle);
+      CHECK(ui.current_screen() == Screen::MainMenu);
+      CHECK(double_press(ui).action == UIAction::None);
+      CHECK(ui.current_screen() == Screen::Home);
+    }
   }
 }

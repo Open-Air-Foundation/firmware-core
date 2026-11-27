@@ -64,7 +64,8 @@ public:
   // (+ready NOTIFY), blocks servicing END/ABORT/disconnect/stall while Data
   // callbacks flash, then finish()/abort() + terminal NOTIFY. Returns the final
   // OtaStatus (Ok on success). Blocking, non-reentrant, not thread-safe.
-  OtaStatus run(uint32_t timeout_ms = 0);
+  // start_allowed=false rejects a latched START with InvalidArgument before touching flash.
+  OtaStatus run(uint32_t timeout_ms = 0, bool start_allowed = true);
 
   // Clear write callbacks and abort any in-flight transfer; never deinit()s the
   // server. Idempotent. Product/owner context only.
