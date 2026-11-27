@@ -47,3 +47,18 @@ def test_config_field_round_trip(
     if field in {"idleInterval", "trackingInterval"}:
         companion = "trackingInterval" if field == "idleInterval" else "idleInterval"
         assert api.get_config(ago_http_client)[companion] == baseline[companion]
+
+
+@pytest.mark.config_write
+@pytest.mark.parametrize("preserved_config_setting", ["logMeasurements"], indirect=True)
+def test_logging_noop_preserves_config(
+    ago_http_client: httpx.Client,
+    preserved_config_setting: tuple[str, object, object],
+    ago_convergence_timeout: float,
+) -> None:
+    baseline = api.get_config(ago_http_client)
+    api.put_and_wait(
+        ago_http_client, "logMeasurements", baseline["logMeasurements"],
+        ago_convergence_timeout,
+    )
+    assert api.get_config(ago_http_client) == baseline

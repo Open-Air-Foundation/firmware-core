@@ -38,7 +38,7 @@ async def config_payload(ago_client: BleakClient) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestConfigRead:
-    """Verify reading the Config characteristic returns a valid 19-key map."""
+    """Verify reading the Config characteristic returns a valid 20-key map."""
 
     def test_read_config(self, config_payload: dict):
         """Reading Config must return valid CBOR map."""
@@ -47,7 +47,7 @@ class TestConfigRead:
         )
 
     def test_all_keys_present(self, config_payload: dict):
-        """Config read must contain exactly the 19 expected keys."""
+        """Config read must contain exactly the 20 expected keys."""
         missing = proto.CONFIG_READ_KEYS - set(config_payload.keys())
         extra = set(config_payload.keys()) - proto.CONFIG_READ_KEYS
         assert not missing, f"Missing Config keys: {missing}"
@@ -310,7 +310,7 @@ class TestConfigWrite:
 
     @pytest.mark.parametrize("key", [
         "buz", "abc", "tlo", "nlo", "pchart", "bledi", "bled",
-        "idle_int", "tracking_int",
+        "idle_int", "tracking_int", "log_m",
     ])
     async def test_set_compact_device_field_roundtrip(
         self,
@@ -324,7 +324,7 @@ class TestConfigWrite:
             bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
         )
         original_value = original[key]
-        if key == "buz":
+        if key in {"buz", "log_m"}:
             new_value = not original_value
         elif key == "bledi":
             new_value = "co2" if original_value == "aqi" else "aqi"
@@ -570,7 +570,7 @@ class TestConfigWrite:
             )
             await config_notifications.wait_for(timeout=ago_notify_timeout)
 
-    @pytest.mark.parametrize("key", ["temp_f", "bledi", "idle_int", "tracking_int", "wifi"])
+    @pytest.mark.parametrize("key", ["temp_f", "bledi", "idle_int", "tracking_int", "wifi", "log_m"])
     async def test_noop_set_emits_no_notification(
         self,
         key: str,
@@ -687,8 +687,9 @@ class TestConfigWrite:
         (key, value)
         for key in ("idle_int", "tracking_int")
         for value in (0, 3601, 1.5, True, "10")
-    ] + [("wifi", value) for value in (0, 1, "true", None)])
-    async def test_invalid_interval_or_wifi_is_rejected(
+    ] + [("wifi", value) for value in (0, 1, "true", None)]
+      + [("log_m", value) for value in (0, 1, 1.0, "true", None, [], {})])
+    async def test_invalid_interval_or_boolean_is_rejected(
         self,
         key: str,
         value: object,
@@ -699,24 +700,37 @@ class TestConfigWrite:
         original = proto.decode_cbor(
             bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
         )
-        config_notifications.drain()
-        await ago_client.write_gatt_char(
-            proto.CHAR_CONFIG_UUID,
-            proto.encode_config_set(**{key: value}), response=True,
-        )
-        result = proto.decode_cbor(
-            await config_notifications.wait_for(timeout=ago_notify_timeout)
-        )
-        assert result == {
-            "type": "cmd_result", "cmd": "set", "ok": False,
-            "err": proto.ERR_INVALID_CONFIG_VALUE,
-        }
-        with pytest.raises(asyncio.TimeoutError):
-            await config_notifications.wait_for(timeout=CONFIG_QUIET_WINDOW_SECONDS)
-        updated = proto.decode_cbor(
-            bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
-        )
-        assert updated == original
+        try:
+            config_notifications.drain()
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID,
+                proto.encode_config_set(**{key: value}), response=True,
+            )
+            result = proto.decode_cbor(
+                await config_notifications.wait_for(timeout=ago_notify_timeout)
+            )
+            assert result == {
+                "type": "cmd_result", "cmd": "set", "ok": False,
+                "err": proto.ERR_INVALID_CONFIG_VALUE,
+            }
+            with pytest.raises(asyncio.TimeoutError):
+                await config_notifications.wait_for(timeout=CONFIG_QUIET_WINDOW_SECONDS)
+            updated = proto.decode_cbor(
+                bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+            )
+            assert updated == original
+        finally:
+            if key == "log_m" and ago_client.is_connected:
+                current = proto.decode_cbor(
+                    bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+                )
+                if type(current["log_m"]) is not bool or current["log_m"] != original["log_m"]:
+                    config_notifications.drain()
+                    await ago_client.write_gatt_char(
+                        proto.CHAR_CONFIG_UUID,
+                        proto.encode_config_set(log_m=original["log_m"]), response=True,
+                    )
+                    await config_notifications.wait_for(timeout=ago_notify_timeout)
 
     async def test_aiding_key_under_set_rejected(
         self,

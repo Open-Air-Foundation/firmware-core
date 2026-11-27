@@ -222,3 +222,38 @@ def test_known_unsupported_field(
         pytest.skip("configuration source policy takes precedence over product support")
     response = ago_http_client.put(api.CONFIG_PATH, json={"country": "US"})
     api.assert_error(response, 404, "not_found", "not found", field="country")
+
+
+@pytest.mark.config_write
+@pytest.mark.parametrize("preserved_config_setting", ["logMeasurements"], indirect=True)
+@pytest.mark.parametrize("value", [0, 1, 1.0, "true", None, [], {}])
+@pytest.mark.parametrize("mixed", [False, True])
+def test_invalid_logging_value_rejects_entire_update(
+    ago_http_client: httpx.Client,
+    preserved_config_setting: tuple[str, object, object],
+    ago_convergence_timeout: float,
+    value: object,
+    mixed: bool,
+) -> None:
+    baseline = api.get_config(ago_http_client)
+    request = {"logMeasurements": value}
+    if mixed:
+        request["idleInterval"] = api.alternate_config_value("idleInterval", baseline["idleInterval"])
+    try:
+        response = ago_http_client.put(api.CONFIG_PATH, json=request)
+        api.assert_error(response, 400, "invalid_value", "invalid value", field="logMeasurements")
+        deadline = time.monotonic() + ago_convergence_timeout
+        while True:
+            assert api.get_config(ago_http_client) == baseline
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(CONFIG_REJECTION_POLL_INTERVAL, remaining))
+    finally:
+        # The fixture restores logMeasurements; restore the companion too if
+        # a regression partially accepted the mixed request.
+        if mixed:
+            api.put_and_wait(
+                ago_http_client, "idleInterval", baseline["idleInterval"],
+                ago_convergence_timeout,
+            )

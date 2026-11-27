@@ -61,17 +61,16 @@ def _decode_history_notification(data: bytes) -> str:
     """Decode a History characteristic notification for display.
 
     History notifications are prefixed with a 1-byte tag (0x00 = CBOR,
-    0x01 = binary route points).  Plain CBOR decoding of the full buffer
+    0x01 = binary route or measurement records).  Plain CBOR decoding of the full buffer
     sees that tag byte as a CBOR integer and returns 0 or 1, which hides the
     actual content.  This decoder strips the tag first.
     """
     try:
-        tag, payload = proto.parse_history_notification(data)
-        if tag == proto.HISTORY_TAG_CBOR:
-            return repr(payload)
-        # Binary chunk: payload is (first_point_index, [route_point_dicts])
-        point_index, points = payload
-        return f"<binary pts={len(points)} idx={point_index}>"
+        if data and data[0] == proto.HISTORY_TAG_BINARY:
+            index = int.from_bytes(data[1:3], "little")
+            return f"<binary idx={index} record_bytes={len(data) - 3}>"
+        _, payload = proto.parse_history_notification(data)
+        return repr(payload)
     except Exception:
         return _decode_payload(data)
 
@@ -356,9 +355,28 @@ async def config_notifications(
 @pytest_asyncio.fixture
 async def history_notifications(
     ago_client: BleakClient,
+    ago_notify_timeout: float,
 ) -> AsyncGenerator[NotificationCollector, None]:
-    """Subscribe to History notifications for the duration of a test."""
+    """Subscribe and release any export even when a test fails or skips."""
     collector = NotificationCollector(name="History", decoder=_decode_history_notification)
     await ago_client.start_notify(proto.CHAR_HISTORY_UUID, collector.callback)
-    yield collector
-    await ago_client.stop_notify(proto.CHAR_HISTORY_UUID)
+    try:
+        yield collector
+    finally:
+        if ago_client.is_connected:
+            try:
+                async with asyncio.timeout(min(ago_notify_timeout, 5.0)):
+                    await ago_client.write_gatt_char(
+                        proto.CHAR_HISTORY_UUID, proto.encode_history_end(), response=True,
+                    )
+                    while True:
+                        data = await collector.wait_for(timeout=ago_notify_timeout)
+                        if data and data[0] == proto.HISTORY_TAG_CBOR:
+                            payload = proto.decode_cbor(data[1:])
+                            if payload.get("type") == "ended":
+                                break
+            except Exception as exc:
+                logger.warning("History cleanup could not confirm end: %s", exc)
+            finally:
+                if ago_client.is_connected:
+                    await ago_client.stop_notify(proto.CHAR_HISTORY_UUID)
