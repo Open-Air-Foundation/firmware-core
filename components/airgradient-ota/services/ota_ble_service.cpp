@@ -341,7 +341,7 @@ void OtaBleService::_on_data_write(const uint8_t *data, size_t len) {
 
 void OtaBleService::set_on_progress(OtaProgressCallback cb) { _on_progress = cb; }
 
-OtaStatus OtaBleService::run(uint32_t timeout_ms) {
+OtaStatus OtaBleService::run(uint32_t timeout_ms, bool start_allowed) {
   // Idle gate: optionally park up to timeout_ms waiting for a START, then bail
   // out cheaply if none latched.
   if (_state != State::Starting && timeout_ms != 0) {
@@ -349,6 +349,11 @@ OtaStatus OtaBleService::run(uint32_t timeout_ms) {
   }
   if (_state != State::Starting) {
     return OtaStatus::Ok; // nothing to drive
+  }
+
+  if (!start_allowed) {
+    _emit_terminal(OtaState::Failed, OtaStatus::InvalidArgument);
+    return _result;
   }
 
   // Start edge on the product task, before the stack-hungry begin().

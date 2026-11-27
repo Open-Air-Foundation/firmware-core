@@ -37,3 +37,10 @@ def test_logging_field_required(example_config):
     del example_config["logMeasurements"]
     with pytest.raises(AssertionError):
         api.validate_config(example_config)
+
+
+@pytest.mark.parametrize("field", ["duration_min", "tracking_duration", "stop"])
+def test_ble_session_fields_are_not_http_config(example_config, field):
+    example_config[field] = 1
+    with pytest.raises(AssertionError):
+        api.validate_config(example_config)

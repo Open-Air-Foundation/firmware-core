@@ -159,7 +159,9 @@ return `404 not_found`, including mixed requests with a valid interval change;
 the configuration must stay unchanged throughout the convergence window.
 Non-boolean `logMeasurements` writes return `400 invalid_value` with the field
 name, including mixed writes with a valid interval change; neither field may
-change.
+change. BLE-only `duration_min` and `tracking_duration` fields return
+`400 unknown_field`. A mixed duration/interval write must leave all settings
+unchanged; tracking duration is not a Local Server configuration field.
 
 ### `test_actions.py` — Actions
 
@@ -170,7 +172,9 @@ responses. The opt-in calibration test verifies the same response contract for
 ### `test_ota.py` — OTA Policy
 
 These tests require an operator or dedicated test build to stage and hold a
-committed Wi-Fi OTA. The suite does not start OTA itself. Run only
+committed Wi-Fi OTA. Stop tracking first: Recording and Paused both reject OTA
+start. The suite does not start OTA or control tracking itself, so it does not
+verify that start rejection. Run only
 this file while OTA is active:
 
 ```sh

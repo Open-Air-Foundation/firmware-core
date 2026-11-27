@@ -8,6 +8,7 @@
 static constexpr const char *TAG = "Settings";
 
 static constexpr const char *KEY_PENDING_TRACKING_START = "trk_start";
+static constexpr const char *KEY_PENDING_TRACKING_DURATION = "trk_duration";
 
 MeasurementCorrections effective_measurement_corrections(const GoSettings &settings,
                                                          TrackingState tracking,
@@ -25,7 +26,20 @@ bool pending_tracking_start(ConfigStore &store) {
   return store.get_bool(KEY_PENDING_TRACKING_START, pending) == ConfigStoreResult::OK && pending;
 }
 
-bool save_pending_tracking_start(ConfigStore &store, bool pending) {
+uint16_t pending_tracking_duration(ConfigStore &store) {
+  int minutes = 0;
+  if (store.get_int(KEY_PENDING_TRACKING_DURATION, minutes) != ConfigStoreResult::OK ||
+      minutes < 0 || minutes > TRACKING_DURATION_MAX_MINUTES)
+    return 0;
+  return static_cast<uint16_t>(minutes);
+}
+
+bool save_pending_tracking_start(ConfigStore &store, bool pending, uint16_t duration_minutes) {
+  // Store the request before its latch; this is one-shot intent, not a preference.
+  if (pending &&
+      (duration_minutes > TRACKING_DURATION_MAX_MINUTES ||
+       store.set_int(KEY_PENDING_TRACKING_DURATION, duration_minutes) != ConfigStoreResult::OK))
+    return false;
   return store.set_bool(KEY_PENDING_TRACKING_START, pending) == ConfigStoreResult::OK &&
          store.commit() == ConfigStoreResult::OK;
 }

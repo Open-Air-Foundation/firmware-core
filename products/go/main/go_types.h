@@ -35,6 +35,11 @@ enum class TrackingState : uint8_t {
   Paused = 2,
 };
 
+// Values are part of the BLE Status wire contract.
+enum class TrackingStopReason : uint8_t { None = 0, User = 1, Duration = 2 };
+inline constexpr uint16_t TRACKING_DURATION_MAX_MINUTES = 1440;
+inline constexpr uint64_t TRACKING_MINUTE_MS = 60000;
+
 // --- Tracking timing data; pure operations live in go_type_helpers.hpp ---
 
 inline constexpr uint32_t TRACKING_TIME_INVALID_S = UINT32_MAX;

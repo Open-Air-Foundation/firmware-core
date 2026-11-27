@@ -297,6 +297,15 @@ class NotificationCollector:
 
         return list(self._all[:n])
 
+    def drain_pending(self) -> list[bytes]:
+        """Consume unread notifications, keeping the received history intact."""
+        pending = []
+        while True:
+            try:
+                pending.append(self._queue.get_nowait())
+            except asyncio.QueueEmpty:
+                return pending
+
     def drain(self) -> list[bytes]:
         """Return and clear all collected notifications."""
         result = list(self._all)

@@ -71,7 +71,12 @@ static constexpr uint8_t TAG_COUNT = 10;
 // ---------------------------------------------------------------------------
 
 static constexpr uint8_t MENU_TRACKING = 1;
-static constexpr uint8_t TRACKING_MENU_TOTAL = 5;
+static constexpr uint8_t TRACKING_MENU_TOTAL = 6;
+static constexpr uint8_t TRACKING_DURATION = 5;
+static constexpr uint16_t TRACKING_DURATION_MINUTES[] = {0, 15, 30, 60, 120, 240, 480};
+static const char *const TRACKING_DURATION_OPTIONS[] = {"Off",     "15 min",  "30 min", "60 min",
+                                                        "120 min", "240 min", "480 min"};
+static constexpr uint8_t TRACKING_DURATION_COUNT = 7;
 static constexpr uint8_t TRACKING_BACK = 1;
 static constexpr uint8_t TRACKING_STATUS = 2;
 static constexpr uint8_t TRACKING_PAUSE_RESUME = 3;
@@ -333,7 +338,7 @@ DisplayValues UIManager::build_values(const BuildContext &ctx) const {
     populate_chart(v, ctx.history);
     break;
   case Screen::TrackingMenu:
-    populate_tracking_rows(v);
+    populate_tracking_rows(v, ctx.tracking_remaining_minutes);
     break;
   case Screen::TrackingStatus:
     populate_tracking_status_rows(v, ctx.tracking_status, ctx.tracking_state,
@@ -1025,6 +1030,8 @@ int UIManager::setting_measure_interval_seconds() const {
 
 uint8_t UIManager::setting_option_count(SettingId setting_id) const {
   switch (setting_id) {
+  case SettingId::TrackingDuration:
+    return TRACKING_DURATION_COUNT;
   case SettingId::Units:
     return UNITS_COUNT;
   case SettingId::AltitudeUnit:
@@ -1365,7 +1372,11 @@ UIActionResult UIManager::dispatch_settings_choice(InputSource source, InputType
       // Apply chosen option
       uint8_t option_index = (uint8_t)(_settings_choice_index - 2);
 
-      if (_editing_setting_id == SettingId::PlayMelody) {
+      if (_editing_setting_id == SettingId::TrackingDuration) {
+        result.action = UIAction::SetTrackingDuration;
+        result.duration_minutes = TRACKING_DURATION_MINUTES[option_index];
+        navigate_back();
+      } else if (_editing_setting_id == SettingId::PlayMelody) {
         // Play Melody is a transient action, not a persistent setting.
         // option_index 0 = Chime, 1 = Tetris -> MelodySelect 1, 2
         apply_setting_choice(option_index);
@@ -1681,7 +1692,8 @@ void UIManager::sync_tracking_state(TrackingState state) {
     _active_metric = Metric::None;
   }
   if (state == TrackingState::Idle &&
-      (_screen == Screen::TrackingMenu || _screen == Screen::TrackingStatus)) {
+      (_screen == Screen::TrackingMenu || _screen == Screen::TrackingStatus ||
+       (_screen == Screen::SettingsChoice && _editing_setting_id == SettingId::TrackingDuration))) {
     // A finished session has no Tracking parent menu to return to.
     _screen = Screen::MainMenu;
     _menu_index = MENU_TRACKING;
@@ -1709,6 +1721,9 @@ UIActionResult UIManager::dispatch_tracking_menu(InputSource source, InputType /
       result.action = _tracking_state == TrackingState::Paused ? UIAction::ResumeTracking
                                                                : UIAction::PauseTracking;
       go_home();
+      break;
+    case TRACKING_DURATION:
+      open_settings_choice(SettingId::TrackingDuration);
       break;
     case TRACKING_STOP:
       result.action = UIAction::StopTracking;
@@ -1738,7 +1753,7 @@ UIActionResult UIManager::dispatch_tracking_status(InputSource source, InputType
   return {};
 }
 
-void UIManager::populate_tracking_rows(DisplayValues &v) const {
+void UIManager::populate_tracking_rows(DisplayValues &v, uint32_t remaining_minutes) const {
   v.list.row_count = TRACKING_MENU_TOTAL;
   copy_row(v, 0, "Exit", false);
   copy_row(v, TRACKING_BACK, "Back", false);
@@ -1746,6 +1761,12 @@ void UIManager::populate_tracking_rows(DisplayValues &v) const {
   copy_row(v, TRACKING_PAUSE_RESUME,
            _tracking_state == TrackingState::Paused ? "Resume Tracking" : "Pause Tracking", false);
   copy_row(v, TRACKING_STOP, "Stop Tracking", false);
+  char label[24];
+  if (remaining_minutes == TRACKING_TIME_INVALID_S)
+    snprintf(label, sizeof(label), "Stop after: Off");
+  else
+    snprintf(label, sizeof(label), "Stop in: %lum", static_cast<unsigned long>(remaining_minutes));
+  copy_row(v, TRACKING_DURATION, label, false);
   v.list.selected_row = _tracking_menu_index;
   v.list.show_separator_after_back = true;
 }
@@ -1958,6 +1979,9 @@ void UIManager::populate_settings_choice_rows(DisplayValues &v) const {
   const char *const *options = nullptr;
 
   switch (_editing_setting_id) {
+  case SettingId::TrackingDuration:
+    options = TRACKING_DURATION_OPTIONS;
+    break;
   case SettingId::Units:
     options = UNITS_OPTIONS;
     break;

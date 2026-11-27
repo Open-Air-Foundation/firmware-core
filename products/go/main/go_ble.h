@@ -77,17 +77,18 @@ enum class BleConfigOp : uint8_t {
 
 /// BLE command identifiers (decoded from the "cmd" CBOR string).
 enum class BleCommand : uint8_t {
-  Co2Calibration, ///< "co2_cal"  — trigger CO2 background calibration
-  ClearData,      ///< "clear_data" — erase all stored route data
-  FactoryReset,   ///< "factory_rst" — reset settings to defaults
-  StartTracking,  ///< "start_tracking" — begin GPS + sensor route logging
-  StopTracking,   ///< "stop_tracking"  — end route logging
-  PauseTracking,  ///< "pause_tracking" — retain session, stop route writes
-  ResumeTracking, ///< "resume_tracking" — continue the retained session
-  ReleaseBle,     ///< "release_ble" — lock and relinquish BLE ownership
-  SetAiding,      ///< "set_aiding" — inject A-GNSS aiding data
-  Set,            ///< Synthetic — used for config-set error notifications
-  Unknown,        ///< Unrecognised command string
+  Co2Calibration,      ///< "co2_cal"  — trigger CO2 background calibration
+  ClearData,           ///< "clear_data" — erase all stored route data
+  FactoryReset,        ///< "factory_rst" — reset settings to defaults
+  StartTracking,       ///< "start_tracking" — begin GPS + sensor route logging
+  SetTrackingDuration, ///< "tracking_duration" — replace/cancel active countdown
+  StopTracking,        ///< "stop_tracking"  — end route logging
+  PauseTracking,       ///< "pause_tracking" — retain session, stop route writes
+  ResumeTracking,      ///< "resume_tracking" — continue the retained session
+  ReleaseBle,          ///< "release_ble" — lock and relinquish BLE ownership
+  SetAiding,           ///< "set_aiding" — inject A-GNSS aiding data
+  Set,                 ///< Synthetic — used for config-set error notifications
+  Unknown,             ///< Unrecognised command string
 };
 
 /// Reason the device is about to drop the BLE link, carried by the NOTIFY-only
@@ -109,7 +110,9 @@ struct BleConfigDecodeResult {
   bool has_invalid_config_values = false; ///< True if a recognized config value was malformed
   uint32_t requested_fields = 0; ///< GoConfigField bits present; excludes BLE-only settings
   size_t recognized_config_key_count = 0; ///< Count of recognized config-key occurrences in a "set"
-  GpsAidingData aiding;                   ///< Valid when cmd == SetAiding
+  uint16_t duration_minutes = 0;
+  bool duration_present = false;
+  GpsAidingData aiding; ///< Valid when cmd == SetAiding
 };
 
 /// Operation type for a History characteristic write.
@@ -192,7 +195,7 @@ public:
   void update_status(const PowerSnapshot &power, const GpsData &gps, uint32_t session_id,
                      TrackingState tracking_state);
 
-  /// Refresh the full Status snapshot AND push a `{tracking, session, trk}` delta
+  /// Refresh the full Status snapshot AND push a `{tracking, session, trk, stop}` delta
   /// NOTIFY. Use on urgent tracking transitions (start success, start failure,
   /// pause, resume, manual stop) so the client need not poll.
   void notify_tracking_status(const PowerSnapshot &power, const GpsData &gps, uint32_t session_id,
@@ -279,6 +282,7 @@ public:
 
   // --- State queries ---
 
+  void set_tracking_stop_reason(TrackingStopReason reason) { _stop_reason = reason; }
   bool is_initialized() const;
   bool set_connectable(bool allowed);
   void handle_measurement_list(uint32_t after);
@@ -361,6 +365,7 @@ private:
 
   // --- History export state ---
 
+  TrackingStopReason _stop_reason = TrackingStopReason::None;
   uint32_t _export_session_id = 0;
   std::atomic<bool> _export_active{false};
 
@@ -390,7 +395,7 @@ private:
                          time_t ts);
   size_t encode_status(uint8_t *buf, size_t buf_size, const PowerSnapshot &power,
                        const GpsData &gps, uint32_t session_id, TrackingState tracking_state);
-  /// Encode the Status transition delta (`{tracking, session, trk}`) for NOTIFY.
+  /// Encode the Status transition delta (`{tracking, session, trk, stop}`) for NOTIFY.
   /// Returns 0 on encoder overflow.
   size_t encode_status_transition(uint8_t *buf, size_t buf_size, uint32_t session_id,
                                   TrackingState tracking_state);

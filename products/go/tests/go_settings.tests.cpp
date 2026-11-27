@@ -1130,3 +1130,19 @@ TEST_CASE("Logging preference defaults off and persists independently", "[settin
   REQUIRE(store.erase("log_m") == ConfigStoreResult::OK);
   CHECK(load_go_settings(store).equals(settings));
 }
+
+TEST_CASE("Pending tracking duration belongs only to the one-shot start intent",
+          "[settings][duration]") {
+  FakeConfigStore store;
+  CHECK(pending_tracking_duration(store) == 0);
+  REQUIRE(save_pending_tracking_start(store, true, 1440));
+  CHECK(pending_tracking_start(store));
+  CHECK(pending_tracking_duration(store) == 1440);
+  REQUIRE(save_pending_tracking_start(store, false));
+  CHECK_FALSE(pending_tracking_start(store));
+  REQUIRE(save_pending_tracking_start(store, true));
+  CHECK(pending_tracking_duration(store) == 0);
+  REQUIRE(save_pending_tracking_start(store, false));
+  CHECK_FALSE(save_pending_tracking_start(store, true, 1441));
+  CHECK_FALSE(pending_tracking_start(store));
+}

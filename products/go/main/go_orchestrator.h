@@ -136,6 +136,8 @@ private:
   TrackingState _tracking_state = TrackingState::Idle;
   uint32_t _tracking_session_id = 0;
   TrackingTiming _tracking_timing{};
+  uint64_t _tracking_stop_ms = 0; ///< Monotonic deadline; zero means Off, never RTC-retained.
+  uint32_t _tracking_menu_minutes = TRACKING_TIME_INVALID_S; ///< Last submitted countdown row.
 
   // --- Cached data ---
   MeasuresAGo _raw_measures{};       ///< Authoritative sensor results for cloud/storage
@@ -318,14 +320,17 @@ private:
   void lock(bool automatic = false);
   void unlock();
   /// Start tracking, restarting first if GPS would take too long to wake.
-  bool start_tracking();
+  bool start_tracking(uint16_t duration_minutes = 0);
   /// GPS worker must be stopped. Returns false if pending intent cannot be cleared.
-  bool restart_for_tracking_if_needed();
+  bool restart_for_tracking_if_needed(uint16_t duration_minutes);
   /// Open the route and initialize session state for interactive start or silent boot.
-  bool begin_tracking_session();
+  bool begin_tracking_session(uint16_t duration_minutes = 0);
   bool pause_tracking();
   bool resume_tracking();
-  void stop_tracking();
+  void stop_tracking(TrackingStopReason reason = TrackingStopReason::User);
+  bool set_tracking_duration(uint16_t minutes);
+  void check_tracking_deadline();
+  uint32_t tracking_remaining_minutes() const;
   /// Boot-button manufacturing shortcut: skip onboarding and enter
   /// Stationary ephemerally (no NVS persist) for production testing.
   void enter_manufacturing_mode();

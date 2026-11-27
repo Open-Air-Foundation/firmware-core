@@ -999,7 +999,7 @@ OtaService::OtaService(AgBleServer &server, PowerService &power, const Config &c
 bool OtaService::setup_ble() { return true; }
 void OtaService::handle_disconnect() {}
 bool OtaService::is_ble_active() const { return false; }
-OtaStatus OtaService::run_ble() { return OtaStatus::Ok; }
+OtaStatus OtaService::run_ble(bool /*start_allowed*/) { return OtaStatus::Ok; }
 OtaStatus OtaService::check_wifi_update() const { return OtaStatus::UpToDate; }
 
 OtaStatus OtaService::run_wifi_check(const std::function<void()> & /*on_download_started*/) {
@@ -1114,8 +1114,8 @@ void Orchestrator::on_ble_pairing_request(uint32_t /*passkey*/) {}
 void Orchestrator::on_ble_auth_complete(bool /*success*/) {}
 void Orchestrator::lock(bool) {}
 void Orchestrator::unlock() {}
-bool Orchestrator::start_tracking() { return true; }
-void Orchestrator::stop_tracking() {}
+bool Orchestrator::start_tracking(uint16_t) { return true; }
+void Orchestrator::stop_tracking(TrackingStopReason) {}
 void Orchestrator::enter_manufacturing_mode() {}
 void Orchestrator::apply_settings_change() {}
 bool Orchestrator::clear_data() { return true; }

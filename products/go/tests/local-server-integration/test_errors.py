@@ -19,15 +19,42 @@ def test_invalid_bodies(ago_http_client: httpx.Client, body: bytes) -> None:
     api.assert_error(response, 400, "invalid_body", "invalid request body")
 
 
-def test_unknown_field(ago_http_client: httpx.Client) -> None:
-    response = ago_http_client.put(api.CONFIG_PATH, json={"temperatureUnits": "c"})
+@pytest.mark.parametrize("field,value", [
+    ("temperatureUnits", "c"),
+    ("duration_min", 30),
+    ("tracking_duration", 30),
+])
+def test_unknown_field(ago_http_client: httpx.Client, field: str, value: object) -> None:
+    response = ago_http_client.put(api.CONFIG_PATH, json={field: value})
     api.assert_error(
         response,
         400,
         "unknown_field",
         "unknown field",
-        field="temperatureUnits",
+        field=field,
     )
+
+
+@pytest.mark.config_write
+@pytest.mark.parametrize("preserved_config_setting", ["idleInterval"], indirect=True)
+def test_ble_duration_field_rejects_entire_config_write(
+    ago_http_client: httpx.Client,
+    preserved_config_setting: tuple[str, object, object],
+    ago_convergence_timeout: float,
+) -> None:
+    field, _original, updated = preserved_config_setting
+    baseline = api.get_config(ago_http_client)
+    response = ago_http_client.put(
+        api.CONFIG_PATH, json={field: updated, "duration_min": 30},
+    )
+    api.assert_error(response, 400, "unknown_field", "unknown field", field="duration_min")
+    deadline = time.monotonic() + ago_convergence_timeout
+    while True:
+        assert api.get_config(ago_http_client) == baseline
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(CONFIG_REJECTION_POLL_INTERVAL, remaining))
 
 
 @pytest.mark.config_write

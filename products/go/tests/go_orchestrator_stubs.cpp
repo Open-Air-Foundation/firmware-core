@@ -166,6 +166,7 @@ uint32_t ble_notify_charging_status_count = 0;
 bool ble_notify_disconnect_called = false;
 uint32_t ble_notify_disconnect_count = 0;
 BleDiscReason ble_last_disc_reason = BleDiscReason::User;
+TrackingStopReason ble_stop_reason = TrackingStopReason::None;
 bool ble_last_status_tracking = false;
 uint32_t ble_last_status_session = 0;
 bool ble_update_config_called = false;
@@ -251,6 +252,7 @@ bool ota_teardown_ble_called = false;
 uint32_t ota_teardown_ble_count = 0;
 bool ota_handle_disconnect_called = false;
 bool ota_is_ble_active = false;
+bool ota_start_allowed = true;
 uint32_t ota_run_ble_count = 0;
 OtaStatus ota_run_ble_result = OtaStatus::Ok;
 uint32_t ota_run_wifi_count = 0;
@@ -490,6 +492,7 @@ void reset() {
   ota_teardown_ble_count = 0;
   ota_handle_disconnect_called = false;
   ota_is_ble_active = false;
+  ota_start_allowed = true;
   ota_run_ble_count = 0;
   ota_run_ble_result = OtaStatus::Ok;
   ota_run_wifi_count = 0;
@@ -973,6 +976,7 @@ void BleService::update_status(const PowerSnapshot & /*power*/, const GpsData & 
                                uint32_t session_id, TrackingState tracking_state) {
   test_spy::ble_tracking_state = tracking_state;
   test_spy::ble_update_status_called = true;
+  test_spy::ble_stop_reason = _stop_reason;
   test_spy::ble_last_status_tracking = tracking_session_active(tracking_state);
   test_spy::ble_last_status_session = session_id;
 }
@@ -982,6 +986,7 @@ void BleService::notify_tracking_status(const PowerSnapshot & /*power*/, const G
   test_spy::ble_tracking_state = tracking_state;
   test_spy::ble_notify_tracking_status_called = true;
   ++test_spy::ble_notify_tracking_status_count;
+  test_spy::ble_stop_reason = _stop_reason;
   test_spy::ble_last_status_tracking = tracking_session_active(tracking_state);
   test_spy::ble_last_status_session = session_id;
 }
@@ -1344,8 +1349,13 @@ void OtaService::handle_disconnect() { test_spy::ota_handle_disconnect_called = 
 
 bool OtaService::is_ble_active() const { return test_spy::ota_is_ble_active; }
 
-OtaStatus OtaService::run_ble() {
+OtaStatus OtaService::run_ble(bool start_allowed) {
   ++test_spy::ota_run_ble_count;
+  test_spy::ota_start_allowed = start_allowed;
+  if (!start_allowed) {
+    test_spy::ota_is_ble_active = false;
+    return OtaStatus::InvalidArgument;
+  }
   return test_spy::ota_run_ble_result;
 }
 

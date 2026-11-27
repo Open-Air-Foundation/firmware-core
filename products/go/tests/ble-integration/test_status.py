@@ -28,7 +28,7 @@ async def status_payload(ago_client: BleakClient) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestStatus:
-    """Verify the Status characteristic returns a valid 10-key CBOR map."""
+    """Verify the Status characteristic returns a valid 11-key CBOR map."""
 
     def test_read_status(self, status_payload: dict):
         """Reading the Status characteristic must return valid CBOR map."""
@@ -37,7 +37,7 @@ class TestStatus:
         )
 
     def test_all_keys_present(self, status_payload: dict):
-        """The Status payload must contain exactly the 10 expected keys."""
+        """The Status payload must contain exactly the 11 expected keys."""
         missing = proto.STATUS_ALL_KEYS - set(status_payload.keys())
         extra = set(status_payload.keys()) - proto.STATUS_ALL_KEYS
         assert not missing, f"Missing Status keys: {missing}"
@@ -64,6 +64,12 @@ class TestStatus:
         session = status_payload["session"]
         assert type(session) is int
         assert session > 0 if active else session == 0
+
+    def test_stop_reason_valid(self, status_payload: dict):
+        reason = status_payload["stop"]
+        assert type(reason) is int and reason in proto.STOP_REASONS.values()
+        if status_payload["tracking"]:
+            assert reason == proto.STOP_REASONS["none"]
 
     def test_charging_state_valid(self, status_payload: dict):
         """The 'charging' field must be one of the known charging state strings."""

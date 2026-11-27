@@ -71,8 +71,7 @@ static constexpr size_t CBOR_BUF_SIZE = 256;
 /// ceiling that Read-Long can serve, giving the snapshot room to grow.
 static constexpr size_t CONFIG_SNAPSHOT_BUF_SIZE = 512;
 
-/// Status delta buffer — fits both shapes: {tracking, session} and the larger
-/// {charging, bat_pct, bat_v} (~39 B).
+/// Status delta buffer — fits tracking with stop reason (up to 35 B) and charging (~39 B).
 static constexpr size_t STATUS_DELTA_BUF_SIZE = 64;
 
 // NOTIFY single-PDU budget note: every Config/Status notification is bounded at
@@ -893,14 +892,14 @@ void BleService::update_status(const PowerSnapshot &power, const GpsData &gps, u
 
 void BleService::notify_tracking_status(const PowerSnapshot &power, const GpsData &gps,
                                         uint32_t session_id, TrackingState tracking_state) {
-  // Refresh the full 10-key snapshot through the sole writer (READ stays full).
+  // Refresh the full 11-key snapshot through the sole writer (READ stays full).
   update_status(power, gps, session_id, tracking_state);
 
   if (!_connected.load() || _status_char == nullptr) {
     return;
   }
 
-  // NOTIFY carries the tracking transition delta ({tracking, session, trk}).
+  // NOTIFY carries the tracking transition delta ({tracking, session, trk, stop}).
   uint8_t delta[STATUS_DELTA_BUF_SIZE];
   size_t len = encode_status_transition(delta, sizeof(delta), session_id, tracking_state);
   if (len == 0) {
@@ -911,7 +910,7 @@ void BleService::notify_tracking_status(const PowerSnapshot &power, const GpsDat
 
 void BleService::notify_charging_status(const PowerSnapshot &power, const GpsData &gps,
                                         uint32_t session_id, TrackingState tracking_state) {
-  // Refresh the full 10-key snapshot through the sole writer (READ stays full).
+  // Refresh the full 11-key snapshot through the sole writer (READ stays full).
   update_status(power, gps, session_id, tracking_state);
 
   if (!_connected.load() || _status_char == nullptr) {
@@ -1526,10 +1525,10 @@ size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnaps
   CborEncoder encoder;
   cbor_encoder_init(&encoder, buf, buf_size, 0);
 
-  // All 10 keys are always present. Firmware version is intentionally not
+  // All 11 keys are always present. Firmware version is intentionally not
   // exposed here; it lives only in DIS Firmware Revision (0x2A26).
   CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 10);
+  cbor_encoder_create_map(&encoder, &map, 11);
 
   cbor_encode_text_stringz(&map, BLE_KEY_GPS_FIX);
   cbor_encode_uint(&map, static_cast<uint64_t>(gps.fix.fix_type));
@@ -1558,6 +1557,8 @@ size_t BleService::encode_status(uint8_t *buf, size_t buf_size, const PowerSnaps
 
   cbor_encode_text_stringz(&map, BLE_KEY_TRACKING_STATE);
   cbor_encode_uint(&map, static_cast<uint8_t>(tracking_state));
+  cbor_encode_text_stringz(&map, BLE_KEY_STOP_REASON);
+  cbor_encode_uint(&map, static_cast<uint8_t>(_stop_reason));
 
   cbor_encode_text_stringz(&map, BLE_KEY_FLASH_KB);
   cbor_encode_uint(&map, _storage.total_capacity_kb());
@@ -1579,10 +1580,10 @@ size_t BleService::encode_status_transition(uint8_t *buf, size_t buf_size, uint3
   CborEncoder encoder;
   cbor_encoder_init(&encoder, buf, buf_size, 0);
 
-  // Tracking delta: retain the legacy fields and add the explicit state.
+  // Tracking delta includes the reason for the most recent stop.
   // No "type" — the Status characteristic carries only status notifications.
   CborEncoder map;
-  cbor_encoder_create_map(&encoder, &map, 3);
+  cbor_encoder_create_map(&encoder, &map, 4);
 
   cbor_encode_text_stringz(&map, BLE_KEY_TRACKING);
   cbor_encode_boolean(&map, tracking_session_active(tracking_state));
@@ -1592,6 +1593,8 @@ size_t BleService::encode_status_transition(uint8_t *buf, size_t buf_size, uint3
 
   cbor_encode_text_stringz(&map, BLE_KEY_TRACKING_STATE);
   cbor_encode_uint(&map, static_cast<uint8_t>(tracking_state));
+  cbor_encode_text_stringz(&map, BLE_KEY_STOP_REASON);
+  cbor_encode_uint(&map, static_cast<uint8_t>(_stop_reason));
 
   cbor_encoder_close_container(&encoder, &map);
 
@@ -1971,6 +1974,8 @@ static BleCommand str_to_ble_command(const char *s) {
   if (strcmp(s, BLE_VAL_CMD_FACTORY_RST) == 0) {
     return BleCommand::FactoryReset;
   }
+  if (strcmp(s, BLE_VAL_CMD_TRACKING_DURATION) == 0)
+    return BleCommand::SetTrackingDuration;
   if (strcmp(s, BLE_VAL_CMD_START_TRACKING) == 0) {
     return BleCommand::StartTracking;
   }
@@ -2001,6 +2006,8 @@ static const char *ble_command_to_str(BleCommand cmd) {
     return BLE_VAL_CMD_CLEAR_DATA;
   case BleCommand::FactoryReset:
     return BLE_VAL_CMD_FACTORY_RST;
+  case BleCommand::SetTrackingDuration:
+    return BLE_VAL_CMD_TRACKING_DURATION;
   case BleCommand::StartTracking:
     return BLE_VAL_CMD_START_TRACKING;
   case BleCommand::StopTracking:
@@ -2336,6 +2343,17 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
         result.has_invalid_config_values = true;
       }
       handled = true;
+    } else if (key_is(BLE_KEY_DURATION_MIN)) {
+      cbor_value_advance(&it);
+      uint64_t minutes = 0;
+      if (result.duration_present || !cbor_value_is_unsigned_integer(&it) ||
+          cbor_value_get_uint64(&it, &minutes) != CborNoError ||
+          minutes > TRACKING_DURATION_MAX_MINUTES)
+        result.has_invalid_config_values = true;
+      else
+        result.duration_minutes = static_cast<uint16_t>(minutes);
+      result.duration_present = true;
+      handled = true;
     }
     // --- Aiding command payload fields ---
     else if (key_is(BLE_KEY_LAT)) {
@@ -2430,6 +2448,15 @@ BleConfigDecodeResult BleService::decode_config_write(const uint8_t *buf, size_t
   } else if (strcmp(op_str, BLE_VAL_OP_CMD) == 0) {
     result.op = BleConfigOp::Command;
   }
+
+  if (result.duration_present &&
+      (result.op != BleConfigOp::Command ||
+       (result.cmd != BleCommand::StartTracking && result.cmd != BleCommand::SetTrackingDuration) ||
+       (result.cmd == BleCommand::StartTracking && result.duration_minutes == 0)))
+    result.has_invalid_config_values = true;
+  if (result.op == BleConfigOp::Command && result.cmd == BleCommand::SetTrackingDuration &&
+      !result.duration_present)
+    result.has_invalid_config_values = true;
 
   // Aiding keys are valid only under op:"cmd" (set_aiding). Under op:"set"
   // they are meaningless — treat as an unknown config key. Resolved post-loop

@@ -64,7 +64,8 @@ public:
   /// Drive a phone-initiated BLE transfer to its terminal (wraps run(0); the
   /// START is already latched so run() drives immediately).  Blocks on the
   /// caller (orchestrator) task.  Returns the result.
-  OtaStatus run_ble();
+  /// Pass false to reject a pending START before preparing or writing the image.
+  OtaStatus run_ble(bool start_allowed = true);
 
   /// Lightweight availability probe. Called by the cloud worker; never
   /// touches the writer, display, or watchdog. Ok means an image is offered.
