@@ -299,6 +299,7 @@ private:
   uint32_t _log_sync_ms = UINT32_MAX;
   uint32_t _protected_log = 0;
   MeasurementLogBoundary _log_boundary = MeasurementLogBoundary::ColdBoot;
+  bool sync_measurement_file(FILE *file);
   bool create_measurement_log();
   bool reclaim_measurement_space();
   void format_log_path(uint32_t sequence, char *out, size_t capacity) const;

@@ -403,6 +403,7 @@ GoLocalApiService::make_active_config(const GoSettings &settings) {
   active.back_led_brightness = settings.back_led_brightness;
   active.back_led_indicator = settings.back_led_indicator;
   active.touch_led_intensity = settings.touch_led_intensity;
+  active.log_measurements = settings.log_measurements;
   active.buzzer_enabled = settings.buzzer_enabled;
   active.co2_abc_days = settings.co2_abc_days;
   active.tvoc_learning_offset = settings.tvoc_learning_offset;
@@ -430,6 +431,7 @@ LocalServerConfig GoLocalApiService::map_config(const ActiveConfigSnapshot &acti
     break;
   }
   config.touch_led_intensity = static_cast<int>(active.touch_led_intensity);
+  config.log_measurements = active.log_measurements;
   config.buzzer_enabled = active.buzzer_enabled;
   config.co2_abc_days = active.co2_abc_days == CO2_ABC_DAYS_DISABLED
                             ? LOCAL_SERVER_CO2_ABC_DAYS_DISABLED
@@ -549,11 +551,12 @@ bool GoLocalApiService::is_exact_control_recovery(const LocalServerConfig &parti
          !partial.tracking_interval_seconds.has_value() && !partial.gps_mode.has_value() &&
          !partial.front_led_brightness.has_value() && !partial.back_led_brightness.has_value() &&
          !partial.back_led_indicator.has_value() && !partial.touch_led_intensity.has_value() &&
-         !partial.buzzer_enabled.has_value() && !partial.co2_abc_days.has_value() &&
-         !partial.tvoc_learning_offset.has_value() && !partial.nox_learning_offset.has_value() &&
-         !partial.led_mode.has_value() && !partial.led_bar_brightness.has_value() &&
-         !partial.display_brightness.has_value() && !partial.mqtt_broker_url.has_value() &&
-         !partial.http_domain.has_value() && !partial.corrections.has_value();
+         !partial.log_measurements.has_value() && !partial.buzzer_enabled.has_value() &&
+         !partial.co2_abc_days.has_value() && !partial.tvoc_learning_offset.has_value() &&
+         !partial.nox_learning_offset.has_value() && !partial.led_mode.has_value() &&
+         !partial.led_bar_brightness.has_value() && !partial.display_brightness.has_value() &&
+         !partial.mqtt_broker_url.has_value() && !partial.http_domain.has_value() &&
+         !partial.corrections.has_value();
 }
 
 ConfigSubmitResult GoLocalApiService::translate_config(const LocalServerConfig &partial,
@@ -673,6 +676,11 @@ ConfigSubmitResult GoLocalApiService::translate_config(const LocalServerConfig &
     }
     update.touch_led_intensity = static_cast<TouchLedIntensity>(*partial.touch_led_intensity);
     update.update_mask |= static_cast<uint32_t>(GoConfigField::TouchLedIntensity);
+  }
+
+  if (partial.log_measurements.has_value()) {
+    update.log_measurements = *partial.log_measurements;
+    update.update_mask |= static_cast<uint32_t>(GoConfigField::LogMeasurements);
   }
 
   if (partial.buzzer_enabled.has_value()) {

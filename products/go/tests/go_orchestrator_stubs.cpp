@@ -180,6 +180,10 @@ bool ble_delete_all_bonds_called = false;
 bool ble_delete_all_bonds_result = true;
 bool ble_disconnect_observer_set = false; ///< last set_disconnect_observer() arg was non-null
 uint32_t ble_disconnect_observer_set_count = 0;
+int ble_history_ticks = 0;
+uint32_t ble_measurement_list_after = UINT32_MAX;
+uint32_t ble_measurement_start = 0;
+uint32_t ble_measurement_delete = 0;
 bool ble_history_list_called = false;
 bool ble_history_start_called = false;
 uint32_t ble_history_start_session = 0;
@@ -419,6 +423,9 @@ void reset() {
   ble_delete_all_bonds_result = true;
   ble_disconnect_observer_set = false;
   ble_disconnect_observer_set_count = 0;
+  ble_history_ticks = 0;
+  ble_measurement_list_after = UINT32_MAX;
+  ble_measurement_start = ble_measurement_delete = 0;
   ble_history_list_called = false;
   ble_history_start_called = false;
   ble_history_start_session = 0;
@@ -1038,7 +1045,11 @@ void BleService::handle_history_fill(const uint32_t * /*indices*/, size_t /*coun
   test_spy::ble_history_fill_called = true;
 }
 
-void BleService::handle_history_end() { test_spy::ble_history_end_called = true; }
+void BleService::handle_history_end() {
+  test_spy::ble_history_end_called = true;
+  _export_active = false;
+  _storage.release_measurement_log();
+}
 
 void BleService::handle_history_delete(uint32_t session_id) {
   test_spy::ble_history_delete_called = true;
@@ -1599,4 +1610,15 @@ bool StorageService::clear_measurements() {
   test_spy::measurements_cleared = true;
   _log_sequence = 0;
   return test_spy::measurement_sync_ok;
+}
+
+void BleService::tick_history() { ++test_spy::ble_history_ticks; }
+void BleService::handle_measurement_list(uint32_t after) {
+  test_spy::ble_measurement_list_after = after;
+}
+void BleService::handle_measurement_start(uint32_t sequence) {
+  test_spy::ble_measurement_start = sequence;
+}
+void BleService::handle_measurement_delete(uint32_t sequence) {
+  test_spy::ble_measurement_delete = sequence;
 }

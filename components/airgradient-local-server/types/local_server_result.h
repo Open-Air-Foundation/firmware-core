@@ -55,6 +55,7 @@ enum class ConfigFieldId : uint8_t {
   AltitudeUnit,           // "altitudeUnit"
   PinnedChart,            // "pinnedChart"
   BackLedIndicator,       // "backLedIndicator"
+  LogMeasurements,        // "logMeasurements"
 };
 
 enum class ConfigSubmitStatus : uint8_t {

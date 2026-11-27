@@ -515,3 +515,28 @@ TEST_CASE("config intervals reject non-integer values with the matching wire fie
     }
   }
 }
+
+TEST_CASE("Logging config accepts only booleans and preserves omission", "[config][logs]") {
+  for (bool enabled : {false, true}) {
+    LocalServerConfig config;
+    REQUIRE(parse(enabled ? R"({"logMeasurements":true})" : R"({"logMeasurements":false})", config)
+                .status == config_json::ParseStatus::Ok);
+    CHECK(config.log_measurements == enabled);
+    CHECK_FALSE(config.idle_interval_seconds.has_value());
+    char buf[128]{};
+    REQUIRE(config_json::serialize(config, buf, sizeof(buf)) > 0);
+    LocalServerConfig decoded;
+    REQUIRE(parse(buf, decoded).status == config_json::ParseStatus::Ok);
+    CHECK(decoded.log_measurements == enabled);
+  }
+  for (const auto *value : {"1", "0", "null", "\"true\"", "[]", "{}"}) {
+    LocalServerConfig config;
+    auto result = parse(std::string("{\"logMeasurements\":") + value + "}", config);
+    CHECK(result.status == config_json::ParseStatus::InvalidValue);
+    CHECK(result.field == ConfigFieldId::LogMeasurements);
+    CHECK(std::string(config_json::config_field_wire_key(result.field)) == "logMeasurements");
+  }
+  LocalServerConfig config;
+  REQUIRE(parse(R"({"idleInterval":17})", config).status == config_json::ParseStatus::Ok);
+  CHECK_FALSE(config.log_measurements.has_value());
+}

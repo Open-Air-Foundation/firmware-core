@@ -536,3 +536,32 @@ TEST_CASE("destruction unregisters remaining routes", "[lifecycle]") {
   }
   REQUIRE_FALSE(server.has_route(HttpMethod::Get, MEASURES));
 }
+
+TEST_CASE("HTTP logging config rejects malformed partials before admission",
+          "[handler][config][logs]") {
+  RecordingHttpServer server;
+  FakeMeasuresProvider measures;
+  FakeConfigProvider config;
+  config.config.log_measurements = false;
+  LocalServer ls(server, {measures, &config, ConfigAccess::ReadWrite});
+  REQUIRE(ls.begin());
+  for (const auto *value : {"1", "0", "\"true\"", "null", "{}", "[]"}) {
+    TestHttpRequest request(HttpMethod::Put, CONFIG);
+    request.set_body(std::string("{\"idleInterval\":17,\"logMeasurements\":") + value + "}");
+    HttpResponse response;
+    REQUIRE(server.invoke(HttpMethod::Put, CONFIG, request, response));
+    CHECK(response.status == HttpStatus::BadRequest);
+    CHECK(error_code(response) == "invalid_value");
+    CHECK(error_field(response) == "logMeasurements");
+    CHECK_FALSE(config.submit_called);
+  }
+  TestHttpRequest request(HttpMethod::Put, CONFIG);
+  request.set_body(R"({"logMeasurements":true})");
+  config.submit_result = {ConfigSubmitStatus::Accepted, ConfigFieldId::None};
+  HttpResponse response;
+  REQUIRE(server.invoke(HttpMethod::Put, CONFIG, request, response));
+  CHECK(response.status == HttpStatus::Accepted);
+  REQUIRE(config.submit_called);
+  CHECK(config.last_submitted.log_measurements == true);
+  CHECK_FALSE(config.last_submitted.idle_interval_seconds.has_value());
+}

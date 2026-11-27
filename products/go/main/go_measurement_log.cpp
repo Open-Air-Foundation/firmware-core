@@ -56,8 +56,10 @@ bool StorageService::set_log_boundary(MeasurementLogBoundary reason) {
 }
 
 bool StorageService::sync_measurements() {
-  if (_log_file == nullptr)
-    return true;
+  return _log_file == nullptr || sync_measurement_file(_log_file);
+}
+
+bool StorageService::sync_measurement_file(FILE *file) {
 #ifdef TEST_HOST
   if (_test_seam != nullptr) {
     ++_test_seam->fflush_count;
@@ -68,7 +70,7 @@ bool StorageService::sync_measurements() {
       return false;
   }
 #endif
-  return sync_file(_log_file);
+  return sync_file(file);
 }
 
 bool StorageService::close_measurements() {
@@ -333,14 +335,30 @@ bool StorageService::append_measurement(const MeasurementLogRecord &record) {
 }
 
 bool StorageService::protect_measurement_log(uint32_t sequence, MeasurementLogInfo &snapshot) {
-  if (_protected_log != 0 || !sync_measurements() || !measurement_log_info(sequence, snapshot))
+  if (!is_mounted() || _protected_log != 0 || sequence == 0)
+    return false;
+  if (sequence == _log_sequence && _log_file != nullptr) {
+    if (!sync_measurements())
+      return false;
+  } else {
+    char path[LOG_PATH_SIZE];
+    format_log_path(sequence, path, sizeof(path));
+    FILE *file = fopen(path, "r+b");
+    if (file == nullptr)
+      return false;
+    const bool synced = sync_measurement_file(file);
+    const bool closed = fclose(file) == 0;
+    if (!synced || !closed)
+      return false;
+  }
+  if (!measurement_log_info(sequence, snapshot))
     return false;
   _protected_log = sequence;
   return true;
 }
 
 bool StorageService::clear_measurements() {
-  if (_protected_log != 0 || !close_measurements())
+  if (!is_mounted() || _protected_log != 0 || !close_measurements())
     return false;
   _log_sequence = 0;
   _log_boundary = MeasurementLogBoundary::Enabled;

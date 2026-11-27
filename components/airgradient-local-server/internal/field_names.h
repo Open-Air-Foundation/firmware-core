@@ -55,6 +55,7 @@ inline constexpr const char *CLOUD_CONNECTION = "cloudConnection";
 inline constexpr const char *CONFIGURATION_CONTROL = "configurationControl";
 inline constexpr const char *MEASUREMENT_INTERVAL = "measurementInterval";
 inline constexpr const char *IDLE_INTERVAL = "idleInterval";
+inline constexpr const char *LOG_MEASUREMENTS = "logMeasurements";
 inline constexpr const char *TRACKING_INTERVAL = "trackingInterval";
 inline constexpr const char *GPS_MODE = "gpsMode";
 inline constexpr const char *FRONT_LED_BRIGHTNESS = "frontLedBrightness";

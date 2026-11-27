@@ -1612,3 +1612,20 @@ TEST_CASE_METHOD(LogFixture, "Export snapshot requires sync and retry preserves 
   CHECK(snapshot.count == 3);
   storage.release_measurement_log();
 }
+
+TEST_CASE_METHOD(LogFixture, "Export syncs a closed requested log before acquiring ownership",
+                 "[Storage][logs]") {
+  REQUIRE(storage.append_measurement({}));
+  REQUIRE(storage.set_log_boundary(MeasurementLogBoundary::Enabled));
+  MeasurementLogInfo snapshot{};
+  const int syncs = seam.fsync_count;
+  seam.fsync_return = -1;
+  CHECK_FALSE(storage.protect_measurement_log(1, snapshot));
+  CHECK(seam.fsync_count == syncs + 1);
+  seam.fsync_return = 0;
+  REQUIRE(storage.protect_measurement_log(1, snapshot));
+  CHECK(snapshot.count == 1);
+  CHECK_FALSE(storage.delete_measurement_log(1));
+  storage.release_measurement_log();
+  CHECK(storage.delete_measurement_log(1));
+}

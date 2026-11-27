@@ -1305,3 +1305,8 @@ bool StorageService::clear_measurements() {
   _log_sequence = 0;
   return test_spy::measurement_sync_ok;
 }
+
+void BleService::tick_history() {}
+void BleService::handle_measurement_list(uint32_t) {}
+void BleService::handle_measurement_start(uint32_t) {}
+void BleService::handle_measurement_delete(uint32_t) {}

@@ -119,6 +119,10 @@ static bool merge_config_update(const GoConfigUpdate &update, GoConfigSource sou
     candidate.tracking_interval_seconds = update.tracking_interval_seconds;
     has_update = true;
   }
+  if (has_go_config_field(update.update_mask, GoConfigField::LogMeasurements)) {
+    candidate.log_measurements = update.log_measurements;
+    has_update = true;
+  }
   if (has_go_config_field(update.update_mask, GoConfigField::IdleInterval)) {
     candidate.idle_interval_seconds = update.idle_interval_seconds;
     has_update = true;
@@ -443,6 +447,9 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
     return static_cast<int32_t>(deadline - now) <= 0 ? 0u : deadline - now;
   };
 
+  if (_svc.ble_service.export_active())
+    next = std::min(next, BleService::HISTORY_POLL_MS);
+
   // Sensor measurement + BMS deadlines are paused while sensitive services
   // are paused (Provisioning / ProvisioningConfirm).  Their _last_*_ms
   // values stay frozen and are rebased to "now" on resume so the next
@@ -560,6 +567,7 @@ uint32_t Orchestrator::compute_queue_timeout_ms() const {
 }
 
 void Orchestrator::check_timers() {
+  _svc.ble_service.tick_history();
   uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
 
   uint32_t interval =
@@ -2740,7 +2748,7 @@ void Orchestrator::on_ble_history_write() {
   }
   BleHistoryDecodeResult result = BleService::decode_history_write(buf, len);
 
-  // Reject the blocking export reads while the provisioning radio is active
+  // Reject new export reads while the provisioning radio is active
   // so provisioning notifies aren't starved; control/cleanup ops still run.
   if ((_svc.wifi.is_provisioning() || _setup_session_active) &&
       (result.op == BleHistoryOp::List || result.op == BleHistoryOp::Start ||
@@ -2753,11 +2761,17 @@ void Orchestrator::on_ble_history_write() {
   switch (result.op) {
   case BleHistoryOp::List:
     AG_LOGI(TAG, "BLE history: list");
-    _svc.ble_service.handle_history_list();
+    if (result.measurement_log)
+      _svc.ble_service.handle_measurement_list(result.after);
+    else
+      _svc.ble_service.handle_history_list();
     break;
   case BleHistoryOp::Start:
     AG_LOGI(TAG, "BLE history: start session %" PRIu32, result.session_id);
-    _svc.ble_service.handle_history_start(result.session_id);
+    if (result.measurement_log)
+      _svc.ble_service.handle_measurement_start(result.session_id);
+    else
+      _svc.ble_service.handle_history_start(result.session_id);
     break;
   case BleHistoryOp::Fill:
     AG_LOGI(TAG, "BLE history: fill %u points", static_cast<unsigned>(result.point_count));
@@ -2769,7 +2783,10 @@ void Orchestrator::on_ble_history_write() {
     break;
   case BleHistoryOp::Delete:
     AG_LOGI(TAG, "BLE history: delete session %" PRIu32, result.session_id);
-    if (tracking_session_active(_tracking_state) && _tracking_session_id == result.session_id) {
+    if (result.measurement_log) {
+      _svc.ble_service.handle_measurement_delete(result.session_id);
+    } else if (tracking_session_active(_tracking_state) &&
+               _tracking_session_id == result.session_id) {
       _svc.ble_service.notify_history_error(BLE_VAL_ERR_SESSION_ACTIVE);
     } else {
       _svc.ble_service.handle_history_delete(result.session_id);
