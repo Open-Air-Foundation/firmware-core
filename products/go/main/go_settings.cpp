@@ -35,6 +35,7 @@ namespace {
 constexpr const char *KEY_TRACKING_INTERVAL_SECONDS = "mi";
 constexpr const char *KEY_IDLE_INTERVAL_SECONDS = "es_mi";
 constexpr const char *KEY_GPS_MODE = "gpm";
+constexpr const char *KEY_LOG_MEASUREMENTS = "log_m";
 constexpr const char *KEY_WIFI_ENABLED = "wifi";
 constexpr const char *KEY_USE_FAHRENHEIT = "uf";
 constexpr const char *KEY_USE_FEET = "auf";
@@ -223,6 +224,11 @@ GoSettings load_go_settings(ConfigStore &store) {
     settings.gps_mode = static_cast<GpsMode>(gps_mode);
   }
 
+  bool logging = false;
+  if (store.get_bool(KEY_LOG_MEASUREMENTS, logging) == ConfigStoreResult::OK) {
+    settings.log_measurements = logging;
+  }
+
   bool wifi_enabled = false;
   if (store.get_bool(KEY_WIFI_ENABLED, wifi_enabled) == ConfigStoreResult::OK) {
     settings.wifi_enabled = wifi_enabled;
@@ -345,8 +351,8 @@ bool GoSettings::equals(const GoSettings &other) const {
          idle_interval_seconds == other.idle_interval_seconds &&
          use_fahrenheit == other.use_fahrenheit && use_feet == other.use_feet &&
          pm_use_usaqi == other.pm_use_usaqi && pinned_chart == other.pinned_chart &&
-         gps_mode == other.gps_mode && wifi_enabled == other.wifi_enabled &&
-         auto_lock_seconds == other.auto_lock_seconds &&
+         log_measurements == other.log_measurements && gps_mode == other.gps_mode &&
+         wifi_enabled == other.wifi_enabled && auto_lock_seconds == other.auto_lock_seconds &&
          back_led_brightness == other.back_led_brightness &&
          back_led_indicator == other.back_led_indicator &&
          touch_led_intensity == other.touch_led_intensity &&
@@ -432,6 +438,10 @@ bool save_go_settings(ConfigStore &store, const GoSettings &settings) {
   }
 
   if (store.set_int(KEY_GPS_MODE, static_cast<int>(settings.gps_mode)) != ConfigStoreResult::OK) {
+    return false;
+  }
+
+  if (store.set_bool(KEY_LOG_MEASUREMENTS, settings.log_measurements) != ConfigStoreResult::OK) {
     return false;
   }
 

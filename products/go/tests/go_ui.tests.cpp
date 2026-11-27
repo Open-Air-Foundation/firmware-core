@@ -134,7 +134,7 @@ TEST_CASE("UIManager: agreed menu hierarchy", "[UIManager][nav][redesign]") {
   open_row(ui, "Operations");
   auto values = ui.build_values(make_default_ctx());
   check_rows(ui, {"Exit", "Back", "Idle int. 5m", "Tracking int. 10s", "GPS: When tracking",
-                  "Auto Lock: 10s", "CO2 Calibration", "Buzzer: Off"});
+                  "Auto Lock: 10s", "CO2 Calibration", "Buzzer: Off", "Log Measurement Off"});
   double_press(ui);
   open_row(ui, "Display & Touch");
   check_rows(ui, {"Exit", "Back", "Pinned Chart", "Temperature Unit: C", "Altitude Unit: m",
@@ -228,6 +228,7 @@ TEST_CASE("UIManager: group choice returns and exit gestures", "[UIManager][nav]
       {"Operations", "Tracking int.", "10s", Screen::Operations},
       {"Operations", "GPS:", "Always On", Screen::Operations},
       {"Operations", "Buzzer:", "On", Screen::Operations},
+      {"Operations", "Log Measurement", "On", Screen::Operations},
       {"Display & Touch", "PM Display:", "USAQI", Screen::DisplayTouch},
       {"Operations", "Auto Lock:", "60 Seconds", Screen::Operations},
 
@@ -433,7 +434,7 @@ TEST_CASE("UIManager: grouped menus wrap and return to their parent",
   };
   const MenuCase cases[] = {
       {nullptr, Screen::Settings, "Operations", "About Device", 8},
-      {"Operations", Screen::Operations, "Idle int.", "Buzzer: Off", 8},
+      {"Operations", Screen::Operations, "Idle int.", "Log Measurement Off", 9},
       {"Display & Touch", Screen::DisplayTouch, "Pinned Chart", "Touch LED: Off", 9},
       {"Hardware Test", Screen::HardwareTest, "Peripheral Test", "Play Melody", 7},
   };

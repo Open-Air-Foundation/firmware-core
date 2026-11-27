@@ -312,6 +312,7 @@ private:
     PinnedChart,
     IdleInterval,
     TrackingInterval,
+    LogMeasurements,
     GpsMode,
     Wifi,
     AutoLock,
@@ -376,6 +377,7 @@ private:
   int _setting_tracking_interval_seconds = TRACKING_INTERVAL_SECONDS_DEFAULT;
   int _setting_idle_interval_seconds = IDLE_INTERVAL_SECONDS_DEFAULT;
   uint8_t _setting_gps_mode = 1; // 1="On When Tracking"
+  bool _setting_log_measurements = false;
   bool _setting_wifi = false;
   uint8_t _setting_auto_lock = 1;           // 1="10 Seconds"
   uint8_t _setting_back_led_brightness = 0; // 0="Off"

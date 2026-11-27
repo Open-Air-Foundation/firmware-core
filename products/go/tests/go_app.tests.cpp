@@ -3350,3 +3350,28 @@ TEST_CASE("Sleep-cycle scan adds no wait when sensors need no warmup", "[GoApp][
   CHECK(test_spy::light_sleep_count == 0);
   CHECK_FALSE(test_spy::wake_wifi_scan_callback);
 }
+
+namespace test_spy {
+extern int measurement_appends;
+extern int measurement_resumes;
+extern int measurement_closes;
+extern MeasurementLogRecord last_measurement;
+} // namespace test_spy
+
+TEST_CASE("Fast path logs one raw sample and closes before ordinary sleep", "[GoApp][logs]") {
+  test_spy::reset();
+  test_spy::sleep_decision_to_return = {PowerService::SleepType::Deep, 60000};
+  MockBoard board;
+  board.settings.log_measurements = true;
+  GoApp app(board);
+  GoAppTestAccess access(app);
+  RtcAppState state{};
+  state.measurement_log_sequence = 42;
+  volatile bool button = false;
+  const auto result = access.execute_fast_path(state, button);
+  CHECK(result.outcome == GoAppTestAccess::Outcome::Sleep);
+  CHECK(test_spy::measurement_appends == 1);
+  CHECK(test_spy::measurement_resumes == 1);
+  CHECK(test_spy::measurement_closes == 1);
+  CHECK(test_spy::last_measurement.sensors.pm_a.pm_25 == result.measures.pm_a.pm_25);
+}

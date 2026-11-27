@@ -1353,3 +1353,262 @@ TEST_CASE("Cache: latest raw measurement handles wraparound and empty history",
   svc.clear_cache();
   CHECK_FALSE(svc.read_latest_cached_measurement(latest));
 }
+
+TEST_CASE("Measurement logs continue across sleep and retain ordering without UTC",
+          "[Storage][logs]") {
+  TempDir dir;
+  FakeNandStorage nand(dir.path);
+  StubPayloadCacheStorage backing;
+  PayloadCache cache(backing, 16);
+  StorageService storage(cache, nand);
+  StorageTestSeam seam{};
+  seam.free_kb = 8192;
+  storage.set_test_seam(&seam);
+  REQUIRE(storage.init());
+  s_fake_rtos.set(0);
+  MeasurementLogRecord record{};
+  record.timestamp = 42;
+  record.sensors = make_valid_entry(10);
+  REQUIRE(storage.append_measurement(record));
+  const auto first = storage.current_measurement_log();
+  CHECK(first != 0);
+  CHECK(seam.fsync_count == 2); // header, first append
+  REQUIRE(storage.append_measurement(record));
+  CHECK(seam.fsync_count == 2);
+  s_fake_rtos.advance(CONFIG_TRACKING_FSYNC_INTERVAL_MS);
+  REQUIRE(storage.append_measurement(record));
+  CHECK(seam.fsync_count == 3);
+  REQUIRE(storage.close_measurements());
+  REQUIRE(storage.resume_measurements(first));
+  REQUIRE(storage.append_measurement(record));
+  REQUIRE(storage.close_measurements());
+  MeasurementLogInfo info{};
+  REQUIRE(storage.measurement_log_info(first, info));
+  CHECK(info.count == 4);
+  CHECK(info.first_timestamp == 0);
+  CHECK(info.boundary == MeasurementLogBoundary::ColdBoot);
+  MeasurementLogRecord loaded{};
+  REQUIRE(storage.read_measurement(first, 3, loaded));
+  CHECK(loaded.sensors.pm_a.pm_25 == record.sensors.pm_a.pm_25);
+  CHECK(storage.cached_count() == 0); // persistent logs never populate charts
+  storage.set_log_boundary(MeasurementLogBoundary::AfterTracking);
+  REQUIRE(storage.append_measurement(record));
+  REQUIRE(storage.close_measurements());
+  REQUIRE(storage.next_measurement_log(first, info));
+  CHECK(info.sequence > first);
+  CHECK(info.boundary == MeasurementLogBoundary::AfterTracking);
+  REQUIRE(storage.clear_measurements());
+  REQUIRE(storage.append_measurement(record));
+  CHECK(storage.current_measurement_log() > info.sequence);
+  REQUIRE(storage.close_measurements());
+}
+
+TEST_CASE("Measurement logs rotate by count and repair torn tails", "[Storage][logs]") {
+  TempDir dir;
+  FakeNandStorage nand(dir.path);
+  StubPayloadCacheStorage backing;
+  PayloadCache cache(backing, 16);
+  StorageService storage(cache, nand);
+  StorageTestSeam seam{};
+  seam.free_kb = 8192;
+  storage.set_test_seam(&seam);
+  REQUIRE(storage.init());
+  MeasurementLogRecord record{};
+  record.timestamp = 1737000000;
+  for (uint32_t i = 0; i < StorageService::LOG_RECORD_LIMIT; ++i)
+    REQUIRE(storage.append_measurement(record));
+  const auto first = storage.current_measurement_log();
+  REQUIRE(storage.append_measurement(record));
+  const auto second = storage.current_measurement_log();
+  REQUIRE(second > first);
+  REQUIRE(storage.close_measurements());
+  MeasurementLogInfo info{};
+  REQUIRE(storage.measurement_log_info(second, info));
+  CHECK(info.boundary == MeasurementLogBoundary::RecordLimit);
+  CHECK(info.count == 1);
+  char filename[64];
+  snprintf(filename, sizeof(filename), "measures/log_%010u.bin", second);
+  FILE *file = fopen((dir / filename).c_str(), "ab");
+  REQUIRE(file != nullptr);
+  REQUIRE(fwrite("torn", 4, 1, file) == 1);
+  REQUIRE(fclose(file) == 0);
+  REQUIRE(storage.resume_measurements(second));
+  record.timestamp += 1;
+  REQUIRE(storage.append_measurement(record));
+  REQUIRE(storage.close_measurements());
+  REQUIRE(storage.measurement_log_info(second, info));
+  CHECK(info.count == 2);
+  CHECK(info.last_timestamp == record.timestamp);
+}
+
+TEST_CASE("Measurement exports protect a fixed snapshot and rolling never deletes tracking",
+          "[Storage][logs]") {
+  TempDir dir;
+  FakeNandStorage nand(dir.path);
+  StubPayloadCacheStorage backing;
+  PayloadCache cache(backing, 16);
+  StorageService storage(cache, nand);
+  StorageTestSeam seam{};
+  seam.free_kb = 8192;
+  storage.set_test_seam(&seam);
+  REQUIRE(storage.init());
+  REQUIRE(storage.create_route(10001));
+  REQUIRE(storage.end_route());
+  REQUIRE(storage.append_measurement({}));
+  const auto first = storage.current_measurement_log();
+  MeasurementLogInfo snapshot{};
+  REQUIRE(storage.protect_measurement_log(first, snapshot));
+  REQUIRE(snapshot.count == 1);
+  REQUIRE(storage.append_measurement({}));
+  CHECK(snapshot.count == 1);
+  storage.set_log_boundary(MeasurementLogBoundary::Enabled);
+  REQUIRE_FALSE(storage.delete_measurement_log(first));
+  REQUIRE(storage.append_measurement({}));
+  const auto second = storage.current_measurement_log();
+  storage.set_log_boundary(MeasurementLogBoundary::ColdBoot);
+  seam.free_kb = StorageService::STORAGE_RESERVE_KB;
+  CHECK_FALSE(storage.append_measurement({}));
+  MeasurementLogInfo info{};
+  CHECK(storage.measurement_log_info(first, info));
+  CHECK_FALSE(storage.measurement_log_info(second, info));
+  CHECK(storage.route_file_exists(10001));
+  storage.release_measurement_log();
+  REQUIRE(storage.delete_measurement_log(first));
+}
+
+TEST_CASE("Measurement log sync failure is reported and file is still closed", "[Storage][logs]") {
+  TempDir dir;
+  FakeNandStorage nand(dir.path);
+  StubPayloadCacheStorage backing;
+  PayloadCache cache(backing, 16);
+  StorageService storage(cache, nand);
+  StorageTestSeam seam{};
+  seam.free_kb = 8192;
+  storage.set_test_seam(&seam);
+  REQUIRE(storage.init());
+  REQUIRE(storage.append_measurement({}));
+  const auto id = storage.current_measurement_log();
+  seam.fsync_return = -1;
+  CHECK_FALSE(storage.close_measurements());
+  seam.fsync_return = 0;
+  REQUIRE(storage.resume_measurements(id));
+  REQUIRE(storage.append_measurement({}));
+  REQUIRE(storage.close_measurements());
+}
+
+struct LogFixture {
+  TempDir dir;
+  FakeNandStorage nand{dir.path};
+  StubPayloadCacheStorage backing;
+  PayloadCache cache{backing, 16};
+  StorageService storage{cache, nand};
+  StorageTestSeam seam{};
+  LogFixture() {
+    seam.free_kb = 8192;
+    storage.set_test_seam(&seam);
+    REQUIRE(storage.init());
+    s_fake_rtos.set(0);
+  }
+  ~LogFixture() { storage.close_measurements(); }
+};
+
+TEST_CASE_METHOD(LogFixture, "Logging repairs a failed partial append before retry",
+                 "[Storage][logs]") {
+  MeasurementLogRecord record{};
+  record.timestamp = 1737000000;
+  record.sensors = make_valid_entry(20);
+  REQUIRE(storage.append_measurement(record));
+  const auto sequence = storage.current_measurement_log();
+  seam.write_bytes = 13;
+  CHECK_FALSE(storage.append_measurement(record));
+  seam.write_bytes = -1;
+  record.timestamp++;
+  REQUIRE(storage.append_measurement(record));
+  REQUIRE(storage.close_measurements());
+  MeasurementLogInfo info{};
+  REQUIRE(storage.measurement_log_info(sequence, info));
+  CHECK(info.count == 2);
+  CHECK(info.last_timestamp == record.timestamp);
+  MeasurementLogRecord loaded{};
+  REQUIRE(storage.read_measurement(sequence, 1, loaded));
+  CHECK(loaded.sensors.temp_hum_a.temperature == record.sensors.temp_hum_a.temperature);
+}
+
+TEST_CASE_METHOD(LogFixture, "Logging fails closed on damaged or exhausted sequence",
+                 "[Storage][logs]") {
+  REQUIRE(storage.append_measurement({}));
+  REQUIRE(storage.set_log_boundary(MeasurementLogBoundary::Enabled));
+  uint32_t counter[2] = {7, 7};
+  SECTION("corrupt complement") {}
+  SECTION("exhausted sequence") {
+    counter[0] = UINT32_MAX;
+    counter[1] = 0;
+  }
+  SECTION("missing counter with existing logs") {
+    REQUIRE(std::filesystem::remove(dir / "measures/sequence.bin"));
+    CHECK_FALSE(storage.append_measurement({}));
+    return;
+  }
+  FILE *file = fopen((dir / "measures/sequence.bin").c_str(), "wb");
+  REQUIRE(file != nullptr);
+  REQUIRE(fwrite(counter, sizeof(counter), 1, file) == 1);
+  REQUIRE(fclose(file) == 0);
+  CHECK_FALSE(storage.append_measurement({}));
+  MeasurementLogInfo info{};
+  REQUIRE(storage.next_measurement_log(0, info));
+  CHECK(info.sequence == 1);
+  CHECK_FALSE(storage.next_measurement_log(1, info));
+}
+
+TEST_CASE_METHOD(LogFixture, "Logging boundaries create no files until append", "[Storage][logs]") {
+  for (const auto reason : {MeasurementLogBoundary::ColdBoot, MeasurementLogBoundary::Enabled,
+                            MeasurementLogBoundary::AfterTracking}) {
+    REQUIRE(storage.set_log_boundary(reason));
+    MeasurementLogInfo info{};
+    CHECK_FALSE(storage.next_measurement_log(0, info));
+    REQUIRE(storage.append_measurement({}));
+    REQUIRE(storage.close_measurements());
+    REQUIRE(storage.next_measurement_log(0, info));
+    CHECK(info.boundary == reason);
+    REQUIRE(storage.clear_measurements());
+  }
+}
+
+TEST_CASE_METHOD(LogFixture, "Rolling deletes oldest eligible log and preserves export",
+                 "[Storage][logs]") {
+  REQUIRE(storage.append_measurement({}));
+  MeasurementLogInfo snapshot{};
+  REQUIRE(storage.protect_measurement_log(1, snapshot));
+  REQUIRE(storage.set_log_boundary(MeasurementLogBoundary::Enabled));
+  REQUIRE(storage.append_measurement({}));
+  REQUIRE(storage.set_log_boundary(MeasurementLogBoundary::Enabled));
+  REQUIRE(storage.append_measurement({}));
+  CHECK_FALSE(storage.delete_measurement_log(3));
+  seam.free_kb = StorageService::STORAGE_RESERVE_KB;
+  seam.reclaimed_kb = 10;
+  REQUIRE(storage.append_measurement({}));
+  CHECK(seam.deleted_logs == 1);
+  MeasurementLogInfo info{};
+  CHECK(storage.measurement_log_info(1, info));
+  CHECK_FALSE(storage.measurement_log_info(2, info));
+  CHECK(storage.measurement_log_info(3, info));
+  CHECK(storage.current_measurement_log() == 4);
+  storage.release_measurement_log();
+}
+
+TEST_CASE_METHOD(LogFixture, "Export snapshot requires sync and retry preserves append budget",
+                 "[Storage][logs]") {
+  REQUIRE(storage.append_measurement({}));
+  s_fake_rtos.advance(CONFIG_TRACKING_FSYNC_INTERVAL_MS);
+  seam.fsync_return = -1;
+  CHECK_FALSE(storage.append_measurement({}));
+  MeasurementLogInfo snapshot{};
+  CHECK_FALSE(storage.protect_measurement_log(1, snapshot));
+  const int syncs = seam.fsync_count;
+  seam.fsync_return = 0;
+  REQUIRE(storage.append_measurement({}));
+  CHECK(seam.fsync_count == syncs + 1);
+  REQUIRE(storage.protect_measurement_log(1, snapshot));
+  CHECK(snapshot.count == 3);
+  storage.release_measurement_log();
+}

@@ -440,6 +440,11 @@ void GoApp::run_fast_path(const RtcAppState &state) {
   RtcAppState save = state;
   save.set_flag(RtcAppFlag::SensorsWarm, result.sensors_warm);
   save.gps_wake_deadline_ms = result.gps_wake_deadline_ms;
+  if (result.has_measures) {
+    save.measurement_log_sequence = _board.storage().current_measurement_log();
+    save.measurement_log_boundary =
+        static_cast<uint8_t>(_board.storage().measurement_log_boundary());
+  }
 
   if (result.outcome == FastPathResult::Outcome::Sleep) {
     if (result.has_measures) {
@@ -592,6 +597,20 @@ GoApp::FastPathResult GoApp::execute_fast_path(const RtcAppState &state,
 
   // --- Display + sleep decision ---
   const PowerSnapshot power_snapshot = power.poll_bms();
+  if (settings.log_measurements) {
+    if (state.measurement_log_sequence == 0)
+      stor.set_log_boundary(static_cast<MeasurementLogBoundary>(state.measurement_log_boundary));
+    const bool resumed = state.measurement_log_sequence == 0 ||
+                         stor.resume_measurements(state.measurement_log_sequence);
+    MeasurementLogRecord record{};
+    record.timestamp = time(nullptr);
+    record.sensors = ago;
+    record.battery_percentage = power_snapshot.battery_percentage;
+    if (!resumed || !stor.append_measurement(record))
+      AG_LOGE(TAG, "fast-path measurement log append failed");
+    if (!stor.close_measurements())
+      AG_LOGE(TAG, "fast-path measurement log sync failed");
+  }
   DisplayService &disp = _board.display();
   DisplayValues values =
       build_fast_path_display(ago, power_snapshot, settings, settings.wifi_enabled);

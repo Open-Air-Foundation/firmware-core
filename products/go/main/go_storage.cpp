@@ -680,3 +680,26 @@ uint32_t StorageService::used_kb() const {
 
   return static_cast<uint32_t>(used_bytes / 1024ULL);
 }
+
+// One filesystem snapshot: an unavailable capacity must not trigger deletion.
+bool StorageService::measurement_free_kb(uint32_t &free_kb) const {
+  if (!is_mounted())
+    return false;
+#ifdef TEST_HOST
+  if (_test_seam != nullptr && _test_seam->free_kb >= 0) {
+    free_kb = static_cast<uint32_t>(_test_seam->free_kb);
+    return true;
+  }
+  struct statvfs stats{};
+  if (statvfs(mount_path(), &stats) != 0)
+    return false;
+  const uint64_t free_bytes = static_cast<uint64_t>(stats.f_bavail) * stats.f_frsize;
+#else
+  uint64_t total_bytes = 0;
+  uint64_t free_bytes = 0;
+  if (esp_vfs_fat_info(mount_path(), &total_bytes, &free_bytes) != ESP_OK)
+    return false;
+#endif
+  free_kb = static_cast<uint32_t>(free_bytes / 1024ULL);
+  return true;
+}

@@ -214,6 +214,18 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
   _behavior = Behavior::Idle;
   _gps_enabled = _settings.gps_mode != GpsMode::AlwaysOff;
 
+  if (cause == WakeCause::PowerOn) {
+    _svc.storage_service.set_log_boundary(MeasurementLogBoundary::ColdBoot);
+  } else if (_settings.log_measurements) {
+    const auto retained = load_rtc_app_state();
+    const uint32_t sequence = retained.measurement_log_sequence;
+    if (sequence == 0)
+      _svc.storage_service.set_log_boundary(
+          static_cast<MeasurementLogBoundary>(retained.measurement_log_boundary));
+    if (sequence != 0 && !_svc.storage_service.resume_measurements(sequence))
+      AG_LOGE(TAG, "measurement log resume failed");
+  }
+
   // Waking from the sleep cycle with Wi-Fi enabled implies prior fallback.
   _wifi_fallback =
       _settings.wifi_enabled && (cause == WakeCause::Timer || cause == WakeCause::Button);
@@ -1167,6 +1179,14 @@ void Orchestrator::on_sensor_data(const MeasuresAGo &data, MeasurementOrigin ori
 
   if (origin == MeasurementOrigin::Scheduled) {
     _svc.storage_service.cache_measurement(_raw_measures);
+    if (_settings.log_measurements && _tracking_state == TrackingState::Idle) {
+      MeasurementLogRecord record{};
+      record.timestamp = time(nullptr);
+      record.sensors = _raw_measures;
+      record.battery_percentage = _latest_power.battery_percentage;
+      if (!_svc.storage_service.append_measurement(record))
+        AG_LOGE(TAG, "measurement log append failed");
+    }
     // Record
     if (is_recording()) {
       RoutePoint p{};
@@ -1683,6 +1703,10 @@ bool Orchestrator::restart_for_tracking_if_needed() {
     return true;
   }
 
+  if (!_svc.storage_service.close_measurements()) {
+    _svc.ui_manager.show_snackbar("Logging sync failed");
+    return false;
+  }
   if (save_pending_tracking_start(_config_store, true)) {
     _svc.storage_service.backup_cache();
     _svc.display_service.flush();
@@ -1704,6 +1728,10 @@ bool Orchestrator::restart_for_tracking_if_needed() {
 }
 
 bool Orchestrator::begin_tracking_session() {
+  if (!_svc.storage_service.close_measurements()) {
+    _svc.ui_manager.show_snackbar("Logging sync failed");
+    return false;
+  }
   const uint32_t session_id = generate_tracking_session_id(_svc.storage_service);
   if (session_id == 0 || !_svc.storage_service.create_route(session_id)) {
     AG_LOGE(TAG, "begin_tracking_session: failed to open route (session=%" PRIu32 ")", session_id);
@@ -1839,6 +1867,7 @@ void Orchestrator::stop_tracking() {
   AG_LOGI(TAG, "stop_tracking");
   const bool was_gps_active = is_gps_active();
   const uint32_t ended_session_id = _tracking_session_id;
+  _svc.storage_service.set_log_boundary(MeasurementLogBoundary::AfterTracking);
   _svc.storage_service.end_route();
   _tracking_state = TrackingState::Idle;
   _tracking_session_id = 0;
@@ -2301,6 +2330,11 @@ void Orchestrator::apply_settings_runtime_delta(const GoSettings &previous_setti
                                                            _settings.nox_learning_offset);
   }
 
+  if (previous_settings.log_measurements != _settings.log_measurements) {
+    if (!_svc.storage_service.set_log_boundary(MeasurementLogBoundary::Enabled))
+      _svc.ui_manager.show_snackbar("Logging sync failed");
+  }
+
   if (_svc.ble_service.is_connected()) {
     _svc.ble_service.notify_config(previous_settings, _settings);
   }
@@ -2321,6 +2355,9 @@ bool Orchestrator::clear_data() {
   }
   _tracking_timing = TrackingTiming{};
 
+  _svc.ble_service.handle_history_end();
+  _svc.storage_service.release_measurement_log();
+  const bool logs_cleared = _svc.storage_service.clear_measurements();
   _svc.storage_service.clear_cache();
   const bool routes_cleared = _svc.storage_service.clear_routes();
 
@@ -2329,10 +2366,11 @@ bool Orchestrator::clear_data() {
                                    _tracking_state);
   }
 
-  _svc.ui_manager.show_snackbar(routes_cleared ? "Data cleared" : "Data clear failed");
+  _svc.ui_manager.show_snackbar((routes_cleared && logs_cleared) ? "Data cleared"
+                                                                 : "Data clear failed");
   update_display();
 
-  return routes_cleared;
+  return routes_cleared && logs_cleared;
 }
 
 bool Orchestrator::factory_reset(bool preserve_corrections) {
@@ -2436,6 +2474,9 @@ void Orchestrator::shutdown(ShipModeRequest reason) {
     stop_tracking();
   }
   _svc.storage_service.backup_cache();
+
+  if (!_svc.storage_service.close_measurements())
+    AG_LOGE(TAG, "measurement log shutdown sync failed");
 
   // 3. Disable peripherals to reduce power draw before final shutdown.
   _svc.power_service.set_pm_power(false);
@@ -3673,6 +3714,8 @@ void Orchestrator::prepare_for_sleep(uint32_t sleep_duration_ms) {
   _svc.display_service.deep_sleep();
 
   // Flush and close storage before the CPU reboots.
+  if (!_svc.storage_service.close_measurements())
+    AG_LOGE(TAG, "measurement log sleep sync failed");
   _svc.storage_service.end_route();
 
   _svc.storage_service.backup_cache();
@@ -3736,9 +3779,13 @@ RtcAppState Orchestrator::snapshot_state() const {
       .behavior = _behavior,
       .lock_state = _lock_state,
       .tracking_state = _tracking_state,
+      .measurement_log_boundary =
+          static_cast<uint8_t>(_svc.storage_service.measurement_log_boundary()),
       .tracking_timing =
           tracking_session_active(_tracking_state) ? _tracking_timing : TrackingTiming{},
       .tracking_session_id = _tracking_session_id,
+      .measurement_log_sequence =
+          _settings.log_measurements ? _svc.storage_service.current_measurement_log() : 0,
       .gps_wake_deadline_ms = _svc.gps_service.sleep_deadline_ms(),
   };
   state.set_flag(RtcAppFlag::GpsEnabled, _gps_enabled);

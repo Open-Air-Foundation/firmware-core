@@ -104,6 +104,13 @@ TouchLedIntensity led_last_touch_intensity = TouchLedIntensity::Off;
 bool led_touch_bright_seen = false;
 
 // --- StorageService ---
+int measurement_appends = 0;
+int measurement_closes = 0;
+int measurement_resumes = 0;
+bool measurement_sync_ok = true;
+bool measurements_cleared = false;
+MeasurementLogRecord last_measurement{};
+MeasurementLogBoundary measurement_boundary = MeasurementLogBoundary::ColdBoot;
 bool cache_measurement_called = false;
 MeasuresAGo last_cached_measurement{};
 std::vector<MeasuresAGo> cached_measurements;
@@ -282,6 +289,11 @@ bool ble_connectable = true;
 std::vector<std::string> connectivity_calls;
 
 void reset() {
+  measurement_appends = measurement_closes = measurement_resumes = 0;
+  measurement_sync_ok = true;
+  measurements_cleared = false;
+  last_measurement = {};
+  measurement_boundary = MeasurementLogBoundary::ColdBoot;
   cloud_stop_ready = true;
   cloud_request_stop_count = 0;
   wifi_suspend_ready = true;
@@ -1558,4 +1570,33 @@ bool WifiService::resume_station(const WifiStaticIpConfig *ip, const char *saved
   test_spy::connectivity_calls.push_back("wifi_resume");
   connect_with_saved_credentials(ip);
   return true;
+}
+
+// Persistent measurement logging service boundary.
+bool StorageService::append_measurement(const MeasurementLogRecord &record) {
+  ++test_spy::measurement_appends;
+  test_spy::last_measurement = record;
+  if (_log_sequence == 0)
+    _log_sequence = 1;
+  return true;
+}
+bool StorageService::close_measurements() {
+  ++test_spy::measurement_closes;
+  return test_spy::measurement_sync_ok;
+}
+bool StorageService::resume_measurements(uint32_t sequence) {
+  ++test_spy::measurement_resumes;
+  _log_sequence = sequence;
+  return true;
+}
+bool StorageService::set_log_boundary(MeasurementLogBoundary boundary) {
+  test_spy::measurement_boundary = boundary;
+  _log_boundary = boundary;
+  _log_sequence = 0;
+  return close_measurements();
+}
+bool StorageService::clear_measurements() {
+  test_spy::measurements_cleared = true;
+  _log_sequence = 0;
+  return test_spy::measurement_sync_ok;
 }

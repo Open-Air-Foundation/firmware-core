@@ -130,7 +130,7 @@ private:
   std::size_t _write_attempt_count = 0;
 };
 
-static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 34;
+static constexpr std::size_t GO_SETTINGS_WRITE_COUNT = 35;
 
 // ============================================================================
 // Defaults — load from empty store returns struct defaults
@@ -1116,4 +1116,17 @@ TEST_CASE("runtime policy separates cadence GPS sleep and correction selection",
       }
     }
   }
+}
+
+TEST_CASE("Logging preference defaults off and persists independently", "[settings][logs]") {
+  FakeConfigStore store;
+  auto settings = load_go_settings(store);
+  CHECK_FALSE(settings.log_measurements);
+  GoSettings enabled = settings;
+  enabled.log_measurements = true;
+  CHECK_FALSE(settings.equals(enabled));
+  REQUIRE(save_go_settings(store, enabled));
+  CHECK(load_go_settings(store).equals(enabled));
+  REQUIRE(store.erase("log_m") == ConfigStoreResult::OK);
+  CHECK(load_go_settings(store).equals(settings));
 }

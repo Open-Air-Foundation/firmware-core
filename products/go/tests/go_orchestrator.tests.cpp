@@ -14904,3 +14904,85 @@ TEST_CASE("Cold boot saved-network failure retains fallback-to-sleep behavior",
   CHECK_FALSE(test_spy::wifi_start_provisioning_called);
   CHECK(f.ui_manager.current_screen() != Screen::Provisioning);
 }
+
+namespace test_spy {
+extern int measurement_appends;
+extern int measurement_closes;
+extern bool measurements_cleared;
+extern MeasurementLogRecord last_measurement;
+extern MeasurementLogBoundary measurement_boundary;
+} // namespace test_spy
+
+TEST_CASE("Measurement logging records raw Idle samples and suspends throughout tracking",
+          "[Orchestrator][logs]") {
+  TestFixture f;
+  f.settings.log_measurements = true;
+  auto orch = f.make_orchestrator();
+  MeasuresAGo raw{};
+  raw.pm_a.pm_25 = 12.5f;
+  raw.temp_hum_a.temperature = 23;
+  A::on_sensor_data(orch, raw);
+  CHECK(test_spy::measurement_appends == 1);
+  CHECK(test_spy::last_measurement.sensors.pm_a.pm_25 == raw.pm_a.pm_25);
+  CHECK(test_spy::last_measurement.sensors.temp_hum_a.humidity == MeasuresInvalid::HUMIDITY);
+  REQUIRE(A::start_tracking(orch));
+  CHECK(test_spy::measurement_closes > 0);
+  A::on_sensor_data(orch, raw);
+  CHECK(test_spy::measurement_appends == 1);
+  A::pause_tracking(orch);
+  A::on_sensor_data(orch, raw);
+  CHECK(test_spy::measurement_appends == 1);
+  CHECK(A::settings(orch).log_measurements);
+  A::stop_tracking(orch);
+  CHECK(test_spy::measurement_boundary == MeasurementLogBoundary::AfterTracking);
+  A::on_sensor_data(orch, raw);
+  CHECK(test_spy::measurement_appends == 2);
+  CHECK(test_spy::cache_measurement_called);
+  REQUIRE(A::clear_data(orch));
+  CHECK(test_spy::measurements_cleared);
+}
+
+TEST_CASE("Logging setting activates only after persistence and disable preserves files",
+          "[Orchestrator][logs]") {
+  TestFixture f;
+  f.settings.log_measurements = true;
+  auto orch = f.make_orchestrator();
+  GoSettings candidate = f.settings;
+  candidate.log_measurements = false;
+  f.ui_manager.sync_settings(candidate);
+  ALLOW_CALL(f.mock_config, set_int(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_bool(trompeloeil::_, trompeloeil::_)).RETURN(ConfigStoreResult::OK);
+  ALLOW_CALL(f.mock_config, set_string(trompeloeil::_, trompeloeil::_))
+      .RETURN(ConfigStoreResult::OK);
+  bool saved = true;
+  SECTION("success") {}
+  SECTION("persistence failure") { saved = false; }
+  REQUIRE_CALL(f.mock_config, commit())
+      .RETURN(saved ? ConfigStoreResult::OK : ConfigStoreResult::ERROR);
+  A::apply_settings_change(orch);
+  CHECK(A::settings(orch).log_measurements == !saved);
+  CHECK_FALSE(test_spy::measurements_cleared);
+  CHECK(test_spy::measurement_closes == (saved ? 1 : 0));
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK(test_spy::measurement_appends == (saved ? 0 : 1));
+}
+
+TEST_CASE("Logging ignores refresh and carries pending boundaries through sleep",
+          "[Orchestrator][logs]") {
+  TestFixture f;
+  f.settings.log_measurements = true;
+  auto orch = f.make_orchestrator();
+  Event refresh{};
+  refresh.type = EventType::SensorDataReady;
+  refresh.sensor_data.origin = MeasurementOrigin::Refresh;
+  A::dispatch(orch, refresh);
+  CHECK(test_spy::measurement_appends == 0);
+  REQUIRE(f.storage_service.set_log_boundary(MeasurementLogBoundary::Enabled));
+  const auto state = A::snapshot_state(orch);
+  CHECK(state.measurement_log_sequence == 0);
+  CHECK(state.measurement_log_boundary == static_cast<uint8_t>(MeasurementLogBoundary::Enabled));
+  A::settings(orch).log_measurements = false;
+  A::on_sensor_data(orch, MeasuresAGo{});
+  CHECK(test_spy::measurement_appends == 0);
+  CHECK(test_spy::cache_measurement_called);
+}
