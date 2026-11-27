@@ -13312,7 +13312,7 @@ TEST_CASE("Handoff: unlock drains Cloud then network cleanup before BLE is ready
   now += 3000;
   A::connectivity(orch);
   CHECK(A::handoff(orch));
-  CHECK(A::window_pending(orch));
+  CHECK_FALSE(A::window_pending(orch));
   CHECK(f.local_api.access() == ConfigAccess::Disabled);
   CHECK(test_spy::cloud_request_stop_count == 1);
   CHECK(test_spy::wifi_suspend_count == 0);
@@ -13350,24 +13350,155 @@ TEST_CASE("Handoff: connection window precedes the nonconnectable handoff delay"
     now = start + 10000;
     A::auto_lock(orch);
     CHECK(test_spy::ble_connectable);
-    now = start + 62999;
+    CHECK(A::window_deadline(orch) == now + 60000);
+    now = start + 69999;
     A::connectivity(orch);
     CHECK(test_spy::ble_connectable);
-    now = start + 63000;
+    now = start + 70000;
     A::connectivity(orch);
     CHECK_FALSE(test_spy::ble_connectable);
     CHECK(test_spy::ble_initialized);
     CHECK(A::returning(orch));
-    now = start + 65999;
+    now = start + 72999;
     A::connectivity(orch);
     CHECK_FALSE(test_spy::wifi_connect_saved_called);
-    now = start + 66000;
+    now = start + 73000;
     A::connectivity(orch);
     CHECK_FALSE(test_spy::ble_initialized);
     CHECK_FALSE(test_spy::wifi_connect_saved_called);
     CHECK(test_spy::wifi_resume_count == 1);
     CHECK(A::wifi_allowed(orch));
   }
+}
+
+TEST_CASE("Handoff: provisioning keeps BLE window lifecycle without spinning the event loop",
+          "[Orchestrator][handoff][timeout][regression]") {
+  const bool locked = GENERATE(false, true);
+  const bool connected = GENERATE(false, true);
+  TestFixture f;
+  f.settings.wifi_enabled = true;
+  f.settings.auto_lock_seconds = 0;
+  f.settings.idle_interval_seconds = 300;
+  auto orch = f.make_orchestrator();
+  uint32_t now = 100;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  A::unlock(orch);
+  now += 3000;
+  A::connectivity(orch);
+  REQUIRE_FALSE(A::window_active(orch));
+  REQUIRE_FALSE(A::window_pending(orch));
+  test_spy::ble_connected = connected;
+  test_spy::ble_authenticated = connected;
+  if (locked) {
+    A::auto_lock(orch);
+  }
+  CHECK(A::window_active(orch) == (locked && !connected));
+  test_spy::wifi_provisioning_active = true;
+  now += 61000;
+  A::check_timers(orch);
+  CHECK(A::compute_queue_timeout_ms(orch) > 0);
+  CHECK_FALSE(A::window_active(orch));
+  CHECK_FALSE(A::window_pending(orch));
+  CHECK(test_spy::ble_initialized);
+  CHECK(test_spy::ble_connected == connected);
+
+  test_spy::wifi_provisioning_active = false;
+  CHECK(A::compute_queue_timeout_ms(orch) > 0);
+  A::check_timers(orch);
+  CHECK(A::compute_queue_timeout_ms(orch) > 0);
+  CHECK(A::returning(orch) == (locked && !connected));
+}
+
+TEST_CASE("Handoff: auto-lock starts a fresh BLE window after a long unlocked session",
+          "[Orchestrator][handoff][timeout]") {
+  TestFixture f;
+  f.settings.wifi_enabled = true;
+  f.settings.auto_lock_seconds = 0;
+  f.settings.idle_interval_seconds = 300;
+  auto orch = f.make_orchestrator();
+  uint32_t now = 100;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  A::unlock(orch);
+  now += 3000;
+  A::connectivity(orch);
+  CHECK_FALSE(A::window_active(orch));
+  now += 120000;
+  A::check_timers(orch);
+  CHECK_FALSE(A::window_active(orch));
+  CHECK_FALSE(A::window_pending(orch));
+  A::auto_lock(orch);
+  const uint32_t deadline = now + 60000;
+  CHECK(A::window_deadline(orch) == deadline);
+  now += 1000;
+  A::auto_lock(orch); // A repeated lock event must not renew the window.
+  CHECK(A::window_deadline(orch) == deadline);
+  now = deadline - 1;
+  A::check_timers(orch);
+  CHECK(A::compute_queue_timeout_ms(orch) == 1);
+  CHECK(A::window_deadline(orch) == deadline);
+  now = deadline;
+  CHECK(A::compute_queue_timeout_ms(orch) == 0);
+  A::check_timers(orch);
+  CHECK_FALSE(A::window_active(orch));
+  CHECK(A::returning(orch));
+  CHECK(A::compute_queue_timeout_ms(orch) > 0);
+}
+
+TEST_CASE("Handoff: connection ends the window; disconnect starts the return delay",
+          "[Orchestrator][handoff][timeout]") {
+  TestFixture f;
+  f.settings.wifi_enabled = false;
+  auto orch = f.make_orchestrator();
+  uint32_t now = 100;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  A::unlock(orch);
+  A::auto_lock(orch);
+  REQUIRE(A::window_active(orch));
+  now += 10000;
+  test_spy::ble_connected = true;
+  Event event{};
+  event.type = EventType::BleConnected;
+  A::dispatch(orch, event);
+  CHECK_FALSE(A::window_active(orch));
+  CHECK_FALSE(A::window_pending(orch));
+  CHECK_FALSE(A::returning(orch));
+  now += 1000;
+  test_spy::ble_connected = false;
+  event.type = EventType::BleDisconnected;
+  A::dispatch(orch, event);
+  CHECK(A::returning(orch));
+  CHECK_FALSE(test_spy::ble_connectable);
+  now += 2999;
+  A::connectivity(orch);
+  CHECK(test_spy::ble_initialized);
+  ++now;
+  A::connectivity(orch);
+  CHECK_FALSE(test_spy::ble_initialized);
+}
+
+TEST_CASE("Handoff: unlock and tracking cancel an active auto-lock window",
+          "[Orchestrator][handoff][timeout]") {
+  TestFixture f;
+  f.settings.wifi_enabled = false;
+  auto orch = f.make_orchestrator();
+  uint32_t now = 100;
+  ALLOW_CALL(f.mock_rtos, get_time_ms_impl()).LR_RETURN(now);
+  A::unlock(orch);
+  A::auto_lock(orch);
+  REQUIRE(A::window_active(orch));
+  SECTION("unlock") { A::unlock(orch); }
+  SECTION("tracking") {
+    REQUIRE(A::start_tracking(orch));
+    A::finish_wifi_suspend(orch);
+    A::unlock(orch);
+    A::auto_lock(orch); // Tracking has no connection window.
+  }
+  CHECK_FALSE(A::window_active(orch));
+  CHECK_FALSE(A::window_pending(orch));
+  now += 120000;
+  A::connectivity(orch);
+  CHECK(test_spy::ble_initialized);
+  CHECK_FALSE(A::returning(orch));
 }
 
 TEST_CASE("Handoff: BLE retains Wi-Fi and resumes services without a new IP event",
@@ -13502,7 +13633,8 @@ TEST_CASE("Handoff: manual lock cancels unused window and unlock cancels return"
   CHECK_FALSE(A::returning(orch));
   CHECK(test_spy::ble_connectable);
   CHECK_FALSE(test_spy::ble_deinit_called);
-  CHECK(A::window_deadline(orch) == now + 60000);
+  CHECK_FALSE(A::window_active(orch));
+  CHECK_FALSE(A::window_pending(orch));
 }
 
 TEST_CASE("Handoff: manual lock during cleanup does not initialize unnecessary BLE",
@@ -13705,7 +13837,7 @@ TEST_CASE("Handoff: active tracking and OTA reject release without changing lock
   CHECK(std::string(test_spy::ble_last_command_error) == BLE_VAL_ERR_BUSY);
   CHECK(A::lock_state(orch) == LockState::Unlocked);
   CHECK_FALSE(A::releasing(orch));
-  CHECK(A::window_active(orch));
+  CHECK_FALSE(A::window_active(orch));
 }
 
 TEST_CASE("Handoff: physical unlock overrides an accepted release",
@@ -13934,7 +14066,8 @@ TEST_CASE("Handoff: failed cleanup retries after one second and excludes BLE",
   A::connectivity(orch);
   CHECK(test_spy::wifi_suspend_count == 2);
   CHECK(test_spy::ble_initialized);
-  CHECK(A::window_deadline(orch) == now + 60000);
+  CHECK_FALSE(A::window_active(orch));
+  CHECK_FALSE(A::window_pending(orch));
 }
 
 TEST_CASE("Handoff: Wi-Fi Off bypasses delay and tracking upgrades pending cleanup",
@@ -14028,7 +14161,8 @@ TEST_CASE("Handoff: Wi-Fi completion event advances cleanup without polling",
   CHECK_FALSE(f.wifi_service.suspension_pending());
   CHECK_FALSE(A::handoff(orch));
   CHECK(test_spy::ble_initialized);
-  CHECK(A::window_deadline(orch) == now + 60000);
+  CHECK_FALSE(A::window_active(orch));
+  CHECK_FALSE(A::window_pending(orch));
 }
 
 TEST_CASE("Handoff: Cloud completion event starts Wi-Fi cleanup without polling",

@@ -123,6 +123,7 @@ private:
   };
   ConnectivityState _connectivity = ConnectivityState::Uninitialized;
   uint32_t _connectivity_deadline_ms = 0;
+  // Auto-lock grace; Pending waits for BLE readiness.
   enum class BleWindow : uint8_t { Closed, Pending, Open };
   BleWindow _ble_window = BleWindow::Closed;
   uint32_t _ble_window_deadline_ms = 0;
@@ -498,6 +499,7 @@ private:
   void start_wifi_services();
   bool ble_provisioning_allowed() const;
   bool connectivity_paused() const;
+  void reconcile_ble_window();
   void reconcile_connectivity(const char *saved_ssid = nullptr);
   void start_wifi_cleanup(bool for_ble);
   void continue_wifi_cleanup();

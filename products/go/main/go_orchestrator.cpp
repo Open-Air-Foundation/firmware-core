@@ -341,8 +341,7 @@ void Orchestrator::init(WakeCause cause, const BootHandoff &handoff) {
     AG_LOGI(TAG, "first-boot guide ready; first measurement pending");
     update_display(/*wait=*/true);
   }
-  _ble_window =
-      handoff.initial_lock_state == LockState::Unlocked ? BleWindow::Pending : BleWindow::Closed;
+  _ble_window = BleWindow::Closed;
   if (_connectivity == ConnectivityState::Uninitialized) {
     _connectivity = ConnectivityState::Off;
   }
@@ -1645,6 +1644,9 @@ void Orchestrator::on_input(const InputEventData &input) {
 void Orchestrator::lock(bool automatic) {
   AG_LOGI(TAG, "lock");
   _svc.ui_manager.show_snackbar("Locked");
+  if (automatic && _lock_state == LockState::Unlocked) {
+    _ble_window = BleWindow::Pending;
+  }
   _lock_state = LockState::Locked;
   if (!automatic && !_svc.ble_service.is_connected()) {
     _ble_window = BleWindow::Closed;
@@ -1661,7 +1663,7 @@ void Orchestrator::unlock() {
   AG_LOGI(TAG, "unlock");
   _svc.ui_manager.show_snackbar("Unlocked");
   _lock_state = LockState::Unlocked;
-  _ble_window = BleWindow::Pending;
+  _ble_window = BleWindow::Closed;
   if (_connectivity == ConnectivityState::DelayToBle) {
     _connectivity = ConnectivityState::Wifi;
   } else if (_connectivity == ConnectivityState::DelayToWifi || releasing_ble()) {
@@ -3914,7 +3916,27 @@ bool Orchestrator::connectivity_paused() const {
   return _svc.ota.is_ble_active();
 }
 
+void Orchestrator::reconcile_ble_window() {
+  if (_lock_state == LockState::Unlocked || _svc.ble_service.is_connected() ||
+      tracking_session_active(_tracking_state)) {
+    _ble_window = BleWindow::Closed;
+    return;
+  }
+
+  const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
+  if (_ble_window == BleWindow::Pending && _connectivity == ConnectivityState::Ble &&
+      _svc.ble_service.is_initialized()) {
+    _ble_window = BleWindow::Open;
+    _ble_window_deadline_ms = now + BLE_CONNECTION_WINDOW_MS;
+  }
+  if (_ble_window == BleWindow::Open && static_cast<int32_t>(now - _ble_window_deadline_ms) >= 0) {
+    _ble_window = BleWindow::Closed;
+  }
+}
+
 void Orchestrator::reconcile_connectivity(const char *saved_ssid) {
+  // Window bookkeeping continues while provisioning or OTA pauses handoffs.
+  reconcile_ble_window();
   if (connectivity_paused()) {
     return;
   }
@@ -3929,10 +3951,6 @@ void Orchestrator::reconcile_connectivity(const char *saved_ssid) {
 
   const uint32_t now = static_cast<uint32_t>(RTOS::get_time_ms());
   const auto due = [now](uint32_t deadline) { return static_cast<int32_t>(now - deadline) >= 0; };
-  if (_ble_window == BleWindow::Open && due(_ble_window_deadline_ms)) {
-    _ble_window = BleWindow::Closed;
-  }
-
   // BLE takes priority over the saved Wi-Fi preference.
   const bool need_ble = ble_needed();
   const bool tracking = tracking_session_active(_tracking_state);
@@ -4105,10 +4123,7 @@ void Orchestrator::activate_ble() {
     _connectivity_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + CONNECTIVITY_RETRY_MS;
     return;
   }
-  if (_ble_window == BleWindow::Pending) {
-    _ble_window = BleWindow::Open;
-    _ble_window_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + BLE_CONNECTION_WINDOW_MS;
-  }
+  reconcile_ble_window();
 }
 
 void Orchestrator::begin_ble_return() {
