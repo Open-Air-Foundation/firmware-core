@@ -283,8 +283,8 @@ contains the full snapshot.
 | Characteristic | Typical Size | Max/Limit | Transport |
 |---|---:|---:|---|
 | Measures | ~120 B | ~135 B | One notification when MTU is at least 138 |
-| Status Read | ~100 B | ~120 B | Read; notifications carry small deltas |
-| Status Tracking Notify | 27–29 B while active | 29 B | One notification carrying `tracking`, `session`, and `trk` |
+| Status Read | Varies | ≤256 B | Read; notifications carry small deltas |
+| Status Tracking Notify | 33–35 B while active | 35 B | One notification carrying `tracking`, `session`, `trk`, and `stop` |
 | Config Read | — | <512 B | Read-Long / Read Blob |
 | Config Notify | — | <180 B | One notification when MTU is at least 185 |
 | History control | ~40 B; larger for lists | Varies with list metadata | One notification per response; request MTU 512 |
@@ -421,7 +421,7 @@ A Status **NOTIFY carries only a delta** — never the full snapshot. There are
 **three delta shapes**, distinguished by which keys are present (there is **no**
 `"type"` discriminator on Status notifications):
 
-- **Tracking transition** — `{"tracking": <bool>, "session": <uint>, "trk": <uint>}`.
+- **Tracking transition** — `{"tracking": <bool>, "session": <uint>, "trk": <uint>, "stop": <uint>}`.
 - **Charging transition** — `{"charging": <text>, "bat_pct": <uint>, "bat_v":
   <float32>}`, pushed when the user plugs in, unplugs, or the battery finishes
   charging.
@@ -430,7 +430,7 @@ A Status **NOTIFY carries only a delta** — never the full snapshot. There are
 
 The shapes have **disjoint keys**, so just **merge whichever keys arrive** into
 your local model. A notification is a single ATT PDU and is kept bounded by
-sending the relevant state fields. The **Read** value remains the full 10-key snapshot
+sending the relevant state fields. The **Read** value remains the full 11-key snapshot
 (see Payload); re-read Status for the full state on connect.
 
 | Event | NOTIFY? | Payload Reflects |
@@ -440,6 +440,7 @@ sending the relevant state fields. The **Read** value remains the full 10-key sn
 | `pause_tracking` from Recording | Yes, including sync/close failure | `tracking: true`, same `session: N`, `trk: 2` |
 | `resume_tracking` from Paused succeeded | Yes | `tracking: true`, same `session: N`, `trk: 1` |
 | `stop_tracking` from Recording or Paused | Yes | `tracking: false`, `session: 0`, `trk: 0` |
+| Duration expires in Recording or Paused | Yes | `tracking: false`, `session: 0`, `trk: 0`, `stop: 2` |
 | Charging transition (plug in / unplug / charge complete) | Yes | `charging`, `bat_pct`, `bat_v` |
 | Device about to shut down | Yes | `disc` |
 | Silent tracking-start restart | No guaranteed pre-reset result | Reconnect and Read Status to learn whether the new session started |
@@ -477,7 +478,7 @@ state without restarting Go, it produces **two** notifications on different
 characteristics:
 
 1. **Status NOTIFY** (this characteristic) — broadcasts the state change
-   (`tracking`, `session`, `trk`).
+   (`tracking`, `session`, `trk`, `stop`).
 2. **Config NOTIFY** (`type: "cmd_result"`) — the response to the issued
    command, carrying `ok` and optionally `err`.
 
@@ -497,15 +498,15 @@ result.
 If you receive a NOTIFY with `trk: 0` that did **not** follow
 a client-issued `stop_tracking` command, treat it as "session ended on
 device" and refresh local state from the device (re-list History,
-re-read Status). Do not try to infer the cause from the payload — the
-on-device snackbar carries the human-readable reason. A stop on the device
-menu or a data-clear operation can end the session.
+re-read Status). `stop: 2` identifies countdown expiry;
+`stop: 1` covers normal Stop, including the device menu and data clearing.
+Older firmware may omit `stop`.
 Do not assume a route append failure will end tracking automatically; reconcile
 state and downloaded data separately.
 
 ### Payload
 
-The **Read** value is a CBOR map with **all 10 keys always present**. A **NOTIFY**
+The **Read** value is a CBOR map with **all 11 keys always present**. A **NOTIFY**
 payload carries only one of the delta shapes (tracking transition, charging
 transition, or the NOTIFY-only `disc` notice); every snapshot key is available
 via Read. The `disc` key is never part of the Read snapshot.
@@ -520,6 +521,7 @@ via Read. The `disc` key is never part of the Read snapshot.
 | `"tracking"` | bool | Yes (tracking delta) | Compatibility flag: `true` while Recording or Paused |
 | `"session"` | uint | Yes (tracking delta) | Current session ID, retained while Paused; 0 when Idle |
 | `"trk"` | uint | Yes (tracking delta) | Tracking state: `0` = Idle, `1` = Recording, `2` = Paused |
+| `"stop"` | uint | Yes (tracking delta) | Stop reason: `0` = none (boot/successful Start), `1` = user (normal Stop), `2` = duration expired; retained across BLE reconnects, not reboots |
 | `"flash_kb"` | uint | No (Read-only) | Total flash storage capacity in KB |
 | `"used_kb"` | uint | No (Read-only) | Used flash storage in KB |
 
@@ -574,6 +576,7 @@ they are not a continuous battery telemetry stream.
   "tracking": true,
   "session": 10042,
   "trk": 1,
+  "stop": 0,
   "flash_kb": 262144,
   "used_kb": 8192
 }
@@ -814,6 +817,7 @@ Write a CBOR map to execute a device command.
 | `"factory_rst"` | Reset to factory defaults: clears data, restores default settings, deletes BLE bonds, and reboots the device |
 | `"start_tracking"` | Begin GPS + sensor route logging session |
 | `"stop_tracking"` | End the current route logging session |
+| `"tracking_duration"` | Replace/cancel the active countdown; see [Tracking Duration](#tracking-duration) |
 | `"pause_tracking"` | Stop route-point writes while retaining the current session |
 | `"resume_tracking"` | Resume recording into the retained session |
 | `"release_ble"` | Lock controls and disconnect BLE |
@@ -841,7 +845,7 @@ the command pending until a `cmd_result` arrives; the GATT write response and
 progress notification are not completion signals.
 
 Other commands (`"start_tracking"`, `"stop_tracking"`, `"pause_tracking"`,
-`"resume_tracking"`, `"release_ble"`, `"set_aiding"`) normally respond with a
+`"resume_tracking"`, `"tracking_duration"`, `"release_ble"`, `"set_aiding"`) normally respond with a
 command result notification only (no progress notification). A successful
 tracking-start power reset can occur before its result is sent.
 
@@ -862,7 +866,7 @@ tracking-start power reset can occur before its result is sent.
   enters Paused. Resume reports the same error if reopening fails and remains
   Paused. Both retain the session ID.
 - Tracking state changes also push **Status NOTIFY** with `tracking`, `session`,
-  and `trk`. Repeated Pause/Resume in the requested state succeeds without a
+  `trk`, and `stop`. Repeated Pause/Resume in the requested state succeeds without a
   Status push (see §6).
 - `"set_aiding"` accepts optional position and/or time fields (see below).
   At least one useful piece of data must be present; otherwise the command
@@ -878,8 +882,45 @@ tracking-start power reset can occur before its result is sent.
 
 `start_tracking` can restart Go to wake GPS, dropping BLE before its command
 result arrives. Bonds are retained. Reconnect, authenticate and Read Status:
-`trk: 1` confirms recording; `trk: 0` means tracking did not start. Check this
-before retrying the command.
+`trk: 1` confirms recording; `trk: 0` means no session is active. Check
+`stop` in case a short countdown already expired before reconnecting.
+Check Status before retrying the command.
+
+#### Tracking Duration
+
+Send these commands to the Config characteristic as CBOR:
+
+```json
+{"op": "cmd", "cmd": "start_tracking", "duration_min": 30}
+{"op": "cmd", "cmd": "tracking_duration", "duration_min": 60}
+{"op": "cmd", "cmd": "tracking_duration", "duration_min": 0}
+```
+
+These start a 30-minute session, replace its countdown with 60 minutes from now,
+and cancel auto-stop without stopping tracking.
+
+- Duration must be an unsigned integer from **1–1440 minutes**.
+- On Start, omit `duration_min` to disable auto-stop. Explicit zero is invalid.
+- For `tracking_duration`, zero cancels auto-stop.
+- Pause does **not** pause the countdown.
+
+Replacement and cancellation return a Config result:
+
+```json
+{"type": "cmd_result", "cmd": "tracking_duration", "ok": true}
+```
+
+When time expires, Go stops tracking and sends a **Status notification**:
+
+```json
+{"tracking": false, "session": 0, "trk": 0, "stop": 2}
+```
+
+Invalid arguments return `invalid_config_value`. Changing duration while Idle
+returns `not_tracking`.
+
+BLE does not report remaining time. Avoid automatically retrying a duration
+change after a timeout: each accepted request restarts the countdown.
 
 #### Release BLE
 
@@ -1044,7 +1085,7 @@ description is available.
 |---|---|---|
 | `"busy"` | `release_ble` | Tracking, export, provisioning/setup or update prevents release, or release is already pending |
 | `"busy"` | Config writes | BLE release is pending |
-| `"invalid_config_value"` | `set` | Invalid field type, range, correction group, or complete settings candidate |
+| `"invalid_config_value"` | `set`, `start_tracking`, `tracking_duration` | Invalid field type, range, correction group, settings candidate, or duration argument |
 | `"config_save_failed"` | `set` | Persistence failed; active settings were not replaced |
 | `"unsupported"` | `set` | Touch LED writes are unavailable on V2 |
 | `"unsupported"` | `co2_cal` | No CO2 sensor is selected or the selected driver does not support manual calibration; S12 and SCD4x support it, while the current STCC4 driver does not |
@@ -1053,7 +1094,7 @@ description is available.
 | `"factory_reset_failed"` | `factory_rst` | Settings save, data clear, or bond delete failed |
 | `"already_tracking"` | `start_tracking` | Session was already Recording or Paused |
 | `"flash_error"` | `start_tracking`, `pause_tracking`, `resume_tracking` | Start was blocked or could not establish tracking; Pause failed to sync/close; Resume could not reopen the route. Read `trk` to reconcile state. |
-| `"not_tracking"` | `stop_tracking`, `pause_tracking`, `resume_tracking` | No tracking session was active |
+| `"not_tracking"` | `stop_tracking`, `pause_tracking`, `resume_tracking`, `tracking_duration` | No tracking session was active |
 | `"no_aiding_data"` | `set_aiding` | No valid position or time data in the payload |
 | `"unknown_command"` | (any) | Unrecognised `"cmd"` string |
 | `"unknown_config_key"` | `set` | Config write contained an unrecognised key (or an aiding key under `op:"set"`); entire write rejected |
@@ -1836,6 +1877,9 @@ sequenceDiagram
 ```
 
 ### 11.5 Constraints
+
+- Stop Recording or Paused tracking before OTA. Otherwise OTA reports
+  `Failed / InvalidArgument` before preparing or writing the image.
 
 - **One transfer at a time**, on the authenticated BLE connection.
 - Do not start OTA after requesting `release_ble`.
