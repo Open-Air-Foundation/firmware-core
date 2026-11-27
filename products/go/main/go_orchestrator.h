@@ -108,19 +108,20 @@ private:
   const char *_serial; ///< Device serial string for BLE advertising
 
   // --- Application state ---
+  // Connectivity ownership and handoffs; BLE ownership may retain connected Wi-Fi.
   enum class ConnectivityState : uint8_t {
-    Uninitialized,
-    Off,
-    Wifi,
-    DelayToBle,
-    StoppingWifiForBle, // Cloud drains first, then Wi-Fi cleanup completes the handoff.
-    StoppingWifiForOff,
-    RetryWifiCleanupForBle,
-    RetryWifiCleanupForOff,
-    Ble,
-    RetryBle,
-    DelayToWifi,
-    ReleaseBle,
+    Uninitialized,      // Boot has not selected an owner.
+    Off,                // No connectivity owner.
+    Wifi,               // Wi-Fi owns network services.
+    DelayToBle,         // Unlock delay before preparing BLE ownership.
+    PreparingForBle,    // Drain services; tracking also stops and releases Wi-Fi.
+    PreparingForOff,    // Drain services and stop Wi-Fi before relinquishing ownership.
+    RetryCleanupForBle, // Retry failed cleanup before BLE ownership.
+    RetryCleanupForOff, // Retry failed cleanup before relinquishing ownership.
+    Ble,                // BLE owns connectivity; network services stay suspended.
+    RetryBle,           // Retry BLE initialization or advertising.
+    DelayToWifi,        // Return delay after the last BLE ownership reason ends.
+    ReleaseBle,         // Allow the explicit release acknowledgement to drain.
   };
   ConnectivityState _connectivity = ConnectivityState::Uninitialized;
   uint32_t _connectivity_deadline_ms = 0;

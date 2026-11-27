@@ -3740,10 +3740,10 @@ bool Orchestrator::wifi_active() const {
 }
 
 bool Orchestrator::wifi_cleanup_pending() const {
-  return _connectivity == ConnectivityState::StoppingWifiForBle ||
-         _connectivity == ConnectivityState::StoppingWifiForOff ||
-         _connectivity == ConnectivityState::RetryWifiCleanupForBle ||
-         _connectivity == ConnectivityState::RetryWifiCleanupForOff;
+  return _connectivity == ConnectivityState::PreparingForBle ||
+         _connectivity == ConnectivityState::PreparingForOff ||
+         _connectivity == ConnectivityState::RetryCleanupForBle ||
+         _connectivity == ConnectivityState::RetryCleanupForOff;
 }
 
 bool Orchestrator::connectivity_timer_active() const {
@@ -3751,8 +3751,8 @@ bool Orchestrator::connectivity_timer_active() const {
   case ConnectivityState::DelayToBle:
   case ConnectivityState::DelayToWifi:
   case ConnectivityState::ReleaseBle:
-  case ConnectivityState::RetryWifiCleanupForBle:
-  case ConnectivityState::RetryWifiCleanupForOff:
+  case ConnectivityState::RetryCleanupForBle:
+  case ConnectivityState::RetryCleanupForOff:
   case ConnectivityState::RetryBle:
     return true;
   default:
@@ -3832,17 +3832,17 @@ void Orchestrator::reconcile_connectivity(const char *saved_ssid) {
     start_wifi_cleanup(need_ble || _svc.ble_service.is_initialized());
     return;
 
-  case ConnectivityState::StoppingWifiForOff:
+  case ConnectivityState::PreparingForOff:
     if (need_ble) {
-      _connectivity = ConnectivityState::StoppingWifiForBle;
+      _connectivity = ConnectivityState::PreparingForBle;
     }
     return; // CloudStopped and WifiSuspendComplete advance cleanup.
 
-  case ConnectivityState::StoppingWifiForBle:
+  case ConnectivityState::PreparingForBle:
     return;
 
-  case ConnectivityState::RetryWifiCleanupForOff:
-  case ConnectivityState::RetryWifiCleanupForBle:
+  case ConnectivityState::RetryCleanupForOff:
+  case ConnectivityState::RetryCleanupForBle:
     continue_wifi_cleanup();
     return;
 
@@ -3916,8 +3916,7 @@ void Orchestrator::reconcile_connectivity(const char *saved_ssid) {
 }
 
 void Orchestrator::start_wifi_cleanup(bool for_ble) {
-  _connectivity =
-      for_ble ? ConnectivityState::StoppingWifiForBle : ConnectivityState::StoppingWifiForOff;
+  _connectivity = for_ble ? ConnectivityState::PreparingForBle : ConnectivityState::PreparingForOff;
   _local_api_activation_retry_deadline_ms = 0;
   _svc.local_api.set_access(ConfigAccess::Disabled);
   // Keep already accepted local requests queued while Cloud drains HTTP.
@@ -3931,10 +3930,10 @@ void Orchestrator::continue_wifi_cleanup() {
   }
   // Once BLE claims cleanup, retain its return delay even if the user locks.
   if (ble_needed()) {
-    if (_connectivity == ConnectivityState::StoppingWifiForOff) {
-      _connectivity = ConnectivityState::StoppingWifiForBle;
-    } else if (_connectivity == ConnectivityState::RetryWifiCleanupForOff) {
-      _connectivity = ConnectivityState::RetryWifiCleanupForBle;
+    if (_connectivity == ConnectivityState::PreparingForOff) {
+      _connectivity = ConnectivityState::PreparingForBle;
+    } else if (_connectivity == ConnectivityState::RetryCleanupForOff) {
+      _connectivity = ConnectivityState::RetryCleanupForBle;
     }
   }
   if (_svc.cloud.stop_pending() || _svc.wifi.suspension_pending()) {
@@ -3944,10 +3943,9 @@ void Orchestrator::continue_wifi_cleanup() {
   if (connectivity_timer_active() && static_cast<int32_t>(now - _connectivity_deadline_ms) < 0) {
     return;
   }
-  const bool for_ble = _connectivity == ConnectivityState::StoppingWifiForBle ||
-                       _connectivity == ConnectivityState::RetryWifiCleanupForBle;
-  _connectivity =
-      for_ble ? ConnectivityState::StoppingWifiForBle : ConnectivityState::StoppingWifiForOff;
+  const bool for_ble = _connectivity == ConnectivityState::PreparingForBle ||
+                       _connectivity == ConnectivityState::RetryCleanupForBle;
+  _connectivity = for_ble ? ConnectivityState::PreparingForBle : ConnectivityState::PreparingForOff;
   WifiService::SuspendMode mode = WifiService::SuspendMode::StopWifi;
   if (tracking_session_active(_tracking_state)) {
     mode = WifiService::SuspendMode::ReleaseDriver;
@@ -3955,8 +3953,8 @@ void Orchestrator::continue_wifi_cleanup() {
     mode = WifiService::SuspendMode::Services;
   }
   if (!_svc.wifi.request_suspend(mode)) {
-    _connectivity = for_ble ? ConnectivityState::RetryWifiCleanupForBle
-                            : ConnectivityState::RetryWifiCleanupForOff;
+    _connectivity =
+        for_ble ? ConnectivityState::RetryCleanupForBle : ConnectivityState::RetryCleanupForOff;
     _connectivity_deadline_ms = now + CONNECTIVITY_RETRY_MS;
   }
 }
@@ -4036,10 +4034,10 @@ void Orchestrator::on_wifi_suspend_complete(bool success) {
   if (!wifi_cleanup_pending()) {
     return;
   }
-  const bool to_ble = _connectivity == ConnectivityState::StoppingWifiForBle;
+  const bool to_ble = _connectivity == ConnectivityState::PreparingForBle;
   if (!success) {
-    _connectivity = to_ble ? ConnectivityState::RetryWifiCleanupForBle
-                           : ConnectivityState::RetryWifiCleanupForOff;
+    _connectivity =
+        to_ble ? ConnectivityState::RetryCleanupForBle : ConnectivityState::RetryCleanupForOff;
     _connectivity_deadline_ms = static_cast<uint32_t>(RTOS::get_time_ms()) + CONNECTIVITY_RETRY_MS;
     return;
   }
