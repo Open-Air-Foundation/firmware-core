@@ -23,8 +23,9 @@ downloads, Wi-Fi provisioning, and firmware updates.
 12. [MTU Considerations](#12-mtu-considerations)
 13. [Error Reference](#13-error-reference)
 14. [Appendix: RoutePointWire Binary Format](#appendix-routepointwire-binary-format)
-15. [Appendix: CBOR Quick Reference](#appendix-cbor-quick-reference)
-16. [Appendix: Invalid Sentinel Values](#appendix-invalid-sentinel-values)
+15. [Appendix: Measurement Record Binary Format](#appendix-measurement-record-binary-format)
+16. [Appendix: CBOR Quick Reference](#appendix-cbor-quick-reference)
+17. [Appendix: Invalid Sentinel Values](#appendix-invalid-sentinel-values)
 
 ---
 
@@ -222,7 +223,7 @@ There is no supported build-time or runtime option to disable BLE security.
 | Measures | `d1c0c0a1-...` | Read, Notify | Live sensor + GPS data |
 | Status | `d1c0c0a2-...` | Read, Notify | Device status snapshot |
 | Config | `d1c0c0a3-...` | Read, Write, Notify | Get/set config, execute commands |
-| History | `d1c0c0a4-...` | Write, Notify | Stored route data export |
+| History | `d1c0c0a4-...` | Write, Notify | Stored route and measurement-log export |
 
 All UUIDs share the base `d1c0c0aX-6b48-4b2a-9b1d-59f9f2b0a1e1` where `X`
 is the characteristic index (1–4).
@@ -259,7 +260,8 @@ for the specific characteristic before decoding.
 - **Missing keys**: If a sensor reading is unavailable or invalid, the key
   is omitted entirely. A missing key means "data not available" — not zero.
 - **Numeric types**:
-  - Unsigned integers (`uint`): CO2, TVOC, NOx, timestamps, counts, `trk` state.
+  - Unsigned integers (`uint`): CO2, TVOC, NOx, counts, `trk` state, most timestamps.
+    Measurement-log UTC uses signed 64-bit values in its binary records.
   - Float32 (`float`): Temperature, humidity, PM, pressure, altitude.
   - Float64 (`double`): GPS latitude and longitude (for precision).
   - Boolean: Config toggles, legacy `tracking` active-session flag.
@@ -285,8 +287,8 @@ contains the full snapshot.
 | Status Tracking Notify | 27–29 B while active | 29 B | One notification carrying `tracking`, `session`, and `trk` |
 | Config Read | — | <512 B | Read-Long / Read Blob |
 | Config Notify | — | <180 B | One notification when MTU is at least 185 |
-| History control | ~40 B | ~180 B | One notification per response |
-| History data | 227 B | 227 B | One notification when MTU is at least 230 |
+| History control | ~40 B; larger for lists | Varies with list metadata | One notification per response; request MTU 512 |
+| History data | 42 B (measurement), 59 B (route) | 59 B | One record per notification; see §12 for MTU requirements |
 | OTA data | — | `MTU - 3` (509 B at MTU 512) | Sequential Write Without Response |
 
 ---
@@ -595,13 +597,14 @@ This characteristic supports three operations:
 
 Read the characteristic to receive the full device configuration.
 
-#### Payload (19-Key CBOR Map)
+#### Payload (20-Key CBOR Map)
 
 | Key | Type | Description |
 |---|---|---|
 | `"idle_int"` | uint | Idle Interval: 1–3600 seconds; default 300. Used without an active tracking session. |
 | `"tracking_int"` | uint | Tracking Interval: 1–3600 seconds; default 10. Used in Recording and Paused. |
 | `"wifi"` | bool | Saved Wi-Fi preference; default `false`. Does not report current connection state. |
+| `"log_m"` | bool | Saved raw measurement logging preference; default `false`. Logs scheduled measurements while Idle. |
 | `"temp_f"` | bool | `true` = Fahrenheit, `false` = Celsius |
 | `"alt_ft"` | bool | `true` = feet, `false` = meters |
 | `"pm_aqi"` | bool | `true` = US AQI for PM, `false` = raw ug/m3 |
@@ -641,6 +644,20 @@ Factory PM calibration appears as custom (ID `2`) in reads and notifications,
 with unchanged coefficients. Writing this group back selects custom; omit
 `pm25_corr` when changing unrelated settings to preserve factory calibration.
 
+#### Measurement Logging Preference
+
+`log_m` is a saved toggle, default `false`. It logs scheduled measurements
+while Idle; Recording and Paused suspend logging without changing the toggle.
+Turning it off preserves existing logs. Older logs may be automatically deleted
+when storage fills.
+
+```json
+{"op":"set","log_m":true}
+```
+
+A changed value produces `{"type":"config","log_m":true}`. Use
+[History](#8-history-characteristic) to list and download logs.
+
 #### GPS Mode Values
 
 | Value | Meaning |
@@ -666,7 +683,7 @@ Wi-Fi preference and tracking commands are independent.
 
 ```json
 {
-  "idle_int": 300, "tracking_int": 10, "wifi": false,
+  "idle_int": 300, "tracking_int": 10, "wifi": false, "log_m": false,
   "temp_f": false, "alt_ft": false,
   "pm_aqi": false, "pchart": 1, "gps_mode": "tracking",
   "auto_lock": 60,
@@ -715,6 +732,7 @@ silently ignored for backward compatibility. They do not modify any setting.
 | `"idle_int"` | uint | 1–3600 seconds; affects Idle cadence only |
 | `"tracking_int"` | uint | 1–3600 seconds; affects Recording/Paused cadence only |
 | `"wifi"` | bool | Enable/disable the saved Wi-Fi preference; credentials are preserved |
+| `"log_m"` | bool | Enable/disable persistent raw measurement logging; accepts a CBOR boolean only |
 | `"temp_f"` | bool | |
 | `"alt_ft"` | bool | Altitude display unit: `true` = feet |
 | `"pm_aqi"` | bool | |
@@ -756,8 +774,8 @@ After applying the config change, the device sends a **Config notification**
 
 The write is rejected before any value is applied if it contains an
 **unrecognized config key** (`unknown_config_key`, checked first), an invalid
-interval, Wi-Fi, GPS mode, LED, buzzer, ABC, learning-offset, or correction value
-(`invalid_config_value`), or **more than one recognized config key**
+interval, Wi-Fi, measurement-logging, GPS mode, LED, buzzer, ABC, learning-offset,
+or correction value (`invalid_config_value`), or **more than one recognized config key**
 (`single_field_only`). After these checks, V2 rejects `tled` writes with
 `unsupported`, including writes of `0`. The field remains readable (default
 `0`); rejected writes emit no Config delta. A settings persistence failure returns
@@ -792,7 +810,7 @@ Write a CBOR map to execute a device command.
 | `"cmd"` Value | Action |
 |---|---|
 | `"co2_cal"` | Request manual CO2 calibration |
-| `"clear_data"` | Erase all stored route data and clear chart cache |
+| `"clear_data"` | End any History export, erase stored routes and measurement logs, and clear chart cache |
 | `"factory_rst"` | Reset to factory defaults: clears data, restores default settings, deletes BLE bonds, and reboots the device |
 | `"start_tracking"` | Begin GPS + sensor route logging session |
 | `"stop_tracking"` | End the current route logging session |
@@ -1059,13 +1077,16 @@ Config notifications always contain a `"type"` key. Use it to dispatch:
 **Properties**: Write, Notify
 **Direction**: Bidirectional
 
-Bulk export of stored route session data from the device's flash storage.
-This is a stateful download protocol using CBOR for control messages and
-packed binary for bulk data transfer.
+Download routes and measurement logs using CBOR control messages and packed
+binary records. All operations require authentication. Readings are raw;
+clients may apply Config corrections locally.
 
-History points are exported from the raw route data without applying the device's
-correction settings. Clients may apply the current Config corrections or another
-policy locally. Route points do not contain a correction-version identifier.
+Omit `kind` for routes; use `"kind":"measurements"` on `list`, `start`, and
+`delete` for logs. No other `kind` is supported. Keep the kind with each ID:
+routes and logs have separate IDs and record layouts.
+
+Only one download can be active. A `start` that passes authentication and busy
+checks replaces the previous download, even if opening the requested file fails.
 
 ### 8.1 Notification Format
 
@@ -1074,7 +1095,7 @@ Every History notification starts with a **1-byte type tag**:
 | Tag | Content | Meaning |
 |---|---|---|
 | `0x00` | CBOR map | Control response (session list, started, done, ended, error) |
-| `0x01` | Binary data | Route point data chunk |
+| `0x01` | Binary data | Route or measurement record chunk |
 
 **Important**: Strip the first byte before decoding. CBOR payloads start at
 byte index 1.
@@ -1092,6 +1113,15 @@ All writes are CBOR maps with an `"op"` key.
 Request the list of stored route sessions. Wait until provisioning/setup is
 idle and no BLE release is pending.
 
+For measurement logs, request one file at a time using a sequence cursor:
+
+```json
+{"op":"list","kind":"measurements","after":0}
+```
+
+Use the response's `next` as the next request's `after` (default 0).
+Stop when `logs` is empty and `next` is 0.
+
 #### Start Download
 
 ```json
@@ -1101,6 +1131,16 @@ idle and no BLE release is pending.
 Start downloading all points for the specified session. The `"session"` value
 is a session ID obtained from the session list. Existing sessions with zero
 points are valid download targets.
+
+For a measurement log, use its sequence as `session`:
+
+```json
+{"op":"start","kind":"measurements","session":42}
+```
+
+Use `started.total` as the download's fixed record count. Later measurements
+are excluded; start a new download to retrieve them. The log cannot be
+automatically deleted while its download remains active.
 
 #### Fill Missing Points
 
@@ -1114,7 +1154,9 @@ only be sent after a download has completed (after receiving `"done"`).
 
 Send at most 50 indices per request and keep the complete encoded command
 within 256 bytes and the negotiated write limit. For larger gaps, send multiple
-`fill` requests, waiting for each `done` before sending the next.
+`fill` requests, waiting for each `done` before sending the next. For either
+dataset, omit `kind` and `session`. All indices must be below `started.total`
+(`invalid_index` otherwise); requests during streaming return `busy`.
 
 #### End Download
 
@@ -1122,7 +1164,7 @@ within 256 bytes and the negotiated write limit. For larger gaps, send multiple
 {"op": "end"}
 ```
 
-Signal that the download is complete. Cleans up server-side state.
+Close the active download for either dataset.
 
 #### Delete Session
 
@@ -1142,6 +1184,16 @@ internally so the next read reflects the reduced `"used_kb"`.
 
 Can be sent at any time (does not require an active download). Listed sessions
 with zero points can be deleted normally.
+
+For a measurement log:
+
+```json
+{"op":"delete","kind":"measurements","session":42}
+```
+
+Deleting the log currently being recorded returns `delete_failed`; disable
+`log_m` first to close it. Deleting a log being downloaded ends that download,
+even if deletion fails. Success returns the same `deleted` response as routes.
 
 ### 8.3 Notify Responses (Device -> Phone)
 
@@ -1185,6 +1237,32 @@ A route stopped before its first measurement is still a valid stored session.
 It is included with `"pts": 0` and `"ts": 0` and remains downloadable and
 deletable.
 
+#### Measurement Log List
+
+Sent in response to `{"op":"list","kind":"measurements","after":0}`:
+
+```json
+{
+  "type":"list", "kind":"measurements", "next":42,
+  "logs":[{
+    "session":42, "count":300, "boundary":1,
+    "first_ts":0, "last_ts":1790000000, "version":1
+  }]
+}
+```
+
+Each response contains at most one log with a sequence greater than `after`.
+Request each page explicitly using `next`.
+
+| Field | Type | Description |
+|---|---|---|
+| `session` | uint32 | File sequence for `start` and `delete`; not reused after deletion |
+| `count` | uint | Records when listed; use `started.total` for downloads |
+| `boundary` | uint | File start reason: 1=cold boot, 2=logging enabled, 3=after tracking, 4=rollover |
+| `first_ts`, `last_ts` | int | First and last record's UTC Unix seconds; 0 means unknown |
+| `version` | uint | Measurement format version; currently 1 |
+| `next` | uint32 | Cursor for the next request; 0 marks the end |
+
 #### Download Started
 
 Sent at the beginning of a `start` operation, before binary data streaming
@@ -1194,15 +1272,23 @@ begins.
 {"type": "started", "session": 10042, "total": 300, "pt_size": 56}
 ```
 
+For a measurement log:
+
+```json
+{"type":"started","session":42,"total":300,"pt_size":39,"kind":"measurements","version":1}
+```
+
 | Field | Type | Description |
 |---|---|---|
-| `"session"` | uint | Session ID being downloaded |
-| `"total"` | uint | Total number of points in this session |
-| `"pt_size"` | uint | Bytes per route point (always 56) |
+| `"session"` | uint | Route session ID or measurement file sequence |
+| `"total"` | uint | Fixed number of records in this export |
+| `"pt_size"` | uint | Bytes per record: 56 for routes, 39 for measurement version 1 |
+| `"kind"` | text | `"measurements"` for measurement logs; absent for routes |
+| `"version"` | uint | 1 for measurement logs; absent for routes |
 
-The `"pt_size"` field allows the client to verify wire format compatibility.
-If `"pt_size"` is not 56, the client should abort — the binary format is
-incompatible.
+Validate the format before decoding; send `end` if unsupported. Use the
+[route layout](#appendix-routepointwire-binary-format) or
+[measurement layout](#appendix-measurement-record-binary-format).
 
 For an empty session, `"total"` is 0. The device sends no binary chunks and
 immediately follows `"started"` with `{"type": "done", "sent": 0}`. The
@@ -1215,26 +1301,25 @@ Sent after `"started"`. Tagged with `0x01`.
 Binary layout:
 
 ```text
-[0x01] [uint16_le point_index] [RoutePointWire...]
+[0x01] [uint16_le point_index] [packed records...]
 ```
 
 | Offset | Size | Type | Description |
 |---|---|---|---|
 | 0 | 1 | uint8 | Tag: `0x01` |
 | 1 | 2 | uint16_le | Index of the first point in this chunk |
-| 3 | N*56 | bytes | Packed RoutePointWire data |
+| 3 | N × pt_size | bytes | Packed records using the layout from `started` |
 
-Each notification contains up to **4 route points** (4 x 56 = 224 bytes of
-point data, plus 3 bytes header = 227 bytes total).
+Current firmware sends **one record per notification**: 59 bytes for a route
+point or 42 bytes for a measurement record, including the three-byte header.
+Derive the record count from `(notification_length - 3) / pt_size`; reject
+payloads that are not an exact multiple.
 
 Points are streamed sequentially starting from index 0. The `point_index`
 field tells the client which points are in this notification. Use it to
 detect gaps (missed notifications).
 
-The current wire index is only 16 bits although stored route counts are wider.
-Indices wrap beyond 65,535; sessions above 65,536 points cannot be unambiguously
-recovered with this index alone. Treat this as a protocol limitation rather than
-silently merging wrapped indices into earlier points.
+Downloads above 65,535 records return `unsupported_export`.
 
 #### Download Done
 
@@ -1247,11 +1332,16 @@ operations).
 
 | Field | Type | Description |
 |---|---|---|
-| `"sent"` | uint | Points processed for transmission; not a client receipt acknowledgement |
+| `"sent"` | uint | Records submitted successfully for notification in this pass; not a client receipt acknowledgement |
 
-Count received indices independently. `fill` skips unreadable indices and
-reports only the points it could read; a `done` response does not prove that
-all requested gaps were filled.
+After `done`, check received indices and use `fill` for gaps, then `end`.
+An empty `fill` returns `sent:0`; a record read failure ends the download with
+`flash_error`.
+
+The download remains active after `done` but closes on disconnect, transfer
+failure, or 60 seconds without progress or a new `fill`. Listing does not renew
+this timeout. After silent expiration, `fill` returns `no_active_download`;
+send `start` again.
 
 #### Download Ended
 
@@ -1271,7 +1361,7 @@ Sent in response to a successful `{"op": "delete"}`.
 
 | Field | Type | Description |
 |---|---|---|
-| `"session"` | uint | Session ID that was deleted |
+| `"session"` | uint | Route session ID or measurement file sequence that was deleted |
 
 #### Error
 
@@ -1283,12 +1373,14 @@ Sent when an operation fails.
 
 | Error String | Cause |
 |---|---|
-| `"session_not_found"` | The requested session ID does not exist |
-| `"no_active_download"` | `fill` was sent without a prior `start` |
-| `"flash_error"` | Flash storage read failed during streaming |
-| `"delete_failed"` | Flash storage delete failed |
+| `"session_not_found"` | The requested route session ID does not exist |
+| `"no_active_download"` | `fill` was sent without an active export, including after timeout |
+| `"flash_error"` | Measurement snapshot setup failed (including missing file or sync failure), or a record read failed |
+| `"delete_failed"` | File deletion failed, including a missing log or the current measurement writer |
+| `"unsupported_export"` | Export exceeds 65,535 records |
+| `"invalid_index"` | A `fill` index is outside the fixed export count |
 | `"session_active"` | Cannot delete the active tracking session |
-| `"busy"` | A provisioning operation or setup session blocks `list` / `start` / `fill`, or BLE release is pending (see §10) |
+| `"busy"` | `fill` arrived during streaming, provisioning/setup blocks `list` / `start` / `fill`, or BLE release is pending (see §10) |
 
 ### 8.4 Download Protocol Flow
 
@@ -1302,7 +1394,7 @@ sequenceDiagram
     Device-->>Phone: 0x00 sessions pages
     Phone->>Device: start session N
     Device-->>Phone: 0x00 started, total 300
-    loop Chunks of up to four points
+    loop One record per notification
         Device-->>Phone: 0x01 index and packed points
     end
     Device-->>Phone: 0x00 done, sent 300
@@ -1321,13 +1413,13 @@ sequenceDiagram
     participant Device
     Phone->>Device: start session N
     Device-->>Phone: 0x00 started
-    Device-->>Phone: 0x01 points 0-7 in two chunks
-    Device--xPhone: 0x01 points 8-11 lost
+    Device-->>Phone: 0x01 points 0-7 in eight notifications
+    Device--xPhone: 0x01 notifications for points 8-11 lost
     Device-->>Phone: 0x01 remaining chunks
     Device-->>Phone: 0x00 done
     Phone->>Phone: Detect missing indices 8-11
     Phone->>Device: fill indices 8, 9, 10, 11
-    loop Each requested readable point
+    loop Each requested point
         Device-->>Phone: 0x01 single point
     end
     Device-->>Phone: 0x00 done, sent 4
@@ -1358,25 +1450,27 @@ sequenceDiagram
 ### 8.5 Client Implementation Guide
 
 1. **Subscribe** to History notifications before sending any write commands.
-2. **List sessions** with `{"op": "list"}` to discover available data.
-3. **Start download** with `{"op": "start", "session": <id>}`.
+2. **List data** with `{"op":"list"}` for routes, or
+   `{"op":"list","kind":"measurements","after":0}` for logs. Follow the
+   selected dataset's pagination rules.
+3. **Start download** with `{"op":"start","session":<id>}`; include
+   `"kind":"measurements"` for logs. Validate the `started` record format.
 4. **Buffer incoming notifications** — dispatch by first byte tag:
    - `0x00`: Decode CBOR, handle control message.
    - `0x01`: Extract `point_index` (bytes 1-2, little-endian uint16), then
-     parse route point data starting at byte 3.
+     parse records starting at byte 3 using the selected layout.
 5. **Track received indices** to detect gaps after `"done"` is received.
 6. **Fill gaps** if any point indices are missing, using one or more `fill`
    commands.
 7. **End download** with `{"op": "end"}` when all data is received.
-8. **Delete sessions** with `{"op": "delete", "session": <id>}` to remove
-   individual route files from the device. Check the Status characteristic's
-   `"trk"` and `"session"` fields first to avoid deleting the current Recording
-   (`trk: 1`) or Paused (`trk: 2`) session.
+8. **Delete files** when needed with `{"op":"delete","session":<id>}`;
+   include `"kind":"measurements"` for logs. For routes, check Status `trk`
+   and `session` to avoid deleting the current Recording or Paused session.
+   Measurement writer deletion can fail with `delete_failed`.
 
-**Gap detection**: Compare the expected set of indices `[0, total-1]` with
-the indices actually received. Each binary notification's `point_index` tells
-you the starting index. With 4 points per notification, a notification with
-`point_index = 8` contains points 8, 9, 10, 11.
+**Gap detection**: Compare received indices with `[0, total-1]`. Each binary
+notification gives its starting index; derive its record count from the payload
+length and `pt_size`.
 
 ---
 
@@ -1785,7 +1879,7 @@ finish without a timeout.
 
 ### Required MTUs by Operation
 
-- **Config Read**: the full 19-key snapshot is bounded by a 512-byte
+- **Config Read**: the full 20-key snapshot is bounded by a 512-byte
   characteristic buffer. Use Read-Long / Read Blob and
   collect all fragments. Config Read does not require MTU 512, but it does
   require a client API that supports long reads.
@@ -1796,11 +1890,11 @@ finish without a timeout.
 - **Measures notifications**: the maximum Measures payload is approximately
   135 bytes, requiring an MTU of at least 138 bytes. MTU 185 or higher is
   recommended for normal operation.
-- **History binary notifications**: each chunk is 227 bytes (3-byte header plus
-  four 56-byte points), so the negotiated MTU must be at least **230 bytes** to
-  carry a full chunk. The firmware sends up to four points per chunk; the last
-  chunk can be smaller and `fill` sends individual points. A larger MTU does
-  not increase that count.
+- **History notifications**: current binary chunks contain one record: 59
+  application bytes for routes (MTU at least 62), or 42 for measurement logs
+  (MTU at least 45). These binary minima do not cover the larger CBOR control
+  responses. Request the preferred **MTU 512** to leave room for CBOR list
+  responses. A larger MTU does not increase records per chunk.
 - **OTA Data writes**: use Write Without Response with chunks no larger than
   `MTU - 3`, and no larger than the device's 512-byte write cap. At the preferred
   MTU 512, the maximum ATT payload is 509 bytes.
@@ -1819,12 +1913,14 @@ errors and [Config Response](#response) for validation and persistence behavior.
 
 | Error | Meaning | Recovery |
 |---|---|---|
-| `"session_not_found"` | Session ID doesn't exist | Re-list sessions |
-| `"no_active_download"` | `fill` sent without `start` | Send `start` first |
-| `"flash_error"` | Storage read failed | Retry or skip session |
-| `"delete_failed"` | Flash delete failed | Retry or ignore |
+| `"session_not_found"` | Route session ID does not exist | Re-list route sessions |
+| `"no_active_download"` | No export is active, including after timeout | Send `start` again |
+| `"flash_error"` | Measurement snapshot setup or a record read failed | Re-list, then retry `start` or skip the file |
+| `"delete_failed"` | Delete failed or file is the current measurement writer | End logging to close the writer, or retry a different file |
+| `"unsupported_export"` | More than 65,535 records | Skip the export; this protocol cannot transfer it |
+| `"invalid_index"` | `fill` index is outside the snapshot | Use indices below `started.total` |
 | `"session_active"` | Cannot delete the active tracking session | Stop tracking first via Config `"stop_tracking"` command, then retry |
-| `"busy"` | Provisioning/setup blocks `list` / `start` / `fill`, or BLE release is pending | Wait for provisioning/setup to finish; if releasing BLE, reconnect when available |
+| `"busy"` | `fill` during streaming, provisioning/setup contention, or BLE release pending | Wait for `done` or setup completion; reconnect after release |
 
 ### Connection Errors
 
@@ -1872,6 +1968,30 @@ binary data from History notifications.
 
 ---
 
+## Appendix: Measurement Record Binary Format
+
+Use this 39-byte, little-endian layout when `started` reports
+`kind:"measurements"`, `version:1`, and `pt_size:39`. No GPS fields are included.
+
+| Offset | Size | Type | Field | Invalid Sentinel |
+|---|---|---|---|---|
+| 0 | 8 | int64_le | UTC timestamp (Unix seconds) | `0` (unknown) |
+| 8 | 4 | float32_le | temperature (Celsius) | `-1001.0` |
+| 12 | 4 | float32_le | humidity (%) | `-1.0` |
+| 16 | 4 | float32_le | pm1.0 (ug/m3) | `-1.0` |
+| 20 | 4 | float32_le | pm2.5 (ug/m3) | `-1.0` |
+| 24 | 4 | float32_le | pm10 (ug/m3) | `-1.0` |
+| 28 | 2 | int16_le | co2 (ppm) | `-1` |
+| 30 | 2 | int16_le | tvoc_index | `-1` |
+| 32 | 2 | int16_le | nox_index | `-1` |
+| 34 | 4 | float32_le | pressure (hPa) | `-1001.0` |
+| 38 | 1 | uint8 | battery_percentage (0–100 %) | `255` |
+
+Floats use IEEE 754 binary32. Check sentinels per field. Timestamp 0 means
+unknown time, not an invalid record; order records by file sequence and index.
+
+---
+
 ## Appendix: CBOR Quick Reference
 
 CBOR (RFC 8949) is a binary serialization format. Most platforms have CBOR
@@ -1896,16 +2016,18 @@ if history_bytes[0] == 0x00:
     control = cbor2.loads(history_bytes[1:])
 elif history_bytes[0] == 0x01:
     first_index = int.from_bytes(history_bytes[1:3], "little")
-    packed_points = history_bytes[3:]  # Decode each 56-byte point by the table.
+    packed_records = history_bytes[3:]  # Use started.kind/version/pt_size.
 ```
 
 See [`ago_protocol.py`](tests/ble-integration/ago_protocol.py) for complete
-History framing and binary decoding used by the integration tests.
+route History framing and binary decoding used by the integration tests.
+The measurement-record layout above defines the additional log format.
 
 ---
 
 ## Appendix: Invalid Sentinel Values
 
-The [RoutePointWire table](#appendix-routepointwire-binary-format) lists the
+The [RoutePointWire table](#appendix-routepointwire-binary-format) and
+[measurement-record table](#appendix-measurement-record-binary-format) list the
 binary sentinels. Measures CBOR omits unavailable fields; Status always emits
 its snapshot keys and substitutes zero for unavailable battery readings.
