@@ -1,7 +1,7 @@
 # AirGradient Go Local Server Integration Tests
 
 Hardware integration tests for the AirGradient Go Local Server API. The suite
-connects to a real device in Stationary mode and verifies mDNS discovery, HTTP
+connects to a real device over Wi-Fi and verifies mDNS discovery, HTTP
 routes, JSON schemas, configuration admission, structured errors, actions, and
 OTA access policy.
 
@@ -9,8 +9,10 @@ OTA access policy.
 
 - Python >= 3.11
 - An AirGradient Go connected to the same network as the test host
-- The device running in **Stationary** mode with **Local Server enabled**,
-  outside manufacturing mode
+- **Wi-Fi** and **Local Server** enabled, tracking Idle, outside manufacturing mode
+- Go locked with no BLE client connected; wait for any BLE connection window
+  to end before testing. A connected Wi-Fi station alone does not mean the
+  local server is available while BLE owns connectivity
 - Multicast DNS available between the host and device, or the device IP address
 
 ## Install
@@ -60,8 +62,8 @@ pytest products/go/tests/local-server-integration/test_measures.py -v \
 | `--ago-ota-active` | off | Confirm committed OTA is active |
 | `--ago-board-variant` | `v1` | Expected board: `v1` or `v2`; does not change firmware board detection |
 
-Run configuration tests with UV from the repository root. Enable the server in
-Stationary mode and set `configurationControl=local`:
+Run configuration tests with UV from the repository root. Meet the prerequisites
+above and set `configurationControl=local`:
 
 ```sh
 uv run --project products/go/tests/local-server-integration pytest \
@@ -95,7 +97,7 @@ can leave the live GPS Test screen open for the operator to exit; HTTP success
 alone does not prove that either diagnostic ran.
 
 Persisted mutation tests require `--ago-allow-config-write`. They round-trip the
-temperature and altitude units, Pinned Chart, measurement and GPS settings,
+temperature and altitude units, Pinned Chart, Idle/Tracking intervals and GPS settings,
 back LED indicator (`aqi`/`co2`), back LED and V1 touch LED levels, buzzer, CO2 ABC period,
 and TVOC/NOx learning offsets.
 Each parameterized case
@@ -140,6 +142,8 @@ unknown-key rejection, and omission of invalid values rather than JSON `null`.
 Validates the complete Go configuration schema and safe empty-update admission.
 Opt-in parameterized cases round-trip and restore the display-unit, Pinned
 Chart, timing, GPS, LED, buzzer, CO2 ABC, and gas-learning settings.
+The schema uses `idleInterval` and `trackingInterval`; each interval round trip
+checks that the other preference is unchanged. `measurementInterval` is absent.
 The schema requires `backLedIndicator` to be `aqi` or `co2`; its round-trip case
 switches to the other indicator and restores the original selection.
 
@@ -147,7 +151,9 @@ switches to the other indicator and restores the original selection.
 
 Exercises empty, malformed, non-object, and trailing request bodies; unknown and
 invalid fields; config enum, type, and range rejection; nested dotted error
-paths; and known fields unsupported by Go.
+paths; and known fields unsupported by Go. Legacy `measurementInterval` writes
+return `404 not_found`, including mixed requests with a valid interval change;
+the configuration must stay unchanged throughout the convergence window.
 
 ### `test_actions.py` — Actions
 
@@ -158,7 +164,7 @@ responses. The opt-in calibration test verifies the same response contract for
 ### `test_ota.py` — OTA Policy
 
 These tests require an operator or dedicated test build to stage and hold a
-committed Stationary Wi-Fi OTA. The suite does not start OTA itself. Run only
+committed Wi-Fi OTA. The suite does not start OTA itself. Run only
 this file while OTA is active:
 
 ```sh

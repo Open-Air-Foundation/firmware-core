@@ -51,7 +51,8 @@ CONFIG_KEYS = {
     "pinnedChart",
     "cloudConnection",
     "configurationControl",
-    "measurementInterval",
+    "idleInterval",
+    "trackingInterval",
     "gpsMode",
     "backLedIndicator",
     "backLedBrightness",
@@ -68,7 +69,8 @@ CONFIG_ROUND_TRIP_VALUES: dict[str, tuple[object, object]] = {
     "temperatureUnit": ("c", "f"),
     "altitudeUnit": ("m", "ft"),
     "pinnedChart": ("none", "pm25"),
-    "measurementInterval": (1, 2),
+    "idleInterval": (1, 3600),
+    "trackingInterval": (1, 3600),
     "gpsMode": ("off", "tracking"),
     "backLedIndicator": ("aqi", "co2"),
     "backLedBrightness": (0, 1),
@@ -234,7 +236,8 @@ def validate_config(payload: dict[str, Any]) -> None:
     }
     assert isinstance(payload["cloudConnection"], bool)
     assert payload["configurationControl"] in {"cloud", "local", "both"}
-    _assert_integer(payload["measurementInterval"], 1, 3600)
+    _assert_integer(payload["idleInterval"], 1, 3600)
+    _assert_integer(payload["trackingInterval"], 1, 3600)
     assert payload["gpsMode"] in {"off", "tracking", "always"}
     assert payload["backLedIndicator"] in {"aqi", "co2"}
     _assert_integer(payload["backLedBrightness"], 0, 3)

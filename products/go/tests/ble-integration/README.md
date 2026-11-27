@@ -9,8 +9,10 @@ history download state machine.
 
 - Python >= 3.11
 - Linux with BlueZ (or macOS with CoreBluetooth)
-- An AGo device advertising in **Portable** mode
+- An unlocked AGo device advertising the Go data service
 - The device must already be **bonded/paired** with the host machine
+- Finish Getting Started and Wi-Fi setup before running the full suite; do not
+  run provisioning, History export from another client, or OTA during the tests
 
 ## Install
 
@@ -89,8 +91,9 @@ export any routes you need to keep, and run one test process at a time:
   `--ago-notify-timeout=90` for these cases; the default 30 seconds is shorter
   than the firmware's approximately 60-second calibration polling window.
 - `test_status_notify.py` stops any existing tracking session, creates test
-  sessions, exercises pause/resume, and leaves tracking idle. It does not
-  restore the original session.
+  sessions, exercises pause/resume, and leaves tracking idle. It temporarily
+  sets GPS Off and restores the preference afterward to avoid a GPS-triggered
+  restart during notification tests. It does not restore the original session.
 - `TestHistoryDelete::test_delete_session` deletes an existing non-active
   route. Deleted data is not restored.
 
@@ -104,7 +107,8 @@ pytest products/go/tests/ble-integration/test_service_discovery.py \
   --ago-address AA:BB:CC:DD:EE:FF
 ```
 
-Choose a notification timeout longer than the configured measurement interval
+Choose a notification timeout longer than `idle_int` (default 300 seconds), or
+`tracking_int` while Recording or Paused,
 when checking Measures. After a failed mutation test, read back settings and
 tracking state before retrying; a timeout does not undo a device action.
 
@@ -113,7 +117,8 @@ tracking state before retrying; a timeout does not undo a device action.
 ### `test_service_discovery.py` — GATT Profile
 
 Verifies the AGo service UUID and all four characteristic UUIDs are present
-with the correct properties (read/write/notify).
+with the correct properties (read/write/notify). Also checks that provisioning
+and its Scan and Credentials/Status characteristics share this connection.
 
 ### `test_measures.py` — Measures Characteristic
 
@@ -158,6 +163,8 @@ characteristics. Each tracking push is a **delta** carrying
   true and the session ID stays unchanged in both NOTIFY and READ; each command
   has a matching successful Config result
 - a redundant `start_tracking` (already tracking) sends no spurious Status NOTIFY
+- `release_ble` while Recording or Paused returns `busy`, preserves the session,
+  and keeps the BLE connection
 
 Clients should use `trk` for the full tracking state;
 the tests continue checking `tracking` because the current firmware retains it
@@ -169,8 +176,8 @@ Covers read, write, delta-notify, and command operations:
 
 - **Read** (sync): reads Config once (module-scoped fixture), then validates the
   expected config keys present with correct types; versioned correction
-  maps and their value arrays, `bledi`, `gps_mode`, and `op_mode` use valid fields
-  and enum values
+  maps and their value arrays, `bledi`, and `gps_mode` use valid fields and enum
+  values. The 19-key snapshot includes `idle_int`, `tracking_int`, and `wifi`
 - **Set config** (async): writes a single-field `{"op": "set", ...}`, verifies
   the device sends a Config **delta** notification — `"type": "config"` plus
   only the changed key
@@ -178,6 +185,13 @@ Covers read, write, delta-notify, and command operations:
   NOx learning, Pinned Chart (`pchart`), LED indicator (`bledi`: `aqi`/`co2`),
   and LED brightness (`bled`) values, verifies exact deltas, then
   restores each value
+- **Intervals** (async): round-trips `idle_int` and `tracking_int` independently,
+  verifies exact deltas and preservation of the other interval, then restores
+  the changed preference
+- **Compatibility and validation** (async): retired `op_mode` / `meas_int`
+  writes, including mixed requests, return `unknown_config_key` without changing
+  settings. Invalid intervals and Wi-Fi types return `invalid_config_value`.
+  Unchanged `wifi` writes are checked without opening setup
 - **LED indicator validation** (async): invalid names and CBOR types return
   `invalid_config_value` and preserve the config snapshot. LED round trips also
   verify that changing indicator or brightness preserves the other setting.
@@ -219,7 +233,7 @@ least one point and are **skipped** when the device has no non-empty sessions.
 
 ### `test_device_info.py` — Device Information Service
 
-Verifies the standard DIS (`0x180A`), present in Portable mode, exposes valid
+Verifies the standard DIS (`0x180A`) exposes valid
 read-only identity strings over the encrypted bonded link:
 
 - DIS service is present in the GATT table
@@ -275,8 +289,10 @@ is the [BLE client reference](../../go_ble_client.md); test constants live in
 [`ago_protocol.py`](ago_protocol.py). Exact key-set assertions target the current
 firmware and are stricter than the forward-compatible parsing expected of apps.
 
-The suite does not cover Offline broadcasts, provisioning, OTA transfer, fresh
-pairing, charging/disconnect notifications, or reconnect recovery. History tests
+The suite does not cover sleep-cycle broadcasts, provisioning requests, Wi-Fi
+enable/setup transitions, successful `release_ble` disconnects, OTA transfer,
+fresh pairing, charging/disconnect notifications, or GPS-restart reconnect
+recovery. History tests
 skip download checks without a non-empty route and do not simulate packet loss
 or verify successful gap filling. Passing schema and notification checks does
 not establish physical sensor accuracy or calibration quality.

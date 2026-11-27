@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+import pytest_asyncio
 from bleak import BleakClient
 
 import ago_protocol as proto
@@ -52,12 +54,89 @@ async def _ensure_tracking_idle(client: BleakClient) -> None:
     raise RuntimeError("Could not clear pre-existing tracking session")
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def tracking_without_gps_restart(
+    ago_client: BleakClient,
+    config_notifications: NotificationCollector,
+    ago_notify_timeout: float,
+):
+    """Exercise notification transitions without a GPS-triggered restart."""
+    original = proto.decode_cbor(
+        bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+    )["gps_mode"]
+    try:
+        if original != "off":
+            config_notifications.drain()
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID, proto.encode_config_set(gps_mode="off"), response=True,
+            )
+            result = proto.decode_cbor(
+                await config_notifications.wait_for(timeout=ago_notify_timeout)
+            )
+            assert result == {"type": "config", "gps_mode": "off"}
+        config_notifications.drain()
+        yield
+    finally:
+        await _ensure_tracking_idle(ago_client)
+        current = proto.decode_cbor(
+            bytes(await ago_client.read_gatt_char(proto.CHAR_CONFIG_UUID))
+        )["gps_mode"]
+        if current != original:
+            config_notifications.drain()
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID, proto.encode_config_set(gps_mode=original), response=True,
+            )
+            result = proto.decode_cbor(
+                await config_notifications.wait_for(timeout=ago_notify_timeout)
+            )
+            assert result == {"type": "config", "gps_mode": original}
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
 class TestStatusNotify:
     """Status NOTIFY must fire on urgent tracking transitions."""
+
+    @pytest.mark.parametrize("paused", [False, True], ids=["recording", "paused"])
+    async def test_release_ble_is_busy_while_tracking(
+        self,
+        paused: bool,
+        ago_client: BleakClient,
+        ago_notify_timeout: float,
+        config_notifications: NotificationCollector,
+        status_notifications: NotificationCollector,
+    ):
+        await _ensure_tracking_idle(ago_client)
+        commands = ["start_tracking", "pause_tracking"] if paused else ["start_tracking"]
+        for command in commands:
+            config_notifications.drain()
+            await ago_client.write_gatt_char(
+                proto.CHAR_CONFIG_UUID, proto.encode_command(command), response=True,
+            )
+            result = proto.decode_cbor(
+                await config_notifications.wait_for(timeout=ago_notify_timeout)
+            )
+            assert result == {"type": "cmd_result", "cmd": command, "ok": True}
+
+        before = await _read_status(ago_client)
+        assert before["trk"] == proto.TRACKING_STATES["paused" if paused else "recording"]
+        status_notifications.drain()
+        await ago_client.write_gatt_char(
+            proto.CHAR_CONFIG_UUID, proto.encode_command("release_ble"), response=True,
+        )
+        result = proto.decode_cbor(
+            await config_notifications.wait_for(timeout=ago_notify_timeout)
+        )
+        assert result == {
+            "type": "cmd_result", "cmd": "release_ble", "ok": False, "err": "busy",
+        }
+        after = await _read_status(ago_client)
+        assert {key: after[key] for key in proto.STATUS_NOTIFY_KEYS} == {
+            key: before[key] for key in proto.STATUS_NOTIFY_KEYS
+        }
+        assert ago_client.is_connected
 
     async def test_start_tracking_pushes_status_notify(
         self,

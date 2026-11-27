@@ -37,9 +37,13 @@ def test_config_field_round_trip(
     ago_convergence_timeout: float,
 ) -> None:
     field, _original, updated = preserved_config_setting
+    baseline = api.get_config(ago_http_client)
     api.put_and_wait(
         ago_http_client,
         field,
         updated,
         ago_convergence_timeout,
     )
+    if field in {"idleInterval", "trackingInterval"}:
+        companion = "trackingInterval" if field == "idleInterval" else "idleInterval"
+        assert api.get_config(ago_http_client)[companion] == baseline[companion]

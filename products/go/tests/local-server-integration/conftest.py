@@ -371,6 +371,16 @@ def preserved_config_setting(
             ago_convergence_timeout,
             stable_duration=RESTORE_STABILITY_SECONDS,
         )
+        if field in {"idleInterval", "trackingInterval"}:
+            companion = "trackingInterval" if field == "idleInterval" else "idleInterval"
+            if api.get_config(ago_http_client)[companion] != baseline[companion]:
+                api.put_and_wait(
+                    ago_http_client,
+                    companion,
+                    baseline[companion],
+                    ago_convergence_timeout,
+                    stable_duration=RESTORE_STABILITY_SECONDS,
+                )
 
 
 @pytest.fixture

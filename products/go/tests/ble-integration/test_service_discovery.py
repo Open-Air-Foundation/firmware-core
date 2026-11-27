@@ -65,3 +65,20 @@ class TestServiceDiscovery:
             f"{char_uuid}: missing properties {missing}. "
             f"Has: {actual_props}"
         )
+
+    @pytest.mark.parametrize("char_uuid,expected_props", [
+        (proto.CHAR_WIFI_SCAN_UUID, {"write", "notify"}),
+        (proto.CHAR_WIFI_CREDENTIALS_UUID, {"read", "write", "notify"}),
+    ])
+    def test_provisioning_service_is_available(
+        self,
+        ago_client: BleakClient,
+        char_uuid: str,
+        expected_props: set[str],
+    ):
+        """Provisioning shares the data connection, independent of Wi-Fi preference."""
+        service = ago_client.services.get_service(proto.PROVISIONING_SERVICE_UUID)
+        assert service is not None, "Provisioning service missing from the data connection"
+        char = service.get_characteristic(char_uuid)
+        assert char is not None, f"Provisioning characteristic {char_uuid} missing"
+        assert expected_props <= set(char.properties)
