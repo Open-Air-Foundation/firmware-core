@@ -3763,32 +3763,95 @@ bool Orchestrator::connectivity_timer_active() const {
 bool Orchestrator::releasing_ble() const { return _connectivity == ConnectivityState::ReleaseBle; }
 
 bool Orchestrator::ble_needed() const {
-  return tracking_session_active(_tracking_state) || _lock_state == LockState::Unlocked ||
-         _ble_window != BleWindow::Closed || _svc.ble_service.is_authenticated() ||
-         _svc.ble_service.is_connected() || _svc.ble_service.export_active() ||
-         _svc.ota.is_ble_active();
+  if (tracking_session_active(_tracking_state)) {
+    return true;
+  }
+  if (_lock_state == LockState::Unlocked) {
+    return true;
+  }
+  if (_ble_window != BleWindow::Closed) {
+    return true;
+  }
+  if (_svc.ble_service.is_authenticated() || _svc.ble_service.is_connected()) {
+    return true;
+  }
+  if (_svc.ble_service.export_active()) {
+    return true;
+  }
+  return _svc.ota.is_ble_active();
 }
 
 bool Orchestrator::wifi_connection_allowed() const {
-  return !_shutting_down && !_svc.wifi.is_suspended() &&
-         (wifi_active() || wifi_cleanup_pending() || _svc.wifi.station_retained()) &&
-         (_manufacturing_mode || (_settings.wifi_enabled && (!_wifi_fallback || wifi_active()) &&
-                                  !tracking_session_active(_tracking_state)));
+  if (_shutting_down) {
+    return false;
+  }
+  if (_svc.wifi.is_suspended()) {
+    return false;
+  }
+  if (!wifi_active() && !wifi_cleanup_pending() && !_svc.wifi.station_retained()) {
+    return false;
+  }
+  if (_manufacturing_mode) {
+    return true;
+  }
+  if (!_settings.wifi_enabled) {
+    return false;
+  }
+  if (tracking_session_active(_tracking_state)) {
+    return false;
+  }
+  // A wake-selected connection can clear fallback once it obtains an IP.
+  if (_wifi_fallback && !wifi_active()) {
+    return false;
+  }
+  return true;
 }
 
 bool Orchestrator::wifi_services_allowed() const {
-  return wifi_active() &&
-         (_manufacturing_mode ||
-          (_settings.wifi_enabled && !tracking_session_active(_tracking_state) &&
-           (_bring_up_pending || !ble_needed() ||
-            _connectivity == ConnectivityState::DelayToBle))) &&
-         !_svc.wifi.is_provisioning();
+  if (!wifi_active()) {
+    return false;
+  }
+  if (_svc.wifi.is_provisioning()) {
+    return false;
+  }
+  if (_manufacturing_mode) {
+    return true;
+  }
+  if (!_settings.wifi_enabled) {
+    return false;
+  }
+  if (tracking_session_active(_tracking_state)) {
+    return false;
+  }
+  if (_bring_up_pending) {
+    return true;
+  }
+  if (_connectivity == ConnectivityState::DelayToBle) {
+    return true;
+  }
+  return !ble_needed();
 }
 
 bool Orchestrator::connectivity_paused() const {
-  return _connectivity == ConnectivityState::Uninitialized || _shutting_down || _ota_committed ||
-         _svc.wifi.is_provisioning() || _bring_up_pending || _manufacturing_mode ||
-         _svc.ota.is_ble_active();
+  if (_connectivity == ConnectivityState::Uninitialized) {
+    return true;
+  }
+  if (_shutting_down) {
+    return true;
+  }
+  if (_ota_committed) {
+    return true;
+  }
+  if (_svc.wifi.is_provisioning()) {
+    return true;
+  }
+  if (_bring_up_pending) {
+    return true;
+  }
+  if (_manufacturing_mode) {
+    return true;
+  }
+  return _svc.ota.is_ble_active();
 }
 
 void Orchestrator::reconcile_connectivity(const char *saved_ssid) {
