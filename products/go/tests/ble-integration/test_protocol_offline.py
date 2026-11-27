@@ -9,7 +9,40 @@ import pytest
 import ago_protocol as proto
 from conftest import NotificationCollector
 from test_measurement_history import _collect_pass, _download
-from test_tracking_duration import _next_tracking_status
+from test_tracking_duration import _assert_unchanged, _next_tracking_status
+
+
+@pytest.mark.parametrize("extra", [None, "charging", "config_delta", "duplicate_result", "tracking"])
+async def test_unchanged_check_ignores_consumed_notifications_but_rejects_extras(extra):
+    status = {"tracking": True, "session": 42, "trk": 1, "stop": 0}
+    config = {"gps_mode": "off"}
+    result = {"type": "cmd_result", "cmd": "tracking_duration", "ok": True}
+    statuses, results = NotificationCollector(), NotificationCollector()
+
+    class Client:
+        async def read_gatt_char(self, uuid):
+            assert uuid in (proto.CHAR_STATUS_UUID, proto.CHAR_CONFIG_UUID)
+            return cbor2.dumps(status if uuid == proto.CHAR_STATUS_UUID else config)
+
+    # Normal command/transition replies have already been validated by the test.
+    statuses.callback(None, cbor2.dumps(status))
+    results.callback(None, cbor2.dumps(result))
+    assert await _next_tracking_status(statuses, 0.01) == status
+    assert proto.decode_cbor(await results.wait_for(0.01)) == result
+    if extra == "charging":
+        statuses.callback(None, cbor2.dumps({"charging": "fast", "bat_pct": 75, "bat_v": 4.0}))
+    elif extra == "config_delta":
+        results.callback(None, cbor2.dumps({"type": "config", **config}))
+    elif extra == "duplicate_result":
+        results.callback(None, cbor2.dumps(result))
+    elif extra == "tracking":
+        statuses.callback(None, cbor2.dumps(status))
+
+    if extra in (None, "charging"):
+        await _assert_unchanged(Client(), statuses, results, status, config)
+    else:
+        with pytest.raises(AssertionError):
+            await _assert_unchanged(Client(), statuses, results, status, config)
 
 
 @pytest.mark.parametrize("arguments", [{}, {"duration_min": 0}, {"duration_min": 1},

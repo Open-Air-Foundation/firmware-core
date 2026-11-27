@@ -66,8 +66,8 @@ async def _assert_unchanged(client, statuses, results, baseline_status, baseline
     current = await _read_status(client)
     assert {key: current[key] for key in proto.STATUS_NOTIFY_KEYS} == baseline_status
     assert proto.decode_cbor(bytes(await client.read_gatt_char(proto.CHAR_CONFIG_UUID))) == baseline_config
-    assert results.drain() == []  # No Config delta or extra command result.
-    for raw in statuses.drain():
+    assert results.drain_pending() == []  # No unread Config delta or command result.
+    for raw in statuses.drain_pending():
         assert set(proto.decode_cbor(raw)) == proto.STATUS_CHARGING_KEYS
 
 
